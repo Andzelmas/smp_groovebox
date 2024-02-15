@@ -45,7 +45,7 @@ enum FlowType{
     FLOW_INPUT = 0x1,
     FLOW_OUTPUT = 0x2
 };
-
+//the port type for the audio client
 enum PortType{
     TYPE_AUDIO = 0,
     TYPE_MIDI = 1
