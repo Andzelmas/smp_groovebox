@@ -40,7 +40,7 @@ enum paramRealtimeType{
     UI_TO_RT_RING_E = 0,
     RT_TO_UI_RING_E = 1
 };
-  
+//stream flow directions  
 enum FlowType{
     FLOW_INPUT = 0x1,
     FLOW_OUTPUT = 0x2
