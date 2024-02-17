@@ -1039,13 +1039,17 @@ void win_refresh_win_array(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win
 		    unsigned int box = 0;
 		    if(draw_box)box = draw_box[i];
 		    if(!draw_box)box = draw_box_all;
-		    win_refresh(app_intrf, curr_scr, cur_win, box, cur_win->highlight);
+		    if(cur_win->children_array_size<=0)win_refresh(app_intrf, curr_scr, cur_win, box, cur_win->highlight);
 		    //if this window has children refresh them too
 		    if(cur_win->children_array_size>0){
 			//we dont want to draw a box around the parent window so we refresh it again, but draw a box around children
 			//if the box should have been drawn around the parent window
-			if(box == 1){
-			    win_refresh(app_intrf, curr_scr, cur_win, 0, cur_win->highlight);
+			win_refresh(app_intrf, curr_scr, cur_win, 0, cur_win->highlight);
+			//if the parent window is highlighet highlight the children too
+			for(int ch = 0; ch < cur_win->children_array_size; ch++){
+			    WIN* cur_child  = cur_win->children_array[ch];
+			    if(!cur_child)continue;
+			    cur_child->highlight = cur_win->highlight;
 			}
 			win_refresh_win_array(app_intrf, curr_scr, cur_win->children_array, cur_win->children_array_size, NULL, box, all);
 		    }   
@@ -1054,21 +1058,52 @@ void win_refresh_win_array(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win
 	}	
     }
 }
+//draw box depending on the type of window.
+//for example for parameter windows we draw a different box to better see them 
+static void win_draw_box(WIN* win, unsigned int highlight){
+    if(!win)return;
+    if(highlight == 0){
+	if((win->win_type & 0xff00) == Param_win_type){
+	    if((win->win_type & 0x00ff) == Param_name_win_type){
+		wborder(win->nc_win, '|', ' ', 0, 0, 0, ' ', 0, ' ');
+	    }
+	    if((win->win_type & 0x00ff) == Param_val_win_type){
+		wborder(win->nc_win, ' ', '|', 0, 0, ' ', 0, ' ', 0);
+	    }	    
+	}
+	else{
+	    box(win->nc_win, 0, 0);
+	}
+    }
+    if(highlight == 1 || highlight == 2){
+	if((win->win_type & 0xff00) == Param_win_type){
+	    if((win->win_type & 0x00ff) == Param_name_win_type){
+		wborder(win->nc_win, '|', ' ', '=', '=', '*', ' ', '*', ' ');
+	    }
+	    if((win->win_type & 0x00ff) == Param_val_win_type){
+		wborder(win->nc_win, ' ', '|', '=', '=', ' ', '*', ' ', '*');
+	    }	    
+	}
+	else{
+	    wborder(win->nc_win, '|', '|', '=', '=', '*', '*', '*', '*');
+	}
+    }
+}
 
 void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned int draw_box, unsigned int highlight){
     if(!win)return;
     if(draw_box==1){
 	if(highlight == 0){
 	    wattroff(win->nc_win, A_STANDOUT);	    
-	    box(win->nc_win, 0, 0);
+	    win_draw_box(win, highlight);
 	}
 	if(highlight == 1){
 	    wattroff(win->nc_win, A_STANDOUT);	    
-	    wborder(win->nc_win, '|', '|', '=', '=', '*', '*', '*', '*');
+	    win_draw_box(win, highlight);
 	}
 	if(highlight == 2){
 	    wattron(win->nc_win, A_STANDOUT);
-	    wborder(win->nc_win, '|', '|', '=', '=', '*', '*', '*', '*');
+	    win_draw_box(win, highlight);
 	}
     }
     //if this is a parameter value update it
