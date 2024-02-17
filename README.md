@@ -13,6 +13,8 @@ The synth uses oscillator lookup table code by Nigel Redmon here https://www.ear
 
 ### Installing
 ### Dependencies: jack2, libsndfile, json-c, lilv, ncurses
+If build folder or smp_conf.json inside of it does not exist:
+
 mkdir build in the smp_groovebox folder.
 Copy the smp_conf.json file to the build folder.
 
