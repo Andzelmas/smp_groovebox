@@ -40,7 +40,7 @@ typedef struct _win_impl_{
     int win_y, win_x;
     //highlight==1 change box frame, highlight==2 highlight with color.
     int highlight;
-    //if hide==1 we dont refresh the window; if hide==2 we dont even consider it for layout
+    //if hide==1 we dont refresh the window, hide == 2 dont layout this window
     int hide;
     WINDOW* nc_win;
     CX* cx_obj;
@@ -319,14 +319,11 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
 						    NULL, (unsigned int[2]){20, 40}, 0, (unsigned int[2]){1,0}, NULL);
 	if(!curr_src->title_lr_win)return -1;
 	if(title_array)free(title_array);
-	
 	//create the array that will hold the title window and the scoll button array
 	if(curr_src->title_scroll_win == NULL){
 	    curr_src->title_scroll_win = win_init_win_array(app_intrf, curr_src->title_lr_win[1], 2, NULL,
 						       NULL, (unsigned int[2]){20, 20}, 0, NULL, NULL);
 	    if(!curr_src->title_scroll_win)return -1;
-	    curr_src->title_scroll_win[0]->hide = 1;
-	    curr_src->title_scroll_win[1]->hide = 1;
 	}
     }   
     //if it exists only create the current cx title window - we need the right title window to be persistent
@@ -348,8 +345,6 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
 	curr_src->scroll_bar_wins = win_init_win_array(app_intrf, curr_src->title_scroll_win[1], 2, NULL,
 							  NULL, NULL, 0, NULL, NULL);
 	if(!curr_src->scroll_bar_wins)return -1;
-	curr_src->scroll_bar_wins[1]->hide = 1;
-
 	//write the type for the scroll buttons
 	curr_src->scroll_bar_wins[0]->win_type = (Scroll_win_type | Scroll_up_win_type);
 	curr_src->scroll_bar_wins[1]->win_type = (Scroll_win_type | Scroll_down_win_type);
@@ -366,18 +361,26 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
     }
     CX** cx_array_main = nav_return_children(app_intrf, curr_cx, &total, 1);
     if(total>0){
-	curr_src->win_array_size = total;
 	unsigned int widths[total];
 	unsigned int name_from_cx[total];
 	unsigned int create_children[total];
+	//new total will be calculated because some contexts might need to be completely hidden
+	//and not even calculated, for example output ports when they are not of the current context
+	unsigned int new_total = 0;
+	CX** cx_new_array_main = malloc(sizeof(CX*) * total);
 	for(int i = 0; i<total; i++){
-	    widths[i] = 23;
-	    name_from_cx[i] = 1;
-	    create_children[i] = 1;
+	    if(nav_return_need_to_highlight(cx_array_main[i])==2)continue;
+	    widths[new_total] = 23;
+	    name_from_cx[new_total] = 1;
+	    create_children[new_total] = 1;
+	    cx_new_array_main[new_total] = cx_array_main[i];
+	    new_total += 1;
 	}
-	curr_src->win_array = win_init_win_array(app_intrf, curr_src->main_win, total, cx_array_main,
+	curr_src->win_array = win_init_win_array(app_intrf, curr_src->main_win, new_total, cx_new_array_main,
 						 NULL, widths, 0, name_from_cx, create_children);
 	if(!curr_src->win_array)return -1;
+	curr_src->win_array_size = new_total;	
+	if(cx_new_array_main)free(cx_new_array_main);
     }
     if(cx_array_main)free(cx_array_main);
    
@@ -491,8 +494,7 @@ void curr_screen_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, unsigned i
     win_refresh_win_array(app_intrf, curr_scr, curr_scr->title_lr_win, 2, (unsigned int [2]){1, 0}, 0, clicked);
     //layout the title_scroll_win that holds the info on the left and scroll bars on the right
     win_layout_win_array(curr_scr->title_scroll_win, 2, 2, curr_scr->title_lr_win[1], 0);
-    win_refresh_win_array(app_intrf, curr_scr, curr_scr->title_scroll_win, 2, (unsigned int [2]){1,0}, 0, clicked);
-
+    win_refresh_win_array(app_intrf, curr_scr, curr_scr->title_scroll_win, 2, (unsigned int [2]){1,0}, 0, clicked);   
     //layout the main window cx array
     int scroll = win_layout_win_array(curr_scr->win_array, curr_scr->win_array_size, 0, curr_scr->main_win,
 				      curr_scr->win_array_start);
@@ -523,6 +525,7 @@ void curr_screen_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, unsigned i
     else{
 	curr_scr->title_scroll_win[1]->hide = 0;
     }
+ 
     //now refresh the main window win arrays, we do it here because we hide and unhide them
     win_refresh_win_array(app_intrf, curr_scr, curr_scr->scroll_bar_wins, 2, NULL, 1, clicked);    
     win_refresh_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_size, NULL, 1, clicked);
@@ -962,8 +965,6 @@ int win_layout_win_array(WIN* win_array[], unsigned int size, unsigned int list,
     int new_start = -1;
     while(old_array_iter<size){
 	WIN* cur_win = win_array[old_array_iter];
-	if(nav_return_need_to_highlight(cur_win->cx_obj)==2)cur_win->hide=2;
-
 	if(cur_win->hide!=2){
 	    new_array[iter] = cur_win;
 	    new_size += 1;
