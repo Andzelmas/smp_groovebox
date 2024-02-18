@@ -72,6 +72,8 @@ typedef struct _curr_screen_impl_{
     unsigned int win_array_size;
     //from which member of the win_array we should display the windows
     unsigned int win_array_start;
+    //the last member of the win_array that is displayed because of scrolling
+    int win_array_end;
     //the win array displayed in the button window
     WIN** button_win_array;
     unsigned int button_win_array_size;
@@ -253,7 +255,7 @@ int curr_screen_init(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
     curr_src->win_array = NULL;
     curr_src->win_array_size = 0;
     curr_src->win_array_start = 0;
-    
+    curr_src->win_array_end = 0;
     curr_src->button_win_array = NULL;
     curr_src->button_win_array_size = 0;
     curr_src->root_win_array = NULL;
@@ -496,10 +498,9 @@ void curr_screen_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, unsigned i
 				      curr_scr->win_array_start);
     //if the win_array items do not fit implement scrolling - show the scroll buttons
     if(scroll >= 0 || curr_scr->win_array_start>0){
+	curr_scr->win_array_end = scroll;
 	curr_scr->scroll_bar_wins[1]->hide = 0;
 	curr_scr->scroll_bar_wins[0]->hide = 0;
-	if(curr_scr->win_array_start==0)
-	    curr_scr->scroll_bar_wins[0]->hide = 1;	
 	//layout the title_scroll_win scroll button array
 	win_layout_win_array(curr_scr->scroll_bar_wins, 2, 2, curr_scr->title_scroll_win[1], 0);
 	//if the start item is 0 we dont need the scroll bar that scrolls up
@@ -509,6 +510,7 @@ void curr_screen_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, unsigned i
     //if all context in win_array fit hide the main window scroll buttons, we do this after laying them down
     //since if we would lay them out after this conditional the layout would simply unhide these windows again
     if(scroll == -1){
+	curr_scr->win_array_end = curr_scr->win_array_size-1;
 	//only hide the up scroll bar if the start item is 0, otherwise it means there are some previous items
 	//and the user has to be able scroll up(or back, how ever you look at it)
 	if(curr_scr->win_array_start==0)
@@ -557,7 +559,314 @@ void curr_screen_clear(CURR_SCREEN* curr_scr, unsigned int clicked){
     //clear the root cx array
     win_clear_win_array(curr_scr->root_win_array, curr_scr->root_win_array_size, clicked);
 }
+//enter the cx of the window if there is a cx_obj
+static int curr_enter_window(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* clicked_win){
+    CX* cur_cx = clicked_win->cx_obj;
+    if(cur_cx){
+	//set the selected context to the clicked context
+	nav_set_select_cx(app_intrf, cur_cx);
+	//invoke can destroy context, for ex when entering directories
+	//thats why we need to use the returned cx to enter
+	CX* sel_cx = nav_invoke_cx(app_intrf, cur_cx);
+	nav_enter_cx(app_intrf, sel_cx);	    
+	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;
+    }
+    return 0;
+}
+//interpret the keypress codes and do the correct navigation action
+//TODO keypresses should be in a json file so the user can modify the shortcuts
+static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, char ch, WINDOW* main_window){
+    if(!app_intrf || !curr_scr)return 0;
+    int ret_val = 0;
+    switch(ch){
+    case '1':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case '2':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+1){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+1];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case '3':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+2){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+2];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case '4':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+3){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+3];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case '5':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+4){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+4];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case '6':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+5){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+5];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case '7':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+6){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+6];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case '8':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+7){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+7];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;		
+	//alt key was pressed look for combinations
+    case 27:
+	ch = wgetch(main_window);
+	if(ch == '1'){
+	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start){
+		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start];
+		if(first_win)
+		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
+	    }
+	}
+	if(ch == '2'){
+	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+1){
+		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+1];
+		if(first_win)
+		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
+	    }
+	}
+	if(ch == '3'){
+	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+2){
+		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+2];
+		if(first_win)
+		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
+	    }
+	}
+	if(ch == '4'){
+	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+3){
+		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+3];
+		if(first_win)
+		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
+	    }
+	}
+	if(ch == '5'){
+	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+4){
+		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+4];
+		if(first_win)
+		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
+	    }
+	}
+	if(ch == '6'){
+	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+5){
+		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+5];
+		if(first_win)
+		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
+	    }
+	}
+	if(ch == '7'){
+	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+6){
+		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+6];
+		if(first_win)
+		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
+	    }
+	}
+	if(ch == '8'){
+	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+7){
+		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+7];
+		if(first_win)
+		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
+	    }
+	}	
+	break;
+	//shift + 1 was pressed
+    case '!':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
+	}
+	break;
+	//shift + 2 was pressed
+    case '@':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+1){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+1];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
+	}
+	break;
+	//shift + 3 was pressed
+    case '#':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+2){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+2];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
+	}
+	break;
+	//shift + 4 was pressed
+    case '$':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+3){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+3];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
+	}
+	break;
+	//shift + 5 was pressed
+    case '%':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+4){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+4];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
+	}
+	break;
+	//shift + 6 was pressed
+    case '^':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+5){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+5];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
+	}
+	break;
+	//shift + 7 was pressed
+    case '&':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+6){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+6];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
+	}
+	break;
+	//shift + 8 was pressed
+    case '*':
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+7){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+7];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
+	}
+	break;
+    case'-':
+	//scroll the main context array up - the last window displayed + 1 will become first
+	ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
+			      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 1);
+	break;
+    case'+':
+	//scroll the main context array down - the first window displayed - 1 will become last
+	ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
+			      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 0);
+	break;
 
+	//navigate the button array (liek save, load etc)
+    case'w':
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
+	    WIN* first_win = curr_scr->button_win_array[0];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case'e':
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 1){
+	    WIN* first_win = curr_scr->button_win_array[1];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case'r':
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 2){
+	    WIN* first_win = curr_scr->button_win_array[2];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case't':
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 3){
+	    WIN* first_win = curr_scr->button_win_array[3];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case'y':
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 4){
+	    WIN* first_win = curr_scr->button_win_array[4];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case'u':
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 5){
+	    WIN* first_win = curr_scr->button_win_array[5];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;	
+	//navigate the root array (the main contexts that we see at the bottom all the time)
+    case's':
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
+	    WIN* first_win = curr_scr->root_win_array[0];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case'd':
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 1){
+	    WIN* first_win = curr_scr->root_win_array[1];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case'f':
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 2){
+	    WIN* first_win = curr_scr->root_win_array[2];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case'g':
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 3){
+	    WIN* first_win = curr_scr->root_win_array[3];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case'h':
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 4){
+	    WIN* first_win = curr_scr->root_win_array[4];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;
+    case'j':
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 5){
+	    WIN* first_win = curr_scr->root_win_array[5];
+	    if(first_win)
+		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	}
+	break;	
+    case 'q':
+	int cx_exit = nav_exit_cur_context(app_intrf);
+	if(cx_exit == -2)return 1;
+	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;		
+	break;
+	
+    default:
+	break;
+    }
+    return ret_val;
+}
 //read the input and navigate the screen, returns 1 if we need to exit the program
 int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
     if(!curr_scr)return -1;
@@ -570,13 +879,7 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
     //read the input char
     MEVENT event;
     ch = wgetch(main_window);
-    switch(ch){
-    case 'q':
-	int cx_exit = nav_exit_cur_context(app_intrf);
-	if(cx_exit == -2)return 1;
-	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;		
-	break;
-    case KEY_MOUSE:
+    if(ch == KEY_MOUSE){
 	if(getmouse(&event) == OK){
 	    if(event.bstate & BUTTON1_CLICKED){
 		WIN* clicked_win = ctrl_win_return_clicked(curr_scr, event.y, event.x);
@@ -593,7 +896,7 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
 		    }
 		    //if clicked on scroll down button window
 		    else if(clicked_win->win_type == (Scroll_win_type | Scroll_down_win_type)){
-			//scroll the main context array down - the last window displayed will become first
+			//scroll the main context array down - the last window displayed + 1 will become first
 			ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
 					      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 0);
 		    }
@@ -606,16 +909,7 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
 			nav_set_cx_value(app_intrf, clicked_win->cx_obj, 1);
 		    }
 		    else{
-			CX* cur_cx = clicked_win->cx_obj;
-			if(cur_cx){
-			    //set the selected context to the clicked context
-			    nav_set_select_cx(app_intrf, cur_cx);
-			    //invoke can destroy context, for ex when entering directories
-			    //thats why we need to use the returned cx to enter
-			    CX* sel_cx = nav_invoke_cx(app_intrf, cur_cx);
-			    nav_enter_cx(app_intrf, sel_cx);	    
-			    if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;
-			}
+			if(curr_enter_window(app_intrf, curr_scr, clicked_win)<0)return -1;
 		    }
 		}
 	    }
@@ -634,10 +928,9 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
 		}
 	    }
 	}
-	break;
-    default:
-	break;
     }
+    //check keystrokes and key combinations
+    else ret_val = curr_input_keypress_read(app_intrf, curr_scr, ch, main_window);
     return ret_val;
 }
 
