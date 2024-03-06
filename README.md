@@ -27,7 +27,11 @@ The main window with different contexts visible
 
 <img width="520" alt="smp_groovebox_screen_01" src="https://github.com/Andzelmas/smp_groovebox/assets/118473988/26c4dd8c-c630-48f9-8d9d-44aad1c95a73">
 
-The synth context one oscillator controls. Upper right corner box is a scroll bar, beacause not all oscillator controls fit in the window (max 8 parameters in the main window because I'm planning to have 8 encoders).
+Here is the same screen made very small. It is still possible to navigate all the contexts with the scroll bar in the upper right corner
+
+<img width="214" alt="smp_groovebox_screen_small" src="https://github.com/Andzelmas/smp_groovebox/assets/118473988/d5f12b8a-ab83-43c1-8272-5b6e11822f3a">
+
+The synth context one oscillator controls. Upper right corner box is a scroll bar, because not all oscillator controls fit in the window (max 8 parameters in the main window because I'm planning to have 8 encoders).
 
 <img width="522" alt="smp_groovebox_screen_02" src="https://github.com/Andzelmas/smp_groovebox/assets/118473988/bc80d589-8490-430d-a45b-2cfb099fd665">
 
