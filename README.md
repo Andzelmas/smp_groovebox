@@ -37,4 +37,4 @@ Playhead controls
 
 
 
-Maintained and Written by Vidmantas Brukstus
+### Maintained and Written by Vidmantas Brukstus
