@@ -20,4 +20,11 @@ Copy the smp_conf.json file to the build folder.
 
 If you have the dependencies "make" and then "make run" to build and run the software.
 
+The app uses jack2 so dont forget to run it before launching.
+
+### Some screen grabs
+<img width="520" alt="smp_groovebox_screen_03" src="https://github.com/Andzelmas/smp_groovebox/assets/118473988/cf85e8b2-ca1b-476b-a2da-f9a1cad4ef2d">
+<img width="522" alt="smp_groovebox_screen_02" src="https://github.com/Andzelmas/smp_groovebox/assets/118473988/bc80d589-8490-430d-a45b-2cfb099fd665">
+<img width="520" alt="smp_groovebox_screen_01" src="https://github.com/Andzelmas/smp_groovebox/assets/118473988/26c4dd8c-c630-48f9-8d9d-44aad1c95a73">
+
 Maintained and Written by Vidmantas Brukstus
