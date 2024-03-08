@@ -370,7 +370,7 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
 	CX** cx_new_array_main = malloc(sizeof(CX*) * total);
 	for(int i = 0; i<total; i++){
 	    if(nav_return_need_to_highlight(cx_array_main[i])==2)continue;
-	    widths[new_total] = 23;
+	    widths[new_total] = 21;
 	    name_from_cx[new_total] = 1;
 	    create_children[new_total] = 1;
 	    cx_new_array_main[new_total] = cx_array_main[i];
@@ -578,7 +578,7 @@ static int curr_enter_window(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* c
 }
 //interpret the keypress codes and do the correct navigation action
 //TODO keypresses should be in a json file so the user can modify the shortcuts
-static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, char ch, WINDOW* main_window){
+static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, int ch, WINDOW* main_window){
     if(!app_intrf || !curr_scr)return 0;
     int ret_val = 0;
     switch(ch){
@@ -638,65 +638,62 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;		
-	//alt key was pressed look for combinations
-    case 27:
-	ch = wgetch(main_window);
-	if(ch == '1'){
-	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start){
-		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start];
-		if(first_win)
-		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
-	    }
+	//alt key with numbers pressed, using code of the M-1, M-2...etc here
+    case 177:
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
 	}
-	if(ch == '2'){
-	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+1){
-		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+1];
-		if(first_win)
-		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
-	    }
+	break;
+    case 178:
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+1){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+1];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
 	}
-	if(ch == '3'){
-	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+2){
-		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+2];
-		if(first_win)
-		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
-	    }
+	break;
+    case 179:
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+2){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+2];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
 	}
-	if(ch == '4'){
-	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+3){
-		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+3];
-		if(first_win)
-		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
-	    }
+	break;
+    case 180:
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+3){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+3];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
 	}
-	if(ch == '5'){
-	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+4){
-		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+4];
-		if(first_win)
-		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
-	    }
+	break;
+    case 181:
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+4){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+4];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
 	}
-	if(ch == '6'){
-	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+5){
-		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+5];
-		if(first_win)
-		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
-	    }
+	break;
+    case 182:
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+5){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+5];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
 	}
-	if(ch == '7'){
-	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+6){
-		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+6];
-		if(first_win)
-		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
-	    }
+	break;
+    case 183:
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+6){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+6];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
 	}
-	if(ch == '8'){
-	    if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+7){
-		WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+7];
-		if(first_win)
-		    nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
-	    }
-	}	
+	break;
+    case 184:
+	if(curr_scr->win_array && curr_scr->win_array_end >= curr_scr->win_array_start+7){
+	    WIN* first_win = curr_scr->win_array[curr_scr->win_array_start+7];
+	    if(first_win)
+		nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
+	}
 	break;
 	//shift + 1 was pressed
     case '!':
