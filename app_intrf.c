@@ -1319,6 +1319,9 @@ static void intrf_callback_enter(APP_INTRF* app_intrf, CX* self){
 	if(cur_type == (Button_cx_e | Port_cx_st))
 	    cx_enter_port_callback(app_intrf, self);
     }
+    if((cur_type & 0xff00) == Val_cx_e){
+	cx_set_value_callback(app_intrf, self, 0, Operation_DefValue);
+    }
 }
 static void intrf_callback_exit(APP_INTRF* app_intrf, CX* self){
     unsigned int cur_type = self->type;

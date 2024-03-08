@@ -23,6 +23,7 @@ typedef struct _params_param{
     float val;
     float min_val;
     float max_val;
+    float def_val; //default value
     //how much to increase or decrease the parameter
     float inc_am;
     //the type of the parameter value, used for ui display purposes
@@ -162,6 +163,9 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, const char*
 	param_container->rt_params[i]->max_val = param_maxs[i];
 	param_container->ui_params[i]->max_val = param_maxs[i];
 
+	param_container->rt_params[i]->def_val = param_vals[i];
+	param_container->ui_params[i]->def_val = param_vals[i];
+	
 	param_container->rt_params[i]->inc_am = param_incs[i];
 	param_container->ui_params[i]->inc_am = param_incs[i];
 	
@@ -222,6 +226,9 @@ int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, u
 	break;
     case Operation_SetValue:
 	cur_param->val = set_to;
+	break;
+    case Operation_DefValue:
+	cur_param->val = cur_param->def_val;
 	break;
     default:
 	cur_param->val = cur_param->val;
