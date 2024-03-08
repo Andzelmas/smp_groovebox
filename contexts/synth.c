@@ -734,7 +734,9 @@ static void synth_stop_osc_rt(SYNTH_OSC* osc, MIDI_DATA_T vel, MIDI_DATA_T note,
 static int synth_metronome_process_rt(SYNTH_DATA* synth_data, SYNTH_OSC* metro_osc, NFRAMES_T nframes, int32_t tick,
 				      SAMPLE_T ticks_per_beat, int32_t beat, int playhead){
     if(!metro_osc)return -1;
-
+    if(playhead == 0){
+	synth_stop_osc_rt(metro_osc, 127, 0, 1);
+    }
     if(playhead == 1){
 	//calculate if we need to trigger the metronome oscillator
 	unsigned int play_osc = 0;
