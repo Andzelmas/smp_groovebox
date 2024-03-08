@@ -570,9 +570,14 @@ static int curr_enter_window(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* c
 	nav_set_select_cx(app_intrf, cur_cx);
 	//invoke can destroy context, for ex when entering directories
 	//thats why we need to use the returned cx to enter
-	CX* sel_cx = nav_invoke_cx(app_intrf, cur_cx);
-	nav_enter_cx(app_intrf, sel_cx);	    
-	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;
+	int cx_structure_change = 0;
+	CX* sel_cx = nav_invoke_cx(app_intrf, cur_cx, &cx_structure_change);
+	nav_enter_cx(app_intrf, sel_cx);
+	CX* new_sel_cx = nav_ret_select_cx(app_intrf);
+	//only recreate the cx window if the cx actually had children and now we are inside of it
+	//or create new array if invoke says that there was a structure change of the contexts
+	if(sel_cx != new_sel_cx || cx_structure_change == 1)
+	    if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;
     }
     return 0;
 }

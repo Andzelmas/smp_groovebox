@@ -943,8 +943,9 @@ static void cx_set_value_callback(APP_INTRF* app_intrf, CX* self, float set_to, 
     app_param_set_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id,
 			set_to, param_op, 0);
 }
-
-static void cx_enter_remove_callback(APP_INTRF* app_intrf, CX* self){
+//return 1 if context structure changed
+static int cx_enter_remove_callback(APP_INTRF* app_intrf, CX* self){
+    int ret_val = 0;
     if(self){
 	if(self->parent){
 	    //TODO is it ok to have curr_cx and select_cx set to the same cx? Cant think of why not bot a bit weird
@@ -953,9 +954,11 @@ static void cx_enter_remove_callback(APP_INTRF* app_intrf, CX* self){
 	    helper_cx_remove_cx_and_data(app_intrf, self->parent);
 	    //reset the ports, so the ports have correct int_val values, because removing a plugin or similar
 	    //can change the ports on the audio backend
-	    app_intrf_iterate_reset_ports(app_intrf, app_intrf->root_cx, 1);	    
+	    app_intrf_iterate_reset_ports(app_intrf, app_intrf->root_cx, 1);
+	    ret_val = 1;
 	}
     }
+    return ret_val;
 }
 
 static void cx_enter_save_callback(APP_INTRF* app_intrf, CX* self){
@@ -1010,10 +1013,11 @@ static void cx_enter_save_callback(APP_INTRF* app_intrf, CX* self){
 finish:
     if(cur_dir)free(cur_dir);
 }
-
-static void cx_enter_dir_callback(APP_INTRF *app_intrf, CX* self){
+//returns 1 if the context structure changed
+static int cx_enter_dir_callback(APP_INTRF *app_intrf, CX* self){
     CX_BUTTON* dir = (CX_BUTTON*)self;
     CX* self_parent = self->parent;
+    int ret_val = 0;
     //increase the parents int_val which holds the dir travel depth
     //decrease it if the dir name is "..". This helps not to travel outside of the initial dir
     if(strcmp(self->short_name,"..")==0){
@@ -1032,6 +1036,7 @@ static void cx_enter_dir_callback(APP_INTRF *app_intrf, CX* self){
     if(next_cx){
 	cx_remove_child(next_cx, 0, (Button_cx_e | Dir_cx_st));
 	cx_remove_child(next_cx, 0, (Button_cx_e | Item_cx_st));
+	ret_val = 1;
     }
 
     //create the new list from the dir context
@@ -1041,15 +1046,19 @@ static void cx_enter_dir_callback(APP_INTRF *app_intrf, CX* self){
     if(self_parent!=NULL){
 	app_intrf->select_cx = self_parent->child;
     }
+    return ret_val;
 }
-static void cx_enter_port_callback(APP_INTRF* app_intrf, CX* self){
-    if(!self->parent)goto finish;
+//returns 1 if context structure changed
+static int cx_enter_port_callback(APP_INTRF* app_intrf, CX* self){
+    if(!self->parent)return -1;
+    int ret_val = 0;
     CX_BUTTON* cx_port = (CX_BUTTON*) self;
     unsigned int send_type = (cx_port->uchar_val & 0xf0);
     send_type = (send_type | Port_type_in);    
     //if this port is output port create input ports inside of it
     if((cx_port->uchar_val & 0x0f) == Port_type_out){
 	cx_reset_ports(app_intrf, self, send_type, 1);
+	ret_val = 1;
     }
     //if this is input port change the int_val and reset_ports, connecting or disconnecting ports
     else if((cx_port->uchar_val & 0x0f) == Port_type_in){
@@ -1061,7 +1070,7 @@ static void cx_enter_port_callback(APP_INTRF* app_intrf, CX* self){
 	}
 	cx_reset_ports(app_intrf, self->parent, send_type, 0);
     }
-finish:
+    return ret_val;
 }
 
 static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
@@ -1143,9 +1152,10 @@ static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
     //and we might make some connections
     app_intrf_iterate_reset_ports(app_intrf, app_intrf->root_cx, 1);
 }
-
-static void cx_enter_cancel_callback(APP_INTRF* app_intrf, CX* self){
+//returns 1 if the context structure changed
+static int cx_enter_cancel_callback(APP_INTRF* app_intrf, CX* self){
     CX* parent = self->parent;
+    int ret_val = 0;
     if(parent!=NULL){
 	if(parent->type == (Button_cx_e | AddList_cx_st)){
 	    CX_BUTTON* cx_parent = (CX_BUTTON*)parent;
@@ -1154,6 +1164,7 @@ static void cx_enter_cancel_callback(APP_INTRF* app_intrf, CX* self){
 		//remove the children (including the files and dirs) inside the addFile node
 		cx_remove_child(self->parent->child, 0, (Button_cx_e | Item_cx_st));
 		cx_remove_child(self->parent->child, 0, (Button_cx_e | Dir_cx_st));
+		ret_val = 1;
 		//reset the dir depth counter
 		cx_parent->int_val = 0;
 	    }	    
@@ -1175,9 +1186,11 @@ static void cx_enter_cancel_callback(APP_INTRF* app_intrf, CX* self){
 		    cx_port = cx_port->sib;
 		    if(is_nan==1)cx_remove_this_and_children(temp_port);
 		}
+		ret_val = 1;
 	    }
 	}
     }
+    return ret_val;
 }
 
 static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
@@ -1300,29 +1313,33 @@ static float intrf_callback_get_value(APP_INTRF* app_intrf, CX* self, unsigned c
     }
     return ret_val;
 }
-static void intrf_callback_enter(APP_INTRF* app_intrf, CX* self){
+//if invoke returns 1, it means that the context structure was modified (for example nodes deleted
+//when cancel button was pressed)
+static int intrf_callback_enter(APP_INTRF* app_intrf, CX* self){
     unsigned int cur_type = self->type;
+    int ret_val = 0;
     //enter for Button_cx_e
     if((cur_type & 0xff00)== Button_cx_e){
 	if(cur_type == (Button_cx_e | Dir_cx_st))
-	    cx_enter_dir_callback(app_intrf, self);
+	    ret_val = cx_enter_dir_callback(app_intrf, self);
 	if(cur_type == (Button_cx_e | Item_cx_st))
 	    cx_enter_item_callback(app_intrf, self);
 	if(cur_type == (Button_cx_e | AddList_cx_st))
 	    cx_enter_AddList_callback(app_intrf, self);
 	if(cur_type == (Button_cx_e | Cancel_cx_st))
-	    cx_enter_cancel_callback(app_intrf, self);
+	    ret_val = cx_enter_cancel_callback(app_intrf, self);
 	if(cur_type == (Button_cx_e | Save_cx_st))
 	    cx_enter_save_callback(app_intrf, self);
 	if(cur_type == (Button_cx_e | Remove_cx_st))
-	    cx_enter_remove_callback(app_intrf, self);
+	    ret_val = cx_enter_remove_callback(app_intrf, self);
 	if(cur_type == (Button_cx_e | Port_cx_st))
-	    cx_enter_port_callback(app_intrf, self);
+	    ret_val = cx_enter_port_callback(app_intrf, self);
     }
     //if this is a parameter change its value to default value
     if((cur_type & 0xff00) == Val_cx_e){
 	cx_set_value_callback(app_intrf, self, 0, Operation_DefValue);
     }
+    return ret_val;
 }
 static void intrf_callback_exit(APP_INTRF* app_intrf, CX* self){
     unsigned int cur_type = self->type;
@@ -1467,12 +1484,12 @@ int nav_exit_cur_context(APP_INTRF *app_intrf){
     intrf_callback_exit(app_intrf, cur_cx);
     return return_val;
 }
-
-CX* nav_invoke_cx(APP_INTRF* app_intrf, CX* select_cx){
+//changed_structure will be 1 if the cx structure changed after the invoke
+CX* nav_invoke_cx(APP_INTRF* app_intrf, CX* select_cx, int* changed_structure){
     if(!app_intrf)return NULL;
     if(!select_cx)return NULL;
 
-    intrf_callback_enter(app_intrf, select_cx);
+    *changed_structure = intrf_callback_enter(app_intrf, select_cx);
     
     return app_intrf->select_cx;
 }

@@ -184,23 +184,27 @@ static float cx_get_value_callback(APP_INTRF* app_intrf, CX* self, unsigned char
 //set the values of a cx, param_op to increase decrease or set the value, check the paramOperType in types.h
 static void cx_set_value_callback(APP_INTRF* app_intrf, CX* self, float set_to, unsigned char param_op);
 //callback for remove button, that removes its parent context
-static void cx_enter_remove_callback(APP_INTRF* app_intrf, CX* self);
+//returns 1 if context structure changed
+static int cx_enter_remove_callback(APP_INTRF* app_intrf, CX* self);
 //callback to save the current context to a file, as a preset or a song file - the process is the same
 //uses app_json_write_json_callback to write into the JSONHANDlE object, that can be used to save a cx
 //structure to a file
 static void cx_enter_save_callback(APP_INTRF* app_intrf, CX* self);
 //enter dir callback, this callback lists the dirs and files in its str_val member and clears the file and dir
 //contexts created before
-static void cx_enter_dir_callback(APP_INTRF* app_intrf, CX* self);
+//returns 1 if the context structure changed
+static int cx_enter_dir_callback(APP_INTRF* app_intrf, CX* self);
 //enter port, add its str_val to the addList str_val, if the value is not NULL connect these ports
-static void cx_enter_port_callback(APP_INTRF* app_intrf, CX* self);
+//returns 1 if the context structure changed
+static int cx_enter_port_callback(APP_INTRF* app_intrf, CX* self);
 //enter transport button and depending on what it does (int_val == 0 - start, 1 - stop,
 //2 - skip bar int_val_1 amount forward, 3 - skip bar int_val_1 amount backward
 static void cx_enter_transport_callback(APP_INTRF* app_intrf,CX* self);
 //enter file callback, load a plugin, smaple, preset etc.
 static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self);
 //cancel button, depending on the parents type does different things
-static void cx_enter_cancel_callback(APP_INTRF* app_intrf, CX* self);
+//returns 1 if the context structure changed
+static int cx_enter_cancel_callback(APP_INTRF* app_intrf, CX* self);
 //callback that creates a list of files when called (uses the context_list_from_dir)
 static void cx_enter_AddList_callback(APP_INTRF* app_intrf, CX* self);
 //callback that simply clears the AddList str_val to NULL and frees it
@@ -215,7 +219,8 @@ static void intrf_callback_set_value(APP_INTRF* app_intrf, CX* self, int set_to)
 //returns a float but from ret_type can see what type of data it is originally
 static float intrf_callback_get_value(APP_INTRF* app_intrf, CX* self, unsigned char* ret_type);
 //filters out which enter callback to call depending on type and subtype
-static void intrf_callback_enter(APP_INTRF* app_intrf, CX* self);
+//returns 1 if the context structure changed
+static int intrf_callback_enter(APP_INTRF* app_intrf, CX* self);
 //filters out which exit callback to call depending on type and subtype
 static void intrf_callback_exit(APP_INTRF* app_intrf, CX* self);
 
@@ -241,7 +246,8 @@ int nav_exit_cur_context(APP_INTRF* app_intrf);
 //invoke the cx, calling its enter function. Some functions delete cx when invoked, so this function returns
 //the app_intrf->select_cx, because after invoking usually we call nav_enter_cx on a cx, if it is deleted with
 //invoke function the cx wont be there anymore, that is why this function returns a cx.
-CX* nav_invoke_cx(APP_INTRF* app_intrf, CX* select_cx);
+//change_structure will be 1 if the invoke changed the contexts structure
+CX* nav_invoke_cx(APP_INTRF* app_intrf, CX* select_cx, int* changed_structure);
 //enter the current context. changes the app_intrf->curr_cx, but does not invoke the cx
 int nav_enter_cx(APP_INTRF* app_intrf, CX* select_cx);
 //set the select context
