@@ -563,48 +563,46 @@ void curr_screen_clear(CURR_SCREEN* curr_scr, unsigned int clicked){
     win_clear_win_array(curr_scr->root_win_array, curr_scr->root_win_array_size, clicked);
 }
 //enter the cx of the window if there is a cx_obj
-static int curr_enter_window(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* clicked_win){
+static void curr_enter_window(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* clicked_win){
     CX* cur_cx = clicked_win->cx_obj;
-    if(cur_cx){
-	//set the selected context to the clicked context
-	nav_set_select_cx(app_intrf, cur_cx);
-	//invoke can destroy context, for ex when entering directories
-	//thats why we need to use the returned cx to enter
-	int cx_structure_change = 0;
-	CX* sel_cx = nav_invoke_cx(app_intrf, cur_cx, &cx_structure_change);
-	nav_enter_cx(app_intrf, sel_cx);
-	CX* new_sel_cx = nav_ret_select_cx(app_intrf);
-	//only recreate the cx window if the cx actually had children and now we are inside of it
-	//or create new array if invoke says that there was a structure change of the contexts
-	if(sel_cx != new_sel_cx || cx_structure_change == 1)
-	    if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;
-    }
-    return 0;
+    if(!cur_cx)return;
+    //set the selected context to the clicked context
+    nav_set_select_cx(app_intrf, cur_cx);
+    //invoke can destroy context, for ex when entering directories
+    //thats why we need to use the returned cx to enter
+    int cx_structure_change = 0;
+    CX* sel_cx = nav_invoke_cx(app_intrf, cur_cx, &cx_structure_change);
+    nav_enter_cx(app_intrf, sel_cx);
+    CX* new_sel_cx = nav_ret_select_cx(app_intrf);
+    //only recreate the cx window if the cx actually had children and now we are inside of it
+    //or create new array if invoke says that there was a structure change of the contexts
+    if(sel_cx != new_sel_cx || cx_structure_change == 1)
+	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return;
 }
 //enter, increase or decrease value of the cx in the win_num window in the win_array
 //cx_do==0 - enter, cx_do==1 - increase value (or enter the cx), cx_do==-1 - decrease value
-static int curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN** win_array, int win_array_start, int win_array_end,
+static void curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN** win_array, int win_array_start, int win_array_end,
 					  unsigned int win_num, int cx_do){
-    int ret_val = 0;
-    if(!app_intrf)return -1;
-    if(!curr_scr)return -1;
-    if(!win_array)return -1;
-    if(win_array_end < win_array_start + win_num)return -1;
+    if(!app_intrf)return;
+    if(!curr_scr)return;
+    if(!win_array)return;
+    if(win_array_end < win_array_start + win_num)return;
     
     WIN* first_win = win_array[win_array_start + win_num];
-    if(!first_win)return -1;
-    if(!first_win->cx_obj)return -1;
+    if(!first_win)return;
+    if(!first_win->cx_obj)return;
     
     if(cx_do == 0){
-	ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	curr_enter_window(app_intrf, curr_scr, first_win);
     }
     //if user wants to increase the value check if this is a parameter, if not try to enter the cx instead
     if(cx_do == 1){
+	nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
 	unsigned int cx_type = nav_return_cx_type(first_win->cx_obj);
 	if((cx_type & 0xff00) == Val_cx_e)
 	    nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
 	else
-	    ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+	    curr_enter_window(app_intrf, curr_scr, first_win);
     }
     if(cx_do == -1){
 	nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
@@ -613,112 +611,111 @@ static int curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* cur
 //interpret the keypress codes and do the correct navigation action
 //TODO keypresses should be in a json file so the user can modify the shortcuts
 static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, int ch, WINDOW* main_window){
-    if(!app_intrf || !curr_scr)return 0;
-    int ret_val = 0;
+    if(!app_intrf || !curr_scr)return -1;
     switch(ch){
     case '1':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 0, 0);
 	break;
     case '2':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 1, 0);
 	break;
     case '3':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 2, 0);
 	break;
     case '4':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 3, 0);
 	break;
     case '5':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 4, 0);
 	break;
     case '6':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 5, 0);
 	break;
     case '7':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 6, 0);
 	break;
     case '8':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 7, 0);
 	break;		
 	//alt key with numbers pressed, using code of the M-1, M-2...etc here
     case 177:
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 0, -1);
 	break;
     case 178:
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 1, -1);
 	break;
     case 179:
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 2, -1);
 	break;
     case 180:
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 3, -1);
 	break;
     case 181:
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 4, -1);
 	break;
     case 182:
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 5, -1);
 	break;
     case 183:
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 6, -1);
 	break;
     case 184:
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 7, -1);
 	break;
 	//shift + 1 was pressed
     case '!':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 0, 1);
 	break;
 	//shift + 2 was pressed
     case '@':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 1, 1);
 	break;
 	//shift + 3 was pressed
     case '#':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 2, 1);
 	break;
 	//shift + 4 was pressed
     case '$':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+        curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 3, 1);
 	break;
 	//shift + 5 was pressed
     case '%':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 4, 1);
 	break;
 	//shift + 6 was pressed
     case '^':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 5, 1);
 	break;
 	//shift + 7 was pressed
     case '&':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 6, 1);
 	break;
 	//shift + 8 was pressed
     case '*':
-	ret_val = curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 7, 1);
 	break;
     case'-':
@@ -737,42 +734,42 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
 	    WIN* first_win = curr_scr->button_win_array[0];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case'e':
 	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 1){
 	    WIN* first_win = curr_scr->button_win_array[1];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case'r':
 	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 2){
 	    WIN* first_win = curr_scr->button_win_array[2];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case't':
 	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 3){
 	    WIN* first_win = curr_scr->button_win_array[3];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case'y':
 	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 4){
 	    WIN* first_win = curr_scr->button_win_array[4];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case'u':
 	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 5){
 	    WIN* first_win = curr_scr->button_win_array[5];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;	
 	//navigate the root array (the main contexts that we see at the bottom all the time)
@@ -780,42 +777,42 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
 	    WIN* first_win = curr_scr->root_win_array[0];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case'd':
 	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 1){
 	    WIN* first_win = curr_scr->root_win_array[1];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case'f':
 	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 2){
 	    WIN* first_win = curr_scr->root_win_array[2];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case'g':
 	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 3){
 	    WIN* first_win = curr_scr->root_win_array[3];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case'h':
 	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 4){
 	    WIN* first_win = curr_scr->root_win_array[4];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
     case'j':
 	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 5){
 	    WIN* first_win = curr_scr->root_win_array[5];
 	    if(first_win)
-		ret_val = curr_enter_window(app_intrf, curr_scr, first_win);
+		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;	
     case 'q':
@@ -823,11 +820,10 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 	if(cx_exit == -2)return 1;
 	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;		
 	break;
-	
     default:
 	break;
     }
-    return ret_val;
+    return 0;
 }
 //read the input and navigate the screen, returns 1 if we need to exit the program
 int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
@@ -871,7 +867,7 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
 			nav_set_cx_value(app_intrf, clicked_win->cx_obj, 1);
 		    }
 		    else{
-			if(curr_enter_window(app_intrf, curr_scr, clicked_win)<0)return -1;
+			curr_enter_window(app_intrf, curr_scr, clicked_win);
 		    }
 		}
 	    }
