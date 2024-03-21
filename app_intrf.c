@@ -1604,7 +1604,7 @@ char* nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx){
 	
     //first we must find out how much we have to allocate
     if((ret_type & 0xff) == Uchar_type)name_len = snprintf(NULL, 0, "%02X", (unsigned int) cx_val);
-    if((ret_type & 0xff) == Int_type)name_len = snprintf(NULL, 0, "%d", (unsigned int)cx_val);
+    if((ret_type & 0xff) == Int_type)name_len = snprintf(NULL, 0, "%d", (int)cx_val);
     if((ret_type & 0xff) == Float_type)name_len = snprintf(NULL, 0, "%g",cx_val);
     if((ret_type & 0xff) == DB_Return_Type)name_len = snprintf(NULL, 0, "%0.2fDB",  log10((double)cx_val) * 20);
     if((ret_type & 0xff) == Curve_Float_Return_Type)name_len = snprintf(NULL, 0, "%g", cx_val);
@@ -1615,7 +1615,7 @@ char* nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx){
 	ret_string = (char*)malloc(sizeof(char)*(name_len+1));
 	if(ret_string){
 	    if((ret_type & 0xff) == Uchar_type)snprintf(ret_string, name_len+1, "%02X", (unsigned int) cx_val);
-	    if((ret_type & 0xff) == Int_type)snprintf(ret_string, name_len+1, "%d", (unsigned int) cx_val);
+	    if((ret_type & 0xff) == Int_type)snprintf(ret_string, name_len+1, "%d", (int) cx_val);
 	    if((ret_type & 0xff) == Float_type)snprintf(ret_string, name_len+1, "%g", cx_val);
 	    if((ret_type & 0xff) == DB_Return_Type)snprintf(ret_string, name_len+1, "%0.2fDB", log10((double)cx_val) * 20);
 	    if((ret_type & 0xff) == Curve_Float_Return_Type)snprintf(ret_string, name_len+1, "%g", cx_val);
