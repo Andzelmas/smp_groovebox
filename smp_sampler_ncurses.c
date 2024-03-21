@@ -717,12 +717,12 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 7, 1);
 	break;
-    case'-':
+    case 258:
 	//scroll the main context array up - the last window displayed + 1 will become first
 	ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
 			      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 1);
 	break;
-    case'+':
+    case 259:
 	//scroll the main context array down - the first window displayed - 1 will become last
 	ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
 			      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 0);
