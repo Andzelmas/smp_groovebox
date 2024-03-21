@@ -613,35 +613,35 @@ static void curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* cu
 static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, int ch, WINDOW* main_window){
     if(!app_intrf || !curr_scr)return -1;
     switch(ch){
-    case '1':
+    case 'u':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 0, 0);
 	break;
-    case '2':
+    case 'i':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 1, 0);
 	break;
-    case '3':
+    case 'o':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 2, 0);
 	break;
-    case '4':
+    case 'p':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 3, 0);
 	break;
-    case '5':
+    case 'j':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 4, 0);
 	break;
-    case '6':
+    case 'k':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 5, 0);
 	break;
-    case '7':
+    case 'l':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 6, 0);
 	break;
-    case '8':
+    case ';':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 7, 0);
 	break;		
@@ -765,13 +765,6 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
-    case'u':
-	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 5){
-	    WIN* first_win = curr_scr->button_win_array[5];
-	    if(first_win)
-		curr_enter_window(app_intrf, curr_scr, first_win);
-	}
-	break;	
 	//navigate the root array (the main contexts that we see at the bottom all the time)
     case's':
 	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
@@ -808,13 +801,6 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 		curr_enter_window(app_intrf, curr_scr, first_win);
 	}
 	break;
-    case'j':
-	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 5){
-	    WIN* first_win = curr_scr->root_win_array[5];
-	    if(first_win)
-		curr_enter_window(app_intrf, curr_scr, first_win);
-	}
-	break;	
     case 'q':
 	int cx_exit = nav_exit_cur_context(app_intrf);
 	if(cx_exit == -2)return 1;
