@@ -597,7 +597,6 @@ static void curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* cu
     }
     //if user wants to increase the value check if this is a parameter, if not try to enter the cx instead
     if(cx_do == 1){
-	nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
 	unsigned int cx_type = nav_return_cx_type(first_win->cx_obj);
 	if((cx_type & 0xff00) == Val_cx_e)
 	    nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
@@ -613,35 +612,35 @@ static void curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* cu
 static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, int ch, WINDOW* main_window){
     if(!app_intrf || !curr_scr)return -1;
     switch(ch){
-    case 'z':
+    case '1':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 0, 0);
 	break;
-    case 'x':
+    case '2':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 1, 0);
 	break;
-    case 'c':
+    case '3':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 2, 0);
 	break;
-    case 'v':
+    case '4':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 3, 0);
 	break;
-    case 'b':
+    case '5':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 4, 0);
 	break;
-    case 'n':
+    case '6':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 5, 0);
 	break;
-    case 'm':
+    case '7':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 6, 0);
 	break;
-    case ',':
+    case '8':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
 				       curr_scr->win_array_end, 7, 0);
 	break;		
