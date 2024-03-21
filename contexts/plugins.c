@@ -763,7 +763,6 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
 	lilv_state_free(plug->preset);
 	plug->preset = NULL;
     }
-    
     LilvNode* new_preset = lilv_new_uri(plug_data->lv_world, preset_name);
     int load_err = lilv_world_load_resource(plug_data->lv_world, new_preset);
     if(load_err<0){
@@ -790,7 +789,9 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
     //TODO here depending if the plug has safe_restore or does not we send different set port values functions
     //one sets the values directly (if there is no safe_restore, and the rt process is paused), the other uses
     //circle buffers and is the general function to set values on the plugin
-    lilv_state_restore(plug->preset, plug->plug_instance, plug_set_value_direct, plug, 0, state_features);
+    //TODO for some reason plugin preset loading crashes when sending features to the livl_state_restore
+    //TODO need to find out which feature is not loaded correctly and crashes
+    lilv_state_restore(plug->preset, plug->plug_instance, plug_set_value_direct, plug, 0, NULL);
     
     if(new_preset)lilv_node_free(new_preset);
     plug->request_update = true;
