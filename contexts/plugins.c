@@ -855,6 +855,7 @@ static void plug_create_properties(PLUG_INFO* plug_data, PLUG_PLUG* plug, bool w
 	log_append_logfile("property %s writable %d\n", lilv_node_as_string(property), writable);
 	log_append_logfile("default %g\n", lilv_node_as_float(lilv_world_get(world, property, plug_data->nodes.lv2_default, NULL)));
 	log_append_logfile("label %s\n", lilv_node_as_string(lilv_world_get(world, property, plug_data->nodes.rdfs_label, NULL)));
+       
     }
     lilv_nodes_free(properties);
     lilv_node_free(patch_readable);
