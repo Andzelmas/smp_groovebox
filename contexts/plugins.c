@@ -852,8 +852,9 @@ static void plug_create_properties(PLUG_INFO* plug_data, PLUG_PLUG* plug, bool w
 						  writable ? patch_writable: patch_readable, NULL);
     LILV_FOREACH(nodes, p, properties){
 	const LilvNode* property = lilv_nodes_get(properties, p);
-	//log_append_logfile("property %s\n", lilv_node_as_string(property));
-
+	log_append_logfile("property %s writable %d\n", lilv_node_as_string(property), writable);
+	log_append_logfile("default %g\n", lilv_node_as_float(lilv_world_get(world, property, plug_data->nodes.lv2_default, NULL)));
+	log_append_logfile("label %s\n", lilv_node_as_string(lilv_world_get(world, property, plug_data->nodes.rdfs_label, NULL)));
     }
     lilv_nodes_free(properties);
     lilv_node_free(patch_readable);
@@ -954,8 +955,13 @@ void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	    cur_port->type = TYPE_CONTROL;
 	    cur_port->control = isnan(default_values[i]) ? 0.0f : default_values[i];
 	    //connect the port to its value
-	    lilv_instance_connect_port(plug->plug_instance, i, &(cur_port->control));	    
+	    lilv_instance_connect_port(plug->plug_instance, i, &(cur_port->control));
 	    //TODO here we should add a control struct that holds min and max values and etc. for the gui
+	    LilvNode* port_name_node = lilv_port_get_name(plug->plug, cur_port->lilv_port);
+	    if(port_name_node){
+		log_append_logfile("control %s\n", lilv_node_as_string(port_name_node));
+		lilv_node_free(port_name_node);
+	    }
 	}
 	else if (lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.lv2_AudioPort)){
 	    cur_port->type = TYPE_AUDIO;
@@ -1057,6 +1063,9 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    }
 	    if(cur_port->type == TYPE_CV){
 		lilv_instance_connect_port(plug->plug_instance, i, a_buffer);	    
+	    }
+	    if(cur_port->type == TYPE_CONTROL && cur_port->flow == FLOW_INPUT){
+		//TODO update control ports from gui (update the parameter values)
 	    }
 	    if(cur_port->type == TYPE_EVENT && cur_port->flow == FLOW_INPUT){
 		//clean the evbuf
