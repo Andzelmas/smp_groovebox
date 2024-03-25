@@ -1220,7 +1220,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		}
 		//TODO add control events of properties to the buffer
 		//TODO contro_90 for testing purposes (for pianoteq volume control)
-		//TODO clean this up only test code now - better not to forge in rt thread? 
+		//TODO clean this up only test code now - better not to forge in rt thread (though forge api is realtime safe)? 
 		PLUG_CONTROL* control_90 = NULL;
 		for(unsigned int ctrl_iter = 0; ctrl_iter < plug->num_controls; ctrl_iter++){
 		    PLUG_CONTROL* curr_control = plug->controls[ctrl_iter];
