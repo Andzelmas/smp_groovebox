@@ -1222,7 +1222,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 
 		//send to control port atom controls (for plugin properties not on control ports)
 		//but only if there is a control_in port to send the atoms to
-		if(plug->control_in < plug->num_ports && plug->control_in != -1 && (uint32_t)plug->control_in == i){
+		if(plug->control_in < plug->num_ports && plug->control_in != -1 && (uint32_t)plug->control_in == cur_port->index){
 		    //TODO add control events of properties to the buffer
 		    //TODO contro_90 for testing purposes (for pianoteq volume control)
 		    //TODO clean this up only test code now - better not to forge in rt thread (though forge api is realtime safe)? 
