@@ -1218,38 +1218,46 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 						     plug->midi_cont->buf_size[i], midi_msg);
 		    }
 		}
-		//TODO add control events of properties to the buffer
-		//TODO contro_90 for testing purposes (for pianoteq volume control)
-		//TODO clean this up only test code now - better not to forge in rt thread (though forge api is realtime safe)? 
-		PLUG_CONTROL* control_90 = NULL;
-		for(unsigned int ctrl_iter = 0; ctrl_iter < plug->num_controls; ctrl_iter++){
-		    PLUG_CONTROL* curr_control = plug->controls[ctrl_iter];
-		    if(!curr_control)continue;
-		    if(!strcmp(lilv_node_as_string(curr_control->label), "Volume")){
-			control_90 = curr_control;
-			break;
-		    }
-		}
-		if(control_90){
-		    LV2_Atom_Forge       forge = plug->forge;
-		    LV2_Atom_Forge_Frame frame;
-		    uint8_t              buf[MSG_BUFFER_SIZE];
-		    lv2_atom_forge_set_buffer(&forge, buf, sizeof(buf));
-		    lv2_atom_forge_object(&forge, &frame, 0, plug_data->urids.patch_Set);
-		    lv2_atom_forge_key(&forge, plug_data->urids.patch_property);
-		    lv2_atom_forge_urid(&forge, control_90->property);
-		    lv2_atom_forge_key(&forge, plug_data->urids.patch_value);
-		    lv2_atom_forge_float(&forge, 0.1);
-		    lv2_atom_forge_pop(&forge, &frame);
-		    //const LV2_Atom* const atom = lv2_atom_forge_deref(&forge, frame.ref);
-		    const LV2_Atom* const atom = (const LV2_Atom*) buf;
-		    plug_evbuf_write(&iter_buf, nframes, 0, atom->type, atom->size, LV2_ATOM_BODY_CONST(atom));
-		}
 	    }
 	    if(cur_port->type == TYPE_EVENT && cur_port->flow == FLOW_OUTPUT){
 		plug_evbuf_reset(cur_port->evbuf, 0);
 	    }
 	    plug->request_update = false;
+	}
+
+	//send to control port atom controls (for plugin properties not on control ports)
+	PLUG_PORT* control_port = NULL;
+	if(plug->control_in < plug->num_ports)
+	    control_port = &(plug->ports[plug->control_in]);
+	if(control_port){
+	    PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_end(control_port->evbuf);		
+	    //TODO add control events of properties to the buffer
+	    //TODO contro_90 for testing purposes (for pianoteq volume control)
+	    //TODO clean this up only test code now - better not to forge in rt thread (though forge api is realtime safe)? 
+	    PLUG_CONTROL* control_90 = NULL;
+	    for(unsigned int ctrl_iter = 0; ctrl_iter < plug->num_controls; ctrl_iter++){
+		PLUG_CONTROL* curr_control = plug->controls[ctrl_iter];
+		if(!curr_control)continue;
+		if(!strcmp(lilv_node_as_string(curr_control->label), "Volume")){
+		    control_90 = curr_control;
+		    break;
+		}
+	    }
+	    if(control_90){
+		LV2_Atom_Forge       forge = plug->forge;
+		LV2_Atom_Forge_Frame frame;
+		uint8_t              buf[MSG_BUFFER_SIZE];
+		lv2_atom_forge_set_buffer(&forge, buf, sizeof(buf));
+		lv2_atom_forge_object(&forge, &frame, 0, plug_data->urids.patch_Set);
+		lv2_atom_forge_key(&forge, plug_data->urids.patch_property);
+		lv2_atom_forge_urid(&forge, control_90->property);
+		lv2_atom_forge_key(&forge, plug_data->urids.patch_value);
+		lv2_atom_forge_float(&forge, 0.1);
+		lv2_atom_forge_pop(&forge, &frame);
+		//const LV2_Atom* const atom = lv2_atom_forge_deref(&forge, frame.ref);
+		const LV2_Atom* const atom = (const LV2_Atom*) buf;
+		plug_evbuf_write(&iter_buf, nframes, 0, atom->type, atom->size, LV2_ATOM_BODY_CONST(atom));
+	    }	    
 	}
 	//----------------------------------------------------------------------------------------------------
 

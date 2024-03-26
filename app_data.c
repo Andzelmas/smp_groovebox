@@ -517,7 +517,7 @@ static int app_transport_control_rt(APP_INFO* app_data, NFRAMES_T nframes){
 	    
 	    app_param_set_value(app_data, Context_type_Trk, 0, 2, (float)beat, Operation_SetValue, RT_PARAM_E);
 	    param_get_value(transport_cntr, 2, &val_type, 0, 0, RT_PARAM_E);
-	    
+
 	    app_param_set_value(app_data, Context_type_Trk, 0, 3, (float)tick, Operation_SetValue, RT_PARAM_E);
 	    param_get_value(transport_cntr, 3, &val_type, 0, 0, RT_PARAM_E);
 

@@ -813,7 +813,9 @@ int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes){
 
 	//now process the voices of this oscilator
 	//TODO this function could return the highest value or average added to the buffer
-	//would then be possible to send these values to ui to store on a parameter in the osc (to for ex show the Volume of the oscillator)
+	//Then could have a parameter that is readable only and update here and in app_data send it to rt_to_ui ring buffer
+	//(just go through just changed rt parameters at the end of the rt thread and write to rt_to_ui thread)
+	//This way could for example show the user what are the oscillator levels.
 	synth_process_osc_voices(synth_data, cur_osc, nframes);    
     }
 
