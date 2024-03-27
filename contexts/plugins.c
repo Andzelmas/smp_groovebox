@@ -1422,7 +1422,8 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    else{
 			iter_buf = plug_evbuf_end(control_port->evbuf);
 		    }
-		    if(!plug_evbuf_is_valid(iter_buf))continue;
+		    if(!plug_evbuf_is_valid(iter_buf) && plug_evbuf_get_size(control_port->evbuf) > 0)continue;
+
 		    //send the value to the event port as atom
 		    //Dont copy the forge, only use address here - so the forge should only be used in rt thread
 		    //or when rt thread is paused (when initializing a plugin or preset etc.)

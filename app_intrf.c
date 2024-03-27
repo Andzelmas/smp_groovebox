@@ -285,29 +285,23 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    }
 	}
 	if(type == (Main_cx_e | Synth_cx_st)){
-	    log_append_logfile("loading synth \n");
 	    //load the oscillators with their names
 	    if(app_intrf->load_from_conf == 1){
-		log_append_logfile("synth load from conf \n");
 		int osc_num = 0;
 		const char** osc_names = app_context_return_names(app_intrf->app_data, Context_type_Synth, &osc_num);
 		if(osc_names){
-		    log_append_logfile("getting osc names\n");
 		    for(int i = 0; i < osc_num; i++){
 			const char* cur_name = osc_names[i];
 			if(!cur_name)continue;
-			log_append_logfile("osc name %s\n", cur_name);
 			char osc_id[20];
 			snprintf(osc_id, 20, "%d", i);
 			if(!cx_init_cx_type(app_intrf, ret_node->name, cur_name, Osc_cx_e, (const char*[1]){osc_id}, (const char*[1]){"id"}, 1)){
-			    log_append_logfile("osc load failed \n");
 			    cx_remove_this_and_children(ret_node);
 			    return NULL;
 			}
 		    }
 		}
 		free(osc_names);
-		log_append_logfile("finished loading synth \n");
 	    }
 	}
         //if this is Sampler_cx_st add a AddList_cx_st button that adds cx from a chosen file
@@ -346,7 +340,6 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
         return ret_node;
     }
     if((type & 0xff00) == Osc_cx_e){
-	log_append_logfile("loading Osc\n");
 	CX_OSC* cx_osc = malloc(sizeof(CX_OSC));
 	if(!cx_osc)return NULL;
 	cx_osc->id = -1;
@@ -354,7 +347,6 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	ret_node->save = 1;
 	if(attrib_size>0){
 	    cx_osc->id = str_find_value_to_int(type_attrib_names, type_attribs, "id", attrib_size);
-	    log_append_logfile("getting osc id %i\n", cx_osc->id);
 	}
 	if(cx_osc->id < 0){
 	    free(cx_osc);
@@ -365,14 +357,12 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
             free(cx_osc);
             return NULL;
         }
-	log_append_logfile("added osc to the cx array \n");
 	//if loaded from the conf json file create the cx representing the parameter
 	if(app_intrf->load_from_conf == 1){
 	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Synth, cx_osc->id)<0){
 		cx_remove_this_and_children(ret_node);
 		return NULL;
 	    }
-	    log_append_logfile("loaded osc parameters \n");
 	}	
     }
     //if the type is a sample
