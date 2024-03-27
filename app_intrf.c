@@ -284,6 +284,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 		}
 	    }
 	}
+
 	if(type == (Main_cx_e | Synth_cx_st)){
 	    //load the oscillators with their names
 	    if(app_intrf->load_from_conf == 1){
@@ -304,6 +305,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 		free(osc_names);
 	    }
 	}
+
         //if this is Sampler_cx_st add a AddList_cx_st button that adds cx from a chosen file
         if(type  == (Main_cx_e | Sampler_cx_st)){
             if(!cx_init_cx_type(app_intrf, ret_node->name, "add_sample", (Button_cx_e | AddList_cx_st),
@@ -363,7 +365,8 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 		cx_remove_this_and_children(ret_node);
 		return NULL;
 	    }
-	}	
+	}
+	return ret_node;
     }
     //if the type is a sample
     if((type & 0xff00) == Sample_cx_e){
@@ -2133,38 +2136,36 @@ static int helper_cx_copy_str_val(CX* from_cx, CX* to_cx){
 }
 
 static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* parent_node, unsigned char cx_type, unsigned int cx_id){
-	    //get the sampler parameters
-	    unsigned int param_num;
-	    char** param_names = NULL;
-	    char** param_vals = NULL;
-	    char** param_types = NULL;
-	    int got_params = app_param_return_all_as_string(app_intrf->app_data, cx_type, cx_id,
-						  &param_names, &param_vals, &param_types, &param_num);
-	    if(got_params >= 0 && param_num > 0 && param_names !=NULL){
-		for(int i=0; i<param_num; i++){
-		    if(param_names[i] == NULL)continue;
-		    if(param_vals[i]==NULL || param_types[i]==NULL)continue;
-
-		    char val_id[40];
-		    snprintf(val_id, 40, "%d", i);
-		    char val_cx_type [12];
-		    snprintf(val_cx_type, 12, "%d", cx_type);
-		    char val_cx_id [20];
-		    snprintf(val_cx_id, 20, "%d", cx_id);
-		    if(!cx_init_cx_type(app_intrf, parent_node->name, param_names[i], Val_cx_e,
-					(const char*[5]){val_id, param_types[i], param_vals[i], val_cx_type, val_cx_id},
-					(const char*[5]){"val_id", "val_type", "float_val", "cx_type", "cx_id"}, 5)){
-			return -1;
-		    }
-		    if(param_names[i])free(param_names[i]);
-		    if(param_vals[i])free(param_vals[i]);
-		    if(param_types[i])free(param_types[i]);
-		}
+    unsigned int param_num;
+    char** param_names = NULL;
+    char** param_vals = NULL;
+    char** param_types = NULL;
+    int got_params = app_param_return_all_as_string(app_intrf->app_data, cx_type, cx_id,
+						    &param_names, &param_vals, &param_types, &param_num);
+    if(got_params >= 0 && param_num > 0 && param_names !=NULL){
+	for(int i=0; i<param_num; i++){
+	    if(param_names[i] == NULL)continue;
+	    if(param_vals[i]==NULL || param_types[i]==NULL)continue;
+	    char val_id[40];
+	    snprintf(val_id, 40, "%d", i);
+	    char val_cx_type [12];
+	    snprintf(val_cx_type, 12, "%d", cx_type);
+	    char val_cx_id [20];
+	    snprintf(val_cx_id, 20, "%d", cx_id);
+	    if(!cx_init_cx_type(app_intrf, parent_node->name, param_names[i], Val_cx_e,
+				(const char*[5]){val_id, param_types[i], param_vals[i], val_cx_type, val_cx_id},
+				(const char*[5]){"val_id", "val_type", "float_val", "cx_type", "cx_id"}, 5)){
+		return -1;
 	    }
-	    if(param_types)free(param_types);
-	    if(param_vals)free(param_vals);
-	    if(param_names)free(param_names);
-	    return 0;
+	    if(param_names[i])free(param_names[i]);
+	    if(param_vals[i])free(param_vals[i]);
+	    if(param_types[i])free(param_types[i]);
+	}
+    }
+    if(param_types)free(param_types);
+    if(param_vals)free(param_vals);
+    if(param_names)free(param_names);
+    return 0;
 }
 
 const char *app_intrf_write_err(const int *err_status){
