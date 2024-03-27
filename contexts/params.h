@@ -12,7 +12,7 @@ PRM_INTERP_VAL* params_init_interpolated_val(SAMPLE_T max_range, unsigned int to
 //interpolate the value and get the cur val
 SAMPLE_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, SAMPLE_T new_val);
 //initializes the parameter container the parameter value arrays (for min val, names etc) have to be the same size
-PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, const char** const param_names, float* param_vals,
+PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, float* param_vals,
 					 float* param_mins, float* param_maxs, float* param_incs, unsigned char* val_types);
 //add a curve table for exponential, logarithmic etc. parameters
 //should be added in the initialization stage, while the rt thread is not launched, since will add to rt and ui parameters
@@ -27,7 +27,7 @@ int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, u
 SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char* val_type,
 			 unsigned int curved, unsigned int interp, unsigned int rt_params);
 //set the strings for paramter, the type must be String_Return_type
-int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, const char** strings);
+int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings);
 //get the parameter string, from the current parameter value, the values must go from >= 0 in positive direction
 const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
 //check if the parameter is just changed - returns 1 if this parameters value was not retrieved with param_get_value

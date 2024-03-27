@@ -159,7 +159,7 @@ int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
     }
 
     //init the sample parameters to default values
-    cur_smp->params = params_init_param_container(NUM_PARAMS, (const char*[1]){"Note"}, (float[1]){40}, (float[1]){0},
+    cur_smp->params = params_init_param_container(NUM_PARAMS, (char*[1]){"Note"}, (float[1]){40}, (float[1]){0},
 						  (float[1]){127}, (float[1]){1}, (unsigned char[1]){Uchar_type});
     
     //first populate the new sample members

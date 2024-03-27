@@ -497,9 +497,12 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	cx_init_cx_type(app_intrf, ret_node->name, "load_preset", (Button_cx_e | AddList_cx_st),
 			(const char*[1]){"06"}, (const char*[1]){"uchar_val"}, 1);
 	//if init==1 initialize the values that the user can set or get as buttons
-	//TODO here we can create the Val_cx_e for each plugin control port
+	//create the Val_cx_e for each plugin control port
 	if(init==1){
-
+	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Plugins, cx_plug->id)<0){
+		cx_remove_this_and_children(ret_node);
+		return NULL;
+	    }
 	}
 	return ret_node;	
     }	    

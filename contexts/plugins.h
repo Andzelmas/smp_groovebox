@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include "../structs.h"
+#include "params.h"
 
 enum PlugStatus{
     plug_failed_malloc,
@@ -51,6 +52,8 @@ void plug_set_block_length(PLUG_INFO* plug_data, uint32_t block_length);
 void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug);
 //return the system ports of the plugin - plug_id is the number of the plugin in the plugins array.
 void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigned int* number_ports);
+//return the plugin parameter container
+PRM_CONTAIN* plug_return_param_container(PLUG_INFO* plug_data, unsigned int plug_id);
 //connect the ports, run the plugins instances for nframes, and update the output ports
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes);
 //run the plugin for nframes

@@ -98,7 +98,7 @@ SAMPLE_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, SAMPLE_T new_val
     return intrp_val->cur_val;
 }
 
-PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, const char** const param_names, float* param_vals,
+PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, float* param_vals,
 					 float* param_mins, float* param_maxs, float* param_incs, unsigned char* val_types){
     if(num_of_params<=0) return NULL;
     if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types) return NULL;
@@ -283,7 +283,7 @@ SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char
     return ret_val;
 }
 
-int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, const char** strings){
+int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings){
     if(!param_container)return -1;
     if(!strings)return -1;
     if(val_id >= param_container->num_of_params)return -1;
@@ -296,7 +296,7 @@ int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, const char
     if((val_type & 0xff) != String_Return_Type)return -1;
     if(!cur_param_rt->param_strings || !cur_param_ui->param_strings)return -1;
 
-    unsigned int len = (cur_param_rt->max_val - cur_param_rt->min_val) + 1;
+    unsigned int len = abs(cur_param_rt->max_val - cur_param_rt->min_val) + 1;
     if(len <= 0)return -1;
     
     for(int i = 0; i < len; i++){
@@ -328,7 +328,7 @@ const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, uns
 
     PRM_PARAM* cur_param = param_array[val_id];
     int cur_val = cur_param->val;
-    unsigned int len = (cur_param->max_val - cur_param->min_val) + 1;
+    unsigned int len = abs(cur_param->max_val - cur_param->min_val) + 1;
     if(len <= 0 || cur_val >= len || cur_val < 0)return NULL;
         
     return cur_param->param_strings[cur_val];
@@ -343,6 +343,7 @@ int param_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int 
     if(rt_params == 0)param_array = param_container->ui_params;
 
     PRM_PARAM* cur_param = param_array[val_id];
+    if(!cur_param)return -1;
     return cur_param->just_changed;
 }
 

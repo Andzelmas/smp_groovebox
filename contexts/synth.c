@@ -410,7 +410,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	    cur_voice->osc_table = NULL;
 	}
 
-	cur_osc->params = params_init_param_container(10, (const char* [10]){"Amp", "Freq", "Spread", "Wobble", "Octave", "Table", "A", "D", "S", "R"},
+	cur_osc->params = params_init_param_container(10, (char* [10]){"Amp", "Freq", "Spread", "Wobble", "Octave", "Table", "A", "D", "S", "R"},
 						      (float [10]){0.8, 0, 0, 0, 0, 0, 0.0, 0.0, 1.0, 0.001},
 						      (float [10]){0.00001, -12, 0, 0, ((MAX_SEMITONES - 12)/12)*-1, 0, 0.0, 0.0, 0.0, 0.0},
 						      (float [10]){1, 12, 1, 1, (MAX_SEMITONES - 12)/12, 3, 5.0, 5.0, 1.0, 5.0},
@@ -418,7 +418,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 						      (unsigned char [10]){DB_Return_Type, Float_type, Float_type, Float_type, Int_type, String_Return_Type,
 							  Curve_Float_Return_Type, Curve_Float_Return_Type, Float_type, Curve_Float_Return_Type});
 	//write strings to parameters that are String_Return_Type
-	param_set_param_strings(cur_osc->params, 5, (const char* [4]){"sin", "triang", "saw", "sqr"});
+	param_set_param_strings(cur_osc->params, 5, (char* [4]){"sin", "triang", "saw", "sqr"});
 	//put a curve table for the params that should be returned as curves
 	param_add_curve_table(cur_osc->params, 6, synth_data->amp_to_exp);
 	param_add_curve_table(cur_osc->params, 7, synth_data->amp_to_exp);

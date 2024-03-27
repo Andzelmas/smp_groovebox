@@ -227,7 +227,9 @@ static PRM_CONTAIN* app_return_param_container(APP_INFO* app_data, unsigned char
     if(cx_type == Context_type_Synth){
 	return_container = synth_return_param_container(app_data->synth_data, cx_id);
     }
-    
+    if(cx_type == Context_type_Plugins){
+	return_container = plug_return_param_container(app_data->plug_data, cx_id);
+    }
     return return_container;
 }
 

@@ -43,7 +43,8 @@ int main(){
         if(q=='e'){
 	    printf("->%s\n", nav_get_cx_name(app_intrf, sel_cx));
 	    //invoke can destroy cx that is why we get a new selected cx from that
-	    CX* new_select = nav_invoke_cx(app_intrf, sel_cx);
+	    int changed = 0;
+	    CX* new_select = nav_invoke_cx(app_intrf, sel_cx, &changed);
 	    if(new_select)sel_cx = new_select;
 	    nav_enter_cx(app_intrf, sel_cx);		
         }

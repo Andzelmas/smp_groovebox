@@ -42,7 +42,7 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
     jack_status_t status = 0;
 
     //initialize the general song trk parameters like current bar, beat, play etc.
-    jack_data->trk_params = params_init_param_container(7, (const char*[7]){"Tempo", "Bar", "Beat", "Tick", "Play", "BPB", "Beat_Type"},
+    jack_data->trk_params = params_init_param_container(7, (char*[7]){"Tempo", "Bar", "Beat", "Tick", "Play", "BPB", "Beat_Type"},
 							(float[7]){100, 1, 1, 0, 0, 4, 4},
 							(float[7]){10, 1, 1, 0, 0, 2, 2}, (float[7]){500, MAX_BARS, 16, 2000, 1, 16, 16},
 							(float[7]){1, 1, 1, floor(time_ticks_per_beat/4), 1, 1, 1},
@@ -191,10 +191,10 @@ void* app_jack_create_port_on_client(void* client_in, unsigned int port_type, un
     if(!client)return NULL;
     const char* type = NULL;
     switch(port_type){
-    case 0:
+    case TYPE_AUDIO:
 	type = JACK_DEFAULT_AUDIO_TYPE;
 	break;
-    case 1:
+    case TYPE_MIDI:
 	type = JACK_DEFAULT_MIDI_TYPE;
 	break;
     default:

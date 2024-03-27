@@ -21,7 +21,7 @@
 #include <math.h>
 //my libraries
 #include "plugins.h"
-#include "params.h"
+#include "../types.h"
 //my math funcs
 #include "../util_funcs/math_funcs.h"
 //symap for map to id and back
@@ -144,14 +144,14 @@ typedef struct _plug_evbuf_iterator_impl{
 
 
 //what type of flow the port has - in or out.
-enum PortFlow { FLOW_UNKNOWN, FLOW_INPUT, FLOW_OUTPUT };
+//enum PortFlow { FLOW_UNKNOWN, FLOW_INPUT, FLOW_OUTPUT };
 //por type
-enum PortType { TYPE_UNKNOWN, TYPE_CONTROL, TYPE_AUDIO, TYPE_EVENT, TYPE_CV };
+//enum PortType { TYPE_UNKNOWN, TYPE_CONTROL, TYPE_AUDIO, TYPE_EVENT, TYPE_CV };
 
 typedef struct _plug_port {
     const LilvPort* lilv_port; ///< LV2 port
     enum PortType type;      ///< Data type
-    enum PortFlow flow;      ///< Data flow direction
+    enum FlowType flow;      ///< Data flow direction
     void* sys_port;  ///< For audio/MIDI ports, otherwise NULL
     PLUG_EVBUF* evbuf;     ///< For MIDI ports, otherwise NULL
     void* widget;    ///< Control widget, if applicable
@@ -193,7 +193,6 @@ typedef struct _plug_control{
     LilvNode* node; //port or property
     LilvNode* symbol;
     LilvNode* label; //short name of the control
-    LV2_Atom_Forge* forge; //for urids
     LV2_URID property; //iff type == PROPERTY
     uint32_t index; //number of port if type == PORT
     LilvNode* group; //port/property group or NULL if none
@@ -251,7 +250,8 @@ typedef struct _plug_plug{
     //atom forge for types and general convenience
     LV2_Atom_Forge forge;
     PLUG_CONTROL** controls; //parameters (properties and port controls)
-    unsigned int num_controls; //number of PLUG_CONTROL 
+    unsigned int num_controls; //number of PLUG_CONTROL
+    PRM_CONTAIN* plug_params; //plugin parameter container for params.c
 }PLUG_PLUG;
 
 typedef struct _plug_info{
@@ -657,6 +657,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     plug->num_controls = 0;
     plug->request_update = false;
     plug->control_in = -1;
+    plug->plug_params = NULL;
     zix_sem_init(&(plug->work_lock), 1);
     //Check for thread-safe state restore() method
     plug->safe_restore = false;
@@ -782,14 +783,102 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     plug_create_properties(plug_data, plug, false);    
     //--------------------------------------------------
 
-    //TODO go through all created controls and create the params for each of them
-    //simply create the param_names param_vals etc with malloc of num_controls size and call the params init function
-    //the for loop should not be necessary
+    //go through all created controls and create the params for each of them
     if(plug->controls){
+	unsigned int num_of_params = plug->num_controls;
+	char** param_names = malloc(sizeof(char*) * num_of_params);
+	float* param_vals = malloc(sizeof(float) * num_of_params);
+	float* param_mins = malloc(sizeof(float) * num_of_params);
+	float* param_maxs = malloc(sizeof(float) * num_of_params);
+	float* param_incs = malloc(sizeof(float) * num_of_params);
+	unsigned char* val_types = malloc(sizeof(char) * num_of_params);
+	
 	for(unsigned int ct_iter = 0; ct_iter < plug->num_controls; ct_iter++){
-	    log_append_logfile("Control index %d type %d label %s\n", plug->controls[ct_iter]->index,
-			       plug->controls[ct_iter]->type, lilv_node_as_string(plug->controls[ct_iter]->label));
+	    //first set this index in all arrays to be sent to params init function to zero
+	    param_names[ct_iter] = NULL;
+	    param_vals[ct_iter] = 0;
+	    param_mins[ct_iter] = 0;
+	    param_maxs[ct_iter] = 0;
+	    param_incs[ct_iter] = 0;
+	    val_types[ct_iter] = 0;
+	    PLUG_CONTROL* cur_ctrl = plug->controls[ct_iter];
+	    if(!cur_ctrl)continue;
+
+	    param_names[ct_iter] = strdup(lilv_node_as_string(cur_ctrl->label));
+	    param_vals[ct_iter] = lilv_node_as_float(cur_ctrl->def);
+	    param_mins[ct_iter] = lilv_node_as_float(cur_ctrl->min);
+	    param_maxs[ct_iter] = lilv_node_as_float(cur_ctrl->max);
+
+	    unsigned char val_t = Float_type;
+	    if(cur_ctrl->is_integer || cur_ctrl->is_toggle){
+		val_t = Int_type;
+	    }
+	    if(cur_ctrl->is_enumeration){
+		val_t = String_Return_Type;
+	    }
+	    val_types[ct_iter] = val_t;
+	    //TODO now if the param is not writable it will simply have increment of 0 and the user wont be able to increase or decrease it
+	    //should have a property for this parameter to not send it to ui_to_rt ring buffer and only get its value from the plugin
+	    //TODO in case of writable and readable param should read and write the value (like trk params in trk context)
+	    if(cur_ctrl->is_writable != 1)continue;
+	    
+	    //decide how big the increment of the parameter will be
+	    float total_range = abs(param_maxs[ct_iter] - param_mins[ct_iter]);
+	    float cur_inc = 1;
+	    if(val_t == Float_type){
+		cur_inc = total_range * 0.01;
+	    }
+	    if(val_t == Int_type){
+		if(total_range <= 10) cur_inc = 1;
+		if(total_range <= 100) cur_inc = 5;
+		if(total_range <= 1000) cur_inc = 10;
+		if(total_range > 1000) cur_inc = (unsigned int)(total_range * 0.05);
+	    }
+	    if(cur_ctrl->is_toggle) cur_inc = 1;
+	    if(cur_ctrl->is_enumeration) cur_inc = 1;
+	    param_incs[ct_iter] = cur_inc;
 	}
+	PRM_CONTAIN* plug_params = params_init_param_container(num_of_params, param_names,
+							       param_vals, param_mins, param_maxs, param_incs, val_types);
+	//go through the controls again and set the strings for parameters that are string type
+	for(unsigned int ct_iter = 0; ct_iter < plug->num_controls; ct_iter++){
+	    PLUG_CONTROL* cur_ctrl = plug->controls[ct_iter];
+	    if(!cur_ctrl)continue;
+	    if(!cur_ctrl->is_enumeration || !cur_ctrl->is_integer)continue;
+
+	    if(cur_ctrl->n_points > 0 && cur_ctrl->points){
+		char** val_labels = malloc(sizeof(char*) * cur_ctrl->n_points);
+		if(val_labels){
+		    for(unsigned int c_pt = 0; c_pt < cur_ctrl->n_points; c_pt++){
+			val_labels[c_pt] = NULL;
+			ScalePoint* cur_pt = &(cur_ctrl->points[c_pt]);
+			if(!cur_pt)continue;
+			if(!cur_pt->label)continue;
+			val_labels[c_pt] = strdup(cur_pt->label);
+		    }		    
+		    param_set_param_strings(plug_params, ct_iter, val_labels);
+		    for(unsigned int lbl_iter = 0; lbl_iter < cur_ctrl->n_points; lbl_iter++){
+			char* cur_lbl = val_labels[lbl_iter];
+			if(cur_lbl)free(cur_lbl);
+		    }
+		    free(val_labels);
+		}
+	    }	    
+	}
+	//clean the temp arrays
+	if(param_names){
+	    for(unsigned int name_iter = 0; name_iter < num_of_params; name_iter++){
+		if(param_names[name_iter])free(param_names[name_iter]);
+	    }
+	    free(param_names);
+	}
+	if(param_vals)free(param_vals);
+	if(param_mins)free(param_mins);
+	if(param_maxs)free(param_maxs);
+	if(param_incs)free(param_incs);
+	if(val_types)free(val_types);
+
+	plug->plug_params = plug_params;
     }
     
     plug->midi_cont = app_jack_init_midi_cont(MIDI_CONT_SIZE);
@@ -916,12 +1005,11 @@ static PLUG_CONTROL* new_port_control(LilvWorld* const world, const LilvPlugin* 
 				      LV2_Atom_Forge* forge){
     PLUG_CONTROL* id = (PLUG_CONTROL*)calloc(1, sizeof(PLUG_CONTROL));
     if(!id)return NULL;
-
+    id->property = 0;
     id->type = PORT;
     id->node = lilv_node_duplicate(lilv_port_get_node(plugin, port));
     id->symbol = lilv_node_duplicate(lilv_port_get_symbol(plugin, port));
     id->label = lilv_port_get_name(plugin, port);
-    id->forge = forge;
     id->index = port_index;
     id->group = lilv_port_get(plugin, port, nodes->pg_group);
     id->value_type = forge->Float;
@@ -975,6 +1063,7 @@ static PLUG_CONTROL* new_property_control(LilvWorld* const world, const LilvNode
 					  LV2_URID_Map* const map, LV2_Atom_Forge* forge){
     PLUG_CONTROL* id = (PLUG_CONTROL*)calloc(1, sizeof(PLUG_CONTROL));
     if(!id)return NULL;
+    id->node = NULL;
     id->is_enumeration = 0;
     id->is_integer = 0;
     id->is_logarithmic = 0;
@@ -985,7 +1074,6 @@ static PLUG_CONTROL* new_property_control(LilvWorld* const world, const LilvNode
     id->type = PROPERTY;
     id->node = lilv_node_duplicate(property);
     id->symbol = lilv_world_get_symbol(world, property);
-    id->forge = forge;
     id->property = map->map(map->handle, lilv_node_as_uri(property));
 
     id->label = lilv_world_get(world, property, nodes->rdfs_label, NULL);
@@ -1168,18 +1256,18 @@ void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	}
 	else if (lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.lv2_AudioPort)){
 	    cur_port->type = TYPE_AUDIO;
-	    cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, 0, port_io, full_port_name);
+	    cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_AUDIO, port_io, full_port_name);
 	}
 	else if(lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.lv2_CVPort)){
 	    cur_port->type = TYPE_CV;
-	    cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, 0, port_io, full_port_name);
+	    cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_AUDIO, port_io, full_port_name);
 	}
 	else if(lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.atom_AtomPort)){
 	    cur_port->type = TYPE_EVENT;
 	   
 	    if(lilv_port_supports_event(plug->plug, cur_port->lilv_port, plug_data->nodes.midi_MidiEvent)) {
 		cur_port->port_type_urid = plug_data->urids.midi_MidiEvent;
-		cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, 1, port_io, full_port_name);
+		cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_MIDI, port_io, full_port_name);
 	    }
 	    //ready the evbuf for the events
 	    //--------------------
@@ -1246,6 +1334,14 @@ void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigne
     return ret_sys_ports;
 }
 
+PRM_CONTAIN* plug_return_param_container(PLUG_INFO* plug_data, unsigned int plug_id){
+    if(!plug_data)return NULL;
+    if(plug_id > plug_data->max_id)return NULL;
+    PLUG_PLUG* cur_plug = plug_data->plugins[plug_id];
+    if(!cur_plug)return NULL;
+    return cur_plug->plug_params;
+}
+
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
     if(!plug_data)return;    
     if(!plug_data->plugins)return;    
@@ -1268,9 +1364,6 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    if(cur_port->type == TYPE_CV){
 		lilv_instance_connect_port(plug->plug_instance, i, a_buffer);	    
 	    }
-	    if(cur_port->type == TYPE_CONTROL && cur_port->flow == FLOW_INPUT){
-
-	    }
 	    if(cur_port->type == TYPE_EVENT && cur_port->flow == FLOW_INPUT){
 		//clean the evbuf
 		plug_evbuf_reset(cur_port->evbuf, 1);
@@ -1292,42 +1385,6 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 						     plug->midi_cont->buf_size[i], midi_msg);
 		    }
 		}
-
-		//send to control port atom controls (for plugin properties not on control ports)
-		//but only if there is a control_in port to send the atoms to
-		if(plug->control_in < plug->num_ports && plug->control_in != -1 && (uint32_t)plug->control_in == cur_port->index){
-		    //TODO contro_90 for testing purposes (for pianoteq volume control)
-		    //TODO dont copy the forge and only use it in init and rt thread
-		    //TODO redo all this to its own function so wouldnt need a for loop
-		    //app_data calls this rt function per param in the ui_to_rt ring buffer
-		    //in the function check the control_in port evbuf (plug_evbuf_get_size) if the size is 0 check if its valid, plug_evbuf_reset and iter_buf = plug_evbuf_begin
-		    //if the evbuf size is not 0 dont reset it, check if its valid and iter_buf = plug_evbuf_end to add the property control values to the end of the buffer
-		    //for control port simply get the port index and write the value to its port->control value
-		    PLUG_CONTROL* control_90 = NULL;
-		    for(unsigned int ctrl_iter = 0; ctrl_iter < plug->num_controls; ctrl_iter++){
-			PLUG_CONTROL* curr_control = plug->controls[ctrl_iter];
-			if(!curr_control)continue;
-			if(!strcmp(lilv_node_as_string(curr_control->label), "Volume")){
-			    control_90 = curr_control;
-			    break;
-			}
-		    }
-		    if(control_90){
-			LV2_Atom_Forge       forge = plug->forge;
-			LV2_Atom_Forge_Frame frame;
-			uint8_t              buf[MSG_BUFFER_SIZE];
-			lv2_atom_forge_set_buffer(&forge, buf, sizeof(buf));
-			lv2_atom_forge_object(&forge, &frame, 0, plug_data->urids.patch_Set);
-			lv2_atom_forge_key(&forge, plug_data->urids.patch_property);
-			lv2_atom_forge_urid(&forge, control_90->property);
-			lv2_atom_forge_key(&forge, plug_data->urids.patch_value);
-			lv2_atom_forge_float(&forge, 0.1);
-			lv2_atom_forge_pop(&forge, &frame);
-			//const LV2_Atom* const atom = lv2_atom_forge_deref(&forge, frame.ref);
-			const LV2_Atom* const atom = (const LV2_Atom*) buf;
-			plug_evbuf_write(&iter_buf, nframes, 0, atom->type, atom->size, LV2_ATOM_BODY_CONST(atom));
-		    }	    
-		}		
 	    }
 	    if(cur_port->type == TYPE_EVENT && cur_port->flow == FLOW_OUTPUT){
 		plug_evbuf_reset(cur_port->evbuf, 0);
@@ -1335,7 +1392,55 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    plug->request_update = false;
 	}
 	//----------------------------------------------------------------------------------------------------
-
+	//go through controls and either set them direclty if its control port parameter or send them to the
+	//event port as atoms if its a property port
+	for(unsigned int ctrl_iter = 0; ctrl_iter < plug->num_controls; ctrl_iter ++){
+	    int param_changed = param_get_if_changed(plug->plug_params, ctrl_iter, 1);
+	    if(param_changed != 1) continue;
+	    PLUG_CONTROL* cur_control = plug->controls[ctrl_iter];
+	    if(!cur_control)continue;
+	    if(!(cur_control->is_writable))continue;
+	    unsigned char param_val_type = 0;
+	    SAMPLE_T param_value = param_get_value(plug->plug_params, ctrl_iter, &param_val_type, 0, 0, 1);
+	    if(param_val_type == 0)continue;
+	    if(cur_control->type == PORT){
+		uint32_t port_index = cur_control->index;
+		if(port_index < plug->num_ports){
+		    PLUG_PORT* const control_port = &(plug->ports[port_index]);
+		    if(!control_port)continue;
+		    control_port->control = param_value;
+		}
+	    }
+	    if(cur_control->type == PROPERTY){
+		if(plug->control_in < plug->num_ports && plug->control_in != -1 && plug->controls){
+		    PLUG_PORT* const control_port = &(plug->ports[plug->control_in]);
+		    if(!control_port)continue;
+		    PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_begin(control_port->evbuf);
+		    if(plug_evbuf_get_size(control_port->evbuf) <= 0){
+			plug_evbuf_reset(control_port->evbuf, 1);
+		    }
+		    else{
+			iter_buf = plug_evbuf_end(control_port->evbuf);
+		    }
+		    if(!plug_evbuf_is_valid(iter_buf))continue;
+		    //send the value to the event port as atom
+		    //Dont copy the forge, only use address here - so the forge should only be used in rt thread
+		    //or when rt thread is paused (when initializing a plugin or preset etc.)
+		    LV2_Atom_Forge* forge = &(plug->forge);
+		    LV2_Atom_Forge_Frame frame;
+		    uint8_t buf[MSG_BUFFER_SIZE];
+		    lv2_atom_forge_set_buffer(forge, buf, sizeof(buf));
+		    lv2_atom_forge_object(forge, &frame, 0, plug_data->urids.patch_Set);
+		    lv2_atom_forge_key(forge, plug_data->urids.patch_property);
+		    lv2_atom_forge_urid(forge, cur_control->property);
+		    lv2_atom_forge_key(forge, plug_data->urids.patch_value);
+		    lv2_atom_forge_float(forge, param_value);
+		    lv2_atom_forge_pop(forge, &frame);
+		    const LV2_Atom* const atom = (const LV2_Atom*) buf;
+		    plug_evbuf_write(&iter_buf, nframes, 0, atom->type, atom->size, LV2_ATOM_BODY_CONST(atom));
+		}
+	    }
+	}
 	//----------------------------------------------------------------------------------------------------
 	//now run the plugin for nframes
 	plug_run_rt(plug, nframes);
@@ -1475,6 +1580,7 @@ int  plug_remove_plug(PLUG_INFO* plug_data, const int id){
     }
 
     //clean the controls
+    if(cur_plug->plug_params)param_clean_param_container(cur_plug->plug_params);
     if(cur_plug->controls){
 	for(unsigned int i = 0; i < cur_plug->num_controls; i++){
 	    PLUG_CONTROL* const control = cur_plug->controls[i];
