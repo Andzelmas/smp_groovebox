@@ -362,6 +362,7 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
     CX** cx_array_main = nav_return_children(app_intrf, curr_cx, &total, 1);
     if(total>0){
 	unsigned int widths[total];
+	unsigned int heights[total];
 	unsigned int name_from_cx[total];
 	unsigned int create_children[total];
 	//new total will be calculated because some contexts might need to be completely hidden
@@ -370,14 +371,15 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
 	CX** cx_new_array_main = malloc(sizeof(CX*) * total);
 	for(int i = 0; i<total; i++){
 	    if(nav_return_need_to_highlight(cx_array_main[i])==2)continue;
-	    widths[new_total] = 21;
+	    widths[new_total] = 23;
+	    heights[new_total] = 3;
 	    name_from_cx[new_total] = 1;
 	    create_children[new_total] = 1;
 	    cx_new_array_main[new_total] = cx_array_main[i];
 	    new_total += 1;
 	}
 	curr_src->win_array = win_init_win_array(app_intrf, curr_src->main_win, new_total, cx_new_array_main,
-						 NULL, widths, 0, name_from_cx, create_children);
+						 heights, widths, 0, name_from_cx, create_children);
 	if(!curr_src->win_array)return -1;
 	curr_src->win_array_size = new_total;	
 	if(cx_new_array_main)free(cx_new_array_main);
@@ -1221,7 +1223,7 @@ int win_create(APP_INTRF* app_intrf, WIN* app_win, int height, int width, int st
 		//its easier to send the cx to nav functions to increase or decrease the value.
 		CX* cx_param_array[] = {cx_obj, cx_obj};
 		app_win->children_array_size = 2;
-		app_win->children_array = win_init_win_array(app_intrf, app_win, 2, cx_param_array, NULL, NULL, 0, (unsigned int[2]){1,0}, NULL);
+		app_win->children_array = win_init_win_array(app_intrf, app_win, 2, cx_param_array, NULL, (unsigned int[2]){20,15}, 0, (unsigned int[2]){1,0}, NULL);
 		//put the value of the param as the value window text right away, otherwise when refreshed the text would be empty for a moment
 		app_win->children_array[1]->display_text = nav_get_cx_value_as_string(app_intrf, cx_obj);
 		//add the win type for the param window
