@@ -1142,6 +1142,7 @@ static void plug_create_properties(PLUG_INFO* plug_data, PLUG_PLUG* plug, bool w
 	else{
 	    free(record);
 	}
+	log_append_logfile("added property %s\n", lilv_node_as_string(record->label));
     }   
     
     lilv_nodes_free(properties);
@@ -1264,7 +1265,6 @@ void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	}
 	else if(lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.atom_AtomPort)){
 	    cur_port->type = TYPE_EVENT;
-	   
 	    if(lilv_port_supports_event(plug->plug, cur_port->lilv_port, plug_data->nodes.midi_MidiEvent)) {
 		cur_port->port_type_urid = plug_data->urids.midi_MidiEvent;
 		cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_MIDI, port_io, full_port_name);
@@ -1369,10 +1369,13 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		plug_evbuf_reset(cur_port->evbuf, 1);
 		PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_begin(cur_port->evbuf);
 		if(plug->request_update){
-		    const LV2_Atom_Object get = {
-			{sizeof(LV2_Atom_Object_Body), plug_data->urids.atom_Object},
-			{0, plug_data->urids.patch_Get}};
-		    plug_evbuf_write(&iter_buf, 0, 0, get.atom.type, get.atom.size, LV2_ATOM_BODY_CONST(&get));
+		    LV2_Atom_Forge_Frame frame;
+		    uint8_t buf[MSG_BUFFER_SIZE];
+		    lv2_atom_forge_set_buffer(&plug->forge, buf, sizeof(buf));
+		    lv2_atom_forge_object(&plug->forge, &frame, 0, plug_data->urids.patch_Get);
+		    const LV2_Atom* get = lv2_atom_forge_deref(&plug->forge, frame.ref);
+		    lv2_atom_forge_pop(&plug->forge, &frame);
+		    plug_evbuf_write(&iter_buf, 0, 0, get->type, get->size, LV2_ATOM_BODY_CONST(get));
 		}
 		//add midi event to the buffer
 		if(a_buffer){
@@ -1389,7 +1392,6 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    if(cur_port->type == TYPE_EVENT && cur_port->flow == FLOW_OUTPUT){
 		plug_evbuf_reset(cur_port->evbuf, 0);
 	    }
-	    plug->request_update = false;
 	}
 	//----------------------------------------------------------------------------------------------------
 	//go through controls and either set them direclty if its control port parameter or send them to the
@@ -1438,10 +1440,11 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    lv2_atom_forge_float(forge, param_value);
 		    lv2_atom_forge_pop(forge, &frame);
 		    const LV2_Atom* const atom = (const LV2_Atom*) buf;
-		    plug_evbuf_write(&iter_buf, nframes, 0, atom->type, atom->size, LV2_ATOM_BODY_CONST(atom));
+		    plug_evbuf_write(&iter_buf, 0, 0, atom->type, atom->size, LV2_ATOM_BODY_CONST(atom));
 		}
 	    }
 	}
+	plug->request_update = false;
 	//----------------------------------------------------------------------------------------------------
 	//now run the plugin for nframes
 	plug_run_rt(plug, nframes);
@@ -1464,7 +1467,6 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    if(cur_port->type == TYPE_EVENT){
 		void* buf = NULL;
 		if(cur_port->sys_port){
-
 		    //clean the buffer
 		    buf = app_jack_get_buffer_rt(cur_port->sys_port, nframes);
 		    app_jack_midi_clear_buffer_rt(buf);
@@ -1477,14 +1479,19 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    LV2_URID type = 0;
 		    uint32_t size = 0;
 		    void* data = NULL;
-
 		    plug_evbuf_get(i, &frames, &subframes, &type, &size, &data);
-		    if(buf && type == plug->urids->midi_MidiEvent){
+		    if(buf && type == plug_data->urids.midi_MidiEvent){
 			app_jack_midi_events_write_rt(buf, frames, data, size);
+		    }
+		    if(type == plug_data->urids.atom_Object){
+			//TODO could catch property changes (not control ports) when preset is applied or similar
+			//BUT its difficult to untangle what different plugins send, some (like Pianoteq) dont send this info at all
+			//SO not worth the effort, though without sending the new parameter values to the ui when a preset is loaded
+			//the parameters will stay the same, though audibly the plugin will change (if it has properties and not only control ports)
 		    }
 		}
 	    }
-	}	
+	}
     }
 }
 
