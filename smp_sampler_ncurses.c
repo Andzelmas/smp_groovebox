@@ -599,11 +599,14 @@ static void curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* cu
     }
     //if user wants to increase the value check if this is a parameter, if not try to enter the cx instead
     if(cx_do == 1){
+	nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
+	/*
 	unsigned int cx_type = nav_return_cx_type(first_win->cx_obj);
 	if((cx_type & 0xff00) == Val_cx_e)
 	    nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
 	else
 	    curr_enter_window(app_intrf, curr_scr, first_win);
+	*/
     }
     if(cx_do == -1){
 	nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
