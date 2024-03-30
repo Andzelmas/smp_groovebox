@@ -207,7 +207,9 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
 	//some functionality that was created on the first initialization
 	cx_enter_save_callback(app_intrf, app_intrf->root_cx->child);
     }
-
+    
+    //clap_plug_init("/usr/lib/clap/CHOWTapeModel.clap");
+    
     return app_intrf;
 }
 
