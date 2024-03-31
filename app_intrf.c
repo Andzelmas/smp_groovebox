@@ -591,7 +591,9 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	cx_set_value_callback(app_intrf, ret_node, cx_val->float_val, Operation_SetValue);
 	
         return ret_node;
-    }    
+    }
+
+    return ret_node;
 }
 
 static int cx_add_child(CX *parent_cx, CX *child_cx, const char *name, unsigned int type){
