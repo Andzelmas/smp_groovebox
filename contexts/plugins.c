@@ -142,12 +142,6 @@ typedef struct _plug_evbuf_iterator_impl{
     uint32_t offset;
 }PLUG_EVBUF_ITERATOR;
 
-
-//what type of flow the port has - in or out.
-//enum PortFlow { FLOW_UNKNOWN, FLOW_INPUT, FLOW_OUTPUT };
-//por type
-//enum PortType { TYPE_UNKNOWN, TYPE_CONTROL, TYPE_AUDIO, TYPE_EVENT, TYPE_CV };
-
 typedef struct _plug_port {
     const LilvPort* lilv_port; ///< LV2 port
     enum PortType type;      ///< Data type
@@ -485,16 +479,22 @@ static const char* unmap_uri(LV2_URID_Unmap_Handle handle, LV2_URID urid){
   return uri;
 }
 //internal function for printf for the log feature
+//TODO now does nothing
 static int plug_vprintf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, va_list ap){
     PLUG_INFO* const plug_data = (PLUG_INFO*)handle;
-    return vfprintf(stderr, fmt, ap);
+    //return vfprintf(stderr, fmt, ap);
+    return 0;
 }
+//TODO now does nothing
 static int plug_printf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, ...){
+    /*
     va_list args;
     va_start(args, fmt);
     const int ret = plug_vprintf(handle, type, fmt, args);
     va_end(args);
     return ret;
+    */
+    return 0;
 }
 PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 		     plug_status_t* plug_errors,
@@ -784,6 +784,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     //--------------------------------------------------
 
     //go through all created controls and create the params for each of them
+
     if(plug->controls){
 	unsigned int num_of_params = plug->num_controls;
 	char** param_names = malloc(sizeof(char*) * num_of_params);
@@ -880,7 +881,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 
 	plug->plug_params = plug_params;
     }
-    
+
     plug->midi_cont = app_jack_init_midi_cont(MIDI_CONT_SIZE);
     if(!plug->midi_cont){
 	plug_remove_plug(plug_data, plug->id);
@@ -1355,8 +1356,10 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    PLUG_PORT* const cur_port = &(plug->ports[i]);
 	    //if there is a sys_port get the buffer from it
 	    void* a_buffer = NULL;
-	    if(cur_port->sys_port)
+	    if(cur_port->sys_port){
 		a_buffer = app_jack_get_buffer_rt(cur_port->sys_port, nframes);
+		app_jack_midi_cont_reset(plug->midi_cont);
+	    }
 	    if(cur_port->type == TYPE_AUDIO){
 		lilv_instance_connect_port(plug->plug_instance, i, a_buffer);
 	    }
@@ -1373,12 +1376,10 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    lv2_atom_forge_set_buffer(&plug->forge, buf, sizeof(buf));
 		    lv2_atom_forge_object(&plug->forge, &frame, 0, plug_data->urids.patch_Get);
 		    const LV2_Atom* get = lv2_atom_forge_deref(&plug->forge, frame.ref);
-		    lv2_atom_forge_pop(&plug->forge, &frame);
 		    plug_evbuf_write(&iter_buf, 0, 0, get->type, get->size, LV2_ATOM_BODY_CONST(get));
 		}
 		//add midi event to the buffer
 		if(a_buffer){
-		    app_jack_midi_cont_reset(plug->midi_cont);
 		    app_jack_return_notes_vels_rt(a_buffer, plug->midi_cont);
 		    //go through the returned audio backend midi event and write to the evbuf
 		    for(uint32_t i = 0; i<plug->midi_cont->num_events; i++){
@@ -1403,7 +1404,8 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    unsigned char param_val_type = 0;
 	    SAMPLE_T param_value = param_get_value(plug->plug_params, ctrl_iter, &param_val_type, 0, 0, 1);
 	    if(param_val_type == 0)continue;
-	    if(!(cur_control->is_writable))continue;	    
+	    if(!(cur_control->is_writable))continue;
+
 	    if(cur_control->type == PORT){
 		uint32_t port_index = cur_control->index;
 		if(port_index < plug->num_ports){
@@ -1445,6 +1447,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    }
 
 	}
+
 	plug->request_update = false;
 	//----------------------------------------------------------------------------------------------------
 	//now run the plugin for nframes

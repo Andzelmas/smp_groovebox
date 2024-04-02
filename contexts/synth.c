@@ -423,7 +423,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	param_add_curve_table(cur_osc->params, 6, synth_data->amp_to_exp);
 	param_add_curve_table(cur_osc->params, 7, synth_data->amp_to_exp);
 	param_add_curve_table(cur_osc->params, 9, synth_data->amp_to_exp);
-	
+
 	synth_activate_backend_ports(synth_data, cur_osc);
     }
   

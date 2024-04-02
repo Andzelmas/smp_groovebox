@@ -4,6 +4,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdarg.h>
+#include <unistd.h>
 //my libraries includes
 //functions to interact with the app_data, user interface basically
 #include "app_intrf.h"
@@ -11,7 +12,7 @@
 #include "util_funcs/log_funcs.h"
 
 //max tick before it restarts
-#define MAX_TICK 10000
+#define MAX_TICK 100000
 //max windows that can fit in a window, after that scroll
 //if the screen is even smaller and less windows fit, the scroll bar will appear sooner
 #define MAX_WINDOWS 8
@@ -185,6 +186,15 @@ void ctrl_win_array_scroll(WIN* win_array[], WIN* win_parent, unsigned int* star
 			   unsigned int list, unsigned int up);
 
 int main(){
+    //start ncurses interface
+    initscr();
+    //cbreak();
+    clear();
+    //raw();
+    curs_set(0);
+    noecho();
+    //use mouse
+    mousemask(ALL_MOUSE_EVENTS, NULL);
     //clear the log file
     log_clear_logfile();
     //init the app interface
@@ -202,17 +212,7 @@ int main(){
     if(intrf_status<0){
         const char* err = app_intrf_write_err(&intrf_status);
         log_append_logfile("%s\n", err);
-    }
-
-    //start ncurses interface
-    initscr();
-    //cbreak();
-    clear();
-    //raw();
-    curs_set(0);
-    noecho();
-    //use mouse
-    mousemask(ALL_MOUSE_EVENTS, NULL);
+    }       
     //wait for user input but continue if no input used
     //halfdelay(1);
     //the screen struct that will hold the infor for the current screen, like cx arrays and so forth
@@ -220,15 +220,22 @@ int main(){
     if(curr_screen_init(app_intrf, &curr_scr)<0)exit(1);
     curr_screen_refresh(app_intrf, &curr_scr, 1);
     nodelay(curr_scr.curr_main_win->nc_win, 1);
+
+ 
     while(1){
-	curr_screen_refresh(app_intrf, &curr_scr, 1);	
 	//navigate the screen, if returns 1 exit the program
-	if(curr_screen_read(app_intrf, &curr_scr)==1)break;
-	curr_screen_clear(&curr_scr, 1);
+	int read_scr_err = curr_screen_read(app_intrf, &curr_scr);
+	if(read_scr_err == 1)break;
+	if(read_scr_err == 2){
+	    curr_screen_clear(&curr_scr, 1);
+	    curr_screen_refresh(app_intrf, &curr_scr, 1);
+	}
 	//read the lines from the logfile if there are new ones in there
 	//TODO would be better to use a void pointer with a string to display instead of opening a file constantly
-
-	if(curr_scr.tick %2000==0){
+	if(curr_scr.tick % 100000 == 0){
+	    curr_screen_clear(&curr_scr, 1);
+	    curr_screen_refresh(app_intrf, &curr_scr, 1);
+	    
 	    unsigned int curr_line = log_calclines_logfile();
 	    if((curr_line-1)>=curr_scr.log_line){
 		char* log_text = log_getline_logfile(curr_scr.log_line);
@@ -239,8 +246,13 @@ int main(){
 		curr_scr.log_line += 1;
 	    }
 	}
-
-	nav_update_params(app_intrf);
+	if(nav_update_params(app_intrf)>0){
+	    curr_screen_clear(&curr_scr, 1);
+	    curr_screen_refresh(app_intrf, &curr_scr, 1);
+	}
+	//increase the tick count and reset if necessary
+	curr_scr.tick += 1;
+	if(curr_scr.tick>MAX_TICK)curr_scr.tick = 0;
     }
     curr_screen_free(&curr_scr);
     
@@ -309,7 +321,7 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
     if(!curr_src)return -1;
     CX* curr_cx = nav_ret_curr_cx(app_intrf);
     if(!curr_cx)return -1;
-
+    
     unsigned int total = 0;
     //create the title_lr window array
     //if it does not exist create both title windows
@@ -431,7 +443,7 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
 	}
 	if(cx_array_root)free(cx_array_root);
     }
-    
+
     return 0;
 }
 
@@ -485,9 +497,6 @@ void curr_screen_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, unsigned i
     if(!curr_scr->fast_win)return;
     //before refreshing unhighlight all the windows if there are any
     curr_screen_highlights_off(curr_scr);
-    //increase the tick count and reset if necessary
-    curr_scr->tick += 1;
-    if(curr_scr->tick>MAX_TICK)curr_scr->tick = 0;  
     //layout the main windows, so they are correctly drawn even if the terminal is resized
     WIN* main_win_array[4] = {curr_scr->title_win, curr_scr->main_win, curr_scr->button_win, curr_scr->fast_win};
     win_layout_win_array(main_win_array, 4, 1, NULL, 0);
@@ -498,7 +507,8 @@ void curr_screen_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, unsigned i
     win_refresh_win_array(app_intrf, curr_scr, curr_scr->title_lr_win, 2, (unsigned int [2]){1, 0}, 0, clicked);
     //layout the title_scroll_win that holds the info on the left and scroll bars on the right
     win_layout_win_array(curr_scr->title_scroll_win, 2, 2, curr_scr->title_lr_win[1], 0);
-    win_refresh_win_array(app_intrf, curr_scr, curr_scr->title_scroll_win, 2, (unsigned int [2]){1,0}, 0, clicked);   
+    win_refresh_win_array(app_intrf, curr_scr, curr_scr->title_scroll_win, 2, (unsigned int [2]){1,0}, 0, clicked);
+
     //layout the main window cx array
     int scroll = win_layout_win_array(curr_scr->win_array, curr_scr->win_array_size, 0, curr_scr->main_win,
 				      curr_scr->win_array_start);
@@ -529,7 +539,7 @@ void curr_screen_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, unsigned i
     else{
 	curr_scr->title_scroll_win[1]->hide = 0;
     }
- 
+    
     //now refresh the main window win arrays, we do it here because we hide and unhide them
     win_refresh_win_array(app_intrf, curr_scr, curr_scr->scroll_bar_wins, 2, NULL, 1, clicked);    
     win_refresh_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_size, NULL, 1, clicked);
@@ -618,6 +628,7 @@ static void curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* cu
 //TODO keypresses should be in a json file so the user can modify the shortcuts
 static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, int ch, WINDOW* main_window){
     if(!app_intrf || !curr_scr)return -1;
+    int ret_val = 2;
     switch(ch){
     case '1':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
@@ -813,9 +824,10 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;		
 	break;
     default:
+	ret_val = 0;
 	break;
     }
-    return 0;
+    return ret_val;
 }
 //read the input and navigate the screen, returns 1 if we need to exit the program
 int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
@@ -878,9 +890,11 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
 		}
 	    }
 	}
+	
+	ret_val = 2;
     }
     //check keystrokes and key combinations
-    else ret_val = curr_input_keypress_read(app_intrf, curr_scr, ch, main_window);
+    else if(ch != -1) ret_val = curr_input_keypress_read(app_intrf, curr_scr, ch, main_window);
     return ret_val;
 }
 
@@ -1349,6 +1363,7 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
     }
     //if this is a parameter value update it
     //otherwise the value will stay the same as when the window was created
+
     if(win->cx_obj && win->win_type==(Param_win_type | Param_val_win_type)){
 	if(win->display_text){
 	    free(win->display_text);
@@ -1369,6 +1384,7 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	    win->anim = 0;
 	}
 	//if it does not fit we have to scroll the text
+
 	else{
 	    win->anim = 1;
 	    unsigned int tick = curr_scr->tick;
@@ -1408,6 +1424,7 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	    win->scroll_text = new_text;
 	    display = win->scroll_text;
 	}
+
 	if(display){
 	    mvwprintw(win->nc_win, 1, 1, display);
 	}

@@ -539,7 +539,8 @@ static int app_transport_control_rt(APP_INFO* app_data, NFRAMES_T nframes){
 }
 
 static int app_read_ring_buffer(APP_INFO* app_data, unsigned int rt_to_ui){
-    RING_BUFFER* ring_buffer = app_data->ui_to_rt_ring;
+    RING_BUFFER* ring_buffer = NULL;
+    if(rt_to_ui == UI_TO_RT_RING_E)ring_buffer = app_data->ui_to_rt_ring;
     if(rt_to_ui == RT_TO_UI_RING_E)ring_buffer = app_data->rt_to_ui_ring;
     if(!ring_buffer)return -1;
 

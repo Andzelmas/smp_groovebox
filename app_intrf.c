@@ -940,7 +940,8 @@ static int context_list_from_string(APP_INTRF* app_intrf, const char* disp_name,
 /*--------------------------------------------------------*/
 static float cx_get_value_callback(APP_INTRF* app_intrf, CX* self, unsigned char* ret_type){
     CX_VAL* cx_val = (CX_VAL*)self;
-    float ret_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_type, 0, 0);
+    float ret_val = 0;
+    ret_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_type, 0, 0);
     if(ret_val == -1 && *ret_type == 0) return -1;
     cx_val->float_val = ret_val;
 
