@@ -229,7 +229,6 @@ static void cx_process_from_file(void *arg,
 	    return;
 	}
     }
-    log_append_logfile("Loading name %s\t parent %s\t attrib_size %d\n", cx_name, parent, attrib_size);
     //add this context to the structure, cant be a context if there are 0 attrib values
     if(attrib_size>0)
 	cx_init_cx_type(app_intrf, parent, cx_name, type, attribs, attrib_names, attrib_size);	
