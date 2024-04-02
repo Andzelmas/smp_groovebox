@@ -86,6 +86,7 @@ typedef struct intrf_cx_button{
 
 typedef struct intrf_cx_val{
     struct intrf_cx list_cx;
+    char* val_name; //name of the parameter, that is the same as on the params container
     unsigned char val_type;
     unsigned int val_id;
     float float_val;
@@ -228,7 +229,7 @@ static void cx_process_from_file(void *arg,
 	    return;
 	}
     }
-    log_append_logfile("name %s\t parent %s\t attrib_size %d\n", cx_name, parent, attrib_size);
+    log_append_logfile("Loading name %s\t parent %s\t attrib_size %d\n", cx_name, parent, attrib_size);
     //add this context to the structure, cant be a context if there are 0 attrib values
     if(attrib_size>0)
 	cx_init_cx_type(app_intrf, parent, cx_name, type, attribs, attrib_names, attrib_size);	
@@ -362,13 +363,14 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
             free(cx_osc);
             return NULL;
         }
-	//if loaded from the conf json file create the cx representing the parameter
+	//if loaded from the conf json file create the cx representing the parameters
 	if(app_intrf->load_from_conf == 1){
 	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Synth, cx_osc->id)<0){
 		cx_remove_this_and_children(ret_node);
 		return NULL;
 	    }
 	}
+	//if loaded not from conf json file find parameters from the file and set their values
 	return ret_node;
     }
     //if the type is a sample
@@ -564,18 +566,20 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	
         ret_node = (CX*)cx_val;
 	ret_node->save = 1;
-	
         int child_add_err = cx_add_child(parent, ret_node, name, type);
         if(child_add_err<0){
             free(cx_val);
             return NULL;     
         }
+	cx_val->val_name = NULL;
 	cx_val->val_type = 0;
 	cx_val->val_id = 0;
 	cx_val->float_val = -1000;
 	cx_val->cx_type = 0;
 	cx_val->cx_id = 0;
 	if(attrib_size>0){
+	    cx_val->val_name = str_find_value_from_name(type_attrib_names, type_attribs,
+							 "val_name", attrib_size);	    
 	    cx_val->val_type = str_find_value_to_hex(type_attrib_names, type_attribs,
 							 "val_type", attrib_size);
 	    cx_val->val_id = str_find_value_to_int(type_attrib_names, type_attribs,
@@ -586,6 +590,13 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 							   "cx_type", attrib_size);
 	    cx_val->cx_id = str_find_value_to_hex(type_attrib_names, type_attribs,
 							   "cx_id", attrib_size);	    
+	}
+	//find the parameter id, sometimes what is saved in the json file can be in a different order from the parameters in params
+	//here we check the id of the same name for this purpose
+	cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name, 0);
+	if(cx_val->val_id == -1){
+	    cx_remove_this_and_children(ret_node);
+	    return NULL;
 	}
 	//to init the values on the value button we call the set_value function
 	cx_set_value_callback(app_intrf, ret_node, cx_val->float_val, Operation_SetValue);
@@ -876,6 +887,12 @@ static void cx_clear_contexts(CX *root, int only_one){
                 free(((CX_BUTTON*)root)->str_val);
             }	    
 	}
+	//clean Val_cx_e malloced members
+	if((root->type & 0xff00) == Val_cx_e){
+            if(((CX_VAL*)root)->val_name){
+                free(((CX_VAL*)root)->val_name);
+            }	    
+	}	
         free(root);
     }
     
@@ -1862,7 +1879,6 @@ static int helper_cx_connect_ports(APP_INTRF* app_intrf, CX* top_cx){
 	    int con_err = app_connect_ports(app_intrf->app_data, parent_port->str_val, child_port->str_val);
 	    //if connection is a success increase int_val that holds how many connections the port has
 	    if(con_err == 0 || con_err == EEXIST){
-		log_append_logfile("Connected port %s to %s \n", parent_port->str_val, child_port->str_val);
 		parent_port->int_val +=1;
 		child_cx->save = 1;
 	    }
@@ -1958,32 +1974,35 @@ static int helper_cx_iterate_with_callback(APP_INTRF* app_intrf, CX* top_cx, voi
 	    if(updated_val != -1 && ret_type != 0){
 		cx_val->float_val = updated_val;
 	    }
-	    attrib_names[1] = "val_type";
+	    attrib_names[1] = "val_name";
+	    attrib_vals[1] = cx_val->val_name;
+	    
+	    attrib_names[2] = "val_type";
 	    char val_type[12];
 	    snprintf(val_type, 12, "%2x", cx_val->val_type);
-	    attrib_vals[1] = val_type;
+	    attrib_vals[2] = val_type;
 	    
-	    attrib_names[2] = "val_id";
+	    attrib_names[3] = "val_id";
 	    char val_id[40];
 	    snprintf(val_id, 40, "%2d", cx_val->val_id);
-	    attrib_vals[2] = val_id;
+	    attrib_vals[3] = val_id;
 
-	    attrib_names[3] = "float_val";
+	    attrib_names[4] = "float_val";
 	    char float_val[100];
 	    snprintf(float_val, 100, "%f", cx_val->float_val);
-	    attrib_vals[3] = float_val;
+	    attrib_vals[4] = float_val;
 
-	    attrib_names[4] = "cx_type";
+	    attrib_names[5] = "cx_type";
 	    char cx_type[12];
 	    snprintf(cx_type, 12, "%d", cx_val->cx_type);
-	    attrib_vals[4] = cx_type;
+	    attrib_vals[5] = cx_type;
 	    
-	    attrib_names[5] = "cx_id";
+	    attrib_names[6] = "cx_id";
 	    char cx_id[20];
 	    snprintf(cx_id, 20, "%d", cx_val->cx_id);
-	    attrib_vals[5] = cx_id;
+	    attrib_vals[6] = cx_id;
 
-	    iter = 6;	    
+	    iter = 7;	    
 	}
 	if((top_cx->type & 0xff00) == Button_cx_e){
 	    CX_BUTTON* cx_button = (CX_BUTTON*)top_cx;
@@ -2158,8 +2177,8 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 	    char val_cx_id [20];
 	    snprintf(val_cx_id, 20, "%d", cx_id);
 	    if(!cx_init_cx_type(app_intrf, parent_node->name, param_names[i], Val_cx_e,
-				(const char*[5]){val_id, param_types[i], param_vals[i], val_cx_type, val_cx_id},
-				(const char*[5]){"val_id", "val_type", "float_val", "cx_type", "cx_id"}, 5)){
+				(const char*[6]){param_names[i], val_id, param_types[i], param_vals[i], val_cx_type, val_cx_id},
+				(const char*[6]){"val_name", "val_id", "val_type", "float_val", "cx_type", "cx_id"}, 6)){
 		return -1;
 	    }
 	    if(param_names[i])free(param_names[i]);

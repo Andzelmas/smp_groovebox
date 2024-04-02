@@ -375,6 +375,21 @@ const char* param_get_name(PRM_CONTAIN* param_container, int val_id, unsigned in
     return cur_name;
 }
 
+int param_find_name(PRM_CONTAIN* param_container, const char* param_name, unsigned int rt_params){
+    if(!param_container)return -1;
+    if(!param_name)return -1;
+    PRM_PARAM** param_array = param_container->rt_params;
+    //if we dont want the rt_params
+    if(rt_params == 0)param_array = param_container->ui_params;
+    for(int i = 0; i < param_container->num_of_params; i++){
+	const char* cur_name = param_array[i]->name;
+	if(strcmp(param_name, cur_name)==0){
+	    return i;
+	}
+    }
+    return -1;
+}
+
 unsigned int param_return_num_params(PRM_CONTAIN* param_container){
     if(!param_container)return 0;
     return param_container->num_of_params;    

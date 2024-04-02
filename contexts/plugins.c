@@ -1142,7 +1142,6 @@ static void plug_create_properties(PLUG_INFO* plug_data, PLUG_PLUG* plug, bool w
 	else{
 	    free(record);
 	}
-	log_append_logfile("added property %s\n", lilv_node_as_string(record->label));
     }   
     
     lilv_nodes_free(properties);
@@ -1401,10 +1400,10 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    if(param_changed != 1) continue;
 	    PLUG_CONTROL* cur_control = plug->controls[ctrl_iter];
 	    if(!cur_control)continue;
-	    if(!(cur_control->is_writable))continue;
 	    unsigned char param_val_type = 0;
 	    SAMPLE_T param_value = param_get_value(plug->plug_params, ctrl_iter, &param_val_type, 0, 0, 1);
 	    if(param_val_type == 0)continue;
+	    if(!(cur_control->is_writable))continue;	    
 	    if(cur_control->type == PORT){
 		uint32_t port_index = cur_control->index;
 		if(port_index < plug->num_ports){

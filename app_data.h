@@ -51,6 +51,8 @@ int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, in
 //curved == 1 the parameter should be returned from the curve_table if there is one on the parameter
 SAMPLE_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
 			     unsigned char* val_type, unsigned int curved, unsigned int rt_param);
+//get the parameter id given the context type, cx id and parameter id. Returns -1 if no such parameter is found
+int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name, unsigned int rt_param);
 //get the string of the String_Return_Type parameter
 const char* app_param_get_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
 				 unsigned int rt_param);

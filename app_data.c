@@ -265,6 +265,13 @@ SAMPLE_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_i
     return param_get_value(param_container, param_id, val_type, curved, 0, rt_param);
 }
 
+int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name, unsigned int rt_param){
+    if(!app_data)return -1;
+    PRM_CONTAIN* param_container = app_return_param_container(app_data, cx_type, cx_id);
+    if(!param_container)return -1;
+    return param_find_name(param_container, param_name, rt_param);
+}
+
 const char* app_param_get_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
 			      unsigned int rt_param){
     if(!app_data)return NULL;
