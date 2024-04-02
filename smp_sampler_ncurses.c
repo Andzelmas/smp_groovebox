@@ -12,7 +12,7 @@
 #include "util_funcs/log_funcs.h"
 
 //max tick before it restarts
-#define MAX_TICK 100000
+#define MAX_TICK 10000
 //max windows that can fit in a window, after that scroll
 //if the screen is even smaller and less windows fit, the scroll bar will appear sooner
 #define MAX_WINDOWS 8
@@ -219,9 +219,7 @@ int main(){
     CURR_SCREEN curr_scr;
     if(curr_screen_init(app_intrf, &curr_scr)<0)exit(1);
     curr_screen_refresh(app_intrf, &curr_scr, 1);
-    nodelay(curr_scr.curr_main_win->nc_win, 1);
-
- 
+    wtimeout(curr_scr.curr_main_win->nc_win, 25);
     while(1){
 	//navigate the screen, if returns 1 exit the program
 	int read_scr_err = curr_screen_read(app_intrf, &curr_scr);
@@ -232,10 +230,7 @@ int main(){
 	}
 	//read the lines from the logfile if there are new ones in there
 	//TODO would be better to use a void pointer with a string to display instead of opening a file constantly
-	if(curr_scr.tick % 100000 == 0){
-	    curr_screen_clear(&curr_scr, 1);
-	    curr_screen_refresh(app_intrf, &curr_scr, 1);
-	    
+	if(curr_scr.tick % 1000 == 0){	    
 	    unsigned int curr_line = log_calclines_logfile();
 	    if((curr_line-1)>=curr_scr.log_line){
 		char* log_text = log_getline_logfile(curr_scr.log_line);
@@ -245,7 +240,10 @@ int main(){
 		}
 		curr_scr.log_line += 1;
 	    }
+	    curr_screen_clear(&curr_scr, 1);
+	    curr_screen_refresh(app_intrf, &curr_scr, 1);
 	}
+	//update parameters from the rt thread 
 	if(nav_update_params(app_intrf)>0){
 	    curr_screen_clear(&curr_scr, 1);
 	    curr_screen_refresh(app_intrf, &curr_scr, 1);
@@ -254,6 +252,7 @@ int main(){
 	curr_scr.tick += 1;
 	if(curr_scr.tick>MAX_TICK)curr_scr.tick = 0;
     }
+
     curr_screen_free(&curr_scr);
     
     endwin();
@@ -1399,7 +1398,7 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	    if(end_char > strlen(win->display_text)-1){
 		end_char = strlen(win->display_text)-1;
 	    }
-	    else if(tick%1500==0){
+	    else if(tick%2==0){
 		win->text_start += 1;
 		if(win->text_start >= strlen(win->display_text))win->text_start = 0;
 	    }
