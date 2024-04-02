@@ -1412,6 +1412,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    control_port->control = param_value;
 		}
 	    }
+
 	    if(cur_control->type == PROPERTY){
 		if(plug->control_in < plug->num_ports && plug->control_in != -1 && plug->controls){
 		    PLUG_PORT* const control_port = &(plug->ports[plug->control_in]);
@@ -1442,6 +1443,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    plug_evbuf_write(&iter_buf, 0, 0, atom->type, atom->size, LV2_ATOM_BODY_CONST(atom));
 		}
 	    }
+
 	}
 	plug->request_update = false;
 	//----------------------------------------------------------------------------------------------------

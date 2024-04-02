@@ -227,6 +227,7 @@ int main(){
 	curr_screen_clear(&curr_scr, 1);
 	//read the lines from the logfile if there are new ones in there
 	//TODO would be better to use a void pointer with a string to display instead of opening a file constantly
+
 	if(curr_scr.tick %2000==0){
 	    unsigned int curr_line = log_calclines_logfile();
 	    if((curr_line-1)>=curr_scr.log_line){
@@ -238,6 +239,7 @@ int main(){
 		curr_scr.log_line += 1;
 	    }
 	}
+
 	nav_update_params(app_intrf);
     }
     curr_screen_free(&curr_scr);
