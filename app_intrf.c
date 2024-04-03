@@ -19,6 +19,8 @@
 #include "util_funcs/log_funcs.h"
 //how big is string array for attrib names and values and such
 #define MAX_ATTRIB_ARRAY 40
+//how big is the string for parameter values when they are returned as string
+#define MAX_VALUE_STRING 40
 //the file extension we are using for songs and presets
 #define FILE_EXT ".json"
 /*A FEW IMPORTANT RULES - no name or path strings can contain "<__>", its added to names automatically;
@@ -1610,44 +1612,29 @@ float nav_get_cx_value(APP_INTRF* app_intrf, CX* sel_cx, unsigned char* ret_type
     return ret_val;
 }
 
-char* nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx){
-    char* ret_string = NULL;
-    if(sel_cx==NULL)return ret_string;
+int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_string, int name_len){
+    if(sel_cx==NULL)return -1;
     unsigned char ret_type = 0;
     float cx_val = intrf_callback_get_value(app_intrf, sel_cx, &ret_type);
-    if(cx_val == -1 && ret_type == 0)return ret_string;
-    int name_len = 0;
+    if(cx_val == -1 && ret_type == 0)return -1;
     CX_VAL* param_cx = NULL;
     if((sel_cx->type & 0xff00) == Val_cx_e)param_cx = (CX_VAL*) sel_cx;
 	
-    //first we must find out how much we have to allocate
-    if((ret_type & 0xff) == Uchar_type)name_len = snprintf(NULL, 0, "%02X", (unsigned int) cx_val);
-    if((ret_type & 0xff) == Int_type)name_len = snprintf(NULL, 0, "%d", (int)cx_val);
-    if((ret_type & 0xff) == Float_type)name_len = snprintf(NULL, 0, "%g",cx_val);
-    if((ret_type & 0xff) == DB_Return_Type)name_len = snprintf(NULL, 0, "%0.2fDB",  log10((double)cx_val) * 20);
-    if((ret_type & 0xff) == Curve_Float_Return_Type)name_len = snprintf(NULL, 0, "%g", cx_val);
-    if((ret_type & 0xff) == String_Return_Type && param_cx != NULL)
-	name_len = strlen(app_param_get_string(app_intrf->app_data, param_cx->cx_type, param_cx->cx_id, param_cx->val_id, 0));
-    //if the name length is not 0 allocate the appropriate amount of memory for the string
     if(name_len>0){
-	ret_string = (char*)malloc(sizeof(char)*(name_len+1));
-	if(ret_string){
-	    if((ret_type & 0xff) == Uchar_type)snprintf(ret_string, name_len+1, "%02X", (unsigned int) cx_val);
-	    if((ret_type & 0xff) == Int_type)snprintf(ret_string, name_len+1, "%d", (int) cx_val);
-	    if((ret_type & 0xff) == Float_type)snprintf(ret_string, name_len+1, "%g", cx_val);
-	    if((ret_type & 0xff) == DB_Return_Type)snprintf(ret_string, name_len+1, "%0.2fDB", log10((double)cx_val) * 20);
-	    if((ret_type & 0xff) == Curve_Float_Return_Type)snprintf(ret_string, name_len+1, "%g", cx_val);
-	    if((ret_type & 0xff) == String_Return_Type && param_cx != NULL){
-		const char* param_string = app_param_get_string(app_intrf->app_data, param_cx->cx_type, param_cx->cx_id, param_cx->val_id, 0);
-		if(param_string == NULL){
-		    free(ret_string);
-		    return NULL;
-		}
-		snprintf(ret_string, name_len + 1, "%s", param_string);
+	if((ret_type & 0xff) == Uchar_type)snprintf(ret_string, name_len, "%02X", (unsigned int) cx_val);
+	if((ret_type & 0xff) == Int_type)snprintf(ret_string, name_len, "%d", (int) cx_val);
+	if((ret_type & 0xff) == Float_type)snprintf(ret_string, name_len, "%g", cx_val);
+	if((ret_type & 0xff) == DB_Return_Type)snprintf(ret_string, name_len, "%0.2fDB", log10((double)cx_val) * 20);
+	if((ret_type & 0xff) == Curve_Float_Return_Type)snprintf(ret_string, name_len, "%g", cx_val);
+	if((ret_type & 0xff) == String_Return_Type && param_cx != NULL){
+	    const char* param_string = app_param_get_string(app_intrf->app_data, param_cx->cx_type, param_cx->cx_id, param_cx->val_id, 0);
+	    if(param_string == NULL){
+		return -1;
 	    }
+	    snprintf(ret_string, name_len, "%s", param_string);
 	}
     }
-    return ret_string;
+    return 0;
 }
 
 int nav_set_cx_value(APP_INTRF* app_intrf, CX* select_cx, int set_to){

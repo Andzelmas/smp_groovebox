@@ -264,8 +264,8 @@ CX* nav_ret_curr_cx(APP_INTRF* app_intrf);
 CX* nav_ret_select_cx(APP_INTRF* app_intrf);
 //get the value of the cx, ret_type returns what type the value is originally
 float nav_get_cx_value(APP_INTRF* app_intrf, CX* sel_cx, unsigned char* ret_type);
-//get the value of the cx and return it as a malloced string (that needs to be freed)
-char* nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx);
+//get the value on cx Val_cx_e as a string, ret_string has to be name_len size, if the value string is longer the value will be cut
+int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_string, int name_len);
 //set the value of the selected cx - this will be a Button_cx_e that will increment or lower the apropriate
 //value of its parent cx (set_to<0 decrease the value, set_to>0 - increase the value).
 //though set_to is int, the actual value on the parameter will be float, the context will convert this value

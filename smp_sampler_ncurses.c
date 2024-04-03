@@ -16,13 +16,14 @@
 //animate animated windows (scroll text) every SCROLL_ANIM tick
 #define SCROLL_ANIM 2
 //show logfile line every SHOW_LOG_FILE tick
-#define SHOW_LOG_FILE 1000
+#define SHOW_LOG_FILE 10
 //how many milliseconds to sleep, while waiting for the keyboard or mouse input
 #define W_HALFDELAY 100
 //max windows that can fit in a window, after that scroll
 //if the screen is even smaller and less windows fit, the scroll bar will appear sooner
 #define MAX_WINDOWS 8
-
+//maximum length for the display_text of the window
+#define MAX_DISPLAY_TEXT 50
 //window struct that holds the text to display in the window, the ncurses window object and cx struct if
 //aplicable
 typedef struct _win_impl_ WIN;
@@ -32,6 +33,7 @@ typedef struct _win_impl_{
     unsigned int text_start;
     //the text to display, this can be the display_text, but if it does not fit, it will be scroll text
     char* scroll_text;
+    unsigned int has_text; //does this window have actual text
     //does the window depend on the tick (should we refresh/clear it each tick
     unsigned int anim;
     //what type of window this is, for example a parameter | name of the parameter or parameter | value
@@ -246,10 +248,9 @@ int main(){
 	//update parameters from the rt thread 
 	nav_update_params(app_intrf);
 
-	//clear and refresh the ncruses windows
+	//clear and refresh the ncruses animated windows
 	curr_screen_clear(&curr_scr, 1);
 	curr_screen_refresh(app_intrf, &curr_scr, 1);
-
 	//increase the tick count and reset if necessary
 	curr_scr.tick += 1;
 	if(curr_scr.tick>MAX_TICK)curr_scr.tick = 0;
@@ -552,6 +553,7 @@ void curr_screen_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, unsigned i
     //layout and refresh the root window cx array
     win_layout_win_array(curr_scr->root_win_array, curr_scr->root_win_array_size, 2, curr_scr->fast_win, 0);
     win_refresh_win_array(app_intrf, curr_scr, curr_scr->root_win_array, curr_scr->root_win_array_size, NULL, 1, clicked);
+    
     doupdate();
 }
 
@@ -1209,8 +1211,9 @@ WIN** win_init_win_array(APP_INTRF* app_intrf,  WIN* parent_win, unsigned int si
 int win_create(APP_INTRF* app_intrf, WIN* app_win, int height, int width, int starty, int startx, int highlight,
 	       const char* text, CX* cx_obj, unsigned int can_create_children){
     if(!app_win)return -1;
-    app_win->display_text = NULL;
-    app_win->scroll_text = NULL;
+    app_win->display_text = malloc(sizeof(char) * MAX_DISPLAY_TEXT);
+    app_win->scroll_text = malloc(sizeof(char) * MAX_DISPLAY_TEXT);
+    app_win->has_text = 0;
     app_win->text_start = 0;
     app_win->anim = 0;
     app_win->win_type = 0;
@@ -1229,10 +1232,9 @@ int win_create(APP_INTRF* app_intrf, WIN* app_win, int height, int width, int st
     if(!loc_win)return -1;
     app_win->nc_win = loc_win;
     if(text){
-	app_win->display_text = (char*)malloc(sizeof(char)*(strlen(text)+1));
-	if(app_win->display_text){
-	    strcpy(app_win->display_text, text);
-	}
+	snprintf(app_win->display_text, MAX_DISPLAY_TEXT, "%s", text);
+	snprintf(app_win->scroll_text, MAX_DISPLAY_TEXT, "%s", text);
+	app_win->has_text = 1;
     }
     //check if this cx is a parameter if yes, create a child_array for this window
     if(can_create_children==1){
@@ -1245,9 +1247,9 @@ int win_create(APP_INTRF* app_intrf, WIN* app_win, int height, int width, int st
 		app_win->children_array_size = 2;
 		app_win->children_array = win_init_win_array(app_intrf, app_win, 2, cx_param_array, NULL, (unsigned int[2]){20,15}, 0, (unsigned int[2]){1,0}, NULL);
 		//put the value of the param as the value window text right away, otherwise when refreshed the text would be empty for a moment
-		app_win->children_array[1]->display_text = nav_get_cx_value_as_string(app_intrf, cx_obj);
+		nav_get_cx_value_as_string(app_intrf, cx_obj, app_win->children_array[1]->display_text, MAX_DISPLAY_TEXT);
+		app_win->children_array[1]->has_text = 1;
 		//add the win type for the param window
-
 		app_win->children_array[0]->win_type = (Param_win_type | Param_name_win_type);
 		app_win->children_array[1]->win_type = (Param_win_type | Param_val_win_type);
 
@@ -1366,14 +1368,11 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
     //otherwise the value will stay the same as when the window was created
 
     if(win->cx_obj && win->win_type==(Param_win_type | Param_val_win_type)){
-	if(win->display_text){
-	    free(win->display_text);
-	    win->display_text = NULL;			
-	}
-	win->display_text = nav_get_cx_value_as_string(app_intrf, win->cx_obj);
+	nav_get_cx_value_as_string(app_intrf, win->cx_obj, win->display_text, MAX_DISPLAY_TEXT);
+	win->has_text = 1;
     }
 
-    if(win->display_text){
+    if(win->has_text){
 	//display the text but if it does not fit scroll it with the tick
 	int max_width = getmaxx(win->nc_win)-2;
 	if(max_width < 1) max_width = 1;
@@ -1385,13 +1384,9 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	    win->anim = 0;
 	}
 	//if it does not fit we have to scroll the text
-
 	else{
 	    win->anim = 1;
 	    unsigned int tick = curr_scr->tick;
-	    if(win->scroll_text != NULL){
-		display = win->scroll_text;
-	    }
 	    unsigned int start_char = win->text_start;
 	    if(start_char > (strlen(win->display_text)) - max_width){
 		start_char = (strlen(win->display_text)) - max_width;
@@ -1404,33 +1399,23 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 		win->text_start += 1;
 		if(win->text_start >= strlen(win->display_text))win->text_start = 0;
 	    }
-	    unsigned int new_len = (end_char - start_char) + 1;
-	    
-	    //create the new string
-	    char* new_text = (char*)malloc(sizeof(char) * (new_len+1));
-	    if(!new_text)return;
+	    unsigned int new_len = (end_char - start_char) + 1;	    
 	    //end null for string
-	    new_text[new_len] = '\0';
+	    memset(win->scroll_text, 0, sizeof(char)*MAX_DISPLAY_TEXT);
+	    win->scroll_text[new_len] = '\0';
 	    //copy the display text to the new text
 	    int j = 0;
 	    for(int i=start_char; i<=end_char; i++){
 		char cur_char = win->display_text[i];
-		new_text[j] = cur_char;
+		win->scroll_text[j] = cur_char;
 		j += 1;
 	    }
-	    if(win->scroll_text){
-		free(win->scroll_text);
-		win->scroll_text = NULL;
-	    }
-	    win->scroll_text = new_text;
 	    display = win->scroll_text;
 	}
-
 	if(display){
 	    mvwprintw(win->nc_win, 1, 1, display);
 	}
     }
- 
     wnoutrefresh(win->nc_win);    
 }
 
@@ -1451,25 +1436,19 @@ void win_free(WIN* win){
     if(!win)return;
     delwin(win->nc_win);
     if(win->display_text)free(win->display_text);
-    win->display_text = NULL;
     if(win->scroll_text)free(win->scroll_text);
-    win->scroll_text = NULL;
+    win->has_text = 0;
     //if this win has children free them too
     if(win->children_array_size>0)win_free_win_array(win->children_array, win->children_array_size);
     free(win);
 }
 
 void win_change_text(WIN* app_win, const char* in_text, ...){
-    char new_string[4096];
     va_list args;
     va_start(args, in_text);
-    int string_size = vsnprintf(new_string, sizeof(new_string), in_text, args);
+    vsnprintf(app_win->display_text, sizeof(char) * MAX_DISPLAY_TEXT, in_text, args);
     va_end(args);
-    char* temp_string = (char*)malloc(sizeof(char)*(string_size+1));
-    if(!temp_string)return;
-    strcpy(temp_string, new_string);
-    if(app_win->display_text)free(app_win->display_text);
-    app_win->display_text = temp_string;
+    app_win->has_text = 1;
 }
 
 static WIN* win_array_clicked(WIN* win_array[], unsigned int array_size, int y, int x){
