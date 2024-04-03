@@ -251,6 +251,7 @@ int main(){
 	//clear and refresh the ncruses animated windows
 	curr_screen_clear(&curr_scr, 1);
 	curr_screen_refresh(app_intrf, &curr_scr, 1);
+
 	//increase the tick count and reset if necessary
 	curr_scr.tick += 1;
 	if(curr_scr.tick>MAX_TICK)curr_scr.tick = 0;
@@ -1395,7 +1396,7 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	    if(end_char > strlen(win->display_text)-1){
 		end_char = strlen(win->display_text)-1;
 	    }
-	    else if(tick % SCROLL_ANIM ==0){
+	    if(tick % SCROLL_ANIM ==0){
 		win->text_start += 1;
 		if(win->text_start >= strlen(win->display_text))win->text_start = 0;
 	    }
