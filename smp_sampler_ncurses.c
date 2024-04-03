@@ -18,7 +18,7 @@
 //show logfile line every SHOW_LOG_FILE tick
 #define SHOW_LOG_FILE 1000
 //how many milliseconds to sleep, while waiting for the keyboard or mouse input
-#define W_HALFDELAY 25
+#define W_HALFDELAY 100
 //max windows that can fit in a window, after that scroll
 //if the screen is even smaller and less windows fit, the scroll bar will appear sooner
 #define MAX_WINDOWS 8
@@ -230,10 +230,6 @@ int main(){
 	//navigate the screen, if returns 1 exit the program
 	int read_scr_err = curr_screen_read(app_intrf, &curr_scr);
 	if(read_scr_err == 1)break;
-	if(read_scr_err == 2){
-	    curr_screen_clear(&curr_scr, 1);
-	    curr_screen_refresh(app_intrf, &curr_scr, 1);
-	}
 	//read the lines from the logfile if there are new ones in there
 	//TODO would be better to use a void pointer with a string to display instead of opening a file constantly
 	if(curr_scr.tick % SHOW_LOG_FILE == 0){	    
@@ -246,14 +242,14 @@ int main(){
 		}
 		curr_scr.log_line += 1;
 	    }
-	    curr_screen_clear(&curr_scr, 1);
-	    curr_screen_refresh(app_intrf, &curr_scr, 1);
 	}
 	//update parameters from the rt thread 
-	if(nav_update_params(app_intrf)>0){
-	    curr_screen_clear(&curr_scr, 1);
-	    curr_screen_refresh(app_intrf, &curr_scr, 1);
-	}
+	nav_update_params(app_intrf);
+
+	//clear and refresh the ncruses windows
+	curr_screen_clear(&curr_scr, 1);
+	curr_screen_refresh(app_intrf, &curr_scr, 1);
+
 	//increase the tick count and reset if necessary
 	curr_scr.tick += 1;
 	if(curr_scr.tick>MAX_TICK)curr_scr.tick = 0;
@@ -894,9 +890,9 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
 		    }		    
 		}
 	    }
+	    
+	    ret_val = 2;
 	}
-	
-	ret_val = 2;
     }
     //check keystrokes and key combinations
     else if(ch != -1) ret_val = curr_input_keypress_read(app_intrf, curr_scr, ch, main_window);
