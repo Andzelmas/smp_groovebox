@@ -13,6 +13,12 @@
 
 //max tick before it restarts
 #define MAX_TICK 10000
+//animate animated windows (scroll text) every SCROLL_ANIM tick
+#define SCROLL_ANIM 2
+//show logfile line every SHOW_LOG_FILE tick
+#define SHOW_LOG_FILE 1000
+//how many milliseconds to sleep, while waiting for the keyboard or mouse input
+#define W_HALFDELAY 25
 //max windows that can fit in a window, after that scroll
 //if the screen is even smaller and less windows fit, the scroll bar will appear sooner
 #define MAX_WINDOWS 8
@@ -219,7 +225,7 @@ int main(){
     CURR_SCREEN curr_scr;
     if(curr_screen_init(app_intrf, &curr_scr)<0)exit(1);
     curr_screen_refresh(app_intrf, &curr_scr, 1);
-    wtimeout(curr_scr.curr_main_win->nc_win, 25);
+    wtimeout(curr_scr.curr_main_win->nc_win, W_HALFDELAY);
     while(1){
 	//navigate the screen, if returns 1 exit the program
 	int read_scr_err = curr_screen_read(app_intrf, &curr_scr);
@@ -230,7 +236,7 @@ int main(){
 	}
 	//read the lines from the logfile if there are new ones in there
 	//TODO would be better to use a void pointer with a string to display instead of opening a file constantly
-	if(curr_scr.tick % 1000 == 0){	    
+	if(curr_scr.tick % SHOW_LOG_FILE == 0){	    
 	    unsigned int curr_line = log_calclines_logfile();
 	    if((curr_line-1)>=curr_scr.log_line){
 		char* log_text = log_getline_logfile(curr_scr.log_line);
@@ -1398,7 +1404,7 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	    if(end_char > strlen(win->display_text)-1){
 		end_char = strlen(win->display_text)-1;
 	    }
-	    else if(tick%2==0){
+	    else if(tick % SCROLL_ANIM ==0){
 		win->text_start += 1;
 		if(win->text_start >= strlen(win->display_text))win->text_start = 0;
 	    }
