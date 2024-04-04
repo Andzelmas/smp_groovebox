@@ -14,7 +14,7 @@
 #include "jack_funcs/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
 //the size of the ring buffer arrays for ui to rt and rt to ui communication
-#define MAX_RING_BUFFER_ARRAY_SIZE 4096
+#define MAX_RING_BUFFER_ARRAY_SIZE 2048
 //how many rt cycles should pass before the rt thread sends info to the ui thread, so it does not fill the
 //ring buffer too fast
 #define RT_TO_UI_TICK 25
@@ -552,7 +552,6 @@ static int app_read_ring_buffer(APP_INFO* app_data, unsigned int rt_to_ui){
 
 	RING_DATA_BIT cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
- 	
 	if(read_buffer<=0)continue;
 	float new_val = -1;
 	unsigned char val_type = 0;
