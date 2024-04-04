@@ -251,6 +251,11 @@ int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, in
     RING_BUFFER* ring_buffer = app_data->ui_to_rt_ring;
     if(rt_to_ui == RT_TO_UI_RING_E)ring_buffer = app_data->rt_to_ui_ring;
     int ret = ring_buffer_write(ring_buffer, &send_bit, sizeof(send_bit));
+    //for testing how many items are in the ring_buffer
+    /*
+    if(rt_to_ui==0)
+	log_append_logfile("ringbuffer size %d after sending %s\n", ring_buffer_return_items(ring_buffer),param_get_name(param_container, param_id, rt_to_ui));
+    */
     return ret;
 }
 
