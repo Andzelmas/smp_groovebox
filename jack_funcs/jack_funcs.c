@@ -551,7 +551,7 @@ int app_jack_return_transport(void* audio_client, int32_t* cur_bar, int32_t* cur
     
     jack_position_t pos;
     jack_transport_state_t state = jack_transport_query(jack_data->client, &pos);
-    if(state == JackTransportRolling)isPlaying = 1;
+    if(state != JackTransportStopped)isPlaying = 1;
 
     if(pos.valid) *total_frames = pos.frame;
     

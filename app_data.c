@@ -14,7 +14,7 @@
 #include "jack_funcs/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
 //the size of the ring buffer arrays for ui to rt and rt to ui communication
-#define MAX_RING_BUFFER_ARRAY_SIZE 256
+#define MAX_RING_BUFFER_ARRAY_SIZE 4096
 //how many rt cycles should pass before the rt thread sends info to the ui thread, so it does not fill the
 //ring buffer too fast
 #define RT_TO_UI_TICK 25
@@ -247,10 +247,9 @@ int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, in
     send_bit.param_id = param_id;
     send_bit.param_value = param_value;
     send_bit.param_op = param_op;
-    send_bit.value_type = 0;
+    send_bit.value_type = Float_type;
     RING_BUFFER* ring_buffer = app_data->ui_to_rt_ring;
     if(rt_to_ui == RT_TO_UI_RING_E)ring_buffer = app_data->rt_to_ui_ring;
-
     int ret = ring_buffer_write(ring_buffer, &send_bit, sizeof(send_bit));
     return ret;
 }
@@ -514,25 +513,24 @@ static int app_transport_control_rt(APP_INFO* app_data, NFRAMES_T nframes){
 	SAMPLE_T ticks_per_beat = 0;
 	NFRAMES_T total_frames = 0;
 	int isPlaying = app_jack_return_transport(app_data->trk_jack, &bar, &beat, &tick, &ticks_per_beat, &total_frames);
-	
 	if(isPlaying != -1){
 	    //we also get the tranport parameter container, so we can look up the value after sending it
 	    //to the ring buffer, otherwise just_changed will be 1 again and the new transport object
 	    //would be created each time the rt_cycle == 0
 	    PRM_CONTAIN* transport_cntr = app_return_param_container(app_data, Context_type_Trk, 0);
 	    unsigned char val_type = 0;	    
-	    app_param_set_value(app_data, Context_type_Trk, 0, 1, (float)bar, Operation_SetValue, RT_PARAM_E);
+	    app_param_set_value(app_data, Context_type_Trk, 0, 1, (float)bar, Operation_SetValue, RT_TO_UI_RING_E);
 	    param_get_value(transport_cntr, 1, &val_type, 0, 0, RT_PARAM_E);
 	    
-	    app_param_set_value(app_data, Context_type_Trk, 0, 2, (float)beat, Operation_SetValue, RT_PARAM_E);
+	    app_param_set_value(app_data, Context_type_Trk, 0, 2, (float)beat, Operation_SetValue, RT_TO_UI_RING_E);
 	    param_get_value(transport_cntr, 2, &val_type, 0, 0, RT_PARAM_E);
 
-	    app_param_set_value(app_data, Context_type_Trk, 0, 3, (float)tick, Operation_SetValue, RT_PARAM_E);
+	    app_param_set_value(app_data, Context_type_Trk, 0, 3, (float)tick, Operation_SetValue, RT_TO_UI_RING_E);
 	    param_get_value(transport_cntr, 3, &val_type, 0, 0, RT_PARAM_E);
 
 	    //also set the play value on the ui, just in case the transport started in some external way,
 	    //not through the parameter play
-	    app_param_set_value(app_data, Context_type_Trk, 0, 4, (float)isPlaying, Operation_SetValue, RT_PARAM_E);
+	    app_param_set_value(app_data, Context_type_Trk, 0, 4, (float)isPlaying, Operation_SetValue, RT_TO_UI_RING_E);
 	    param_get_value(transport_cntr, 4, &val_type, 0, 0, RT_PARAM_E);
 	}
     }

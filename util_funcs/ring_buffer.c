@@ -20,7 +20,6 @@ typedef struct _ring_fifo_buffer{
     unsigned int r_pos;
 }RING_BUFFER;
 
-
 RING_BUFFER* ring_buffer_init(unsigned int single_data_size, unsigned int data_array_size){
     RING_BUFFER* ret_ring = NULL;
     ret_ring = (RING_BUFFER*)malloc(sizeof(RING_BUFFER));
