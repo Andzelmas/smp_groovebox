@@ -89,6 +89,9 @@ typedef struct intrf_cx_button{
 typedef struct intrf_cx_val{
     struct intrf_cx list_cx;
     char* val_name; //name of the parameter, that is the same as on the params container
+    //this is NULL unless user creates this name in the parameter configuration file
+    //this variable is not saved when saving song or presets and is only used for display purposes, when nav_get_cx_name function is called
+    char* val_display_name;
     unsigned char val_type;
     unsigned int val_id;
     float float_val;
@@ -225,7 +228,9 @@ static void cx_process_from_file(void *arg,
     //extract the type from the attribs
     unsigned int type = str_find_value_to_hex(attrib_names, attribs, "type", attrib_size);
     //check if the context already exists
-    if(app_intrf->root_cx){
+    //BUT if the type is Val_cx_e dont check for duplicates, since when a parameter is duplicate the cx wont be created
+    //but the parameter will be updated with its value anyway (for cases when parameters are created with user configuration file)
+    if(app_intrf->root_cx && (type & 0xff00)!=Val_cx_e){
 	CX* found_cx = cx_find_name(cx_name, app_intrf->root_cx);
 	if(found_cx !=NULL){
 	    return;
@@ -456,8 +461,6 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    cx_plug->preset_path = str_find_value_from_name(type_attrib_names,
 							    type_attribs, "preset_path", attrib_size);
 	    cx_plug->id = str_find_value_to_int(type_attrib_names, type_attribs, "id", attrib_size);
-	    //do we need to initialize the plugin or is loaded from file
-	    init = str_find_value_to_int(type_attrib_names, type_attribs, "init", attrib_size);
 	}
 	//create the plugin
 	int plug_id = app_plug_init_plugin(app_intrf->app_data, cx_plug->plug_path, cx_plug->id);
@@ -495,13 +498,12 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	//button to load a preset for the plugin, if we fail to create it no big deal - presets wont load
 	cx_init_cx_type(app_intrf, ret_node->name, "load_preset", (Button_cx_e | AddList_cx_st),
 			(const char*[1]){"06"}, (const char*[1]){"uchar_val"}, 1);
-	//if init==1 initialize the values that the user can set or get as buttons
+
 	//create the Val_cx_e for each plugin control port
-	if(init==1){
-	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Plugins, cx_plug->id)<0){
-		cx_remove_this_and_children(ret_node);
-		return NULL;
-	    }
+	//this function also tries to find a configuration file for parameters and use user info from there
+	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Plugins, cx_plug->id)<0){
+	    cx_remove_this_and_children(ret_node);
+	    return NULL;
 	}
 	return ret_node;	
     }	    
@@ -564,15 +566,8 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
     if((type & 0xff00) == Val_cx_e){
         CX_VAL *cx_val = (CX_VAL*)malloc(sizeof(CX_VAL));
         if(!cx_val)return NULL;
-	
-        ret_node = (CX*)cx_val;
-	ret_node->save = 1;
-        int child_add_err = cx_add_child(parent, ret_node, name, type);
-        if(child_add_err<0){
-            free(cx_val);
-            return NULL;     
-        }
 	cx_val->val_name = NULL;
+	cx_val->val_display_name = NULL; //this name is not saved and only != NULL if user sets it in the parameter conf file
 	cx_val->val_type = 0;
 	cx_val->val_id = 0;
 	cx_val->float_val = -1000;
@@ -580,7 +575,9 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	cx_val->cx_id = 0;
 	if(attrib_size>0){
 	    cx_val->val_name = str_find_value_from_name(type_attrib_names, type_attribs,
-							 "val_name", attrib_size);	    
+							 "val_name", attrib_size);
+	    cx_val->val_display_name = str_find_value_from_name(type_attrib_names, type_attribs,
+							 "val_display_name", attrib_size);	    
 	    cx_val->val_type = str_find_value_to_hex(type_attrib_names, type_attribs,
 							 "val_type", attrib_size);
 	    cx_val->val_id = str_find_value_to_int(type_attrib_names, type_attribs,
@@ -591,7 +588,27 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 							   "cx_type", attrib_size);
 	    cx_val->cx_id = str_find_value_to_hex(type_attrib_names, type_attribs,
 							   "cx_id", attrib_size);	    
+	}	
+        ret_node = (CX*)cx_val;
+	ret_node->save = 1;
+	//if cx with this name exists, only set the value for the parameter but dont create the cx
+	CX* val_duplicate = cx_find_name(name, parent);
+	if(val_duplicate){
+	    //find the param id in case the order changed
+	    ret_node->type = Val_cx_e;
+	    cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name, 0);
+	    //set value and remove this cx
+	    cx_set_value_callback(app_intrf, ret_node, cx_val->float_val, Operation_SetValue);
+	    if(cx_val->val_name)free(cx_val->val_name);
+	    free(cx_val);
+	    return NULL;
 	}
+        int child_add_err = cx_add_child(parent, ret_node, name, type);
+        if(child_add_err<0){
+	    if(cx_val->val_name)free(cx_val->val_name);
+            free(cx_val);
+            return NULL;     
+        }
 	//find the parameter id, sometimes what is saved in the json file can be in a different order from the parameters in params
 	//here we check the id of the same name for this purpose
 	cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name, 0);
@@ -892,6 +909,9 @@ static void cx_clear_contexts(CX *root, int only_one){
 	if((root->type & 0xff00) == Val_cx_e){
             if(((CX_VAL*)root)->val_name){
                 free(((CX_VAL*)root)->val_name);
+            }
+	    if(((CX_VAL*)root)->val_display_name){
+                free(((CX_VAL*)root)->val_display_name);
             }	    
 	}	
         free(root);
@@ -1656,6 +1676,15 @@ const char* nav_get_cx_name(APP_INTRF* app_intrf, CX* select_cx){
     if(!select_cx)return NULL;
     if(!select_cx->short_name)return NULL;
     ret_string = select_cx->short_name;
+    //if this is a parameter user potentialy can set its name in parameter configuration file
+    //in that case val_display_name != NULL, so return this name to show on the ui
+    if((select_cx->type & 0xff00) == Val_cx_e){
+	CX_VAL* cx_val = (CX_VAL*)select_cx;
+	if(!cx_val)return ret_string;
+	if(cx_val->val_display_name){
+	    ret_string = cx_val->val_display_name;
+	}
+    }
     return ret_string;
 }
 
@@ -2151,6 +2180,16 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
     char** param_names = NULL;
     char** param_vals = NULL;
     char** param_types = NULL;
+    //TODO first get the configuration file and iterate through each parameter there and create Val_cx_e per each parameter in the file
+    //with the same name as the name in got_params.
+    //Create containers to group parameters, set their increment amounts, get default values to send as "float_val", val_display_name
+    //from the configuration file if these keys exist for the param.
+    //IF the file does not exist, create it with the default values so the user does not have to modify it from scratch
+    //(good candidate to show the user how to setup containers would be trk parameters - all beat, bar settings can go into its own container to not
+    //get in the way of the other parameters)
+    //THE configuration file name should be the same as plugin name not as the cx name (would create conf file per plugin instance)
+    //so configuration file name should be an argument in this function
+    //FOR sampler and synth configuration name should be not per sample or oscillator but per context - synth or sampler. 
     int got_params = app_param_return_all_as_string(app_intrf->app_data, cx_type, cx_id,
 						    &param_names, &param_vals, &param_types, &param_num);
     if(got_params >= 0 && param_num > 0 && param_names !=NULL){

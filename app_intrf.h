@@ -309,8 +309,11 @@ static int helper_cx_build_new_path(APP_INTRF* app_intrf, CX* self, int num);
 static char* helper_cx_combine_paths(CX* self);
 //copies str_val from from_cx to to_cx (for CX_BUTTON contexts)
 static int helper_cx_copy_str_val(CX* from_cx, CX* to_cx);
-//create cx contexts from default context parameters (for example for sample)
+//create cx contexts from default context parameters (for example for sample or synth or plugin etc)
 //parent_node - for which cx to create the parameters
+//this function also tries to get the user configuration file for the parameters if the file exists -
+//it will use the info there to create containers for the parameters, their val_display_name variables, value increment amounts etc
+//if the file does not exists - this function will create the file with default values so the user can modify what he needs
 static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* parent_node, unsigned char cx_type, unsigned int cx_id);
 //parse the IntrfStatus enum errors and return a readable string
 const char *app_intrf_write_err(const int* err_status);
