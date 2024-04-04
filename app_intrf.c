@@ -2189,7 +2189,9 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
     //get in the way of the other parameters)
     //THE configuration file name should be the same as plugin name not as the cx name (would create conf file per plugin instance)
     //so configuration file name should be an argument in this function
-    //FOR sampler and synth configuration name should be not per sample or oscillator but per context - synth or sampler. 
+    //FOR sampler and synth configuration name should be not per sample or oscillator but per context - synth or sampler.
+    //THINK how to setup user names for parameter values - similar to lv2 ScalePoints. Would be best if params had a pointer to function that does
+    //value to text. Current system should be changed.
     int got_params = app_param_return_all_as_string(app_intrf->app_data, cx_type, cx_id,
 						    &param_names, &param_vals, &param_types, &param_num);
     if(got_params >= 0 && param_num > 0 && param_names !=NULL){
