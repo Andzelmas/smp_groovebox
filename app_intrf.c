@@ -176,9 +176,9 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
 	free(app_intrf);
 	*err_status = PlugJackFailedInit;
 	return NULL;
-    }    
+    }
+    
     //read the conf file if its not in this dir create it and the dir structure and the Song_01
-
     if(app_json_read_conf(&app_intrf->shared_dir, song_path, NULL, &app_intrf->load_from_conf, app_intrf, cx_process_from_file)!=0){
         app_intrf_close(app_intrf);
         *err_status = SongFileParseErr;
@@ -202,17 +202,9 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
     //connect ports after initializing the process
     app_intrf_iterate_reset_ports(app_intrf, app_intrf->root_cx, 1);
     
-
     //write the song path to the log file
     CX_MAIN* root_main = (CX_MAIN*)app_intrf->root_cx;
     log_append_logfile("Opened song %s \n", root_main->path);
-    
-
-    if(app_intrf->load_from_conf == 1){
-	//save the file if loaded from the configuration, since otherwise the default structure will be created without
-	//some functionality that was created on the first initialization
-	cx_enter_save_callback(app_intrf, app_intrf->root_cx->child);
-    }
     
     //clap_plug_init("/usr/lib/clap/CHOWTapeModel.clap");
     
@@ -283,37 +275,30 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    app_intrf->root_cx = ret_node;
 	}
 	if(type == (Main_cx_e | Trk_cx_st)){
-	    //if this context is created for the first time from a configuration file and not loaded from a song file
-	    //we need to get the parameter list from app_data and create the contexts for the parameters
-	    //if this context is loaded from a file the parameters will be also loaded from a file so no need to
-	    //create them
-	    if(app_intrf->load_from_conf == 1){
-		if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Trk, 0)<0){
-		    cx_remove_this_and_children(ret_node);
-		    return NULL;
-		}
+	    //create the Trk_cx_st context parameters, also check for the user parameter configuration file for this context
+	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Trk, 0)<0){
+		cx_remove_this_and_children(ret_node);
+		return NULL;
 	    }
 	}
 
 	if(type == (Main_cx_e | Synth_cx_st)){
 	    //load the oscillators with their names
-	    if(app_intrf->load_from_conf == 1){
-		int osc_num = 0;
-		const char** osc_names = app_context_return_names(app_intrf->app_data, Context_type_Synth, &osc_num);
-		if(osc_names){
-		    for(int i = 0; i < osc_num; i++){
-			const char* cur_name = osc_names[i];
-			if(!cur_name)continue;
-			char osc_id[20];
-			snprintf(osc_id, 20, "%d", i);
-			if(!cx_init_cx_type(app_intrf, ret_node->name, cur_name, Osc_cx_e, (const char*[1]){osc_id}, (const char*[1]){"id"}, 1)){
-			    cx_remove_this_and_children(ret_node);
-			    return NULL;
-			}
+	    int osc_num = 0;
+	    const char** osc_names = app_context_return_names(app_intrf->app_data, Context_type_Synth, &osc_num);
+	    if(osc_names){
+		for(int i = 0; i < osc_num; i++){
+		    const char* cur_name = osc_names[i];
+		    if(!cur_name)continue;
+		    char osc_id[20];
+		    snprintf(osc_id, 20, "%d", i);
+		    if(!cx_init_cx_type(app_intrf, ret_node->name, cur_name, Osc_cx_e, (const char*[1]){osc_id}, (const char*[1]){"id"}, 1)){
+			cx_remove_this_and_children(ret_node);
+			return NULL;
 		    }
 		}
-		free(osc_names);
 	    }
+	    free(osc_names);
 	}
 
         //if this is Sampler_cx_st add a AddList_cx_st button that adds cx from a chosen file
@@ -369,14 +354,12 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
             free(cx_osc);
             return NULL;
         }
-	//if loaded from the conf json file create the cx representing the parameters
-	if(app_intrf->load_from_conf == 1){
-	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Synth, cx_osc->id)<0){
-		cx_remove_this_and_children(ret_node);
-		return NULL;
-	    }
+	//initialize the parameters for this Oscillator, also check the parameters user configuration file
+	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Synth, cx_osc->id)<0){
+	    cx_remove_this_and_children(ret_node);
+	    return NULL;
 	}
-	//if loaded not from conf json file find parameters from the file and set their values
+
 	return ret_node;
     }
     //if the type is a sample
@@ -396,9 +379,6 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 		return NULL;
 	    }
 	    cx_smp->file_path = path;
-	    cx_smp->id = str_find_value_to_int(type_attrib_names, type_attribs, "id", attrib_size);
-	    //get value if we need to initialize this sample or if it will load from file
-	    init = str_find_value_to_int(type_attrib_names, type_attribs, "init", attrib_size);
 	}
 	//create the sample on the smp_data here, if successful it will return a unique id for the sample for
 	//us to interact with
@@ -410,35 +390,27 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    return NULL;
 	}
 	int child_add_err = -1;
-	//get the name if the sample is loaded for the first time
-	if(cx_smp->id == -1){
-	    char* smp_name = app_return_cx_name(app_intrf->app_data, Context_type_Sampler, sample_id);
-	    if(smp_name){
-		child_add_err = cx_add_child(parent, ret_node, smp_name, type);
-		free(smp_name);
-	    }
-	}
-	else{
-	    child_add_err = cx_add_child(parent, ret_node, name, type);
+	//get the name
+	char* smp_name = app_return_cx_name(app_intrf->app_data, Context_type_Sampler, sample_id);
+	if(smp_name){
+	    child_add_err = cx_add_child(parent, ret_node, smp_name, type);
+	    free(smp_name);
 	}
         if(child_add_err<0){
 	    if(cx_smp->file_path)free(cx_smp->file_path);
             free(cx_smp);
             return NULL;
         }
-
 	cx_smp->id = sample_id;
+	
 	if(!cx_init_cx_type(app_intrf, ret_node->name, "remove", (Button_cx_e | Remove_cx_st), NULL, NULL,0)){
 	    cx_remove_this_and_children(ret_node);
 	    return NULL;
 	}
-	//if init==1 initialize the values that the user can set or get as buttons
-	if(init==1){
-	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Sampler, cx_smp->id)<0){
-		cx_remove_this_and_children(ret_node);
-		return NULL;
-	    }
-
+	//initialize the parameters also check for configuration file for the parameters
+	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Sampler, cx_smp->id)<0){
+	    cx_remove_this_and_children(ret_node);
+	    return NULL;
 	}
 	return ret_node;	
     }
@@ -460,7 +432,6 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    }
 	    cx_plug->preset_path = str_find_value_from_name(type_attrib_names,
 							    type_attribs, "preset_path", attrib_size);
-	    cx_plug->id = str_find_value_to_int(type_attrib_names, type_attribs, "id", attrib_size);
 	}
 	//create the plugin
 	int plug_id = app_plug_init_plugin(app_intrf->app_data, cx_plug->plug_path, cx_plug->id);
@@ -471,24 +442,19 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    return NULL;
 	}
 	int child_add_err = -1;
-	//get the name if the plugin is loaded for the first time
-	if(cx_plug->id==-1){
-	    char* plug_name = app_return_cx_name(app_intrf->app_data, Context_type_Plugins, plug_id);
-	    if(plug_name){
-		child_add_err = cx_add_child(parent, ret_node, plug_name, type);
-		free(plug_name);
-	    }
-	}
-	else{
-	    child_add_err = cx_add_child(parent, ret_node, name, type);
+	//get the name
+	char* plug_name = app_return_cx_name(app_intrf->app_data, Context_type_Plugins, plug_id);
+	if(plug_name){
+	    child_add_err = cx_add_child(parent, ret_node, plug_name, type);
+	    free(plug_name);
 	}
         if(child_add_err<0){
 	    if(cx_plug->plug_path)free(cx_plug->plug_path);
             free(cx_plug);
             return NULL;
         }
-
 	cx_plug->id = plug_id;
+	
 	if(!cx_init_cx_type(app_intrf, ret_node->name, "remove", (Button_cx_e | Remove_cx_st), NULL, NULL,0)){
 	    cx_remove_this_and_children(ret_node);
 	    return NULL;
@@ -592,7 +558,10 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
         ret_node = (CX*)cx_val;
 	ret_node->save = 1;
 	//if cx with this name exists, only set the value for the parameter but dont create the cx
-	CX* val_duplicate = cx_find_name(name, parent);
+	//if this Val_cx_e parent has a parent search from there, since Val_cx_e can be in a container
+	CX* search_duplicate_root = parent;
+	if(parent->parent)search_duplicate_root = parent->parent;
+	CX* val_duplicate = cx_find_name(name, search_duplicate_root);
 	if(val_duplicate){
 	    //find the param id in case the order changed
 	    ret_node->type = Val_cx_e;
