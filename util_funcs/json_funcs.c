@@ -175,54 +175,58 @@ static int app_json_write_json_to_file(struct json_object* obj, const char* file
 	return_val = -1;
 	goto clean;
     }
+    char* whole_dir = NULL;
     //first try to create the dirs of the file_path, if these will fail with dir already exists thats fine
     //it means we can add the file already
-    dirs = (char*)malloc(sizeof(char)*strlen(file_path)+1);
-    if(!dirs){
-	log_append_logfile("Cant allocate mem for path\n");
-	return_val = -1;
-	goto clean;
-    }
-    strcpy(dirs, file_path);    
-    char* cur_dir = NULL;
-    cur_dir = strtok(dirs, "/");
-    int whole_len = 0;
-    char* whole_dir = NULL;
-    whole_dir = (char*)malloc(sizeof(char)*(strlen(cur_dir)+whole_len+2));
-    if(!whole_dir){
-	return_val = -1;
-	goto clean;
-    }
-    strcpy(whole_dir, cur_dir);
-    strcat(whole_dir, "/");
-    whole_len = strlen(whole_dir);
-    cur_dir = strtok(NULL, "/");
-    int mk_err = mkdir(whole_dir, 0777);
-    if(mk_err<0 && errno!=EEXIST){
-	log_append_logfile("Cant create %s\n", whole_dir);
-	return_val = -1;
-	goto clean;
-    }    
-    while(cur_dir!=NULL){
-	if(strchr(cur_dir,'.')!=NULL)goto next;
-	whole_dir = realloc(whole_dir, sizeof(char)*(strlen(cur_dir)+whole_len+2));
+    //Also if there is no / in the file_path it means there is no directories in the file_path, only the file name
+    if(strchr(file_path, '/') != NULL){
+	dirs = (char*)malloc(sizeof(char)*strlen(file_path)+1);
+	if(!dirs){
+	    log_append_logfile("Cant allocate mem for path\n");
+	    return_val = -1;
+	    goto clean;
+	}
+	strcpy(dirs, file_path);    
+	char* cur_dir = NULL;
+	cur_dir = strtok(dirs, "/");
+	int whole_len = 0;
+	whole_dir = (char*)malloc(sizeof(char)*(strlen(cur_dir)+whole_len+2));
 	if(!whole_dir){
 	    return_val = -1;
 	    goto clean;
 	}
-	strcat(whole_dir, cur_dir);
+
+	strcpy(whole_dir, cur_dir);
 	strcat(whole_dir, "/");
 	whole_len = strlen(whole_dir);
-	mk_err = mkdir(whole_dir, 0777);
+	cur_dir = strtok(NULL, "/");
+	int mk_err = mkdir(whole_dir, 0777);
 	if(mk_err<0 && errno!=EEXIST){
 	    log_append_logfile("Cant create %s\n", whole_dir);
 	    return_val = -1;
 	    goto clean;
+	}    
+	while(cur_dir!=NULL){
+	    if(strchr(cur_dir,'.')!=NULL)goto next;
+	    whole_dir = realloc(whole_dir, sizeof(char)*(strlen(cur_dir)+whole_len+2));
+	    if(!whole_dir){
+		return_val = -1;
+		goto clean;
+	    }
+	    strcat(whole_dir, cur_dir);
+	    strcat(whole_dir, "/");
+	    whole_len = strlen(whole_dir);
+	    mk_err = mkdir(whole_dir, 0777);
+	    if(mk_err<0 && errno!=EEXIST){
+		log_append_logfile("Cant create %s\n", whole_dir);
+		return_val = -1;
+		goto clean;
+	    }
+	next:
+	    cur_dir = strtok(NULL, "/");
 	}
-    next:
-	cur_dir = strtok(NULL, "/");
     }
-
+    
     fp = fopen(file_path, "w");
     if(!fp){
 	log_append_logfile("Cant create file %s\n", file_path);

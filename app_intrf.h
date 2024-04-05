@@ -292,12 +292,15 @@ static int helper_cx_is_port_nan(APP_INTRF* app_intrf, CX* cx_port);
 static int helper_cx_disconnect_ports(APP_INTRF* app_intrf, CX* top_cx, unsigned int disc_all);
 //goes through Port_cx_st and connects ports if there is a Port_cx_st inside
 static int helper_cx_connect_ports(APP_INTRF* app_intrf, CX* top_cx);
+//function that prepares strings for a parameter to write to a default user parameter configuration file
+//builds a json handle with app_json_write_json_callback that can be written to a file
+static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX* top_cx);
+//function to write strings for saving the contexts, and send these strings to an object that can be later written out
+//to a file. This function usually is used as a callback for the helper_cx_iterate_with_callback
+static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_cx);
 //iterates through the cx structure from the top_cx and calls a callback function
-//in_sib - travel to siblings of the top_cx or not
 static int helper_cx_iterate_with_callback(APP_INTRF* app_intrf, CX* top_cx, void* arg,
-				    void(*proc_func)(void*arg, const char* cur_name, const char* parent_name,
-						     const char** attrib_names, const char** attrib_vals,
-						     unsigned int attrib_size));
+					   void(*proc_func)(void*arg, APP_INTRF* app_intrf, CX* in_cx));
 //removes the rem_cx, its children and depending on type the data on data (for example sample in smp_data)
 static int helper_cx_remove_cx_and_data(APP_INTRF* app_intrf, CX* rem_cx);
 //clears the cx in the self_cx that have save == 1

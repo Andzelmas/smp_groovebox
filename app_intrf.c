@@ -274,6 +274,25 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
         if(type == (Main_cx_e | Root_cx_st)){
 	    app_intrf->root_cx = ret_node;
 	}
+	
+	//button to load a song or preset
+	if(!cx_init_cx_type(app_intrf, ret_node->name, "load", (Button_cx_e | AddList_cx_st),
+			    (const char*[1]){"02"}, (const char*[1]){"uchar_val"}, 1)){
+	    cx_remove_this_and_children(ret_node);
+	    return NULL;
+	}	
+	//add buttons that all Main_cx_e have
+	if(!cx_init_cx_type(app_intrf, ret_node->name, "save", (Button_cx_e | Save_cx_st), NULL, NULL, 0)){
+	    cx_remove_this_and_children(ret_node);
+	    return NULL;
+	}
+	//button for saving to new song
+	if(!cx_init_cx_type(app_intrf, ret_node->name, "save_new", (Button_cx_e | Save_cx_st),
+			    (const char*[1]){"1"}, (const char*[1]){"uchar_val"}, 1)){
+	    cx_remove_this_and_children(ret_node);
+	    return NULL;
+	}
+	
 	if(type == (Main_cx_e | Trk_cx_st)){
 	    //create the Trk_cx_st context parameters, also check for the user parameter configuration file for this context
 	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Trk, 0)<0){
@@ -281,7 +300,22 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 		return NULL;
 	    }
 	}
-
+        //if this is Sampler_cx_st add a AddList_cx_st button that adds cx from a chosen file
+        if(type  == (Main_cx_e | Sampler_cx_st)){
+            if(!cx_init_cx_type(app_intrf, ret_node->name, "add_sample", (Button_cx_e | AddList_cx_st),
+				(const char*[1]){"01"}, (const char*[1]){"uchar_val"}, 1)){
+		cx_remove_this_and_children(ret_node);
+		return NULL;
+            }  
+	}
+	//button to add a new plugin
+        if(type == (Main_cx_e | Plugins_cx_st)){
+            if(!cx_init_cx_type(app_intrf, ret_node->name, "add_plugin", (Button_cx_e | AddList_cx_st),
+				(const char*[1]){"03"}, (const char*[1]){"uchar_val"}, 1)){
+		cx_remove_this_and_children(ret_node);
+		return NULL;
+            }
+	}	
 	if(type == (Main_cx_e | Synth_cx_st)){
 	    //load the oscillators with their names
 	    int osc_num = 0;
@@ -300,40 +334,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    }
 	    free(osc_names);
 	}
-
-        //if this is Sampler_cx_st add a AddList_cx_st button that adds cx from a chosen file
-        if(type  == (Main_cx_e | Sampler_cx_st)){
-            if(!cx_init_cx_type(app_intrf, ret_node->name, "add_sample", (Button_cx_e | AddList_cx_st),
-				(const char*[1]){"01"}, (const char*[1]){"uchar_val"}, 1)){
-		cx_remove_this_and_children(ret_node);
-		return NULL;
-            }  
-	}
-	//button to add a new plugin
-        if(type == (Main_cx_e | Plugins_cx_st)){
-            if(!cx_init_cx_type(app_intrf, ret_node->name, "add_plugin", (Button_cx_e | AddList_cx_st),
-				(const char*[1]){"03"}, (const char*[1]){"uchar_val"}, 1)){
-		cx_remove_this_and_children(ret_node);
-		return NULL;
-            }
-	}
-	//button to load a song or preset
-	if(!cx_init_cx_type(app_intrf, ret_node->name, "load", (Button_cx_e | AddList_cx_st),
-			    (const char*[1]){"02"}, (const char*[1]){"uchar_val"}, 1)){
-	    cx_remove_this_and_children(ret_node);
-	    return NULL;
-	}	
-	//add buttons that all Main_cx_e have
-	if(!cx_init_cx_type(app_intrf, ret_node->name, "save", (Button_cx_e | Save_cx_st), NULL, NULL, 0)){
-	    cx_remove_this_and_children(ret_node);
-	    return NULL;
-	}
-	//button for saving to new song
-	if(!cx_init_cx_type(app_intrf, ret_node->name, "save_new", (Button_cx_e | Save_cx_st),
-			    (const char*[1]){"1"}, (const char*[1]){"uchar_val"}, 1)){
-	    cx_remove_this_and_children(ret_node);
-	    return NULL;
-	}	
+	
         return ret_node;
     }
     if((type & 0xff00) == Osc_cx_e){
@@ -342,6 +343,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	cx_osc->id = -1;
 	ret_node = (CX*)cx_osc;
 	ret_node->save = 1;
+	ret_node->sib = NULL;
 	if(attrib_size>0){
 	    cx_osc->id = str_find_value_to_int(type_attrib_names, type_attribs, "id", attrib_size);
 	}
@@ -354,6 +356,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
             free(cx_osc);
             return NULL;
         }
+
 	//initialize the parameters for this Oscillator, also check the parameters user configuration file
 	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Synth, cx_osc->id)<0){
 	    cx_remove_this_and_children(ret_node);
@@ -1011,11 +1014,11 @@ static void cx_enter_save_callback(APP_INTRF* app_intrf, CX* self){
 	//now build the new path of the cx, this sets the cx_main->path
 	if(helper_cx_build_new_path(app_intrf, self->parent, song_num)!=0)goto finish;
     }
-  
+    
     //create an empty object to build the structure in and continue if its not null
     if(app_json_create_obj(&obj)==0){
 	//travel through the cx structure and call a callback, but dont go to siblings of the self->parent
-	helper_cx_iterate_with_callback(app_intrf, send_cx, obj, app_json_write_json_callback);
+	helper_cx_iterate_with_callback(app_intrf, send_cx, obj, helper_cx_prepare_for_save);
     }
     //write the json handle to the file in the context path
     app_json_write_handle_to_file(obj, cx_main->path, write_new, preset);
@@ -1887,132 +1890,160 @@ static int helper_cx_connect_ports(APP_INTRF* app_intrf, CX* top_cx){
     return 0;
 }
 
+static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX* top_cx){
+    if((top_cx->type & 0xff00) != Val_cx_e) return;
+    //parameter cant be without a parent
+    if(!top_cx->parent) return;
+    const char* attrib_names[MAX_ATTRIB_ARRAY] = {NULL};
+    const char* attrib_vals[MAX_ATTRIB_ARRAY] = {NULL};
+    
+    char type_string[12];
+    snprintf(type_string, 12, "%.4x", top_cx->type);
+    attrib_names[0] = "type";
+    attrib_vals[0] = type_string;
+    
+    CX_VAL* cx_val = (CX_VAL*)top_cx;
+    //when loading the configuration file this name will be looked up in the params - if it exists this parameter will be created
+    attrib_names[1] = "name";
+    attrib_vals[1] = cx_val->val_name;
+    //for default configuration the name and display_name are the same
+    //user can change the display_name
+    attrib_names[2] = "display_name";
+    attrib_vals[2] = cx_val->val_name;
+    //TODO get default value (current value since this function will be used when creating params for the first time),
+    //value increment and any others that the user can change
+    app_json_write_json_callback(arg, top_cx->name, NULL, attrib_names, attrib_vals, 3);
+}
+
+static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_cx){
+    //dont save if no need to save the node
+    if(top_cx->save != 1)return;
+    const char* parent_name = NULL;
+    const char* attrib_names[MAX_ATTRIB_ARRAY] = {NULL};
+    const char* attrib_vals[MAX_ATTRIB_ARRAY] = {NULL};
+    //all cx should have a type
+    char type_string[12];
+    snprintf(type_string, 12, "%.4x", top_cx->type);
+    attrib_names[0] = "type";
+    attrib_vals[0] = type_string;
+    unsigned int iter = 1;
+    //add parent name if the cx has a parent (parent should be NULL only for the root cx)
+    if(top_cx->parent) parent_name = top_cx->parent->name;
+    //if the cx is of type CX_MAIN
+    if((top_cx->type & 0xff00) == Main_cx_e){
+	CX_MAIN* cx_main = (CX_MAIN*)top_cx;
+	attrib_names[1] = "path";
+	attrib_vals[1] = cx_main->path;
+	iter = 2;
+    }
+    if((top_cx->type & 0xff00) == Sample_cx_e){
+	CX_SAMPLE* cx_smp = (CX_SAMPLE*)top_cx;
+	attrib_names[1] = "file_path";
+	attrib_vals[1] = cx_smp->file_path;
+	    
+	attrib_names[2] = "id";
+	char id_string[20];
+	snprintf(id_string, 20, "%2d", cx_smp->id);
+	attrib_vals[2] = id_string;
+	    
+	iter = 3;
+    }
+    if((top_cx->type & 0xff00) == Plugin_cx_e){
+	CX_PLUGIN* cx_plug = (CX_PLUGIN*)top_cx;
+	attrib_names[1] = "plug_path";
+	attrib_vals[1] = cx_plug->plug_path;
+
+	attrib_names[2] = "preset_path";
+	attrib_vals[2] = cx_plug->preset_path;
+	    
+	attrib_names[3] = "id";
+	char id_string[20];
+	snprintf(id_string, 20, "%2d", cx_plug->id);
+	attrib_vals[3] = id_string;
+	    
+	iter = 4;
+    }
+    if((top_cx->type & 0xff00) == Osc_cx_e){
+	CX_OSC* cx_osc = (CX_OSC*)top_cx;
+	attrib_names[1] = "id";
+	char id_string[20];
+	snprintf(id_string, 20, "%d", cx_osc->id);
+	attrib_vals[1] = id_string;
+
+	iter = 2;
+    }
+    if((top_cx->type & 0xff00) == Val_cx_e){
+	CX_VAL* cx_val = (CX_VAL*)top_cx;
+	//just in case get the value from the ui_param so the value is 100% up to date before saving
+	//since the value on the cx updates only when we get the value with the cx_get_value_callback
+	unsigned char ret_type = 0;
+	float updated_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, &ret_type, 0, 0);
+	if(updated_val != -1 && ret_type != 0){
+	    cx_val->float_val = updated_val;
+	}
+	attrib_names[1] = "val_name";
+	attrib_vals[1] = cx_val->val_name;
+	    
+	attrib_names[2] = "val_type";
+	char val_type[12];
+	snprintf(val_type, 12, "%2x", cx_val->val_type);
+	attrib_vals[2] = val_type;
+	    
+	attrib_names[3] = "val_id";
+	char val_id[40];
+	snprintf(val_id, 40, "%2d", cx_val->val_id);
+	attrib_vals[3] = val_id;
+
+	attrib_names[4] = "float_val";
+	char float_val[100];
+	snprintf(float_val, 100, "%f", cx_val->float_val);
+	attrib_vals[4] = float_val;
+
+	attrib_names[5] = "cx_type";
+	char cx_type[12];
+	snprintf(cx_type, 12, "%d", cx_val->cx_type);
+	attrib_vals[5] = cx_type;
+	    
+	attrib_names[6] = "cx_id";
+	char cx_id[20];
+	snprintf(cx_id, 20, "%d", cx_val->cx_id);
+	attrib_vals[6] = cx_id;
+
+	iter = 7;	    
+    }
+    if((top_cx->type & 0xff00) == Button_cx_e){
+	CX_BUTTON* cx_button = (CX_BUTTON*)top_cx;
+	attrib_names[1] = "str_val";
+	attrib_vals[1] = cx_button->str_val;
+	    
+	attrib_names[2] = "uchar_val";
+	char val_uchar[12];
+	snprintf(val_uchar, 12, "%2x", (unsigned int)(cx_button->uchar_val));
+	attrib_vals[2] = val_uchar;
+
+	attrib_names[3] = "int_val";
+	char val_int[20];
+	snprintf(val_int, 20, "%d", (int)(cx_button->int_val));
+	attrib_vals[3] = val_int;
+
+	attrib_names[4] = "int_val_1";
+	char val_int_1[20];
+	snprintf(val_int_1, 20, "%d", (int)(cx_button->int_val_1));
+	attrib_vals[4] = val_int_1;
+
+	iter = 5;
+    }
+
+    app_json_write_json_callback(arg, top_cx->name, parent_name, attrib_names, attrib_vals, iter);
+}
+
+
 static int helper_cx_iterate_with_callback(APP_INTRF* app_intrf, CX* top_cx, void* arg,
-					   void(*proc_func)(void*arg, const char* cur_name, const char* parent_name,
-							    const char** attrib_names, const char** attrib_vals,
-							    unsigned int attrib_size)){
-    if(top_cx == NULL){
+					   void(*proc_func)(void* arg, APP_INTRF* app_intrf, CX* in_cx)){
+    if(top_cx == NULL)
 	return -1;
-    }
-    //if we need to save this cx
-    if(top_cx->save==1){
-	const char* parent_name = NULL;
-	const char* attrib_names[MAX_ATTRIB_ARRAY] = {NULL};
-	const char* attrib_vals[MAX_ATTRIB_ARRAY] = {NULL};
-	//all cx should have a type
-	char type_string[12];
-	snprintf(type_string, 12, "%.4x", top_cx->type);
-	attrib_names[0] = "type";
-	attrib_vals[0] = type_string;
-	unsigned int iter = 1;
-	//add parent name if the cx has a parent (parent should be NULL only for the root cx)
-	if(top_cx->parent) parent_name = top_cx->parent->name;
-	//if the cx is of type CX_MAIN
-	if((top_cx->type & 0xff00) == Main_cx_e){
-	    CX_MAIN* cx_main = (CX_MAIN*)top_cx;
-	    attrib_names[1] = "path";
-	    attrib_vals[1] = cx_main->path;
-	    iter = 2;
-	}
-	if((top_cx->type & 0xff00) == Sample_cx_e){
-	    CX_SAMPLE* cx_smp = (CX_SAMPLE*)top_cx;
-	    attrib_names[1] = "file_path";
-	    attrib_vals[1] = cx_smp->file_path;
-	    
-	    attrib_names[2] = "id";
-	    char id_string[20];
-	    snprintf(id_string, 20, "%2d", cx_smp->id);
-	    attrib_vals[2] = id_string;
-	    
-	    iter = 3;
-	}
-	if((top_cx->type & 0xff00) == Plugin_cx_e){
-	    CX_PLUGIN* cx_plug = (CX_PLUGIN*)top_cx;
-	    attrib_names[1] = "plug_path";
-	    attrib_vals[1] = cx_plug->plug_path;
-
-	    attrib_names[2] = "preset_path";
-	    attrib_vals[2] = cx_plug->preset_path;
-	    
-	    attrib_names[3] = "id";
-	    char id_string[20];
-	    snprintf(id_string, 20, "%2d", cx_plug->id);
-	    attrib_vals[3] = id_string;
-	    
-	    iter = 4;
-	}
-	if((top_cx->type & 0xff00) == Osc_cx_e){
-	    CX_OSC* cx_osc = (CX_OSC*)top_cx;
-	    attrib_names[1] = "id";
-	    char id_string[20];
-	    snprintf(id_string, 20, "%d", cx_osc->id);
-	    attrib_vals[1] = id_string;
-
-	    iter = 2;
-	}
-	if((top_cx->type & 0xff00) == Val_cx_e){
-	    CX_VAL* cx_val = (CX_VAL*)top_cx;
-	    //just in case get the value from the ui_param so the value is 100% up to date before saving
-	    //since the value on the cx updates only when we get the value with the cx_get_value_callback
-	    unsigned char ret_type = 0;
-	    float updated_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, &ret_type, 0, 0);
-	    if(updated_val != -1 && ret_type != 0){
-		cx_val->float_val = updated_val;
-	    }
-	    attrib_names[1] = "val_name";
-	    attrib_vals[1] = cx_val->val_name;
-	    
-	    attrib_names[2] = "val_type";
-	    char val_type[12];
-	    snprintf(val_type, 12, "%2x", cx_val->val_type);
-	    attrib_vals[2] = val_type;
-	    
-	    attrib_names[3] = "val_id";
-	    char val_id[40];
-	    snprintf(val_id, 40, "%2d", cx_val->val_id);
-	    attrib_vals[3] = val_id;
-
-	    attrib_names[4] = "float_val";
-	    char float_val[100];
-	    snprintf(float_val, 100, "%f", cx_val->float_val);
-	    attrib_vals[4] = float_val;
-
-	    attrib_names[5] = "cx_type";
-	    char cx_type[12];
-	    snprintf(cx_type, 12, "%d", cx_val->cx_type);
-	    attrib_vals[5] = cx_type;
-	    
-	    attrib_names[6] = "cx_id";
-	    char cx_id[20];
-	    snprintf(cx_id, 20, "%d", cx_val->cx_id);
-	    attrib_vals[6] = cx_id;
-
-	    iter = 7;	    
-	}
-	if((top_cx->type & 0xff00) == Button_cx_e){
-	    CX_BUTTON* cx_button = (CX_BUTTON*)top_cx;
-	    attrib_names[1] = "str_val";
-	    attrib_vals[1] = cx_button->str_val;
-	    
-	    attrib_names[2] = "uchar_val";
-	    char val_uchar[12];
-	    snprintf(val_uchar, 12, "%2x", (unsigned int)(cx_button->uchar_val));
-	    attrib_vals[2] = val_uchar;
-
-	    attrib_names[3] = "int_val";
-	    char val_int[20];
-	    snprintf(val_int, 20, "%d", (int)(cx_button->int_val));
-	    attrib_vals[3] = val_int;
-
-	    attrib_names[4] = "int_val_1";
-	    char val_int_1[20];
-	    snprintf(val_int_1, 20, "%d", (int)(cx_button->int_val_1));
-	    attrib_vals[4] = val_int_1;
-
-	    iter = 5;
-	}	
-	(*proc_func)(arg, top_cx->name, parent_name, attrib_names, attrib_vals, iter);
-    }
+    
+    (*proc_func)(arg, app_intrf, top_cx);
     helper_cx_iterate_with_callback(app_intrf, top_cx->sib, arg, proc_func);
     helper_cx_iterate_with_callback(app_intrf, top_cx->child, arg, proc_func);
 
@@ -2149,20 +2180,15 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
     char** param_names = NULL;
     char** param_vals = NULL;
     char** param_types = NULL;
-    //TODO first get the configuration file and iterate through each parameter there and create Val_cx_e per each parameter in the file
-    //with the same name as the name in got_params.
-    //Create containers to group parameters, set their increment amounts, get default values to send as "float_val", val_display_name
-    //from the configuration file if these keys exist for the param.
-    //IF the file does not exist, create it with the default values so the user does not have to modify it from scratch
-    //(good candidate to show the user how to setup containers would be trk parameters - all beat, bar settings can go into its own container to not
-    //get in the way of the other parameters)
-    //THE configuration file name should be the same as plugin name not as the cx name (would create conf file per plugin instance)
-    //so configuration file name should be an argument in this function
-    //FOR sampler and synth configuration name should be not per sample or oscillator but per context - synth or sampler.
-    //THINK how to setup user names for parameter values - similar to lv2 ScalePoints. Would be best if params had a pointer to function that does
+
+    //TODO how to setup user names for parameter values - similar to lv2 ScalePoints. Would be best if params had a pointer to function that does
     //value to text. Current system should be changed.
     int got_params = app_param_return_all_as_string(app_intrf->app_data, cx_type, cx_id,
 						    &param_names, &param_vals, &param_types, &param_num);
+    //TODO go through the returned params and create the Val_cx_e for them only if there is no user configuration file
+    //THE configuration file name should be the same as plugin name not as the cx name (would create conf file per plugin instance)
+    //so configuration file name should be an argument in this function
+    //FOR sampler and synth configuration name should be not per sample or oscillator but per context - synth or sampler.    
     if(got_params >= 0 && param_num > 0 && param_names !=NULL){
 	for(int i=0; i<param_num; i++){
 	    if(param_names[i] == NULL)continue;
@@ -2186,6 +2212,22 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
     if(param_types)free(param_types);
     if(param_vals)free(param_vals);
     if(param_names)free(param_names);
+
+    //TODO create the default user parameter configuration file if there isnt any
+    //create an empty object to build the structure in and continue if its not null
+    /*
+    JSONHANDLE* obj = NULL;
+    if(app_json_create_obj(&obj)==0){
+	helper_cx_iterate_with_callback(app_intrf, parent_node, obj, helper_cx_prepare_for_param_conf);
+    }
+    //write the json handle to the file in the context path
+    app_json_write_handle_to_file(obj, "test_parameter_conf.json", 1, 1);
+    */
+    //TODO if the parameter configuration file does not exists iterate through each parameter there and create Val_cx_e per each parameter in the file
+    //with the same name as the name in got_params.
+    //Create containers to group parameters, set their increment amounts, get default values to send as "float_val", val_display_name
+    //from the configuration file if these keys exist for the param.
+    
     return 0;
 }
 
