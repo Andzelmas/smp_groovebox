@@ -273,8 +273,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	//if this is the Root_cx_st add it to the app_intrf
         if(type == (Main_cx_e | Root_cx_st)){
 	    app_intrf->root_cx = ret_node;
-	}
-	
+	}	
 	//button to load a song or preset
 	if(!cx_init_cx_type(app_intrf, ret_node->name, "load", (Button_cx_e | AddList_cx_st),
 			    (const char*[1]){"02"}, (const char*[1]){"uchar_val"}, 1)){
@@ -333,8 +332,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 		}
 	    }
 	    free(osc_names);
-	}
-	
+	}	
         return ret_node;
     }
     if((type & 0xff00) == Osc_cx_e){
@@ -562,6 +560,14 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	ret_node->save = 1;
 	//if cx with this name exists, only set the value for the parameter but dont create the cx
 	//if this Val_cx_e parent has a parent search from there, since Val_cx_e can be in a container
+	//TODO should search from Val_cx_e parent->parent only if it is in a container, otherwise search from parent
+	//TODO search not cx with the same name but with the same val_name - if user saves context with parameters and then changes the
+	//parameter configuration file, adds containers there, the names of cx will be different and duplicate Val_cx_e with different cx->name will be
+	//created but with the same val_name and the same parameters will be set from different places.
+	//TODO if context saved when parameters where in a container and then configuration changes and the parameters are not in the container,
+	//the parameters will not be created but the containers from the save file will. SO in nav_ function that returns children check nodes and
+	//if it is a container and has no children delete it.
+	//TODO will need testing after finished configuration files. Save context, change configuration file, load etc...
 	CX* search_duplicate_root = parent;
 	if(parent->parent)search_duplicate_root = parent->parent;
 	CX* val_duplicate = cx_find_name(name, search_duplicate_root);
@@ -982,9 +988,9 @@ static void cx_enter_save_callback(APP_INTRF* app_intrf, CX* self){
     cur_dir = (char*)malloc(sizeof(char)+2);
     if(!cur_dir)goto finish;
     strcpy(cur_dir, ".");
-     //check if we are saving song or preset
+    //check if we are saving song or preset
     if(self->parent->parent != NULL){
-	send_cx = self;
+	send_cx = self->parent->child;
 	preset = 1;
 	//make the dir name for the preset context, like _song/sampler
 	cur_dir = realloc(cur_dir, sizeof(char)*(strlen(app_intrf->shared_dir)+
