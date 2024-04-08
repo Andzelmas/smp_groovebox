@@ -317,7 +317,8 @@ static int helper_cx_copy_str_val(CX* from_cx, CX* to_cx);
 //this function also tries to get the user configuration file for the parameters if the file exists -
 //it will use the info there to create containers for the parameters, their val_display_name variables, value increment amounts etc
 //if the file does not exists - this function will create the file with default values so the user can modify what he needs
-static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* parent_node, unsigned char cx_type, unsigned int cx_id);
+static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* parent_node, const char* config_path,
+						  unsigned char cx_type, unsigned int cx_id);
 //parse the IntrfStatus enum errors and return a readable string
 const char *app_intrf_write_err(const int* err_status);
 

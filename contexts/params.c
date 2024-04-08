@@ -243,6 +243,21 @@ int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, u
     return 0;    
 }
 
+SAMPLE_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
+    if(!param_container)return -1;
+    
+    if(val_id >= param_container->num_of_params)return -1;
+    PRM_PARAM** param_array = param_container->rt_params;
+    //if we dont want the rt_params
+    if(rt_params == 0)param_array = param_container->ui_params;
+
+    PRM_PARAM* cur_param = param_array[val_id];
+
+    SAMPLE_T ret_increment = cur_param->inc_am;
+    
+    return ret_increment;
+}
+
 SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char* val_type,
 			 unsigned int curved, unsigned int interp, unsigned int rt_params){
     if(!param_container)return -1;

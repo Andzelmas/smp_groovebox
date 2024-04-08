@@ -259,6 +259,15 @@ int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, in
     return ret;
 }
 
+SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, unsigned int rt_param){
+    if(!app_data)return -1;
+    //get the appropriate parameter container depending on the context
+    PRM_CONTAIN* param_container = app_return_param_container(app_data, cx_type, cx_id);
+    if(!param_container)return -1;
+
+    return param_get_increment(param_container, param_id, rt_param);
+}
+
 SAMPLE_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
 			     unsigned char* val_type, unsigned int curved, unsigned int rt_param){
     if(!app_data)return -1;
@@ -342,10 +351,11 @@ int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, in
     return 0;
 }
 
-static void app_make_name_from_file_cx_id(APP_INFO* app_data, char** in_path, int cx_id){
+static void app_make_name_from_file_cx_id(APP_INFO* app_data, char** in_path, int cx_id, unsigned int add_id){
     if(!*in_path)return;
     char* file_name = str_return_file_from_path(*in_path);
-    str_combine_str_int(&file_name, cx_id);
+    if(add_id)
+	str_combine_str_int(&file_name, cx_id);
     if(file_name){
 	if(*in_path)free(*in_path);
 	*in_path = file_name;
@@ -370,19 +380,19 @@ const char** app_context_return_names(APP_INFO* app_data, unsigned char cx_type,
     return ret_name_array;
 }
 
-char* app_return_cx_name(APP_INFO* app_data, unsigned char cx_type, int cx_id){
+char* app_return_cx_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, unsigned int add_id){
     char* ret_name = NULL;
 
     //if this is the sampler, return the sample file path and make the name from that
     if(cx_type == Context_type_Sampler){
 	ret_name = smp_get_sample_file_path(app_data->smp_data, cx_id);
-	app_make_name_from_file_cx_id(app_data, &ret_name, cx_id);
+	app_make_name_from_file_cx_id(app_data, &ret_name, cx_id, add_id);
     }
 
     //if this is the plugin context, return the plugin name from the plugin lilv name
     if(cx_type == Context_type_Plugins){
 	ret_name = plug_return_plugin_name(app_data->plug_data, cx_id);
-	app_make_name_from_file_cx_id(app_data, &ret_name, cx_id);
+	app_make_name_from_file_cx_id(app_data, &ret_name, cx_id, add_id);
     }
     
     return ret_name;

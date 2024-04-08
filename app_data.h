@@ -46,6 +46,8 @@ static PRM_CONTAIN* app_return_param_container(APP_INFO* app_data, unsigned char
 //only rt thread should write to the rt_to_ui_ring, and only the ui thread to the ui_to_rt_ring
 int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, float param_value,
 			unsigned char param_op, unsigned int rt_to_ui);
+//return the parameter increment amount (by how much the value increases or decreases)
+SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, unsigned int rt_param);
 //get value, the val_type returns what type of value for display purposes.
 //rt_param - should the value be from the rt_param array, only the rt thread should get values from there.
 //curved == 1 the parameter should be returned from the curve_table if there is one on the parameter
@@ -65,7 +67,8 @@ const char** app_context_return_names(APP_INFO* app_data, unsigned char cx_type,
 int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, char*** param_names, char*** param_vals,
 				   char*** param_types, unsigned int* param_num);
 //return the name of a context by its cx_id (for example the name of a sample by its id, or name of a plugin by its id)
-char* app_return_cx_name(APP_INFO* app_data, unsigned char cx_type, int cx_id);
+//if add_id == 1 will add the id to the end of the string
+char* app_return_cx_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, unsigned int add_id);
 //wrapper for disconnecting two ports
 int app_disconnect_ports(APP_INFO* app_data, const char* source_port, const char* dest_port);
 //wrapper to connect ports

@@ -20,6 +20,8 @@ int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_T
 //set the parameter value. param_op is what to do with parameter, check types.h the paramOperType enum
 int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, unsigned char param_op,
 		    unsigned int rt_params);
+//return the parameter increment amount (by how much the parameter value increases or decreases)
+SAMPLE_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
 //get the parameter value. What type of value is returned to val_type, check appReturntype enum in types.h for the list
 //if returned value is -1 and val_type is 0, something went wrong
 //if interp == 1 the value will be interpolated slowly on each param_get_value call (the speed is INTERP_SAMPLES in params.c)

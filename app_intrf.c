@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <math.h>
+#include <unistd.h>
 #include "contexts/clap_plugins.h"
 //my libraries
 #include "app_intrf.h"
@@ -17,10 +18,12 @@
 #include "util_funcs/string_funcs.h"
 //log file functions
 #include "util_funcs/log_funcs.h"
-//how big is string array for attrib names and values and such
+//how many strings in the attribute name or attribute value arrays
 #define MAX_ATTRIB_ARRAY 40
 //how big is the string for parameter values when they are returned as string
 #define MAX_VALUE_STRING 40
+//how big is the string for parameter configuration file names
+#define MAX_PARAM_CONFIG_STRING 100
 //the file extension we are using for songs and presets
 #define FILE_EXT ".json"
 /*A FEW IMPORTANT RULES - no name or path strings can contain "<__>", its added to names automatically;
@@ -294,7 +297,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	
 	if(type == (Main_cx_e | Trk_cx_st)){
 	    //create the Trk_cx_st context parameters, also check for the user parameter configuration file for this context
-	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Trk, 0)<0){
+	    if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, "Trk_param_conf.json", Context_type_Trk, 0)<0){
 		cx_remove_this_and_children(ret_node);
 		return NULL;
 	    }
@@ -325,7 +328,8 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 		    if(!cur_name)continue;
 		    char osc_id[20];
 		    snprintf(osc_id, 20, "%d", i);
-		    if(!cx_init_cx_type(app_intrf, ret_node->name, cur_name, Osc_cx_e, (const char*[1]){osc_id}, (const char*[1]){"id"}, 1)){
+		    if(!cx_init_cx_type(app_intrf, ret_node->name, cur_name, Osc_cx_e,
+					(const char*[1]){osc_id}, (const char*[1]){"id"}, 1)){
 			cx_remove_this_and_children(ret_node);
 			return NULL;
 		    }
@@ -342,6 +346,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	ret_node = (CX*)cx_osc;
 	ret_node->save = 1;
 	ret_node->sib = NULL;
+	
 	if(attrib_size>0){
 	    cx_osc->id = str_find_value_to_int(type_attrib_names, type_attribs, "id", attrib_size);
 	}
@@ -354,9 +359,8 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
             free(cx_osc);
             return NULL;
         }
-
 	//initialize the parameters for this Oscillator, also check the parameters user configuration file
-	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Synth, cx_osc->id)<0){
+	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, "Synth_param_conf.json", Context_type_Synth, cx_osc->id)<0){
 	    cx_remove_this_and_children(ret_node);
 	    return NULL;
 	}
@@ -392,7 +396,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	}
 	int child_add_err = -1;
 	//get the name
-	char* smp_name = app_return_cx_name(app_intrf->app_data, Context_type_Sampler, sample_id);
+	char* smp_name = app_return_cx_name(app_intrf->app_data, Context_type_Sampler, sample_id, 1);
 	if(smp_name){
 	    child_add_err = cx_add_child(parent, ret_node, smp_name, type);
 	    free(smp_name);
@@ -409,7 +413,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    return NULL;
 	}
 	//initialize the parameters also check for configuration file for the parameters
-	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Sampler, cx_smp->id)<0){
+	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, "Sampler_param_conf.json", Context_type_Sampler, cx_smp->id)<0){
 	    cx_remove_this_and_children(ret_node);
 	    return NULL;
 	}
@@ -444,7 +448,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	}
 	int child_add_err = -1;
 	//get the name
-	char* plug_name = app_return_cx_name(app_intrf->app_data, Context_type_Plugins, plug_id);
+	char* plug_name = app_return_cx_name(app_intrf->app_data, Context_type_Plugins, plug_id, 1);
 	if(plug_name){
 	    child_add_err = cx_add_child(parent, ret_node, plug_name, type);
 	    free(plug_name);
@@ -468,7 +472,15 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 
 	//create the Val_cx_e for each plugin control port
 	//this function also tries to find a configuration file for parameters and use user info from there
-	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, Context_type_Plugins, cx_plug->id)<0){
+	char plugin_config_file[MAX_PARAM_CONFIG_STRING];
+	plug_name = app_return_cx_name(app_intrf->app_data, Context_type_Plugins, cx_plug->id, 0);
+	if(!plug_name){
+	    cx_remove_this_and_children(ret_node);
+	    return NULL;
+	}
+	snprintf(plugin_config_file, MAX_PARAM_CONFIG_STRING, "%s_param_conf.json", plug_name);
+	free(plug_name);
+	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, plugin_config_file, Context_type_Plugins, cx_plug->id)<0){
 	    cx_remove_this_and_children(ret_node);
 	    return NULL;
 	}
@@ -1909,16 +1921,22 @@ static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX
     attrib_vals[0] = type_string;
     
     CX_VAL* cx_val = (CX_VAL*)top_cx;
-    //when loading the configuration file this name will be looked up in the params - if it exists this parameter will be created
-    attrib_names[1] = "name";
-    attrib_vals[1] = cx_val->val_name;
     //for default configuration the name and display_name are the same
     //user can change the display_name
-    attrib_names[2] = "display_name";
-    attrib_vals[2] = cx_val->val_name;
-    //TODO get default value (current value since this function will be used when creating params for the first time),
-    //value increment and any others that the user can change
-    app_json_write_json_callback(arg, top_cx->name, NULL, attrib_names, attrib_vals, 3);
+    attrib_names[1] = "display_name";
+    attrib_vals[1] = cx_val->val_name;
+
+    attrib_names[2] = "default_val";
+    char default_val[100];
+    snprintf(default_val, 100, "%g", cx_val->float_val);
+    attrib_vals[2] = default_val;
+
+    attrib_names[3] = "increment";
+    char incr_val[100];
+    snprintf(incr_val, 100, "%g", app_param_get_increment(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, 0));
+    attrib_vals[3] = incr_val;
+    
+    app_json_write_json_callback(arg, cx_val->val_name, NULL, attrib_names, attrib_vals, 4);
 }
 
 static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_cx){
@@ -1975,7 +1993,7 @@ static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_
 	char id_string[20];
 	snprintf(id_string, 20, "%d", cx_osc->id);
 	attrib_vals[1] = id_string;
-
+	
 	iter = 2;
     }
     if((top_cx->type & 0xff00) == Val_cx_e){
@@ -2181,59 +2199,56 @@ static int helper_cx_copy_str_val(CX* from_cx, CX* to_cx){
     return 0;
 }
 
-static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* parent_node, unsigned char cx_type, unsigned int cx_id){
-    unsigned int param_num;
-    char** param_names = NULL;
-    char** param_vals = NULL;
-    char** param_types = NULL;
-
-    //TODO how to setup user names for parameter values - similar to lv2 ScalePoints. Would be best if params had a pointer to function that does
-    //value to text. Current system should be changed.
-    int got_params = app_param_return_all_as_string(app_intrf->app_data, cx_type, cx_id,
-						    &param_names, &param_vals, &param_types, &param_num);
-    //TODO go through the returned params and create the Val_cx_e for them only if there is no user configuration file
-    //THE configuration file name should be the same as plugin name not as the cx name (would create conf file per plugin instance)
-    //so configuration file name should be an argument in this function
-    //FOR sampler and synth configuration name should be not per sample or oscillator but per context - synth or sampler.    
-    if(got_params >= 0 && param_num > 0 && param_names !=NULL){
-	for(int i=0; i<param_num; i++){
-	    if(param_names[i] == NULL)continue;
-	    if(param_vals[i]==NULL || param_types[i]==NULL)continue;
-	    char val_id[40];
-	    snprintf(val_id, 40, "%d", i);
-	    char val_cx_type [12];
-	    snprintf(val_cx_type, 12, "%d", cx_type);
-	    char val_cx_id [20];
-	    snprintf(val_cx_id, 20, "%d", cx_id);
-	    if(!cx_init_cx_type(app_intrf, parent_node->name, param_names[i], Val_cx_e,
-				(const char*[6]){param_names[i], val_id, param_types[i], param_vals[i], val_cx_type, val_cx_id},
-				(const char*[6]){"val_name", "val_id", "val_type", "float_val", "cx_type", "cx_id"}, 6)){
-		return -1;
-	    }
-	    if(param_names[i])free(param_names[i]);
-	    if(param_vals[i])free(param_vals[i]);
-	    if(param_types[i])free(param_types[i]);
-	}
-    }
-    if(param_types)free(param_types);
-    if(param_vals)free(param_vals);
-    if(param_names)free(param_names);
-
-    //TODO create the default user parameter configuration file if there isnt any
-    //create an empty object to build the structure in and continue if its not null
-    /*
-    JSONHANDLE* obj = NULL;
-    if(app_json_create_obj(&obj)==0){
-	helper_cx_iterate_with_callback(app_intrf, parent_node, obj, helper_cx_prepare_for_param_conf);
-    }
-    //write the json handle to the file in the context path
-    app_json_write_handle_to_file(obj, "test_parameter_conf.json", 1, 1);
-    */
-    //TODO if the parameter configuration file does not exists iterate through each parameter there and create Val_cx_e per each parameter in the file
-    //with the same name as the name in got_params.
-    //Create containers to group parameters, set their increment amounts, get default values to send as "float_val", val_display_name
-    //from the configuration file if these keys exist for the param.
+static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* parent_node, const char* config_path,
+						  unsigned char cx_type, unsigned int cx_id){
+    if(!config_path)return -1;
+    if(access(config_path, R_OK) != 0){
+	unsigned int param_num;
+	char** param_names = NULL;
+	char** param_vals = NULL;
+	char** param_types = NULL;
     
+	int got_params = app_param_return_all_as_string(app_intrf->app_data, cx_type, cx_id,
+							&param_names, &param_vals, &param_types, &param_num);  
+	if(got_params >= 0 && param_num > 0 && param_names !=NULL){
+	    for(int i=0; i<param_num; i++){
+		if(param_names[i] == NULL)continue;
+		if(param_vals[i]==NULL || param_types[i]==NULL)continue;
+		char val_id[40];
+		snprintf(val_id, 40, "%d", i);
+		char val_cx_type [12];
+		snprintf(val_cx_type, 12, "%d", cx_type);
+		char val_cx_id [20];
+		snprintf(val_cx_id, 20, "%d", cx_id);
+		if(!cx_init_cx_type(app_intrf, parent_node->name, param_names[i], Val_cx_e,
+				    (const char*[6]){param_names[i], val_id, param_types[i], param_vals[i], val_cx_type, val_cx_id},
+				    (const char*[6]){"val_name", "val_id", "val_type", "float_val", "cx_type", "cx_id"}, 6)){
+		    return -1;
+		}
+		if(param_names[i])free(param_names[i]);
+		if(param_vals[i])free(param_vals[i]);
+		if(param_types[i])free(param_types[i]);
+	    }
+	}
+	if(param_types)free(param_types);
+	if(param_vals)free(param_vals);
+	if(param_names)free(param_names);
+
+	JSONHANDLE* obj = NULL;
+	if(app_json_create_obj(&obj)==0){
+	    helper_cx_iterate_with_callback(app_intrf, parent_node, obj, helper_cx_prepare_for_param_conf);
+	}
+	//write the json handle to the file in the context path
+	app_json_write_handle_to_file(obj, config_path, 1, 1);
+    }
+    else{
+	//TODO if the parameter configuration file does exists iterate through each parameter there and create Val_cx_e per each parameter in the file
+	//with the same name as the name in params (get Val_cx_e info from params).
+	//TODO Create containers to group parameters, set their increment amounts, get default values to send as "float_val", val_display_name
+	//from the configuration file if these keys exist for the param.
+	//TODO how to setup user names for parameter values - similar to lv2 ScalePoints. Would be best if params had a pointer to function that does
+	//value to text. Current system should be changed.
+    }
     return 0;
 }
 
