@@ -151,6 +151,28 @@ clean_strings:
     return return_val;
 }
 
+int app_json_open_iterate_callback(const char* file_path, const char* in_parent_name,
+				   void* arg, void(*user_func)(void* arg, const char* json_name, const char* json_parent,
+							       const char** attrib_names, const char** attrib_vals, unsigned int attrib_count)){
+    int return_val = 0;
+    char* buffer = NULL;
+    buffer = app_json_read_to_buffer(file_path);
+    if(!buffer){
+	log_append_logfile("Cant read %s file\n", file_path);
+	return_val = -1;
+    }
+    struct json_object* parsed_fp = NULL;
+    parsed_fp = json_tokener_parse(buffer);
+    free(buffer);
+    if(!parsed_fp){
+	log_append_logfile("Cant parse the json file %s\n", file_path);
+	return_val = -1;
+    }
+    return_val = app_json_iterate_run_callback(parsed_fp, NULL, in_parent_name, NULL, arg, user_func);
+
+    return return_val;
+}
+
 static char* app_json_iterate_find_string(struct json_object* parsed_fp, const char* find_key){
     char* ret_string = NULL;
     struct json_object* cur_obj = NULL;

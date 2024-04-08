@@ -12,6 +12,11 @@ int app_json_read_conf(char** shared_dir, const char* load_path, const char* in_
 		       void* arg, void(*user_func)(void*arg, const char* cur_name, const char* parent_name,
 						   const char** attrib_names, const char** attrib_vals,
 						   unsigned int attrib_size));
+//simple file_path json iterator. run the user function for each entry in json file
+//to the function the key attribs are sent as strings (name and value) also the key name, the key parent and the number of the attributes
+int app_json_open_iterate_callback(const char* file_path, const char* in_parent_name,
+				   void* arg, void(*user_func)(void* arg, const char* json_name, const char* json_parent,
+							       const char** attrib_names, const char** attrib_vals, unsigned int attrib_count));
 //find recursevily string find_key in the parsed_fp json object and return a malloced string of the value
 static char* app_json_iterate_find_string(struct json_object* parsed_fp, const char* find_key);
 //write the whole json object to a file with json_object_to_json_string_ext

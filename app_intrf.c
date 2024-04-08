@@ -235,6 +235,26 @@ static void cx_process_from_file(void *arg,
     if(attrib_size>0)
 	cx_init_cx_type(app_intrf, parent, cx_name, type, attribs, attrib_names, attrib_size);	
 }
+//similar to cx_process_from_file but process the parameter configuration file and create the parameters with user settings
+//used as a callback in app_json_open_iterate_callback function
+static void cx_process_params_from_file(void *arg,
+			  const char* cx_name, const char* parent,
+			  const char* attrib_names[], const char* attribs[], unsigned int attrib_size){
+    APP_INTRF *app_intrf = (APP_INTRF*) arg;
+    if(!app_intrf)return;
+    if(!cx_name)return;
+    if(!attrib_names || !attribs)return;
+    if(attrib_size <= 0) return;
+    unsigned int type = str_find_value_to_hex(attrib_names, attribs, "type", attrib_size);
+    //TODO Create Val_cx_e per each cx_name that is of type Val_cx_e and has the same name in the params
+    //get from attributes the default value, set the increment if there is an attribute of such name and the display_name
+    //these attributes should be set in the cx_init_cx_type function (Val_cx_e section)
+    //TODO Create containers to group parameters
+    log_append_logfile("name of the key %s, name of the parent %s\n", cx_name, parent);
+    for(unsigned int i = 0; i < attrib_size; i++){
+	log_append_logfile("param attrib name %s, value %s\n", attrib_names[i], attribs[i]);
+    }
+}
 
 static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, const char *name, unsigned int type,
 		    const char *type_attribs[], const char *type_attrib_names[], int attrib_size){
@@ -1142,7 +1162,6 @@ static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
 	    if(self->parent->parent->type == Plugin_cx_e){
 		CX_PLUGIN* cx_plug = (CX_PLUGIN*)self->parent->parent;
 		int load_preset = app_plug_load_preset(app_intrf->app_data, f_path, cx_plug->id);
-		//TODO if we loaded without errors update the plugin Value_cx_st that represent the parameters
 		if(load_preset >= 0){
 		    //copy the preset name to preset_path of the plugin
 		    cx_plug->preset_path = (char*)malloc(sizeof(char)*(strlen(f_path)+1));
@@ -2242,12 +2261,9 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 	app_json_write_handle_to_file(obj, config_path, 1, 1);
     }
     else{
-	//TODO if the parameter configuration file does exists iterate through each parameter there and create Val_cx_e per each parameter in the file
-	//with the same name as the name in params (get Val_cx_e info from params).
-	//TODO Create containers to group parameters, set their increment amounts, get default values to send as "float_val", val_display_name
-	//from the configuration file if these keys exist for the param.
 	//TODO how to setup user names for parameter values - similar to lv2 ScalePoints. Would be best if params had a pointer to function that does
 	//value to text. Current system should be changed.
+	app_json_open_iterate_callback(config_path, parent_node->name, app_intrf, cx_process_params_from_file);
     }
     return 0;
 }
