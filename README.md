@@ -13,14 +13,81 @@ The synth uses oscillator lookup table code by Nigel Redmon here https://www.ear
 
 ### Installing
 ### Dependencies: jack2, libsndfile, json-c, lilv, ncurses
+Also CLAP library (usually available as a package in your distro) - but CLAP now is not supported, development only begun on hosting CLAP plugins.
 If build folder or smp_conf.json inside of it does not exist:
 
 mkdir build in the smp_groovebox folder.
 Copy the smp_conf.json file to the build folder.
 
-If you have the dependencies "make" and then "make run" to build and run the software.
+If you have the dependencies, "make" and then "make run" to build and run the software.
 
 The app uses jack2 so dont forget to run it before launching.
+
+### User parameter configuration json files
+When first launched the program will create _param_conf.json files for vairous contexts (for example Synth_param_conf.json).
+Also when a plugin is added it will create the _param_conf.json file for that type of plugin.
+Inside it is possible to change "display_name", "default_val", "increment" keys.
+Display_name is the name that will be shown on the screen, can be duplicates.
+Default_val - value that will be set for the parameter on the first load, if a save file for this context does not exist.
+Increment - is by how much the parameter increases or decreases (very useful when parameter is integer but the developer didnt specify that on the parameter itself).
+
+User can also add parameter containers in the config files. If you have this:
+
+```
+{
+  "Tempo":{
+    "type":"0500",
+    "display_name":"Tempo",
+    "default_val":"100",
+    "increment":"1"
+  },
+  "Bar":{
+    "type":"0500",
+    "display_name":"Bar",
+    "default_val":"1",
+    "increment":"1"
+  },
+  "Beat":{
+    "type":"0500",
+    "display_name":"Beat",
+    "default_val":"1",
+    "increment":"1"
+  }
+}
+```
+
+You can add a container like so:
+
+```
+{
+  "My_Container":{
+    "type":"0501",
+    "Tempo":{
+      "type":"0500",
+      "display_name":"Tempo",
+      "default_val":"100",
+      "increment":"1"
+    },
+    "Bar":{
+      "type":"0500",
+      "display_name":"Bar",
+      "default_val":"1",
+      "increment":"1"
+    }
+  },
+  "Beat":{
+    "type":"0500",
+    "display_name":"Beat",
+    "default_val":"1",
+    "increment":"1"
+  }
+}
+```
+The name of the container ("My_Container" in the example) has to be unique not only among the containers but also the parameter names (not the display_names).
+Also, there has to be a "type":"0501" 
+Furthermore mind where to place colons.
+If you mess up with the config file, just delete it and a new one will be created.
+Like everything else in this software this is tested only superficially. 
 
 ### Some screen grabs
 The main window with different contexts visible
