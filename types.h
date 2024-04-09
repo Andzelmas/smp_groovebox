@@ -23,7 +23,9 @@ enum paramOperType{
     Operation_Decrease = 0x01,
     Operation_Increase = 0x02,
     Operation_SetValue = 0x03,
-    Operation_DefValue = 0x04 //set the value of the parameter to the default value
+    Operation_DefValue = 0x04, //set the value of the parameter to the default value
+    Operation_SetIncr = 0x05, //set the increment of the parameter to this value
+    Operation_SetDefValue = 0x06 // set the default value to this value
 };
 
 //wavetables

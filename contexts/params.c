@@ -230,6 +230,12 @@ int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, u
     case Operation_DefValue:
 	cur_param->val = cur_param->def_val;
 	break;
+    case Operation_SetIncr:
+	cur_param->inc_am = set_to;
+	break;
+    case Operation_SetDefValue:
+	cur_param->def_val = set_to;
+	break;
     default:
 	cur_param->val = cur_param->val;
     }

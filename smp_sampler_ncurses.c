@@ -616,13 +616,6 @@ static void curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* cu
     //if user wants to increase the value check if this is a parameter, if not try to enter the cx instead
     if(cx_do == 1){
 	nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
-	/*
-	unsigned int cx_type = nav_return_cx_type(first_win->cx_obj);
-	if((cx_type & 0xff00) == Val_cx_e)
-	    nav_set_cx_value(app_intrf, first_win->cx_obj, 1);
-	else
-	    curr_enter_window(app_intrf, curr_scr, first_win);
-	*/
     }
     if(cx_do == -1){
 	nav_set_cx_value(app_intrf, first_win->cx_obj, -1);
@@ -1241,7 +1234,7 @@ int win_create(APP_INTRF* app_intrf, WIN* app_win, int height, int width, int st
     if(can_create_children==1){
 	if(cx_obj){
 	    unsigned int cx_type = nav_return_cx_type(cx_obj);
-	    if((cx_type & 0xff00) == Val_cx_e){
+	    if(cx_type == Val_cx_e){
 		//this array will contain the cur_cx in the name window and the param value window, so when we click it
 		//its easier to send the cx to nav functions to increase or decrease the value.
 		CX* cx_param_array[] = {cx_obj, cx_obj};

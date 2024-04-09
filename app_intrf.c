@@ -96,12 +96,12 @@ typedef struct intrf_cx_val{
     //this variable is not saved when saving song or presets and is only used for display purposes, when nav_get_cx_name function is called
     char* val_display_name;
     unsigned char val_type;
-    unsigned int val_id;
+    int val_id;
     float float_val;
     //type of context that holds the parameter, like sampler or plugins, check appContextTypes in types.h
     unsigned char cx_type;
     //the id of the context that holds the parameter, for example the sample id on the sampler context
-    unsigned char cx_id;
+    int cx_id;
 }CX_VAL;
 
 //this is the struct for the app interface so that the user can interact with the architecture
@@ -225,7 +225,7 @@ static void cx_process_from_file(void *arg,
     //check if the context already exists
     //BUT if the type is Val_cx_e dont check for duplicates, since when a parameter is duplicate the cx wont be created
     //but the parameter will be updated with its value anyway (for cases when parameters are created with user configuration file)
-    if(app_intrf->root_cx && (type & 0xff00)!=Val_cx_e){
+    if(app_intrf->root_cx && type != Val_cx_e){
 	CX* found_cx = cx_find_name(cx_name, app_intrf->root_cx);
 	if(found_cx !=NULL){
 	    return;
@@ -246,15 +246,96 @@ static void cx_process_params_from_file(void *arg,
     if(!attrib_names || !attribs)return;
     if(attrib_size <= 0) return;
     unsigned int type = str_find_value_to_hex(attrib_names, attribs, "type", attrib_size);
-    //TODO Create Val_cx_e per each cx_name that is of type Val_cx_e and has the same name in the params
-    //get from attributes the default value, set the increment if there is an attribute of such name and the display_name
-    //these attributes should be set in the cx_init_cx_type function (Val_cx_e section)
-    //TODO Create containers to group parameters
-    log_append_logfile("name of the key %s, name of the parent %s, top node name %s\n", cx_name, parent, top_name);
-    //TODO before sending to cx_init_cx_type find the parent (could be top_name or created container, so the name will be different than parent)
-    for(unsigned int i = 0; i < attrib_size; i++){
-	log_append_logfile("param attrib name %s, value %s\n", attrib_names[i], attribs[i]);
+    if(!app_intrf->root_cx)return;
+    CX* parent_cx = cx_find_name(parent, app_intrf->root_cx);
+    CX* top_cx = cx_find_name(top_name, app_intrf->root_cx);
+    if(!top_cx)return;
+    //this cx can be in a container cx, so its name will be different to parent var, because it was created in this callback
+    //in this case find the parent by val_name variable
+    if(!parent_cx){
+	//has to be Val_cx_e
+	if((type & 0xff00) == Val_cx_e){
+	    parent_cx = cx_find_with_val_name(parent, top_cx, 1);
+	}
     }
+    if(!parent_cx)return;
+
+    //create new attribs and attrib_names with correct values to send to cx_init_cx_type
+    const char* new_attribs[8];
+    const char* new_attrib_names[8];
+    
+    char val_name[MAX_PARAM_CONFIG_STRING];
+    snprintf(val_name, MAX_PARAM_CONFIG_STRING, "%s", cx_name);    
+    new_attrib_names[0] = "val_name";
+    new_attribs[0] = val_name;
+    unsigned char cx_type = 0;
+    int cx_id = -1;    
+    if(top_cx->type == Sample_cx_e){
+	CX_SAMPLE* cx_samp = (CX_SAMPLE*)top_cx;
+	cx_type = Context_type_Sampler;
+	cx_id = cx_samp->id;
+    }
+    if(top_cx->type == Plugin_cx_e){
+	CX_PLUGIN* cx_plug = (CX_PLUGIN*)top_cx;
+	cx_type = Context_type_Plugins;
+	cx_id = cx_plug->id;
+    }
+    if(top_cx->type == (Main_cx_e | Trk_cx_st)){
+	cx_type = Context_type_Trk;
+	cx_id = 0;
+    }
+    if(top_cx->type == Osc_cx_e){
+	CX_OSC* cx_osc = (CX_OSC*)top_cx;
+	cx_type = Context_type_Synth;
+	cx_id = cx_osc->id;
+    }
+    if(cx_id == -1)return;
+    char cx_type_str[20];
+    snprintf(cx_type_str, 20, "%d", cx_type);
+    new_attrib_names[1] = "cx_type";
+    new_attribs[1] = cx_type_str;
+    char cx_id_str[20];
+    snprintf(cx_id_str, 20, "%d", cx_id);
+    new_attrib_names[2] = "cx_id";
+    new_attribs[2] = cx_id_str;
+    
+    //if this is a container create it without getting any additional attributes
+    if(type == (Val_cx_e | Val_Container_cx_st)){
+	cx_init_cx_type(app_intrf, parent_cx->name, cx_name, type, new_attribs, new_attrib_names, 3);
+	return;
+    }
+
+    int val_id = app_param_id_from_name(app_intrf->app_data, cx_type, cx_id, val_name, 0);
+    if(val_id == -1)return;
+    
+    char* val_display_name = str_find_value_from_name(attrib_names, attribs, "display_name", attrib_size);
+    float float_val = str_find_value_to_float(attrib_names, attribs, "default_val", attrib_size);
+    float incr = str_find_value_to_float(attrib_names, attribs, "increment", attrib_size);
+    unsigned char val_type = 0;
+    app_param_get_value(app_intrf->app_data, cx_type, cx_id, val_id, &val_type, 0, 0);
+
+    new_attrib_names[3] = "val_display_name";
+    new_attribs[3] = val_display_name;
+    char val_type_str[20];
+    snprintf(val_type_str, 20, "%2x", val_type);
+    new_attrib_names[4] = "val_type";
+    new_attribs[4] = val_type_str;
+    char val_id_str[40];
+    snprintf(val_id_str, 40, "%2d", val_id);
+    new_attrib_names[5] = "val_id";
+    new_attribs[5] = val_id_str;
+    char float_val_str[100];
+    snprintf(float_val_str, 100, "%f", float_val);
+    new_attrib_names[6] = "float_val";
+    new_attribs[6] = float_val_str;
+    char val_incr_str[100];
+    snprintf(val_incr_str, 100, "%f", incr);
+    new_attrib_names[7] = "val_incr";
+    new_attribs[7] = val_incr_str;
+    
+    cx_init_cx_type(app_intrf, parent_cx->name, cx_name, type, new_attribs, new_attrib_names, 8);
+    
+    if(val_display_name)free(val_display_name);
 }
 
 static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, const char *name, unsigned int type,
@@ -569,10 +650,15 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	cx_val->val_name = NULL;
 	cx_val->val_display_name = NULL; //this name is not saved and only != NULL if user sets it in the parameter conf file
 	cx_val->val_type = 0;
-	cx_val->val_id = 0;
+	cx_val->val_id = -1;
 	cx_val->float_val = -1000;
 	cx_val->cx_type = 0;
-	cx_val->cx_id = 0;
+	cx_val->cx_id = -1;
+	
+        ret_node = (CX*)cx_val;
+	ret_node->save = 1;
+	ret_node->type = type;
+	
 	if(attrib_size>0){
 	    cx_val->val_name = str_find_value_from_name(type_attrib_names, type_attribs,
 							 "val_name", attrib_size);
@@ -587,26 +673,33 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    cx_val->cx_type = str_find_value_to_hex(type_attrib_names, type_attribs,
 							   "cx_type", attrib_size);
 	    cx_val->cx_id = str_find_value_to_hex(type_attrib_names, type_attribs,
-							   "cx_id", attrib_size);	    
+							   "cx_id", attrib_size);
+	    //set new increment if there is a request for that
+	    float val_inc = -1;
+	    val_inc = str_find_value_to_float(type_attrib_names, type_attribs, "val_incr", attrib_size);
+	    if(val_inc != -1){
+		app_param_set_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, val_inc, Operation_SetIncr, 0);
+	    }
 	}	
-        ret_node = (CX*)cx_val;
-	ret_node->save = 1;
-	//if cx with this name exists, only set the value for the parameter but dont create the cx
+	//if this is a Val_cx_e container add to the cx array and return
+	if(type == (Val_cx_e | Val_Container_cx_st)){
+	    if(cx_add_child(parent, ret_node, name, type) < 0){
+		free(cx_val);
+		return NULL;
+	    }
+	    return ret_node;
+	}	
+
+	//if cx with this val_name exists, only set the value for the parameter but dont create the cx
 	//if this Val_cx_e parent has a parent search from there, since Val_cx_e can be in a container
-	//TODO should search from Val_cx_e parent->parent only if it is in a container, otherwise search from parent
-	//TODO search not cx with the same name but with the same val_name - if user saves context with parameters and then changes the
-	//parameter configuration file, adds containers there, the names of cx will be different and duplicate Val_cx_e with different cx->name will be
-	//created but with the same val_name and the same parameters will be set from different places.
-	//TODO if context saved when parameters where in a container and then configuration changes and the parameters are not in the container,
-	//the parameters will not be created but the containers from the save file will. SO in nav_ function that returns children check nodes and
-	//if it is a container and has no children delete it.
-	//TODO will need testing after finished configuration files. Save context, change configuration file, load etc...
 	CX* search_duplicate_root = parent;
-	if(parent->parent)search_duplicate_root = parent->parent;
-	CX* val_duplicate = cx_find_name(name, search_duplicate_root);
+	if(parent->parent){
+	    if(parent->type == (Val_cx_e | Val_Container_cx_st))
+		search_duplicate_root = parent->parent;
+	}
+	CX* val_duplicate = cx_find_with_val_name(cx_val->val_name, search_duplicate_root, 1);
 	if(val_duplicate){
 	    //find the param id in case the order changed
-	    ret_node->type = Val_cx_e;
 	    cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name, 0);
 	    //set value and remove this cx
 	    cx_set_value_callback(app_intrf, ret_node, cx_val->float_val, Operation_SetValue);
@@ -614,6 +707,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    free(cx_val);
 	    return NULL;
 	}
+	
         int child_add_err = cx_add_child(parent, ret_node, name, type);
         if(child_add_err<0){
 	    if(cx_val->val_name)free(cx_val->val_name);
@@ -874,6 +968,34 @@ next_sib:
 
     return ret_node;
 }
+
+static CX *cx_find_with_val_name(const char* val_name, CX *root_node, int go_in){
+    CX *ret_node = NULL;
+    if(!root_node)return NULL;
+    if((root_node->type & 0xff00) != Val_cx_e)goto next;
+    CX_VAL* cx_val = (CX_VAL*)root_node;
+    const char* this_val_name = cx_val->val_name;
+    if(!this_val_name)goto next;
+    if(strcmp(val_name, this_val_name)==0){
+        ret_node = root_node;
+        return ret_node;
+    }
+next:
+    //if user does not want to go inside the buttons, only through siblings 
+    if(go_in==0)goto next_sib;
+    ret_node = cx_find_with_val_name(val_name, root_node->child, go_in);
+    if(ret_node){
+	return ret_node;
+    }
+next_sib:
+    ret_node = cx_find_with_val_name(val_name, root_node->sib, go_in);
+    if(ret_node){
+	return ret_node;
+    }
+
+    return ret_node;
+}
+
 
 static void cx_clear_contexts(CX *root, int only_one){
     if(root != NULL){
@@ -1348,7 +1470,7 @@ static void cx_exit_app_callback(APP_INTRF *app_intrf, CX* self){
 static void intrf_callback_set_value(APP_INTRF* app_intrf, CX* self, int set_to){
     unsigned int cur_type = self->type;    
     //set_value callback for value buttons
-    if((cur_type & 0xff00) == Val_cx_e){
+    if(cur_type == Val_cx_e){
 	unsigned char param_op = Operation_Increase;
 	if(set_to<0)param_op = Operation_Decrease;
 	cx_set_value_callback(app_intrf, self, abs(set_to), param_op);
@@ -1358,7 +1480,7 @@ static float intrf_callback_get_value(APP_INTRF* app_intrf, CX* self, unsigned c
     unsigned int cur_type = self->type;    
     float ret_val = -1;
     //get_value callback for value buttons
-    if((cur_type & 0xff00) == Val_cx_e){
+    if(cur_type == Val_cx_e){
 	ret_val = cx_get_value_callback(app_intrf, self, ret_type);
     }
     return ret_val;
@@ -1386,7 +1508,7 @@ static int intrf_callback_enter(APP_INTRF* app_intrf, CX* self){
 	    ret_val = cx_enter_port_callback(app_intrf, self);
     }
     //if this is a parameter change its value to default value
-    if((cur_type & 0xff00) == Val_cx_e){
+    if(cur_type == Val_cx_e){
 	cx_set_value_callback(app_intrf, self, 0, Operation_DefValue);
     }
     return ret_val;
@@ -1439,7 +1561,7 @@ CX** nav_return_children(APP_INTRF* app_intrf, CX* this_cx, unsigned int* childr
 	    if(next_cx->type != (Button_cx_e | Save_cx_st) && next_cx->type != (Button_cx_e | Cancel_cx_st)
 	       && next_cx->type != (Button_cx_e | Remove_cx_st)
 	       && next_cx->type != (Button_cx_e | AddList_cx_st))goto next;
-	}
+	}	
 	CX** temp_array = realloc(cx_array, sizeof(CX*)*(total+1));
 	if(temp_array){
 	    cx_array = temp_array;
@@ -1552,6 +1674,12 @@ int nav_enter_cx(APP_INTRF* app_intrf, CX* select_cx){
 	if(select_cx->parent)
 	    app_intrf->curr_cx = select_cx->parent;
 	app_intrf->select_cx = select_cx;
+	//if this is an empty Val_cx_e container remove it from the cx array
+	if(select_cx->type == (Val_cx_e | Val_Container_cx_st)){
+	    cx_remove_this_and_children(select_cx);
+	    app_intrf->select_cx = app_intrf->curr_cx->child;
+	    if(!app_intrf->select_cx)app_intrf->select_cx = app_intrf->curr_cx;
+	}	
     }
     else{
         app_intrf->curr_cx = select_cx;
@@ -1648,8 +1776,8 @@ int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_strin
     float cx_val = intrf_callback_get_value(app_intrf, sel_cx, &ret_type);
     if(cx_val == -1 && ret_type == 0)return -1;
     CX_VAL* param_cx = NULL;
-    if((sel_cx->type & 0xff00) == Val_cx_e)param_cx = (CX_VAL*) sel_cx;
-	
+    if(sel_cx->type == Val_cx_e)param_cx = (CX_VAL*) sel_cx;
+    if(!param_cx)return -1;
     if(name_len>0){
 	if((ret_type & 0xff) == Uchar_type)snprintf(ret_string, name_len, "%02X", (unsigned int) cx_val);
 	if((ret_type & 0xff) == Int_type)snprintf(ret_string, name_len, "%d", (int) cx_val);
@@ -1688,7 +1816,7 @@ const char* nav_get_cx_name(APP_INTRF* app_intrf, CX* select_cx){
     ret_string = select_cx->short_name;
     //if this is a parameter user potentialy can set its name in parameter configuration file
     //in that case val_display_name != NULL, so return this name to show on the ui
-    if((select_cx->type & 0xff00) == Val_cx_e){
+    if(select_cx->type == Val_cx_e){
 	CX_VAL* cx_val = (CX_VAL*)select_cx;
 	if(!cx_val)return ret_string;
 	if(cx_val->val_display_name){
@@ -1929,7 +2057,7 @@ static int helper_cx_connect_ports(APP_INTRF* app_intrf, CX* top_cx){
 }
 
 static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX* top_cx){
-    if((top_cx->type & 0xff00) != Val_cx_e) return;
+    if(top_cx->type != Val_cx_e) return;
     //parameter cant be without a parent
     if(!top_cx->parent) return;
     const char* attrib_names[MAX_ATTRIB_ARRAY] = {NULL};
@@ -2020,10 +2148,13 @@ static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_
 	CX_VAL* cx_val = (CX_VAL*)top_cx;
 	//just in case get the value from the ui_param so the value is 100% up to date before saving
 	//since the value on the cx updates only when we get the value with the cx_get_value_callback
-	unsigned char ret_type = 0;
-	float updated_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, &ret_type, 0, 0);
-	if(updated_val != -1 && ret_type != 0){
-	    cx_val->float_val = updated_val;
+	//but dont do this if its a subtype of Val_cx_e, for example a container
+	if(top_cx->type == Val_cx_e){
+	    unsigned char ret_type = 0;
+	    float updated_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, &ret_type, 0, 0);
+	    if(updated_val != -1 && ret_type != 0){
+		cx_val->float_val = updated_val;
+	    }
 	}
 	attrib_names[1] = "val_name";
 	attrib_vals[1] = cx_val->val_name;
@@ -2220,7 +2351,7 @@ static int helper_cx_copy_str_val(CX* from_cx, CX* to_cx){
 }
 
 static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* parent_node, const char* config_path,
-						  unsigned char cx_type, unsigned int cx_id){
+						  unsigned char cx_type, int cx_id){
     if(!config_path)return -1;
     if(access(config_path, R_OK) != 0){
 	unsigned int param_num;

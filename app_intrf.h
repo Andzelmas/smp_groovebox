@@ -167,6 +167,8 @@ static void cx_find_container(CX *root_node, unsigned int uchar, CX*** cx_array,
 //find cx that holds the same str_val value
 //go_in == 1, go inside children while searching
 static CX *cx_find_with_str_val(const char* str_val, CX *root_node, int go_in);
+//find Val_cx_e that has the same val_name as the val_name variable
+static CX *cx_find_with_val_name(const char* val_name, CX *root_node, int go_in);
 //travel the context and free the memory, post order traversing, so to start from leaves
 static void cx_clear_contexts(CX* root, int only_one);
 
@@ -323,7 +325,7 @@ static int helper_cx_copy_str_val(CX* from_cx, CX* to_cx);
 //it will use the info there to create containers for the parameters, their val_display_name variables, value increment amounts etc
 //if the file does not exists - this function will create the file with default values so the user can modify what he needs
 static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* parent_node, const char* config_path,
-						  unsigned char cx_type, unsigned int cx_id);
+						  unsigned char cx_type, int cx_id);
 //parse the IntrfStatus enum errors and return a readable string
 const char *app_intrf_write_err(const int* err_status);
 
