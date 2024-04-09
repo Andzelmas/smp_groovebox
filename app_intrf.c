@@ -678,7 +678,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    float val_inc = -1;
 	    val_inc = str_find_value_to_float(type_attrib_names, type_attribs, "val_incr", attrib_size);
 	    if(val_inc != -1){
-		app_param_set_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, val_inc, Operation_SetIncr, 0);
+	        cx_set_value_callback(app_intrf, ret_node, val_inc, Operation_SetIncr);
 	    }
 	}	
 	//if this is a Val_cx_e container add to the cx array and return
@@ -702,7 +702,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    //find the param id in case the order changed
 	    cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name, 0);
 	    //set value and remove this cx
-	    cx_set_value_callback(app_intrf, ret_node, cx_val->float_val, Operation_SetValue);
+	    if(cx_val->val_id != -1)cx_set_value_callback(app_intrf, ret_node, cx_val->float_val, Operation_SetValue);
 	    if(cx_val->val_name)free(cx_val->val_name);
 	    free(cx_val);
 	    return NULL;
