@@ -2255,7 +2255,7 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 
 	JSONHANDLE* obj = NULL;
 	if(app_json_create_obj(&obj)==0){
-	    helper_cx_iterate_with_callback(app_intrf, parent_node, obj, helper_cx_prepare_for_param_conf);
+	    helper_cx_iterate_with_callback(app_intrf, parent_node->child, obj, helper_cx_prepare_for_param_conf);
 	}
 	//write the json handle to the file in the context path
 	app_json_write_handle_to_file(obj, config_path, 1, 1);
