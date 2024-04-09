@@ -27,6 +27,7 @@ The app uses jack2 so dont forget to run it before launching.
 When first launched the program will create _param_conf.json files for various contexts (for example Synth_param_conf.json).
 Also when a plugin is added it will create the _param_conf.json file for that type of plugin.
 Inside it is possible to change "display_name", "default_val", "increment" keys and the order of the parameters (just move around the parameter blocks).
+
 Display_name is the name that will be shown on the screen, can be duplicates.
 Default_val - value that will be set for the parameter on the first load, if a save file for this context does not exist.
 Increment - is by how much the parameter increases or decreases (very useful when the parameter is integer but the developer didnt specify that on the parameter itself).
