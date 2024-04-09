@@ -84,9 +84,12 @@ You can add a container like so:
 }
 ```
 The name of the container ("My_Container" in the example) has to be unique not only among the containers but also the parameter names (not the display_names).
+
 Also, there has to be a "type":"0501" 
 Furthermore mind where to place colons.
+
 If you mess up with the config file, just delete it and a new one will be created.
+
 Like everything else in this software this is tested only superficially. 
 
 ### Some screen grabs
