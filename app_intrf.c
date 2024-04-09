@@ -215,8 +215,8 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
 }
 
 static void cx_process_from_file(void *arg,
-			  const char* cx_name, const char* parent,
-			  const char* attrib_names[], const char* attribs[], unsigned int attrib_size){
+				 const char* cx_name, const char* parent, const char* top_name,
+				 const char* attrib_names[], const char* attribs[], unsigned int attrib_size){
     //dont do anything if the name is null
     if(!cx_name)return;
     APP_INTRF *app_intrf = (APP_INTRF*) arg;
@@ -238,8 +238,8 @@ static void cx_process_from_file(void *arg,
 //similar to cx_process_from_file but process the parameter configuration file and create the parameters with user settings
 //used as a callback in app_json_open_iterate_callback function
 static void cx_process_params_from_file(void *arg,
-			  const char* cx_name, const char* parent,
-			  const char* attrib_names[], const char* attribs[], unsigned int attrib_size){
+					const char* cx_name, const char* parent, const char* top_name,
+					const char* attrib_names[], const char* attribs[], unsigned int attrib_size){
     APP_INTRF *app_intrf = (APP_INTRF*) arg;
     if(!app_intrf)return;
     if(!cx_name)return;
@@ -250,7 +250,8 @@ static void cx_process_params_from_file(void *arg,
     //get from attributes the default value, set the increment if there is an attribute of such name and the display_name
     //these attributes should be set in the cx_init_cx_type function (Val_cx_e section)
     //TODO Create containers to group parameters
-    log_append_logfile("name of the key %s, name of the parent %s\n", cx_name, parent);
+    log_append_logfile("name of the key %s, name of the parent %s, top node name %s\n", cx_name, parent, top_name);
+    //TODO before sending to cx_init_cx_type find the parent (could be top_name or created container, so the name will be different than parent)
     for(unsigned int i = 0; i < attrib_size; i++){
 	log_append_logfile("param attrib name %s, value %s\n", attrib_names[i], attribs[i]);
     }
@@ -1955,7 +1956,7 @@ static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX
     snprintf(incr_val, 100, "%g", app_param_get_increment(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, 0));
     attrib_vals[3] = incr_val;
     
-    app_json_write_json_callback(arg, cx_val->val_name, NULL, attrib_names, attrib_vals, 4);
+    app_json_write_json_callback(arg, cx_val->val_name, NULL, NULL, attrib_names, attrib_vals, 4);
 }
 
 static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_cx){
@@ -2077,7 +2078,7 @@ static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_
 	iter = 5;
     }
 
-    app_json_write_json_callback(arg, top_cx->name, parent_name, attrib_names, attrib_vals, iter);
+    app_json_write_json_callback(arg, top_cx->name, parent_name, parent_name, attrib_names, attrib_vals, iter);
 }
 
 

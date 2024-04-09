@@ -58,7 +58,12 @@ enum cx_types_enum{
     
     //cx to hold values, that can be set and get by the user - a parameter
     //val_type intrfReturntype enum of what type the float returns, val_id - which value to set/get
+    //cx_type  - what context (plugin, smaple etc.), cx_id - id of the context (which plugin, which sample...)
+    //val_name - name of the parameter on the params container
     Val_cx_e = 0x0500,
+    //Container for values for the user to group the values, the same struct is used as for Val_cx_e, but
+    //there is no guarantee that the values will be filled with anything meaningfull, except val_name - this will be the name from user config file
+    Val_Container_cx_st = 0x0001,
 
     //context for the oscillator in the synth cx
     Osc_cx_e = 0x0600
@@ -131,7 +136,7 @@ APP_INTRF* app_intrf_init(intrf_status_t* err_status, const char* song_path);
 //also the string arrays that are malloced are cleared so its our responsibility to malloc what we want to keep
 //usually we dont need to malloc anything from the attrib_names
 static void cx_process_from_file(void* arg,
-				 const char* cx_name, const char* parent,
+				 const char* cx_name, const char* parent, const char* top_name,
 				 const char* attribs[], const char* attrib_names[], unsigned int attrib_size);
 
 //initializes the root context, mallocs the CX subtype and casts it to CX 

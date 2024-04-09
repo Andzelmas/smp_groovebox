@@ -24,8 +24,8 @@
 #define MAX_ATTRIB_ARRAY 200
 
 int app_json_read_conf(char** shared_dir, const char* load_path, const char* in_parent_name, unsigned int* load_from_conf,
-		       void* arg, void(*user_func)(void*, const char*, const char*,
-						    const char**, const char**, unsigned int)){
+		       void* arg, void(*user_func)(void* arg, const char* json_name, const char* jason_parent, const char* top_name,
+						   const char** attrib_names, const char** attribs, unsigned int attrib_count)){
     int return_val = 0;
     *load_from_conf = 0;
    //this will store the base dir of the song, need to free it later
@@ -67,7 +67,7 @@ int app_json_read_conf(char** shared_dir, const char* load_path, const char* in_
     struct json_object* cur_obj = NULL;
     const char* cur_name = DEFAULT_SHARED_DIR_KEY;
     cur_obj = app_json_iterate_and_find_obj(parsed_fp, cur_name);
-    app_json_iterate_run_callback(cur_obj, NULL, NULL, NULL, NULL, app_json_mkdir_callback);
+    app_json_iterate_run_callback(cur_obj, NULL, NULL, NULL, NULL, NULL, app_json_mkdir_callback);
 
     buffer = app_json_read_to_buffer(song_dir);
     struct json_object* file_contents = NULL;
@@ -93,7 +93,7 @@ int app_json_read_conf(char** shared_dir, const char* load_path, const char* in_
 	//structure, then we'll just need to write it out to a file
 	file_contents = json_object_new_object();
 
-	app_json_iterate_run_callback(cur_obj, NULL, in_parent_name, song_dir, file_contents,
+	app_json_iterate_run_callback(cur_obj, NULL, in_parent_name, in_parent_name, song_dir, file_contents,
 				      app_json_write_json_callback);
 	if(file_contents){
 	    if(app_json_write_json_to_file(file_contents, song_dir)<0){
@@ -122,7 +122,7 @@ int app_json_read_conf(char** shared_dir, const char* load_path, const char* in_
 	goto clean_all;
     }
     //now send file_contents to  app_json_iterate_run_callback with the user function to create the contexts
-    app_json_iterate_run_callback(file_contents, NULL, in_parent_name, NULL, arg, user_func);
+    app_json_iterate_run_callback(file_contents, NULL, in_parent_name, in_parent_name, NULL, arg, user_func);
 
     //if we loaded a song file save the name to the last_song name in the configuration file
     if(in_parent_name==NULL){
@@ -152,7 +152,7 @@ clean_strings:
 }
 
 int app_json_open_iterate_callback(const char* file_path, const char* in_parent_name,
-				   void* arg, void(*user_func)(void* arg, const char* json_name, const char* json_parent,
+				   void* arg, void(*user_func)(void* arg, const char* json_name, const char* json_parent, const char* top_name, 
 							       const char** attrib_names, const char** attrib_vals, unsigned int attrib_count)){
     int return_val = 0;
     char* buffer = NULL;
@@ -168,8 +168,9 @@ int app_json_open_iterate_callback(const char* file_path, const char* in_parent_
 	log_append_logfile("Cant parse the json file %s\n", file_path);
 	return_val = -1;
     }
-    return_val = app_json_iterate_run_callback(parsed_fp, NULL, in_parent_name, NULL, arg, user_func);
+    return_val = app_json_iterate_run_callback(parsed_fp, NULL, in_parent_name, in_parent_name, NULL, arg, user_func);
 
+    if(parsed_fp)json_object_put(parsed_fp);
     return return_val;
 }
 
@@ -340,10 +341,10 @@ clean:
 }
 
 static int app_json_iterate_run_callback(struct json_object* parsed_fp,
-					 const char* json_name, const char* json_parent,
+					 const char* json_name, const char* json_parent, const char* top_name,
 					 const char* json_file_path, 
 					 void* arg,
-					 void(*proc_func)(void*, const char*, const char*,
+					 void(*proc_func)(void*, const char*, const char*, const char*,
 							  const char**, const char**, unsigned int)){
     int return_val = 0;
 
@@ -386,7 +387,7 @@ static int app_json_iterate_run_callback(struct json_object* parsed_fp,
 
 	json_object_iter_next(&it);
     }
-    (*proc_func)(arg, json_name, json_parent, attrib_names, attrib_vals, iter);
+    (*proc_func)(arg, json_name, json_parent, top_name, attrib_names, attrib_vals, iter);
     //now go through the objects inside this json object
     //and call this function recursevily
     it = json_object_iter_begin(parsed_fp);
@@ -397,7 +398,7 @@ static int app_json_iterate_run_callback(struct json_object* parsed_fp,
 	if(iter<=0)parent_name = json_parent;
 	rec_obj = json_object_iter_peek_value(&it);
 	if(json_object_get_type(rec_obj)==json_type_object)
-	    app_json_iterate_run_callback(rec_obj, cur_name, parent_name,
+	    app_json_iterate_run_callback(rec_obj, cur_name, parent_name, top_name,
 					  json_file_path, arg, (*proc_func));
 	json_object_iter_next(&it);
     }
@@ -406,7 +407,7 @@ clean:
     return return_val;
 }
 
-static void  app_json_mkdir_callback(void* arg, const char* cur_name, const char* parent_name,
+static void  app_json_mkdir_callback(void* arg, const char* cur_name, const char* parent_name, const char* top_name,
 			    const char** attrib_names, const char** attrib_vals, unsigned int attrib_size){
     if(attrib_size>0){
 	//if there is a parent name create the dir with that name 
@@ -438,7 +439,7 @@ static void  app_json_mkdir_callback(void* arg, const char* cur_name, const char
 
 }
 
-void app_json_write_json_callback(void* arg, const char* cur_name, const char* parent_name,
+void app_json_write_json_callback(void* arg, const char* cur_name, const char* parent_name, const char* top_name,
 			    const char** attrib_names, const char** attrib_vals, unsigned int attrib_size){
     if(attrib_size>0){
 	struct json_object* obj = (struct json_object*)arg;
