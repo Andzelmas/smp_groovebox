@@ -107,9 +107,10 @@ typedef struct _curr_screen_impl_{
     WIN* fast_win;
     //The currently selected window, holds one of main_win, button_win or fast_win
     WIN* curr_main_win;
-    //currently selected cx window in the curr_main_win, like save button in sampler cx window or similar
-    //TODO navigation between these is with wsad keys - on a grid of windows
-    WIN* curr_cx_win;
+    //the clicked window, this is NULL if currently the mouse button is not held down
+    WIN* clicked_win;
+    //the mouse x position, values changes when clicked_win != NULL (mouse button is held down)
+    int x_coord;
 }CURR_SCREEN;
 
 //initialize the main screen struct
@@ -202,7 +203,9 @@ int main(){
     curs_set(0);
     noecho();
     //use mouse
-    mousemask(ALL_MOUSE_EVENTS, NULL);
+    mousemask(ALL_MOUSE_EVENTS | REPORT_MOUSE_POSITION, NULL);
+    //report mouse position events when mouse is clicked and dragged
+    printf("\033[?1002h\n"); 
     //clear the log file
     log_clear_logfile();
     //init the app interface
@@ -282,6 +285,8 @@ int curr_screen_init(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
     curr_src->main_win = NULL;
     curr_src->title_scroll_win = NULL;
     curr_src->scroll_bar_wins = NULL;
+    curr_src->clicked_win = NULL;
+    curr_src->x_coord = -1;
     //init the title window
     WIN* title_win = (WIN*)malloc(sizeof(WIN));
     if(!title_win)return -1;
@@ -876,6 +881,7 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
 			if(curr_cx)
 			    nav_set_cx_user_int(curr_cx, curr_scr->win_array_start);
 		    }
+		    
 		    //if the clicked window is a paramater and user clicked on parameter name - decrease its value
 		    else if(clicked_win->win_type == (Param_win_type | Param_name_win_type)){
 			nav_set_cx_value(app_intrf, clicked_win->cx_obj, -1);
@@ -903,7 +909,27 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
 		    }		    
 		}
 	    }
-	    
+	    //drag the mouse on button1 press
+	    if(event.bstate & BUTTON1_PRESSED){
+		curr_scr->clicked_win = ctrl_win_return_clicked(curr_scr, event.y, event.x);
+		if(curr_scr->clicked_win){
+		    curr_scr->x_coord = event.x;
+		}
+	    }
+	    //while dragging increase or decrease the parameter value if the window is a parameter
+	    if(curr_scr->clicked_win != NULL){
+		int x_diff = event.x - curr_scr->x_coord;
+		curr_scr->x_coord = event.x;
+		//if dragging on a parameter set the value to x_diff
+		if((curr_scr->clicked_win->win_type & 0xff00) == Param_win_type){
+		    nav_set_cx_value(app_intrf, curr_scr->clicked_win->cx_obj, x_diff);
+		}		
+	    }
+	    //if mouse button released stop dragging 
+	    if(event.bstate & BUTTON1_RELEASED){
+		curr_scr->clicked_win = NULL;
+		curr_scr->x_coord = -1;
+	    }		    
 	    ret_val = 2;
 	}
     }

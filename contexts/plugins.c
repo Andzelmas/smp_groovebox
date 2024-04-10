@@ -805,7 +805,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 	    PLUG_CONTROL* cur_ctrl = plug->controls[ct_iter];
 	    if(!cur_ctrl)continue;
 
-	    param_names[ct_iter] = strdup(lilv_node_as_string(cur_ctrl->label));
+	    param_names[ct_iter] = strdup(lilv_node_as_string(cur_ctrl->symbol));
 	    param_vals[ct_iter] = lilv_node_as_float(cur_ctrl->def);
 	    param_mins[ct_iter] = lilv_node_as_float(cur_ctrl->min);
 	    param_maxs[ct_iter] = lilv_node_as_float(cur_ctrl->max);

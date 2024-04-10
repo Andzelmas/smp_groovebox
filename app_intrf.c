@@ -544,7 +544,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	}
 	//create the plugin
 	int plug_id = app_plug_init_plugin(app_intrf->app_data, cx_plug->plug_path, cx_plug->id);
-	//if adding the sample to smp_data failed we clear this cx
+	//if adding the plugin to plug_data failed we clear this cx
 	if(plug_id<0){
 	    if(cx_plug->plug_path)free(cx_plug->plug_path);
 	    free(cx_plug);
@@ -709,23 +709,24 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    free(cx_val);
 	    return NULL;
 	}
-	
+
         int child_add_err = cx_add_child(parent, ret_node, name, type);
         if(child_add_err<0){
 	    if(cx_val->val_name)free(cx_val->val_name);
             free(cx_val);
             return NULL;     
         }
+
 	//find the parameter id, sometimes what is saved in the json file can be in a different order from the parameters in params
 	//here we check the id of the same name for this purpose
 	cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name, 0);
+
 	if(cx_val->val_id == -1){
 	    cx_remove_this_and_children(ret_node);
 	    return NULL;
 	}
 	//to init the values on the value button we call the set_value function
 	cx_set_value_callback(app_intrf, ret_node, cx_val->float_val, Operation_SetValue);
-	
         return ret_node;
     }
 
@@ -2096,7 +2097,6 @@ static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX
     char incr_val[100];
     snprintf(incr_val, 100, "%g", app_param_get_increment(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, 0));
     attrib_vals[3] = incr_val;
-    
     app_json_write_json_callback(arg, cx_val->val_name, NULL, NULL, attrib_names, attrib_vals, 4);
 }
 
@@ -2371,10 +2371,10 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 	char** param_names = NULL;
 	char** param_vals = NULL;
 	char** param_types = NULL;
-    
+
 	int got_params = app_param_return_all_as_string(app_intrf->app_data, cx_type, cx_id,
 							&param_names, &param_vals, &param_types, &param_num);  
-	if(got_params >= 0 && param_num > 0 && param_names !=NULL){
+	if(got_params >= 0 && param_num > 0 && param_names !=NULL){	    	
 	    for(int i=0; i<param_num; i++){
 		if(param_names[i] == NULL)continue;
 		if(param_vals[i]==NULL || param_types[i]==NULL)continue;
@@ -2384,20 +2384,25 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 		snprintf(val_cx_type, 12, "%d", cx_type);
 		char val_cx_id [20];
 		snprintf(val_cx_id, 20, "%d", cx_id);
-		if(!cx_init_cx_type(app_intrf, parent_node->name, param_names[i], Val_cx_e,
+		log_append_logfile("sending value %s\n", param_names[i]);
+		CX* created_cx = cx_init_cx_type(app_intrf, parent_node->name, param_names[i], Val_cx_e,
 				    (const char*[6]){param_names[i], val_id, param_types[i], param_vals[i], val_cx_type, val_cx_id},
-				    (const char*[6]){"val_name", "val_id", "val_type", "float_val", "cx_type", "cx_id"}, 6)){
+						 (const char*[6]){"val_name", "val_id", "val_type", "float_val", "cx_type", "cx_id"}, 6);
+		//dont stop if there was an error creating the val, the val simply will not be created
+		/*
+		if(!created_cx){
 		    return -1;
 		}
+		*/
 		if(param_names[i])free(param_names[i]);
 		if(param_vals[i])free(param_vals[i]);
 		if(param_types[i])free(param_types[i]);
+
 	    }
 	}
 	if(param_types)free(param_types);
 	if(param_vals)free(param_vals);
 	if(param_names)free(param_names);
-
 	JSONHANDLE* obj = NULL;
 	if(app_json_create_obj(&obj)==0){
 	    helper_cx_iterate_with_callback(app_intrf, parent_node->child, obj, helper_cx_prepare_for_param_conf);
