@@ -2410,8 +2410,7 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 	app_json_write_handle_to_file(obj, config_path, 1, 1);
     }
     else{
-	//TODO how to setup user names for parameter values - similar to lv2 ScalePoints. Would be best if params had a pointer to function that does
-	//value to text. Current system should be changed.
+	//TODO how to setup user names for parameter values - similar to lv2 ScalePoints.
 	app_json_open_iterate_callback(config_path, parent_node->name, app_intrf, cx_process_params_from_file);
     }
     return 0;
