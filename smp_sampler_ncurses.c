@@ -79,7 +79,7 @@ typedef struct _curr_screen_impl_{
     WIN** win_array;
     //how many windows from cx are created in the middle window array (win_array)
     unsigned int win_array_size;
-    //from which member of the win_array we should display the windows
+    //from which member of the win_array we should display the windows (for scrolling)
     unsigned int win_array_start;
     //the last member of the win_array that is displayed because of scrolling
     int win_array_end;
@@ -400,6 +400,11 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
 	if(!curr_src->win_array)return -1;
 	curr_src->win_array_size = new_total;	
 	if(cx_new_array_main)free(cx_new_array_main);
+        //set the win_array_start to user_int, so when navigating, when jumping contexts user does not always jump back to the 0 page
+	//user_int is set, when scrolling
+	int user_int = nav_return_cx_user_int(curr_cx);
+	if(user_int != -1 && user_int < curr_src->win_array_size)
+	    curr_src->win_array_start = user_int;
     }
     if(cx_array_main)free(cx_array_main);
    
@@ -626,6 +631,8 @@ static void curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* cu
 static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, int ch, WINDOW* main_window){
     if(!app_intrf || !curr_scr)return -1;
     int ret_val = 2;
+    //get the current cx, mainly to set its user_int when scrolling, so ui remembers on what scroll page it was for this cx
+    CX* curr_cx = nav_ret_curr_cx(app_intrf);    
     switch(ch){
     case '1':
 	curr_change_cx_value_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
@@ -736,11 +743,15 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 	//scroll the main context array up - the last window displayed + 1 will become first
 	ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
 			      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 1);
+	if(curr_cx)
+	    nav_set_cx_user_int(curr_cx, curr_scr->win_array_start);
 	break;
     case 259:
 	//scroll the main context array down - the first window displayed - 1 will become last
 	ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
 			      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 0);
+	if(curr_cx)
+	    nav_set_cx_user_int(curr_cx, curr_scr->win_array_start);	
 	break;
 
 	//navigate the button array (liek save, load etc)
@@ -852,12 +863,18 @@ int curr_screen_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr){
 		    else if(clicked_win->win_type == (Scroll_win_type | Scroll_up_win_type)){
 			ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
 					      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 1);
+			CX* curr_cx = nav_ret_curr_cx(app_intrf);
+			if(curr_cx)
+			    nav_set_cx_user_int(curr_cx, curr_scr->win_array_start);
 		    }
 		    //if clicked on scroll down button window
 		    else if(clicked_win->win_type == (Scroll_win_type | Scroll_down_win_type)){
 			//scroll the main context array down - the last window displayed + 1 will become first
 			ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
 					      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 0);
+			CX* curr_cx = nav_ret_curr_cx(app_intrf);
+			if(curr_cx)
+			    nav_set_cx_user_int(curr_cx, curr_scr->win_array_start);
 		    }
 		    //if the clicked window is a paramater and user clicked on parameter name - decrease its value
 		    else if(clicked_win->win_type == (Param_win_type | Param_name_win_type)){
@@ -1513,14 +1530,14 @@ void ctrl_win_array_scroll(WIN* win_array[], WIN* win_parent, unsigned int* star
 	int total_scroll = win_layout_win_array(win_array, size, list, win_parent, 0);
 	//if there is an error or somewhow now all the windows fit just make the start 0 again
 	if(total_scroll<0){
-	    *start = 0;
+	    *start = 0;	    
 	    return;
 	}
 	//else calculate the new start, by subtracting the windows that currently fit from current start
 	int new_start = *start - total_scroll - 1;
 	//if new start is < 0 make start 0 again
 	if(new_start<=0){
-	    *start = 0;
+	    *start = 0;	    
 	    return;
 	}
 	//else set the new start

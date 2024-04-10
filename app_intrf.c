@@ -49,6 +49,8 @@ typedef struct intrf_cx{
     unsigned int type;
     //this is 1 if the CX needs to be saved when saving a song or preset
     unsigned char save;
+    //var to use for the ui. Can be returned and set, to have a persistent variable on the cx
+    int user_int;
 }CX;
 
 typedef struct intrf_cx_main{
@@ -746,6 +748,7 @@ static int cx_add_child(CX *parent_cx, CX *child_cx, const char *name, unsigned 
     child_cx->sib = NULL;
     child_cx->prev = NULL;
     child_cx->type = type;
+    child_cx->user_int = -1;
     
     if(parent_cx ==NULL){
 	child_cx->short_name = (char*)malloc((strlen(name)+1)*sizeof(char));
@@ -1631,6 +1634,16 @@ unsigned int nav_return_need_to_highlight(CX* this_cx){
     }
 
     return 0;
+}
+
+int nav_set_cx_user_int(CX* this_cx, int new_int){
+    if(!this_cx) return -1;
+    this_cx->user_int = new_int;
+    return 0;
+}
+int nav_return_cx_user_int(CX* this_cx){
+    if(!this_cx) return -1;
+    return this_cx->user_int;
 }
 
 unsigned int nav_return_cx_type(CX* this_cx){

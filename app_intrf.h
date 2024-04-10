@@ -237,6 +237,10 @@ static void intrf_callback_exit(APP_INTRF* app_intrf, CX* self);
 //These are abstract and general functions, with general names like nav_next_context and similar
 //It does not care about the types of contexts it cares what children, siblings, parents the contexts have
 /*-------------------------------------------------------------*/
+//set and return user_int var on this cx. It does not do anything, but can be used for convenience, when ui needs to track
+//a persistent variable on the cx
+int nav_set_cx_user_int(CX* this_cx, int new_int);
+int nav_return_cx_user_int(CX* this_cx);
 //return how many children the cx has
 int nav_return_numchildren(APP_INTRF* app_intrf, CX* this_cx);
 //return the children to user provided CX array of this_cx
