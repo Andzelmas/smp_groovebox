@@ -1,0 +1,617 @@
+{
+    "enabled":{
+	"type":"0500",
+	"display_name":"enabled",
+	"default_val":"1",
+	"increment":"1"
+    },
+    "Pianoteq8STAGE_Volume":{
+	"type":"0500",
+	"display_name":"Volume",
+	"default_val":"0.727273",
+	"increment":"0.01"
+    },
+    "Pianoteq8STAGE_Post_20Effect_20Gain":{
+	"type":"0500",
+	"display_name":"Post Fx Gain",
+	"default_val":"0.533333",
+	"increment":"0.01"
+    },    
+    "Pianoteq8STAGE_Condition":{
+	"type":"0500",
+	"display_name":"Condition",
+	"default_val":"0",
+	"increment":"0.01"
+    },
+    "Pianoteq8STAGE_Output_20Mode":{
+	"type":"0500",
+	"display_name":"Output Mode",
+	"default_val":"0.666667",
+	"increment":"0.01"
+    },
+    "Pianoteq8STAGE_Dynamics":{
+	"type":"0500",
+	"display_name":"Dynamics",
+	"default_val":"0.393939",
+	"increment":"0.01"
+    },
+    "Pianoteq8STAGE_Equalizer_20Switch":{
+	"type":"0500",
+	"display_name":"EQ Switch",
+	"default_val":"1",
+	"increment":"1"
+    },
+    "Pianoteq8STAGE_Aftertouch":{
+	"type":"0500",
+	"display_name":"Aftertouch",
+	"default_val":"0",
+	"increment":"0.01"
+    },
+    "Pianoteq8STAGE_Reversed_20Sustain":{
+	"type":"0500",
+	"display_name":"Reversed Sustain",
+	"default_val":"0",
+	"increment":"0.01"
+    },
+    "Pianoteq8STAGE_Pitch_20Bend":{
+	"type":"0500",
+	"display_name":"Pitch Bend",
+	"default_val":"0.5",
+	"increment":"0.01"
+    },    
+    "Pianoteq8STAGE_Diapason":{
+	"type":"0500",
+	"display_name":"Diapason",
+	"default_val":"0.125",
+	"increment":"0.01"
+    },
+    "Pianoteq8STAGE_Keyboard_20Range_20Switch":{
+	"type":"0500",
+	"display_name":"Kbd Range Switch",
+	"default_val":"0",
+	"increment":"0.01"
+    },
+    "Reverb_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Reverb_20Switch":{
+	    "type":"0500",
+	    "display_name":"Switch",
+	    "default_val":"1",
+	    "increment":"1"
+	},	
+	"Pianoteq8STAGE_Reverb_20Pre_delay":{
+	    "type":"0500",
+	    "display_name":"Pre_delay",
+	    "default_val":"0.215698",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Reverb_20Early_20Reflections":{
+	    "type":"0500",
+	    "display_name":"Early Reflections",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Reverb_20Mix":{
+	    "type":"0500",
+	    "display_name":"Mix",
+	    "default_val":"0.56",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Reverb_20Tone":{
+	    "type":"0500",
+	    "display_name":"Tone",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Reverb_20Duration":{
+	    "type":"0500",
+	    "display_name":"Duration",
+	    "default_val":"0.339727",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Room_20Dimensions":{
+	    "type":"0500",
+	    "display_name":"Room Size",
+	    "default_val":"0.222222",
+	    "increment":"0.01"
+	}
+    },
+    "Limiter_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Limiter_20Switch":{
+	    "type":"0500",
+	    "display_name":"Switch",
+	    "default_val":"1",
+	    "increment":"1"
+	},
+	"Pianoteq8STAGE_Limiter_20Sharpness":{
+	    "type":"0500",
+	    "display_name":"Sharpness",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Limiter_20Threshold":{
+	    "type":"0500",
+	    "display_name":"Threshold",
+	    "default_val":"0.52",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Limiter_20Gain":{
+	    "type":"0500",
+	    "display_name":"Gain",
+	    "default_val":"0.833333",
+	    "increment":"0.01"
+	}
+    },
+    "Action_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Mute":{
+	    "type":"0500",
+	    "display_name":"Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Pedal_20Noise":{
+	    "type":"0500",
+	    "display_name":"Pedal Noise",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Damper_20Noise":{
+	    "type":"0500",
+	    "display_name":"Damper Noise",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Key_20Release_20Noise":{
+	    "type":"0500",
+	    "display_name":"Key Release Noise",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	}
+    },
+    "Pedal_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Celeste_20Pedal":{
+	    "type":"0500",
+	    "display_name":"Celeste",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Harmonic_20Pedal":{
+	    "type":"0500",
+	    "display_name":"Harmonic",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Pinch_20Harmonic_20Pedal":{
+	    "type":"0500",
+	    "display_name":"Harmonic Pinch",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Sostenuto_20Pedal":{
+	    "type":"0500",
+	    "display_name":"Sostenuto",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Sustain_20Pedal":{
+	    "type":"0500",
+	    "display_name":"Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Soft_20Pedal":{
+	    "type":"0500",
+	    "display_name":"Soft",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Glissando_20Pedal":{
+	    "type":"0500",
+	    "display_name":"Glissando",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Lute_20Stop_20Pedal":{
+	    "type":"0500",
+	    "display_name":"Lute Stop",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Rattle_20Pedal":{
+	    "type":"0500",
+	    "display_name":"Rattle",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Super_20Sostenuto":{
+	    "type":"0500",
+	    "display_name":"Super Sostenuto",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Mozart_20Rail":{
+	    "type":"0500",
+	    "display_name":"Mozart Rail",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "Clavinet_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Clavinet_20Low_20Mic":{
+	    "type":"0500",
+	    "display_name":"Low Mic",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Clavinet_20High_20Mic":{
+	    "type":"0500",
+	    "display_name":"High Mic",
+	    "default_val":"1",
+	    "increment":"0.01"
+	}
+    },
+    "Harpsichord_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Harpsichord_20Register_5B1_5D":{
+	    "type":"0500",
+	    "display_name":"Register 1",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Harpsichord_20Register_5B2_5D":{
+	    "type":"0500",
+	    "display_name":"Register 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},	
+	"Pianoteq8STAGE_Harpsichord_20Register_5B3_5D":{
+	    "type":"0500",
+	    "display_name":"Register 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "Mallet_Bounce_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Bounce_20Switch":{
+	    "type":"0500",
+	    "display_name":"Switch",
+	    "default_val":"0",
+	    "increment":"1"
+	},
+	"Pianoteq8STAGE_Bounce_20Sync":{
+	    "type":"0500",
+	    "display_name":"Sync",
+	    "default_val":"0",
+	    "increment":"1"
+	},
+	"Pianoteq8STAGE_Bounce_20Sync_20Speed":{
+	    "type":"0500",
+	    "display_name":"Sync Speed",
+	    "default_val":"0.565217",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Bounce_20Delay":{
+	    "type":"0500",
+	    "display_name":"Init Delay",
+	    "default_val":"0.458333",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Bounce_20Velocity_20Sensitivity":{
+	    "type":"0500",
+	    "display_name":"Vel Sensitivity",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Bounce_20Delay_20Loss":{
+	    "type":"0500",
+	    "display_name":"Delay Loss",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Bounce_20Velocity_20Loss":{
+	    "type":"0500",
+	    "display_name":"Vel Loss",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},	
+	"Pianoteq8STAGE_Bounce_20Humanization":{
+	    "type":"0500",
+	    "display_name":"Humanization",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	}
+    },
+    "Note_Fx_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_NFX_20Lfo_20Rate":{
+	    "type":"0500",
+	    "display_name":"Lfo Rate",
+	    "default_val":"0.4",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_NFX_20Onset_20Duration":{
+	    "type":"0500",
+	    "display_name":"Lfo Onset Duration",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_NFX_20Lfo_20Shape":{
+	    "type":"0500",
+	    "display_name":"Lfo Shape",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_NFX_20Lfo_20Skew":{
+	    "type":"0500",
+	    "display_name":"Lfo Skew",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_NFX_20Lfo_20Phase":{
+	    "type":"0500",
+	    "display_name":"Lfo Phase",
+	    "default_val":"0.25",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_NFX_20Lfo_20Phase_20Locked":{
+	    "type":"0500",
+	    "display_name":"Lfo Phase Locked",
+	    "default_val":"0",
+	    "increment":"1"
+	},
+	"Pianoteq8STAGE_NFX_20Vibrato":{
+	    "type":"0500",
+	    "display_name":"Vibrato Depth",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_NFX_20Vibrato_20Offset":{
+	    "type":"0500",
+	    "display_name":"Vibrato Offset",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_NFX_20Tremolo_20Depth":{
+	    "type":"0500",
+	    "display_name":"Tremolo Depth",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_NFX_20Tremolo_20Phase":{
+	    "type":"0500",
+	    "display_name":"Tremolo Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Attack_20Envelope":{
+	    "type":"0500",
+	    "display_name":"Attack Env",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "Guitar_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Guitar_20Body":{
+	    "type":"0500",
+	    "display_name":"Body",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Guitar_20easy_20fingering":{
+	    "type":"0500",
+	    "display_name":"Easy Fingering",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Guitar_20Legato":{
+	    "type":"0500",
+	    "display_name":"Legato",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Fret":{
+	    "type":"0500",
+	    "display_name":"Fret",
+	    "default_val":"0.052632",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Virtuosity":{
+	    "type":"0500",
+	    "display_name":"Virtuosity",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	}	
+    },
+    "Eff1_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Effect_5B1_5D_Switch":{
+	    "type":"0500",
+	    "display_name":"Switch",
+	    "default_val":"1",
+	    "increment":"1"
+	},
+	"Pianoteq8STAGE_Effect_5B1_5D_Param_5B1_5D":{
+	    "type":"0500",
+	    "display_name":"Param 1",
+	    "default_val":"0.07",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B1_5D_Param_5B2_5D":{
+	    "type":"0500",
+	    "display_name":"Param 2",
+	    "default_val":"0.228336",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B1_5D_Param_5B3_5D":{
+	    "type":"0500",
+	    "display_name":"Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B1_5D_Param_5B4_5D":{
+	    "type":"0500",
+	    "display_name":"Param 4",
+	    "default_val":"0.25",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B1_5D_Param_5B5_5D":{
+	    "type":"0500",
+	    "display_name":"Param 5",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B1_5D_Param_5B6_5D":{
+	    "type":"0500",
+	    "display_name":"Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B1_5D_Param_5B7_5D":{
+	    "type":"0500",
+	    "display_name":"Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B1_5D_Param_5B8_5D":{
+	    "type":"0500",
+	    "display_name":"Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "Eff2_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Effect_5B2_5D_Switch":{
+	    "type":"0500",
+	    "display_name":"Switch",
+	    "default_val":"1",
+	    "increment":"1"
+	},
+	"Pianoteq8STAGE_Effect_5B2_5D_Param_5B1_5D":{
+	    "type":"0500",
+	    "display_name":"Param 1",
+	    "default_val":"0.174046",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B2_5D_Param_5B2_5D":{
+	    "type":"0500",
+	    "display_name":"Param 2",
+	    "default_val":"0.54",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B2_5D_Param_5B3_5D":{
+	    "type":"0500",
+	    "display_name":"Param 3",
+	    "default_val":"0.461274",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B2_5D_Param_5B4_5D":{
+	    "type":"0500",
+	    "display_name":"Param 4",
+	    "default_val":"0.319208",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B2_5D_Param_5B5_5D":{
+	    "type":"0500",
+	    "display_name":"Param 5",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B2_5D_Param_5B6_5D":{
+	    "type":"0500",
+	    "display_name":"Param 6",
+	    "default_val":"0.461274",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B2_5D_Param_5B7_5D":{
+	    "type":"0500",
+	    "display_name":"Param 7",
+	    "default_val":"0.648641",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B2_5D_Param_5B8_5D":{
+	    "type":"0500",
+	    "display_name":"Param 8",
+	    "default_val":"0.54",
+	    "increment":"0.01"
+	}
+    },
+    "Eff3_Settings":{
+	"type":"0501",
+	"Pianoteq8STAGE_Effect_5B3_5D_Switch":{
+	    "type":"0500",
+	    "display_name":"Switch",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B3_5D_Param_5B1_5D":{
+	    "type":"0500",
+	    "display_name":"Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B3_5D_Param_5B2_5D":{
+	    "type":"0500",
+	    "display_name":"Param 2",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B3_5D_Param_5B3_5D":{
+	    "type":"0500",
+	    "display_name":"Param 3",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B3_5D_Param_5B4_5D":{
+	    "type":"0500",
+	    "display_name":"Param 4",
+	    "default_val":"0.109811",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B3_5D_Param_5B5_5D":{
+	    "type":"0500",
+	    "display_name":"Param 5",
+	    "default_val":"0.47",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B3_5D_Param_5B6_5D":{
+	    "type":"0500",
+	    "display_name":"Param 6",
+	    "default_val":"0.694538",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B3_5D_Param_5B7_5D":{
+	    "type":"0500",
+	    "display_name":"Param 7",
+	    "default_val":"0.729568",
+	    "increment":"0.01"
+	},
+	"Pianoteq8STAGE_Effect_5B3_5D_Param_5B8_5D":{
+	    "type":"0500",
+	    "display_name":"Param 8",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	}
+    },
+    "Sys_Settings":{
+	"type":"0501",
+	"latency":{
+	    "type":"0500",
+	    "display_name":"latency",
+	    "default_val":"nan",
+	    "increment":"0"
+	},
+	"freeWheeling":{
+	    "type":"0500",
+	    "display_name":"freeWheeling",
+	    "default_val":"0",
+	    "increment":"1"
+	}
+    }
+}
