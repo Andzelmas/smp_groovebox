@@ -212,7 +212,6 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
     log_append_logfile("Opened song %s \n", root_main->path);
     
     //clap_plug_init("/usr/lib/clap/CHOWTapeModel.clap");
-    
     return app_intrf;
 }
 
