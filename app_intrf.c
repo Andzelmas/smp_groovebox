@@ -2384,7 +2384,6 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 		snprintf(val_cx_type, 12, "%d", cx_type);
 		char val_cx_id [20];
 		snprintf(val_cx_id, 20, "%d", cx_id);
-		log_append_logfile("sending value %s\n", param_names[i]);
 		CX* created_cx = cx_init_cx_type(app_intrf, parent_node->name, param_names[i], Val_cx_e,
 				    (const char*[6]){param_names[i], val_id, param_types[i], param_vals[i], val_cx_type, val_cx_id},
 						 (const char*[6]){"val_name", "val_id", "val_type", "float_val", "cx_type", "cx_id"}, 6);
