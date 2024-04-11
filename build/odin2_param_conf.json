@@ -1025,7 +1025,7 @@
 	    "type":"0500",
 	    "display_name":"on",
 	    "default_val":"0",
-	    "increment":"0.01"
+	    "increment":"1"
 	},
 	"reverb_predelay":{
 	    "type":"0500",

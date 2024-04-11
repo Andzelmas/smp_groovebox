@@ -23,7 +23,7 @@
 //if the screen is even smaller and less windows fit, the scroll bar will appear sooner
 #define MAX_WINDOWS 8
 //maximum length for the display_text of the window
-#define MAX_DISPLAY_TEXT 50
+#define MAX_DISPLAY_TEXT 100
 //maximum string length for the display of the parameter values,
 //should be short, because its hard to read values when they scroll, so better to fit in a window
 #define MAX_VALUE_TEXT 8
@@ -1430,6 +1430,8 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	    char new_display_text[MAX_DISPLAY_TEXT];
 	    snprintf(new_display_text, MAX_DISPLAY_TEXT, "%s%s", win->display_text, space);
 	    txt_len += 3;
+	    if(txt_len > MAX_DISPLAY_TEXT)
+		txt_len = MAX_DISPLAY_TEXT;
 	    
 	    unsigned int tick = curr_scr->tick;
 	    unsigned int start_char = win->text_start;
