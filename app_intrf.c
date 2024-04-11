@@ -1795,7 +1795,7 @@ int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_strin
 	if((ret_type & 0xff) == Uchar_type)snprintf(ret_string, name_len, "%02X", (unsigned int) cx_val);
 	if((ret_type & 0xff) == Int_type)snprintf(ret_string, name_len, "%d", (int) cx_val);
 	if((ret_type & 0xff) == Float_type)snprintf(ret_string, name_len, "%g", cx_val);
-	if((ret_type & 0xff) == DB_Return_Type)snprintf(ret_string, name_len, "%0.2fDB", log10((double)cx_val) * 20);
+	if((ret_type & 0xff) == DB_Return_Type)snprintf(ret_string, name_len, "%0.3gDB", log10((double)cx_val) * 20);
 	if((ret_type & 0xff) == Curve_Float_Return_Type)snprintf(ret_string, name_len, "%g", cx_val);
 	if((ret_type & 0xff) == String_Return_Type && param_cx != NULL){
 	    const char* param_string = app_param_get_string(app_intrf->app_data, param_cx->cx_type, param_cx->cx_id, param_cx->val_id, 0);

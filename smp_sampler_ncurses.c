@@ -24,6 +24,9 @@
 #define MAX_WINDOWS 8
 //maximum length for the display_text of the window
 #define MAX_DISPLAY_TEXT 50
+//maximum string length for the display of the parameter values,
+//should be short, because its hard to read values when they scroll, so better to fit in a window
+#define MAX_VALUE_TEXT 8
 //window struct that holds the text to display in the window, the ncurses window object and cx struct if
 //aplicable
 typedef struct _win_impl_ WIN;
@@ -1284,7 +1287,7 @@ int win_create(APP_INTRF* app_intrf, WIN* app_win, int height, int width, int st
 		app_win->children_array_size = 2;
 		app_win->children_array = win_init_win_array(app_intrf, app_win, 2, cx_param_array, NULL, (unsigned int[2]){20,15}, 0, (unsigned int[2]){1,0}, NULL);
 		//put the value of the param as the value window text right away, otherwise when refreshed the text would be empty for a moment
-		nav_get_cx_value_as_string(app_intrf, cx_obj, app_win->children_array[1]->display_text, MAX_DISPLAY_TEXT);
+		nav_get_cx_value_as_string(app_intrf, cx_obj, app_win->children_array[1]->display_text, MAX_VALUE_TEXT);
 		app_win->children_array[1]->has_text = 1;
 		//add the win type for the param window
 		app_win->children_array[0]->win_type = (Param_win_type | Param_name_win_type);
@@ -1403,9 +1406,8 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
     }
     //if this is a parameter value update it
     //otherwise the value will stay the same as when the window was created
-
     if(win->cx_obj && win->win_type==(Param_win_type | Param_val_win_type)){
-	nav_get_cx_value_as_string(app_intrf, win->cx_obj, win->display_text, MAX_DISPLAY_TEXT);
+	nav_get_cx_value_as_string(app_intrf, win->cx_obj, win->display_text, MAX_VALUE_TEXT);
 	win->has_text = 1;
     }
 
@@ -1416,38 +1418,41 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	int txt_len = strlen(win->display_text);
 	char* display = NULL;
 	//if the text fits no need to scroll
-	if(txt_len<max_width){
+	if(txt_len <= max_width){
 	    display = win->display_text;
 	    win->anim = 0;
 	}
 	//if it does not fit we have to scroll the text
 	else{
 	    win->anim = 1;
+	    //first add spaces to the end of the text, so its clearer to read when the start meets the end
+	    char* space = "    ";
+	    char new_display_text[MAX_DISPLAY_TEXT];
+	    snprintf(new_display_text, MAX_DISPLAY_TEXT, "%s%s", win->display_text, space);
+	    txt_len += 3;
+	    
 	    unsigned int tick = curr_scr->tick;
 	    unsigned int start_char = win->text_start;
-	    if(start_char > (strlen(win->display_text)) - max_width){
-		start_char = (strlen(win->display_text)) - max_width;
-	    }
-	    unsigned int end_char = start_char + (max_width-1);
-	    if(end_char > strlen(win->display_text)-1){
-		end_char = strlen(win->display_text)-1;
-	    }
-	    if(tick % SCROLL_ANIM ==0){
-		win->text_start += 1;
-		if(win->text_start >= strlen(win->display_text))win->text_start = 0;
-	    }
-	    unsigned int new_len = (end_char - start_char) + 1;	    
+	    unsigned int new_len = max_width;
 	    //end null for string
 	    memset(win->scroll_text, 0, sizeof(char)*MAX_DISPLAY_TEXT);
 	    win->scroll_text[new_len] = '\0';
 	    //copy the display text to the new text
 	    int j = 0;
-	    for(int i=start_char; i<=end_char; i++){
-		char cur_char = win->display_text[i];
+	    for(int i = 0; i < max_width; i++){
+		int iter = start_char + i;
+		if(iter >= txt_len)
+		    iter = iter - txt_len;
+		char cur_char = new_display_text[iter];
 		win->scroll_text[j] = cur_char;
 		j += 1;
 	    }
 	    display = win->scroll_text;
+	    //push the text
+	    if(tick % SCROLL_ANIM ==0){
+		win->text_start += 1;
+		if(win->text_start >= txt_len)win->text_start = 0;
+	    }
 	}
 	if(display){
 	    mvwprintw(win->nc_win, 1, 1, display);
