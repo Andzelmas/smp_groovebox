@@ -81,7 +81,7 @@
 	},
 	"osc1_wavetble_position":{
 	    "type":"0500",
-	    "display_name":"wavetble_position",
+	    "display_name":"wavetable_pos",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -93,13 +93,13 @@
 	},
 	"osc1_position_modulation":{
 	    "type":"0500",
-	    "display_name":"position_modulation",
+	    "display_name":"pos_modulation",
 	    "default_val":"0.5",
 	    "increment":"0.01"
 	},
 	"osc1_multi_position":{
 	    "type":"0500",
-	    "display_name":"multi_position",
+	    "display_name":"multi_pos",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -135,13 +135,13 @@
 	},
 	"osc1_arpeggiator_on":{
 	    "type":"0500",
-	    "display_name":"arpeggiator_on",
+	    "display_name":"arp_on",
 	    "default_val":"0",
 	    "increment":"1"
 	},
 	"osc1_arpeggiator_speed":{
 	    "type":"0500",
-	    "display_name":"arpeggiator_speed",
+	    "display_name":"arp_speed",
 	    "default_val":"0.557144",
 	    "increment":"0.01"
 	},
@@ -177,7 +177,7 @@
 	},
 	"osc1_exponential_fm":{
 	    "type":"0500",
-	    "display_name":"exponential_fm",
+	    "display_name":"exp_fm",
 	    "default_val":"0",
 	    "increment":"1"
 	},
@@ -189,13 +189,13 @@
 	},
 	"osc1_noise_lowpass":{
 	    "type":"0500",
-	    "display_name":"noise_lowpass",
+	    "display_name":"noise_lp",
 	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"osc1_noise_highpass":{
 	    "type":"0500",
-	    "display_name":"noise_highpass",
+	    "display_name":"noise_hp",
 	    "default_val":"0",
 	    "increment":"0.01"
 	}
@@ -240,7 +240,7 @@
 	},
 	"osc2_wavetable_position":{
 	    "type":"0500",
-	    "display_name":"wavetable_position",
+	    "display_name":"wavetable_pos",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -252,13 +252,13 @@
 	},
 	"osc2_position_modulation":{
 	    "type":"0500",
-	    "display_name":"position_modulation",
+	    "display_name":"pos_modulation",
 	    "default_val":"0.5",
 	    "increment":"0.01"
 	},
 	"osc2_multi_position":{
 	    "type":"0500",
-	    "display_name":"multi_position",
+	    "display_name":"multi_pos",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -294,13 +294,13 @@
 	},
 	"osc2_arpeggiator_on":{
 	    "type":"0500",
-	    "display_name":"arpeggiator_on",
+	    "display_name":"arp_on",
 	    "default_val":"0",
 	    "increment":"1"
 	},	
 	"osc2_arpeggiator_speed":{
 	    "type":"0500",
-	    "display_name":"arpeggiator_speed",
+	    "display_name":"arp_speed",
 	    "default_val":"0.557144",
 	    "increment":"0.01"
 	},
@@ -336,7 +336,7 @@
 	},
 	"osc2_exponential_fm":{
 	    "type":"0500",
-	    "display_name":"exponential_fm",
+	    "display_name":"exp_fm",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -348,13 +348,13 @@
 	},
 	"osc2_noise_lowpass":{
 	    "type":"0500",
-	    "display_name":"noise_lowpass",
+	    "display_name":"noise_lp",
 	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"osc2_noise_highpass":{
 	    "type":"0500",
-	    "display_name":"noise_highpass",
+	    "display_name":"noise_hp",
 	    "default_val":"0",
 	    "increment":"0.01"
 	}
@@ -399,7 +399,7 @@
 	},
 	"osc3_wavetable_position":{
 	    "type":"0500",
-	    "display_name":"wavetable_position",
+	    "display_name":"wavetable_pos",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -411,13 +411,13 @@
 	},
 	"osc3_position_modulation":{
 	    "type":"0500",
-	    "display_name":"position_modulation",
+	    "display_name":"pos_modulation",
 	    "default_val":"0.5",
 	    "increment":"0.01"
 	},
 	"osc3_multi_position":{
 	    "type":"0500",
-	    "display_name":"multi_position",
+	    "display_name":"multi_pos",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -453,13 +453,13 @@
 	},
 	"osc3_arpeggiator_on":{
 	    "type":"0500",
-	    "display_name":"arpeggiator_on",
+	    "display_name":"arp_on",
 	    "default_val":"0",
 	    "increment":"1"
 	},
 	"osc3_arpeggiator_speed":{
 	    "type":"0500",
-	    "display_name":"arpeggiator_speed",
+	    "display_name":"arp_speed",
 	    "default_val":"0.557144",
 	    "increment":"0.01"
 	},
@@ -495,7 +495,7 @@
 	},
 	"osc3_exponential_fm":{
 	    "type":"0500",
-	    "display_name":"exponential_fm",
+	    "display_name":"exp_fm",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -507,13 +507,13 @@
 	},
 	"osc3_noise_lowpass":{
 	    "type":"0500",
-	    "display_name":"noise_lowpass",
+	    "display_name":"noise_lp",
 	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"osc3_noise_highpass":{
 	    "type":"0500",
-	    "display_name":"noise_highpass",
+	    "display_name":"noise_hp",
 	    "default_val":"0",
 	    "increment":"0.01"
 	}
@@ -540,7 +540,7 @@
 	},
 	"filter1_velocity_amount":{
 	    "type":"0500",
-	    "display_name":"velocity_amount",
+	    "display_name":"vel_am",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -552,7 +552,7 @@
 	},
 	"filter1_keyboard_follow":{
 	    "type":"0500",
-	    "display_name":"keyboard_follow",
+	    "display_name":"kbd_follow",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -564,13 +564,13 @@
 	},
 	"filter1_frequency":{
 	    "type":"0500",
-	    "display_name":"frequency",
+	    "display_name":"freq",
 	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"filter1_resonance":{
 	    "type":"0500",
-	    "display_name":"resonance",
+	    "display_name":"res",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -582,19 +582,19 @@
 	},
 	"filter1_sem_transition":{
 	    "type":"0500",
-	    "display_name":"sem_transition",
+	    "display_name":"sem_trans",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
 	"filter1_formant_transition":{
 	    "type":"0500",
-	    "display_name":"formant_transition",
+	    "display_name":"formant_trans",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
 	"filter1_ringmod_amount":{
 	    "type":"0500",
-	    "display_name":"ringmod_amount",
+	    "display_name":"ringmod_am",
 	    "default_val":"1",
 	    "increment":"0.01"
 	}
@@ -627,7 +627,7 @@
 	},
 	"filter2_velocity_amount":{
 	    "type":"0500",
-	    "display_name":"velocity_amount",
+	    "display_name":"vel_am",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -639,7 +639,7 @@
 	},
 	"filter2_keyboard_follow":{
 	    "type":"0500",
-	    "display_name":"keyboard_follow",
+	    "display_name":"kbd_follow",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -651,13 +651,13 @@
 	},
 	"filter2_frequency":{
 	    "type":"0500",
-	    "display_name":"frequency",
+	    "display_name":"freq",
 	    "default_val":"0.561071",
 	    "increment":"0.01"
 	},
 	"filter2_resonance":{
 	    "type":"0500",
-	    "display_name":"resonance",
+	    "display_name":"res",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -669,19 +669,19 @@
 	},
 	"filter2_sem_transition":{
 	    "type":"0500",
-	    "display_name":"sem_transition",
+	    "display_name":"sem_trans",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
 	"filter2_formant_transition":{
 	    "type":"0500",
-	    "display_name":"formant_transition",
+	    "display_name":"formant_trans",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
 	"filter2_ringmod_amount":{
 	    "type":"0500",
-	    "display_name":"ringmod_amount",
+	    "display_name":"ringmod_am",
 	    "default_val":"1",
 	    "increment":"0.01"
 	}
@@ -690,7 +690,7 @@
 	"type":"0501",
 	"filter3_velocity_amount":{
 	    "type":"0500",
-	    "display_name":"velocity_amount",
+	    "display_name":"vel_am",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -702,7 +702,7 @@
 	},
 	"filter3_keyboard_follow":{
 	    "type":"0500",
-	    "display_name":"keyboard_follow",
+	    "display_name":"kbd_follow",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -714,13 +714,13 @@
 	},
 	"filter3_frequency":{
 	    "type":"0500",
-	    "display_name":"frequency",
+	    "display_name":"freq",
 	    "default_val":"0.561071",
 	    "increment":"0.01"
 	},
 	"filter3_resonance":{
 	    "type":"0500",
-	    "display_name":"resonance",
+	    "display_name":"res",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -732,19 +732,19 @@
 	},
 	"filter3_sem_transition":{
 	    "type":"0500",
-	    "display_name":"sem_transition",
+	    "display_name":"sem_trans",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
 	"filter3_formant_transition":{
 	    "type":"0500",
-	    "display_name":"formant_transition",
+	    "display_name":"formant_trans",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
 	"filter3_ringmod_amount":{
 	    "type":"0500",
-	    "display_name":"ringmod_amount",
+	    "display_name":"ringmod_am",
 	    "default_val":"1",
 	    "increment":"0.01"
 	}
@@ -798,121 +798,121 @@
 	"type":"0501",
 	"ampenv_attack":{
 	    "type":"0500",
-	    "display_name":"ampenv_attack",
+	    "display_name":"amp_a",
 	    "default_val":"0.121202",
 	    "increment":"0.01"
 	},
 	"ampenv_decay":{
 	    "type":"0500",
-	    "display_name":"ampenv_decay",
+	    "display_name":"amp_d",
 	    "default_val":"0.5",
 	    "increment":"0.01"
 	},
 	"ampenv_sustain":{
 	    "type":"0500",
-	    "display_name":"ampenv_sustain",
+	    "display_name":"amp_s",
 	    "default_val":"0.670953",
 	    "increment":"0.01"
 	},
 	"ampenv_release":{
 	    "type":"0500",
-	    "display_name":"ampenv_release",
+	    "display_name":"amp_r",
 	    "default_val":"0.121202",
 	    "increment":"0.01"
 	},
 	"ampenv_loop":{
 	    "type":"0500",
-	    "display_name":"ampenv_loop",
+	    "display_name":"amp_loop",
 	    "default_val":"0",
 	    "increment":"1"
 	},
 	"filterenv_attack":{
 	    "type":"0500",
-	    "display_name":"filterenv_attack",
+	    "display_name":"filter_a",
 	    "default_val":"0.121202",
 	    "increment":"0.01"
 	},
 	"filterenv_decay":{
 	    "type":"0500",
-	    "display_name":"filterenv_decay",
+	    "display_name":"filter_d",
 	    "default_val":"0.467494",
 	    "increment":"0.01"
 	},
 	"filterenv_sustain":{
 	    "type":"0500",
-	    "display_name":"filterenv_sustain",
+	    "display_name":"filter_s",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
 	"filterenv_release":{
 	    "type":"0500",
-	    "display_name":"filterenv_release",
+	    "display_name":"filter_r",
 	    "default_val":"0.121202",
 	    "increment":"0.01"
 	},
 	"filterenv_loop":{
 	    "type":"0500",
-	    "display_name":"filterenv_loop",
+	    "display_name":"filter_loop",
 	    "default_val":"0",
 	    "increment":"1"
 	},
 	"modenv_attack":{
 	    "type":"0500",
-	    "display_name":"modenv_attack",
+	    "display_name":"mod_a",
 	    "default_val":"0.121202",
 	    "increment":"0.01"
 	},
 	"modenv_decay":{
 	    "type":"0500",
-	    "display_name":"modenv_decay",
+	    "display_name":"mod_d",
 	    "default_val":"0.467494",
 	    "increment":"0.01"
 	},
 	"modenv_sustain":{
 	    "type":"0500",
-	    "display_name":"modenv_sustain",
+	    "display_name":"mod_s",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
 	"modenv_release":{
 	    "type":"0500",
-	    "display_name":"modenv_release",
+	    "display_name":"mod_r",
 	    "default_val":"0.121202",
 	    "increment":"0.01"
 	},
 	"modenv_loop":{
 	    "type":"0500",
-	    "display_name":"modenv_loop",
+	    "display_name":"mod_loop",
 	    "default_val":"0",
 	    "increment":"1"
 	},
 	"globalenv_attack":{
 	    "type":"0500",
-	    "display_name":"globalenv_attack",
+	    "display_name":"global_a",
 	    "default_val":"0.121202",
 	    "increment":"0.01"
 	},
 	"globalenv_decay":{
 	    "type":"0500",
-	    "display_name":"globalenv_decay",
+	    "display_name":"global_d",
 	    "default_val":"0.5",
 	    "increment":"0.01"
 	},
 	"globalenv_sustain":{
 	    "type":"0500",
-	    "display_name":"globalenv_sustain",
+	    "display_name":"global_s",
 	    "default_val":"0.670953",
 	    "increment":"0.01"
 	},
 	"globalenv_release":{
 	    "type":"0500",
-	    "display_name":"globalenv_release",
+	    "display_name":"global_r",
 	    "default_val":"0.121202",
 	    "increment":"0.01"
 	},
 	"globalenv_loop":{
 	    "type":"0500",
-	    "display_name":"globalenv_loop",
+	    "display_name":"global_loop",
 	    "default_val":"0",
 	    "increment":"1"
 	}
@@ -996,7 +996,7 @@
 	},
 	"delay_highpass_frequency":{
 	    "type":"0500",
-	    "display_name":"hp_frequency",
+	    "display_name":"hp_freq",
 	    "default_val":"0",
 	    "increment":"0.01"
 	},
@@ -1080,7 +1080,7 @@
 	},
 	"phaser_frequency":{
 	    "type":"0500",
-	    "display_name":"frequency",
+	    "display_name":"freq",
 	    "default_val":"0.733014",
 	    "increment":"0.01"
 	},
