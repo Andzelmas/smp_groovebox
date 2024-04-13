@@ -527,7 +527,12 @@ static int app_transport_control_rt(APP_INFO* app_data, NFRAMES_T nframes){
 	int32_t tick = 0;
 	SAMPLE_T ticks_per_beat = 0;
 	NFRAMES_T total_frames = 0;
-	int isPlaying = app_jack_return_transport(app_data->trk_jack, &bar, &beat, &tick, &ticks_per_beat, &total_frames);
+	//bpm, beat_type and beats_per_bar are used from the params so they are not used here
+	float bpm = 0;
+	float beat_type = 0;
+	float beats_per_bar = 0;
+	int isPlaying = app_jack_return_transport(app_data->trk_jack, &bar, &beat, &tick, &ticks_per_beat, &total_frames,
+						  &bpm, &beat_type, &beats_per_bar);
 	if(isPlaying != -1){
 	    //we also get the tranport parameter container, so we can look up the value after sending it
 	    //to the ring buffer, otherwise just_changed will be 1 again and the new transport object

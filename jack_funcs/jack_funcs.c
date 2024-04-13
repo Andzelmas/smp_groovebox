@@ -543,7 +543,8 @@ void app_jack_update_transport_from_params_rt(JACK_INFO* jack_data){
 }
 
 int app_jack_return_transport(void* audio_client, int32_t* cur_bar, int32_t* cur_beat,
-			      int32_t* cur_tick, SAMPLE_T* ticks_per_beat, jack_nframes_t* total_frames){
+			      int32_t* cur_tick, SAMPLE_T* ticks_per_beat, jack_nframes_t* total_frames,
+			      float* bpm, float* beat_type, float* beats_per_bar){
     if(!audio_client)return -1;
     JACK_INFO* jack_data = (JACK_INFO*)audio_client;
     if(!jack_data)return -1;
@@ -556,6 +557,9 @@ int app_jack_return_transport(void* audio_client, int32_t* cur_bar, int32_t* cur
     if(pos.valid) *total_frames = pos.frame;
     
     if(pos.valid != JackPositionBBT)return -1;
+    *bpm = pos.beats_per_minute;
+    *beat_type = pos.beat_type;
+    *beats_per_bar = pos.beats_per_bar;
     *cur_bar = pos.bar;
     *cur_beat = pos.beat;
     *cur_tick = pos.tick;

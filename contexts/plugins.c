@@ -273,10 +273,13 @@ typedef struct _plug_info{
     uint32_t buffer_size;
     //node for convenience
     PLUG_NODES nodes;
-    //-----------------------
-    //callback functions that should be supplied by the audio backend
     //the address to the audio client
     void* audio_backend;
+    //transport information, mainly to compare if position info changed and if there is a need to send new position info to the plugin
+    //SHOULD only be touched by the processing thread
+    unsigned int isPlaying; // is the tranport playing
+    uint32_t posFrame; //the position frame
+    float bpm;
 }PLUG_INFO;
 
 //internal functions to manipulate evbuf buffer for midi and other events
@@ -516,6 +519,9 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_data->block_length = (uint32_t)block_length;
     plug_data->midi_buf_size = (size_t)DEFAULT_MIDI_BUF_SIZE;
     plug_data->buffer_size = plug_data->midi_buf_size * N_BUFFER_CYCLES;
+    plug_data->posFrame = 0;
+    plug_data->bpm = 120.0f;
+    plug_data->isPlaying = 0;
     
     lilv_world_load_all(plug_data->lv_world);    
     plug_data->symap = symap_new();
@@ -1387,6 +1393,50 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 			int write = plug_evbuf_write(&iter_buf, plug->midi_cont->nframe_nums[i], 0, cur_port->port_type_urid,
 						     plug->midi_cont->buf_size[i], midi_msg);
 		    }
+		}
+		//send plugin the transport information
+		int32_t cur_bar = 0;
+		int32_t cur_beat = 0;
+		int32_t cur_tick = 0;
+		SAMPLE_T ticks_per_beat = 0;
+		jack_nframes_t total_frames = 0;
+		float bpm = plug_data->bpm;
+		float beat_type = 0;
+		float beats_per_bar = 0;
+		unsigned int tr_playing = app_jack_return_transport(plug_data->audio_backend, &cur_bar, &cur_beat, &cur_tick, &ticks_per_beat, &total_frames,
+								    &bpm, &beat_type, &beats_per_bar);
+		if(tr_playing != -1){
+		    unsigned int pos_change = 0;
+		    pos_change = (tr_playing != plug_data->isPlaying || total_frames != plug_data->posFrame || bpm != plug_data->bpm);
+		    if(pos_change){
+			//if transport position changed from the last time write an atom into the input event port for the plugin
+			uint8_t pos_buf[256];
+			LV2_Atom* lv2_pos = (LV2_Atom*)pos_buf;
+			LV2_Atom_Forge* forge = &plug->forge;
+			lv2_atom_forge_set_buffer(forge, pos_buf, sizeof(pos_buf));
+			LV2_Atom_Forge_Frame frame;
+			lv2_atom_forge_object(forge, &frame, 0, plug->urids->time_Position);
+			lv2_atom_forge_key(forge, plug->urids->time_frame);
+			lv2_atom_forge_long(forge, total_frames);
+			lv2_atom_forge_key(forge, plug->urids->time_speed);
+			lv2_atom_forge_float(forge, tr_playing ? 1.0 : 0.0);
+			lv2_atom_forge_key(forge, plug->urids->time_barBeat);
+			lv2_atom_forge_float(forge, cur_beat - 1 + (cur_tick / ticks_per_beat));
+			lv2_atom_forge_key(forge, plug->urids->time_bar);
+			lv2_atom_forge_long(forge, cur_bar - 1);
+			lv2_atom_forge_key(forge, plug->urids->time_beatUnit);
+			lv2_atom_forge_int(forge, beat_type);
+			lv2_atom_forge_key(forge, plug->urids->time_beatsPerBar);
+			lv2_atom_forge_float(forge, beats_per_bar);
+			lv2_atom_forge_key(forge, plug->urids->time_beatsPerMinute);
+			lv2_atom_forge_float(forge, bpm);
+			//write the atom to the atom input port
+			plug_evbuf_write(&iter_buf, 0, 0, lv2_pos->type, lv2_pos->size, LV2_ATOM_BODY(lv2_pos));
+		    }
+		    //update the plug_data transports for next cycle comparison
+		    plug_data->posFrame = tr_playing ? total_frames + nframes : total_frames;
+		    plug_data->bpm = bpm;
+		    plug_data->isPlaying = tr_playing;
 		}
 	    }
 	    if(cur_port->type == TYPE_EVENT && cur_port->flow == FLOW_OUTPUT){

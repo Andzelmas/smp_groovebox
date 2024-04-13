@@ -84,7 +84,8 @@ void timebbt_callback_rt(jack_transport_state_t state, jack_nframes_t nframes, j
 			 int new_pos, void *arg);
 //return the jack transport position info to the various variables
 int app_jack_return_transport(void* audio_client, int32_t* cur_bar, int32_t* cur_beat,
-			      int32_t* cur_tick, SAMPLE_T* ticks_per_beat, jack_nframes_t* total_frames);
+			      int32_t* cur_tick, SAMPLE_T* ticks_per_beat, jack_nframes_t* total_frames,
+			      float* bmp, float* beat_type, float* beats_per_bar);
 //check if any parameters that control the transport head have changed, if yes - request an update with the new
 //parameters to the transport head
 void app_jack_update_transport_from_params_rt(JACK_INFO* jack_data);
