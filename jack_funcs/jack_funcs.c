@@ -444,41 +444,46 @@ void timebbt_callback_rt(jack_transport_state_t state, jack_nframes_t nframes, j
 
 	//Compute the *pos members from frame
 	min = pos->frame / ((double) pos->frame_rate * 60.0);
-	abs_tick = floor(min * pos->beats_per_minute * pos->ticks_per_beat); 
-	abs_beat = floor(abs_tick / pos->ticks_per_beat);
-	abs_bars = abs_beat/pos->beats_per_bar;
+	abs_tick = min * pos->beats_per_minute * pos->ticks_per_beat; 
+	abs_beat = abs_tick / pos->ticks_per_beat;
 
-	pos->bar = floor(abs_bars);
-	if(pos->bar <= 0 ) pos->bar = 1;
+	pos->bar = abs_beat / pos->beats_per_bar;
+	pos->beat = abs_beat - (pos->bar * pos->beats_per_bar) + 1;
+	pos->tick = abs_tick - (abs_beat * pos->ticks_per_beat);
+	pos->bar_start_tick = pos->bar * pos->beats_per_bar * pos->ticks_per_beat;
+	pos->bar++;
 
-	double bars_remainder = abs_bars - floor(abs_bars);	
-	pos->beat = floor((bars_remainder * pos->beats_per_bar)+1);
-
-	double tick_cycles = (abs_tick/pos->ticks_per_beat);
-	pos->tick = floor((tick_cycles - floor(tick_cycles)) * pos->ticks_per_beat);
-
-	pos->bar_start_tick = pos->bar * pos->beats_per_bar *
-	    pos->ticks_per_beat;
     }
-
     else
        {
 	   //if new pos is not requested add the ticks each cycle
+	   //TODO now tick drifts so bars and beats are calculated not from ticks, need to figure out how to
+	   //calculate from ticks and not drift
 	   if(!new_pos){
-	       int32_t add_ticks = floor(nframes * pos->ticks_per_beat * pos->beats_per_minute / (pos->frame_rate * 60));
-	       pos->tick += add_ticks;
+	       pos->tick += (nframes * pos->ticks_per_beat * pos->beats_per_minute / (pos->frame_rate * 60));
 	   }
-
-	   if(pos->tick >= pos->ticks_per_beat){
-	       double add_beats = pos->tick/pos->ticks_per_beat;
-	       pos->tick = floor((add_beats - floor(add_beats)) * pos->ticks_per_beat);
-	       pos->beat += floor(add_beats);
-	       if (pos->beat > pos->beats_per_bar) {
-		   double add_bars = pos->beat/pos->beats_per_bar;
-		   pos->beat = floor((add_bars - floor(add_bars)) * pos->beats_per_bar);
-		   pos->bar += floor(add_bars);
+	   double bpm_sec = (double)pos->beats_per_minute / 60.0;
+	   double secs = (double)pos->frame / (double)pos->frame_rate;
+	   double beats = bpm_sec * secs;
+	   double bar = beats/(double)pos->beats_per_bar;
+	   pos->bar = (unsigned int)bar;
+	   //pos->bar += 1;
+	   double beat_frac = bar - (unsigned int)bar;
+	   double beat_div = 1.0 / (double)pos->beats_per_bar;
+	   pos->beat = (unsigned int)(beat_frac / beat_div);
+	   pos->beat += 1;
+	   if(pos->beat == 1){
+	       pos->bar_start_tick += (pos->beats_per_bar * pos->ticks_per_beat);
+	   }
+	   while(pos->tick >= pos->ticks_per_beat){
+	       pos->tick -= pos->ticks_per_beat;
+	       /*
+	       if(++pos->beat > pos->beats_per_bar){
+		   pos->beat = 1;
+		   ++pos->bar;
 		   pos->bar_start_tick += (pos->beats_per_bar * pos->ticks_per_beat);
 	       }
+	       */
 	   }
 
        }

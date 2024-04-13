@@ -731,8 +731,7 @@ static void synth_stop_osc_rt(SYNTH_OSC* osc, MIDI_DATA_T vel, MIDI_DATA_T note,
     }
 }
 
-static int synth_metronome_process_rt(SYNTH_DATA* synth_data, SYNTH_OSC* metro_osc, NFRAMES_T nframes, int32_t tick,
-				      SAMPLE_T ticks_per_beat, int32_t beat, int playhead){
+static int synth_metronome_process_rt(SYNTH_DATA* synth_data, SYNTH_OSC* metro_osc, NFRAMES_T nframes, int32_t beat, int playhead){
     if(!metro_osc)return -1;
     if(playhead == 0){
 	synth_stop_osc_rt(metro_osc, 127, 0, 1);
@@ -740,8 +739,7 @@ static int synth_metronome_process_rt(SYNTH_DATA* synth_data, SYNTH_OSC* metro_o
     if(playhead == 1){
 	//calculate if we need to trigger the metronome oscillator
 	unsigned int play_osc = 0;
-	SAMPLE_T tick_ratio = (SAMPLE_T)tick / ticks_per_beat;
-	if(tick_ratio < 0.1 && metro_osc->trig != beat){
+	if(metro_osc->trig != beat){
 	    metro_osc->trig = beat;
 	    play_osc = 1;
 	}
@@ -749,7 +747,7 @@ static int synth_metronome_process_rt(SYNTH_DATA* synth_data, SYNTH_OSC* metro_o
 	if(play_osc == 1){
 	    MIDI_DATA_T pitch = 60;
 	    if(beat == 1)pitch = 72;
-	    synth_play_osc_rt(metro_osc, 127, pitch, beat+tick);
+	    synth_play_osc_rt(metro_osc, 127, pitch, beat);
 	}
     }
 
@@ -780,7 +778,7 @@ int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes){
 	if(isPlaying != -1){
 	    SYNTH_OSC* cur_osc = &(synth_data->osc_array[0]);
 	    if(!cur_osc)return -1;
-	    synth_metronome_process_rt(synth_data, cur_osc, nframes, tick, ticks_per_beat, beat, isPlaying);
+	    synth_metronome_process_rt(synth_data, cur_osc, nframes, beat, isPlaying);
 	}
     }
 
