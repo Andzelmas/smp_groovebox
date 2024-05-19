@@ -30,16 +30,7 @@ int app_json_read_conf(char** shared_dir, const char* load_path, const char* in_
     *load_from_conf = 0;
    //this will store the base dir of the song, need to free it later
     char* song_dir = NULL;
-    char* buffer = NULL;
-    buffer = app_json_read_to_buffer(CONFJSONFILE);
-    if(!buffer){
-	log_append_logfile("Cant read from the %s configuration file\n", CONFJSONFILE);
-	return_val = -1;
-	goto clean_strings;
-    }
-    struct json_object* parsed_fp = NULL;
-    parsed_fp = json_tokener_parse(buffer);
-    free(buffer);
+    struct json_object* parsed_fp = app_json_tokenise_path(CONFJSONFILE);
     if(!parsed_fp){
 	log_append_logfile("Cant parse the json file %s\n", CONFJSONFILE);
 	return_val = -1;
@@ -69,7 +60,7 @@ int app_json_read_conf(char** shared_dir, const char* load_path, const char* in_
     cur_obj = app_json_iterate_and_find_obj(parsed_fp, cur_name);
     app_json_iterate_run_callback(cur_obj, NULL, NULL, NULL, NULL, NULL, app_json_mkdir_callback);
 
-    buffer = app_json_read_to_buffer(song_dir);
+    char* buffer = app_json_read_to_buffer(song_dir);
     struct json_object* file_contents = NULL;
     //if failed to open the json song file, try to load the default one from the smp_conf.json
     if(!buffer){
@@ -307,7 +298,7 @@ clean:
     return ret_string;
 }
 
-static struct json_object* app_json_iterate_and_find_obj(struct json_object* parsed_fp, const char* find_key){
+struct json_object* app_json_iterate_and_find_obj(struct json_object* parsed_fp, const char* find_key){
     struct json_object* ret_obj = NULL;
     if(!parsed_fp)goto clean;
     
@@ -538,4 +529,23 @@ int app_json_create_obj(JSONHANDLE** obj){
     *obj = j_obj;
     if(!obj)return -1;
     return 0;
+}
+
+struct json_object* app_json_tokenise_path(char* file_path){
+    char* buffer = NULL;
+    struct json_object* parsed_fp = NULL;
+    
+    buffer = app_json_read_to_buffer(file_path);
+    if(!buffer){
+	log_append_logfile("Cant read from the %s file\n", file_path);
+	return NULL;
+    }
+    parsed_fp = json_tokener_parse(buffer);
+    free(buffer);
+    if(!parsed_fp){
+	log_append_logfile("Cant parse the json file %s\n", file_path);
+	return NULL;
+    }
+
+    return parsed_fp;
 }

@@ -24,7 +24,7 @@ static int app_json_write_json_to_file(struct json_object* obj, const char* file
 //load a file to the buffer and return it, needs to be freed later
 static char* app_json_read_to_buffer(const char* file_path);
 //iterate recursively through the json object and find a key and return the object of that key, value pair
-static struct json_object* app_json_iterate_and_find_obj(struct json_object* parsed_fp, const char* find_key);
+struct json_object* app_json_iterate_and_find_obj(struct json_object* parsed_fp, const char* find_key);
 //recursevily iterate through the json object and run a callback, this is external, just have to use a
 //function to retrieve the root json object
 //parsed_fp - the json object from which to start the iteration
@@ -57,3 +57,5 @@ int app_json_write_handle_to_file(JSONHANDLE* obj, const char* cur_file,
 				  unsigned int new_file, unsigned int preset);
 //create an empty json object
 int app_json_create_obj(JSONHANDLE** obj);
+//given file path tokenise the contents of the file and return a json_object
+struct json_object* app_json_tokenise_path(char* file_path);
