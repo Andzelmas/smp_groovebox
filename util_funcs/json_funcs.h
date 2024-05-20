@@ -61,3 +61,5 @@ int app_json_write_handle_to_file(JSONHANDLE* obj, const char* cur_file,
 int app_json_create_obj(JSONHANDLE** obj);
 //given file path tokenise the contents of the file and return a json_object
 struct json_object* app_json_tokenise_path(char* file_path);
+//free the object memory
+int app_json_clean_object(struct json_object* obj);

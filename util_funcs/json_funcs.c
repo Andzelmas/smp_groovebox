@@ -561,3 +561,10 @@ struct json_object* app_json_tokenise_path(char* file_path){
 
     return parsed_fp;
 }
+
+int app_json_clean_object(struct json_object* obj){
+    if(!obj)return -1;
+
+    json_object_put(obj);
+    return 0;
+}
