@@ -165,7 +165,7 @@ int app_json_open_iterate_callback(const char* file_path, const char* in_parent_
     return return_val;
 }
 
-static char* app_json_iterate_find_string(struct json_object* parsed_fp, const char* find_key){
+char* app_json_iterate_find_string(struct json_object* parsed_fp, const char* find_key){
     char* ret_string = NULL;
     struct json_object* cur_obj = NULL;
     cur_obj = app_json_iterate_and_find_obj(parsed_fp, find_key);
@@ -178,6 +178,18 @@ static char* app_json_iterate_find_string(struct json_object* parsed_fp, const c
     strcpy(ret_string, json_object_get_string(cur_obj));    
 clean:
     return ret_string;
+}
+
+int app_json_iterate_find_int(struct json_object* parsed_fp, const char* find_key, int* error){
+    int ret_int = 0;
+    *error = -1;
+    struct json_object* cur_obj = NULL;
+    cur_obj = app_json_iterate_and_find_obj(parsed_fp, find_key);
+    if(!cur_obj || json_object_get_type(cur_obj)!=json_type_int)return ret_int;
+    ret_int = json_object_get_int(cur_obj);
+    *error = 0;
+
+    return ret_int;    
 }
 
 static int app_json_write_json_to_file(struct json_object* obj, const char* file_path){
@@ -298,7 +310,7 @@ clean:
     return ret_string;
 }
 
-struct json_object* app_json_iterate_and_find_obj(struct json_object* parsed_fp, const char* find_key){
+static struct json_object* app_json_iterate_and_find_obj(struct json_object* parsed_fp, const char* find_key){
     struct json_object* ret_obj = NULL;
     if(!parsed_fp)goto clean;
     

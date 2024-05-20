@@ -18,13 +18,15 @@ int app_json_open_iterate_callback(const char* file_path, const char* in_parent_
 				   void* arg, void(*user_func)(void* arg, const char* json_name, const char* json_parent, const char* top_node_name,
 							       const char** attrib_names, const char** attrib_vals, unsigned int attrib_count));
 //find recursevily string find_key in the parsed_fp json object and return a malloced string of the value
-static char* app_json_iterate_find_string(struct json_object* parsed_fp, const char* find_key);
+char* app_json_iterate_find_string(struct json_object* parsed_fp, const char* find_key);
+//find recursevily int find_key, error will be -1 if an error occured, 0 otherwise.
+int app_json_iterate_find_int(struct json_object* parsed_fp, const char* find_key, int* error);
 //write the whole json object to a file with json_object_to_json_string_ext
 static int app_json_write_json_to_file(struct json_object* obj, const char* file_path);
 //load a file to the buffer and return it, needs to be freed later
 static char* app_json_read_to_buffer(const char* file_path);
 //iterate recursively through the json object and find a key and return the object of that key, value pair
-struct json_object* app_json_iterate_and_find_obj(struct json_object* parsed_fp, const char* find_key);
+static struct json_object* app_json_iterate_and_find_obj(struct json_object* parsed_fp, const char* find_key);
 //recursevily iterate through the json object and run a callback, this is external, just have to use a
 //function to retrieve the root json object
 //parsed_fp - the json object from which to start the iteration

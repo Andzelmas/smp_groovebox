@@ -12,6 +12,8 @@
 #include "util_funcs/log_funcs.h"
 #include "util_funcs/json_funcs.h"
 
+//the ui conf file where the settings for the ui side of the app is held
+#define UI_CONF "ui_conf.json"
 //max tick before it restarts
 #define MAX_TICK 10000
 //animate animated windows (scroll text) every SCROLL_ANIM tick
@@ -20,14 +22,17 @@
 #define SHOW_LOG_FILE 10
 //how many milliseconds to sleep, while waiting for the keyboard or mouse input
 #define W_HALFDELAY 100
-//max windows that can fit in a window, after that scroll
-//if the screen is even smaller and less windows fit, the scroll bar will appear sooner
-#define MAX_WINDOWS 8
 //maximum length for the display_text of the window
 #define MAX_DISPLAY_TEXT 100
 //maximum string length for the display of the parameter values,
 //should be short, because its hard to read values when they scroll, so better to fit in a window
 #define MAX_VALUE_TEXT 8
+
+//max windows that can fit in a window, after that scroll
+//can change the amount in UI_CONF file
+//if the screen is even smaller and less windows fit, the scroll bar will appear sooner
+static unsigned int max_main_windows = 8;
+    
 //window struct that holds the text to display in the window, the ncurses window object and cx struct if
 //aplicable
 typedef struct _win_impl_ WIN;
@@ -149,8 +154,9 @@ int win_layout_line(WIN* win_array[], unsigned int size, int init_y, int init_x,
 			unsigned int start, unsigned int layout);
 //layout win_array as a grid. Windows are placed in a grid with a fixed sized (in win->height and win->width
 //parameters). If the windows dont fit they are not resized, but scrolling is implemented.
+//max_windows - how many windows to display in the grid
 int win_layout_grid(WIN* win_array[], unsigned int size, int init_y, int init_x,
-		     int max_width, int max_height, unsigned int start);
+		    int max_width, int max_height, unsigned int start);
 //turn of the highlights for the windows in the win array
 void win_highlights_off_array(WIN* win_array[], unsigned int size);
 //clear windows in a window array, so we can refresh them
@@ -212,6 +218,16 @@ int main(){
     printf("\033[?1002h\n"); 
     //clear the log file
     log_clear_logfile();
+
+    //get ui_config.json
+    struct json_object* parsed_fp = app_json_tokenise_path(UI_CONF);
+    if(parsed_fp){
+	int errno = -1;
+	//get how many context windows to display in the main window array
+	int max_main_contexts = app_json_iterate_find_int(parsed_fp, "max_main_contexts", &errno);
+	if(errno != -1)max_main_windows = max_main_contexts;
+    }    
+    
     //init the app interface
     intrf_status_t intrf_status = 0;
     APP_INTRF *app_intrf = NULL;
@@ -290,6 +306,7 @@ int curr_screen_init(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
     curr_src->scroll_bar_wins = NULL;
     curr_src->clicked_win = NULL;
     curr_src->x_coord = -1;
+   
     //init the title window
     WIN* title_win = (WIN*)malloc(sizeof(WIN));
     if(!title_win)return -1;
@@ -1170,7 +1187,7 @@ int win_layout_grid(WIN* win_array[], unsigned int size, int init_y, int init_x,
 	}
 	//also implement scrolling if there are more windows than the user wishes
 	//but like with the size dont implement scrolling if its the last window in the array
-	if(displayed_windows >=  MAX_WINDOWS && i != size -1){
+	if(displayed_windows >=  max_main_windows && i != size -1){
 	    cur_win->highlight = 1;
 	    scroll = i;
 	}
