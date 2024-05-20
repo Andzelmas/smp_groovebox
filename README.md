@@ -23,7 +23,7 @@ Copy the smp_conf.json file to the build folder (holds default structure for the
 
 Copy the ui_conf.json file to the build folder (user can config ui aspects here). 
 
-### Now run jack2 and then "make" and then "make run" to build and run the software.
+### Now run jack2 and then "make" and "make run" to build and run the software.
 
 ### User parameter configuration json files
 When first launched the program will create _param_conf.json files for various contexts (for example Synth_param_conf.json).
