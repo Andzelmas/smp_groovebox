@@ -10,6 +10,7 @@
 #include "app_intrf.h"
 //functions for log file
 #include "util_funcs/log_funcs.h"
+#include "util_funcs/json_funcs.h"
 
 //max tick before it restarts
 #define MAX_TICK 10000
@@ -214,7 +215,6 @@ int main(){
     //init the app interface
     intrf_status_t intrf_status = 0;
     APP_INTRF *app_intrf = NULL;
-
     app_intrf = app_intrf_init(&intrf_status, NULL);
     //if app_intrf failed to initialize analyze the error write it and exit
     if(app_intrf==NULL){
