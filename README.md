@@ -15,7 +15,7 @@ The synth uses oscillator lookup table code by Nigel Redmon here https://www.ear
 ### Dependencies: jack2, libsndfile, json-c, lilv, ncurses, clap
 CLAP is not supported at this moment, but development has begun on this.
 
-When all dependencies installed:
+### When all dependencies installed:
 
 mkdir build in the smp_groovebox folder.
 
@@ -23,9 +23,7 @@ Copy the smp_conf.json file to the build folder (holds default structure for the
 
 Copy the ui_conf.json file to the build folder (user can config ui aspects here). 
 
-If you have the dependencies, "make" and then "make run" to build and run the software.
-
-The app uses jack2 so dont forget to run it before launching.
+### Now run jack2 and then "make" and then "make run" to build and run the software.
 
 ### User parameter configuration json files
 When first launched the program will create _param_conf.json files for various contexts (for example Synth_param_conf.json).
