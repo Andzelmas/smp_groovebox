@@ -910,6 +910,7 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
     }
+   
     else if(ch==cx_btn_1){
 	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 1){
 	    WIN* first_win = curr_scr->button_win_array[1];
@@ -979,7 +980,6 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 	if(cx_exit == -2)return 1;
 	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;
     }
-	
     return ret_val;
 }
 //read the input and navigate the screen, returns 1 if we need to exit the program
