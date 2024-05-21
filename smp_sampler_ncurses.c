@@ -32,7 +32,47 @@
 //can change the amount in UI_CONF file
 //if the screen is even smaller and less windows fit, the scroll bar will appear sooner
 static unsigned int max_main_windows = 8;
-    
+//keypress shortcuts, these can be changed in the UI_CONF file
+//keypresses to select contexts in the main context array window
+static int cx_1 = '1';
+static int cx_2 = '2';
+static int cx_3 = '3';
+static int cx_4 = '4';
+static int cx_5 = '5';
+static int cx_6 = '6';
+static int cx_7 = '7';
+static int cx_8 = '8';
+static int cx_9 = '9';
+static int cx_10 = '0';
+static int cx_11 = KEY_F(1);
+static int cx_12 = KEY_F(2);
+static int cx_13 = KEY_F(3);
+static int cx_14 = KEY_F(4);
+static int cx_15 = KEY_F(5);
+static int cx_16 = KEY_F(6);
+static int cx_17 = KEY_F(7);
+static int cx_18 = KEY_F(8);
+static int cx_19 = KEY_F(9);
+static int cx_20 = KEY_F(10);
+static int cx_21 = KEY_F(11);
+static int cx_22 = KEY_F(12);
+static int cx_inc = '+';
+static int cx_dec = '-';
+static int cx_enter = '*';
+static int cx_scroll_up = KEY_UP;
+static int cx_scroll_down = KEY_DOWN;
+static int cx_btn_0 = 'w';
+static int cx_btn_1 = 'e';
+static int cx_btn_2 = 'r';
+static int cx_btn_3 = 't';
+static int cx_btn_4 = 'y';
+static int cx_root_0 = 's';
+static int cx_root_1 = 'd';
+static int cx_root_2 = 'f';
+static int cx_root_3 = 'g';
+static int cx_root_4 = 'h';
+static int cx_exit = 'q';
+
 //window struct that holds the text to display in the window, the ncurses window object and cx struct if
 //aplicable
 typedef struct _win_impl_ WIN;
@@ -226,7 +266,86 @@ int main(){
 	//get how many context windows to display in the main window array
 	int max_main_contexts = app_json_iterate_find_int(parsed_fp, "max_main_contexts", &errno);
 	if(errno != -1)max_main_windows = max_main_contexts;
-
+	//get the keyboard shortcuts from the UI_CONF file
+	//------------------------------------------------------------------
+	int short_cut = app_json_iterate_find_int(parsed_fp, "cx_1", &errno);
+	if(errno != -1)cx_1 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_2", &errno);
+	if(errno != -1)cx_2 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_3", &errno);
+	if(errno != -1)cx_3 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_4", &errno);
+	if(errno != -1)cx_4 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_5", &errno);
+	if(errno != -1)cx_5 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_6", &errno);
+	if(errno != -1)cx_6 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_7", &errno);
+	if(errno != -1)cx_7 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_8", &errno);
+	if(errno != -1)cx_8 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_9", &errno);
+	if(errno != -1)cx_9 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_10", &errno);
+	if(errno != -1)cx_10 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_11", &errno);
+	if(errno != -1)cx_11 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_12", &errno);
+	if(errno != -1)cx_12 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_13", &errno);
+	if(errno != -1)cx_13 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_14", &errno);
+	if(errno != -1)cx_14 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_15", &errno);
+	if(errno != -1)cx_15 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_16", &errno);
+	if(errno != -1)cx_16 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_17", &errno);
+	if(errno != -1)cx_17 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_18", &errno);
+	if(errno != -1)cx_18 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_19", &errno);
+	if(errno != -1)cx_19 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_20", &errno);
+	if(errno != -1)cx_20 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_21", &errno);
+	if(errno != -1)cx_21 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_22", &errno);
+	if(errno != -1)cx_22 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_inc", &errno);
+	if(errno != -1)cx_inc = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_dec", &errno);
+	if(errno != -1)cx_dec = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_enter", &errno);
+	if(errno != -1)cx_enter = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_scroll_up", &errno);
+	if(errno != -1)cx_scroll_up = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_scroll_down", &errno);
+	if(errno != -1)cx_scroll_down = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_btn_0", &errno);
+	if(errno != -1)cx_btn_0 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_btn_1", &errno);
+	if(errno != -1)cx_btn_1 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_btn_2", &errno);
+	if(errno != -1)cx_btn_2 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_btn_3", &errno);
+	if(errno != -1)cx_btn_3 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_btn_4", &errno);
+	if(errno != -1)cx_btn_4 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_root_0", &errno);
+	if(errno != -1)cx_root_0 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_root_1", &errno);
+	if(errno != -1)cx_root_1 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_root_2", &errno);
+	if(errno != -1)cx_root_2 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_root_3", &errno);
+	if(errno != -1)cx_root_3 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_root_4", &errno);
+	if(errno != -1)cx_root_4 = short_cut;
+	short_cut = app_json_iterate_find_int(parsed_fp, "cx_exit", &errno);
+	if(errno != -1)cx_exit = short_cut;	
+	//---------------------------------------------------------------------
+	
 	app_json_clean_object(parsed_fp);
     }    
     
@@ -665,151 +784,202 @@ static void curr_change_cx_value_win_array(APP_INTRF* app_intrf, CURR_SCREEN* cu
     }
 }
 //interpret the keypress codes and do the correct navigation action
-//TODO keypresses should be in a json file so the user can modify the shortcuts
 static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, int ch, WINDOW* main_window){
     if(!app_intrf || !curr_scr)return -1;
     int ret_val = 2;
     //get the current cx, mainly to set its user_int when scrolling, so ui remembers on what scroll page it was for this cx
     CX* curr_cx = nav_ret_curr_cx(app_intrf);    
-    switch(ch){
-    case '1':
+    if(ch==cx_1){
 	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
-				       curr_scr->win_array_end, 0, 0);
-	break;
-    case '2':
+				 curr_scr->win_array_end, 0, 0);
+    }
+    else if(ch==cx_2){
 	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
-				       curr_scr->win_array_end, 1, 0);
-	break;
-    case '3':
+				 curr_scr->win_array_end, 1, 0);
+    }    
+    else if(ch==cx_3){
 	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
-				       curr_scr->win_array_end, 2, 0);
-	break;
-    case '4':
+				 curr_scr->win_array_end, 2, 0);
+    }
+    else if(ch==cx_4){
 	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
-				       curr_scr->win_array_end, 3, 0);
-	break;
-    case '5':
+				 curr_scr->win_array_end, 3, 0);
+    }
+    else if(ch==cx_5){
 	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
-				       curr_scr->win_array_end, 4, 0);
-	break;
-    case '6':
+				 curr_scr->win_array_end, 4, 0);
+    }
+    else if(ch==cx_6){
 	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
-				       curr_scr->win_array_end, 5, 0);
-	break;
-    case '7':
+				 curr_scr->win_array_end, 5, 0);
+    }
+    else if(ch==cx_7){
 	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
-				       curr_scr->win_array_end, 6, 0);
-	break;
-    case '8':
+				 curr_scr->win_array_end, 6, 0);
+    }
+    else if(ch==cx_8){
 	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
-				       curr_scr->win_array_end, 7, 0);
-	break;		
+				 curr_scr->win_array_end, 7, 0);
+    }
+    else if(ch==cx_9){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 8, 0);
+    }
+    else if(ch==cx_10){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 9, 0);
+    }
+    else if(ch==cx_11){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 10, 0);
+    }
+    else if(ch==cx_12){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 11, 0);
+    }
+    else if(ch==cx_13){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 12, 0);
+    }
+    else if(ch==cx_14){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 13, 0);
+    }
+    else if(ch==cx_15){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 14, 0);
+    }
+    else if(ch==cx_16){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 15, 0);
+    }
+    else if(ch==cx_17){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 16, 0);
+    }
+    else if(ch==cx_18){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 17, 0);
+    }
+    else if(ch==cx_19){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 18, 0);
+    }
+    else if(ch==cx_20){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 19, 0);
+    }
+    else if(ch==cx_21){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 20, 0);
+    }
+    else if(ch==cx_22){
+	curr_select_cx_win_array(app_intrf, curr_scr, curr_scr->win_array, curr_scr->win_array_start,
+				 curr_scr->win_array_end, 21, 0);
+    }        
 	//+ increases the selected cx and - decreases. * - enters the selected cx
-    case '+':
+    else if(ch==cx_inc){
 	curr_change_cx_value_win_array(app_intrf, curr_scr, 1);
-	break;
-    case '-':
+    }  
+    else if(ch==cx_dec){
 	curr_change_cx_value_win_array(app_intrf, curr_scr, -1);
-	break;
-    case '*':
-	curr_enter_window(app_intrf, curr_scr, NULL, 1);
-	break;
-    case 258:
+    }  
+    else if(ch==cx_enter){
+	curr_change_cx_value_win_array(app_intrf, curr_scr, 0);
+    }  
+    else if(ch==cx_scroll_up){
 	//scroll the main context array up - the last window displayed + 1 will become first
 	ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
 			      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 1);
 	if(curr_cx)
 	    nav_set_cx_user_int(curr_cx, curr_scr->win_array_start);
-	break;
-    case 259:
+    }  
+    else if(ch==cx_scroll_down){
 	//scroll the main context array down - the first window displayed - 1 will become last
 	ctrl_win_array_scroll(curr_scr->win_array, curr_scr->main_win,
 			      &(curr_scr->win_array_start), curr_scr->win_array_size, 0, 0);
 	if(curr_cx)
 	    nav_set_cx_user_int(curr_cx, curr_scr->win_array_start);	
-	break;
+    }
 
-	//navigate the button array (liek save, load etc)
-    case'w':
+    //navigate the button array (save, load etc)
+    else if(ch==cx_btn_0){
 	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
 	    WIN* first_win = curr_scr->button_win_array[0];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-    case'e':
-	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 1){
+    }
+    else if(ch==cx_btn_1){
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
 	    WIN* first_win = curr_scr->button_win_array[1];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-    case'r':
-	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 2){
+    }
+    else if(ch==cx_btn_2){
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
 	    WIN* first_win = curr_scr->button_win_array[2];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-    case't':
-	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 3){
+    }
+    else if(ch==cx_btn_3){
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
 	    WIN* first_win = curr_scr->button_win_array[3];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-    case'y':
-	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 4){
+    }
+    else if(ch==cx_btn_4){
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
 	    WIN* first_win = curr_scr->button_win_array[4];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-	//navigate the root array (the main contexts that we see at the bottom all the time)
-    case's':
+    }    
+    //navigate the root array (the main contexts that we see at the bottom all the time)
+    else if(ch==cx_root_0){
 	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
 	    WIN* first_win = curr_scr->root_win_array[0];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-    case'd':
-	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 1){
+    }
+    else if(ch==cx_root_1){
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
 	    WIN* first_win = curr_scr->root_win_array[1];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-    case'f':
-	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 2){
+    }
+    else if(ch==cx_root_2){
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
 	    WIN* first_win = curr_scr->root_win_array[2];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-    case'g':
-	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 3){
+    }
+    else if(ch==cx_root_3){
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
 	    WIN* first_win = curr_scr->root_win_array[3];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-    case'h':
-	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 4){
+    }
+    else if(ch==cx_root_4){
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
 	    WIN* first_win = curr_scr->root_win_array[4];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
-	break;
-    case 'q':
+    }
+    else if(ch==cx_exit){
 	int cx_exit = nav_exit_cur_context(app_intrf);
 	if(cx_exit == -2)return 1;
-	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;		
-	break;
-    default:
-	ret_val = 0;
-	break;
+	if(curr_screen_load_win_arrays(app_intrf, curr_scr)<0)return -1;
     }
+	
     return ret_val;
 }
 //read the input and navigate the screen, returns 1 if we need to exit the program
