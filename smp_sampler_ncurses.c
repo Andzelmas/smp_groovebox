@@ -911,28 +911,28 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 	}
     }
     else if(ch==cx_btn_1){
-	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 1){
 	    WIN* first_win = curr_scr->button_win_array[1];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
     }
     else if(ch==cx_btn_2){
-	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 2){
 	    WIN* first_win = curr_scr->button_win_array[2];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
     }
     else if(ch==cx_btn_3){
-	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 3){
 	    WIN* first_win = curr_scr->button_win_array[3];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
     }
     else if(ch==cx_btn_4){
-	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 0){
+	if(curr_scr->button_win_array && curr_scr->button_win_array_size > 4){
 	    WIN* first_win = curr_scr->button_win_array[4];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
@@ -947,28 +947,28 @@ static int curr_input_keypress_read(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr,
 	}
     }
     else if(ch==cx_root_1){
-	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 1){
 	    WIN* first_win = curr_scr->root_win_array[1];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
     }
     else if(ch==cx_root_2){
-	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 2){
 	    WIN* first_win = curr_scr->root_win_array[2];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
     }
     else if(ch==cx_root_3){
-	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 3){
 	    WIN* first_win = curr_scr->root_win_array[3];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
 	}
     }
     else if(ch==cx_root_4){
-	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 0){
+	if(curr_scr->root_win_array && curr_scr->root_win_array_size > 4){
 	    WIN* first_win = curr_scr->root_win_array[4];
 	    if(first_win)
 		curr_enter_window(app_intrf, curr_scr, first_win, 0);
