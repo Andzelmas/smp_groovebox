@@ -25,6 +25,23 @@ Copy the ui_conf.json file to the build folder (user can config ui aspects here)
 
 ### Now run jack2 and then "make" and "make run" to build and run the software.
 
+### ui_conf.json file
+Inside users can change some aspects of the user interface.
+
+max_main_contexts - how many contexts are shown in the middle window.
+
+keyboard_shortcuts:
+
+cx_1 ... to cx_22 - shortcuts to select the 1 to 22 context in the middle window.
+
+cx_inc, cx_dec, cx_enter - increase, decrease the selected parameter context value or enter the selected context.
+
+cx_btn_0 ... to cx_btn_4 - shortcuts to enter the button contexts such as load, save, save new, etc. on the button row.
+
+cx_root_0 ... to cx_root_4 - shortcuts to enter the main contexts such as sampler, plugins, synth etc.
+
+cx_exit - exit the current context. When exiting the top context this will exit the program.
+
 ### User parameter configuration json files
 When first launched the program will create _param_conf.json files for various contexts (for example Synth_param_conf.json).
 Also when a plugin is added it will create the _param_conf.json file for that type of plugin.
