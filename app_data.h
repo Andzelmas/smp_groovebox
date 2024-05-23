@@ -69,6 +69,8 @@ int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, in
 //return the name of a context by its cx_id (for example the name of a sample by its id, or name of a plugin by its id)
 //if add_id == 1 will add the id to the end of the string
 char* app_return_cx_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, unsigned int add_id);
+//check if a port_name port exists on the audio client
+int app_is_port_on_client(APP_INFO* app_data, const char* port_name);
 //wrapper for disconnecting two ports
 int app_disconnect_ports(APP_INFO* app_data, const char* source_port, const char* dest_port);
 //wrapper to connect ports

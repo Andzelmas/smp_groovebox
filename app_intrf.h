@@ -35,16 +35,10 @@ enum cx_types_enum{
     //this file if its 1 save to new file.
     Save_cx_st = 0x0004,
     //a button to cancel the file that is selected and exit from file chooser
-    //if its a port AddList, the cancel button will clear the Port_cx_st that exist only in cx but not on audio.
-    //Though it will be named there clear not cancel.
     Cancel_cx_st = 0x0005,
     //a button to remove the context
     Remove_cx_st = 0x0006,
-    //a button representing a port, inside it can hold other Port_cx_st, it means it is connected to them
-    //only output ports hold input ports inside. Input ports dont have any children
-    //str_val has the full port name
-    //int_val has a number of ports that this output port is connected to, if its an input port int_val 1 means the
-    //port is connected
+    //button that is a Port (audio or midi)
     Port_cx_st = 0x0007,
     //transport button. int_val 0 - start play head, 1 - stop play head
     Transport_cx_st = 0x0008,    
@@ -93,20 +87,14 @@ enum IntrfPurposeType{
     Load_purp = 0x02,
     //list of available plugins that we can load
     addPlugin_purp = 0x03,
-    //list of audio ports available to the system
-    Connect_audio_purp = 0x04,
-    //list of midi ports available to the system
-    Connect_midi_purp = 0x05,
+    //list of available audio output ports
+    AudioPorts_purp = 0x04,
+    //list of available midi output ports
+    MIDIPorts_purp = 0x05,    
     //list of available presets for a Plugin_cx_e
     Load_plugin_preset_purp = 0x06
 };
-//enum to easily differentiate port types
-enum IntrfPortType{
-    Port_type_in = 0x01,
-    Port_type_out = 0x02,
-    Port_type_audio = 0x10,
-    Port_type_midi = 0x20
-};
+
 typedef enum IntrfStatus intrf_status_t;
 //the app_intrf single context, holds other cxs
 typedef struct intrf_cx CX;
@@ -161,8 +149,7 @@ static int cx_remove_this_and_children(CX* this_cx);
 //the root_node is the node from which to start searching
 static CX* cx_find_name(const char* name, CX* root_node);
 //find a AddList context with the uchar variable. cx_array must be allocated (with one member), and size has to be 0
-//the function will build the cx_array with the contexts that are AddList and mach the uchar (good
-//for finding for ex port containers)
+//the function will build the cx_array with the contexts that are AddList and mach the uchar
 static void cx_find_container(CX *root_node, unsigned int uchar, CX*** cx_array, unsigned int* size);
 //find cx that holds the same str_val value
 //go_in == 1, go inside children while searching
@@ -193,6 +180,10 @@ static void cx_set_value_callback(APP_INTRF* app_intrf, CX* self, float set_to, 
 //callback for remove button, that removes its parent context
 //returns 1 if context structure changed
 static int cx_enter_remove_callback(APP_INTRF* app_intrf, CX* self);
+//callback for port button, it checks if ports still exist on audio client
+//also connects/disconnects if entered an input port
+//returns 1 if the context structre changed (can happen if port is removed)
+static int cx_enter_port_callback(APP_INTRF* app_intrf, CX* self);
 //callback to save the current context to a file, as a preset or a song file - the process is the same
 //uses app_json_write_json_callback to write into the JSONHANDlE object, that can be used to save a cx
 //structure to a file
@@ -201,9 +192,6 @@ static void cx_enter_save_callback(APP_INTRF* app_intrf, CX* self);
 //contexts created before
 //returns 1 if the context structure changed
 static int cx_enter_dir_callback(APP_INTRF* app_intrf, CX* self);
-//enter port, add its str_val to the addList str_val, if the value is not NULL connect these ports
-//returns 1 if the context structure changed
-static int cx_enter_port_callback(APP_INTRF* app_intrf, CX* self);
 //enter transport button and depending on what it does (int_val == 0 - start, 1 - stop,
 //2 - skip bar int_val_1 amount forward, 3 - skip bar int_val_1 amount backward
 static void cx_enter_transport_callback(APP_INTRF* app_intrf,CX* self);
@@ -247,8 +235,8 @@ int nav_return_numchildren(APP_INTRF* app_intrf, CX* this_cx);
 //ret_type is what to return; 0 - return all children; 1 - return only main children, no buttons like cancel etc;
 //2 - return only buttons like cancel, load etc.
 CX** nav_return_children(APP_INTRF* app_intrf, CX* this_cx, unsigned int* children_num, unsigned int ret_type);
-//returns if the cx need to be highlighted (for example if the sample or a port is selected)
-unsigned int nav_return_need_to_highlight(CX* this_cx);
+//returns if the cx need to be highlighted
+int nav_return_need_to_highlight(CX* this_cx);
 //return the type of the cx
 unsigned int nav_return_cx_type(CX* this_cx);
 //navigation function to exit from the current context.
@@ -288,21 +276,7 @@ int nav_update_params(APP_INTRF* app_intrf);
 const char* nav_get_cx_name(APP_INTRF* app_intrf, CX* select_cx);
 //function that cleans all the allocated memory, closes the app
 static int app_intrf_close(APP_INTRF* app_intrf);
-//iterates cx, finds AddList_cx_st that has ports and calls cx_reset_ports on that AddList cx
-//top_cx can be root_cx
-int app_intrf_iterate_reset_ports(APP_INTRF* app_intrf, CX* top_cx, unsigned int create);
-//function that disconnects ports, creates the ports cx from all ports (if a port cx does not already exist) and
-//connect ports. The port_parent should be an output port or a AddList that holds such ports. It does not
-//iterate through cx structure to find these ports.
-//create - if we need to create the Port_cx_st for returned ports.
-static int cx_reset_ports(APP_INTRF* app_intrf, CX* port_parent, unsigned int type, unsigned int create);
 /*HELPER FUNCTIONS FOR MUNDAIN CX MANIPULATION*/
-//return 1 if the port exists only on cx but not on audio backend
-static int helper_cx_is_port_nan(APP_INTRF* app_intrf, CX* cx_port);
-//goes through Port_cx_st and disconnects ports
-static int helper_cx_disconnect_ports(APP_INTRF* app_intrf, CX* top_cx, unsigned int disc_all);
-//goes through Port_cx_st and connects ports if there is a Port_cx_st inside
-static int helper_cx_connect_ports(APP_INTRF* app_intrf, CX* top_cx);
 //function that prepares strings for a parameter to write to a default user parameter configuration file
 //builds a json handle with app_json_write_json_callback that can be written to a file
 static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX* top_cx);
@@ -310,7 +284,8 @@ static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX
 //to a file. This function usually is used as a callback for the helper_cx_iterate_with_callback
 static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_cx);
 //iterates through the cx structure from the top_cx and calls a callback function
-static int helper_cx_iterate_with_callback(APP_INTRF* app_intrf, CX* top_cx, void* arg,
+//sib_only == 1 iterate only through siblings skip children
+static int helper_cx_iterate_with_callback(APP_INTRF* app_intrf, CX* top_cx, void* arg,unsigned int sib_only,
 					   void(*proc_func)(void*arg, APP_INTRF* app_intrf, CX* in_cx));
 //removes the rem_cx, its children and depending on type the data on data (for example sample in smp_data)
 static int helper_cx_remove_cx_and_data(APP_INTRF* app_intrf, CX* rem_cx);
@@ -321,15 +296,23 @@ static int helper_cx_clear_cx(APP_INTRF* app_intrf, CX* self_cx);
 static int helper_cx_build_new_path(APP_INTRF* app_intrf, CX* self, int num);
 //combine cx and its parents path attributes
 static char* helper_cx_combine_paths(CX* self);
+//connect the input_port cx to its parent output port
+static int helper_cx_connect_disconnect_ports(APP_INTRF* app_intrf, CX* input_port);
+//remove parent_port port if its not on the audio client (remove its children too)
+static void helper_cx_remove_nan_port(void* arg, APP_INTRF* app_intrf, CX* parent_port);
 //copies str_val from from_cx to to_cx (for CX_BUTTON contexts)
 static int helper_cx_copy_str_val(CX* from_cx, CX* to_cx);
 //create cx contexts from default context parameters (for example for sample or synth or plugin etc)
 //parent_node - for which cx to create the parameters
 //this function also tries to get the user configuration file for the parameters if the file exists -
 //it will use the info there to create containers for the parameters, their val_display_name variables, value increment amounts etc
-//if the file does not exists - this function will create the file with default values so the user can modify what he needs
+//if the file does not exist - this function will create the file with default values so the user can modify what he needs
 static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* parent_node, const char* config_path,
 						  unsigned char cx_type, int cx_id);
+//create cx contexts from default context buttons
+//(for example Audio output ports for a audio container context or other context data that is not parameters)
+//then check those buttons against the song/preset file and if there is a context with the same name there - copy the button data (connect ports etc)
+static int helper_cx_create_cx_for_default_buttons(APP_INTRF* app_intrf, CX* parent_node, unsigned char cx_type, int cx_id);
 //parse the IntrfStatus enum errors and return a readable string
 const char *app_intrf_write_err(const int* err_status);
 

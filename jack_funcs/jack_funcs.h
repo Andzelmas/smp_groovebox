@@ -63,6 +63,8 @@ int app_jack_midi_events_write_rt(void* buffer, jack_nframes_t time, const jack_
 void app_jack_return_notes_vels_rt(void* midi_in, JACK_MIDI_CONT* midi_cont);
 //disconnect ports belonging to this client
 int app_jack_disconnect_all_ports(JACK_INFO* jack_data, unsigned int type_pattern, unsigned long flags);
+//check if port with the port_name exists on the client
+int app_jack_is_port(JACK_INFO* jack_data, const char* port_name);
 //disconnect two ports
 int app_jack_disconnect_ports(JACK_INFO* jack_data, const char* source_port, const char* dest_port);
 //connect two ports together

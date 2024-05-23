@@ -108,7 +108,7 @@ APP_INFO* app_init(app_status_t *app_status){
     
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
-    const char* client_name = "smp_trk";
+    const char* client_name = "smp_grvbox";
     JACK_INFO *trk_jack = NULL;
     trk_jack = jack_initialize(app_data, client_name, 0, 0, 0, NULL,
 			       trk_audio_process_rt, 0);
@@ -396,6 +396,13 @@ char* app_return_cx_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, u
     }
     
     return ret_name;
+}
+
+int app_is_port_on_client(APP_INFO* app_data, const char* port_name){
+    if(!app_data)return -1;
+    int is_port = 1;
+    is_port = app_jack_is_port(app_data->trk_jack, port_name);     
+    return is_port;
 }
 
 int app_disconnect_ports(APP_INFO* app_data, const char* source_port, const char* dest_port){

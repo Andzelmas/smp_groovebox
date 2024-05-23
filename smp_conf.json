@@ -28,15 +28,7 @@
       },
       "trk<__>song":{
         "type":"0104",
-        "path":"_song\/trk\/trk-01.json",
-        "connectAudio<__>trk":{
-          "type":"0201",
-          "uchar_val":"04"
-        },
-        "connectMidi<__>trk":{
-          "type":"0201",
-          "uchar_val":"05"
-        }
+        "path":"_song\/trk\/trk-01.json"
       }
     }
   }

@@ -4,7 +4,8 @@ enum appContextTypes{
     Context_type_Sampler = 0x01,
     Context_type_Plugins = 0x02,
     Context_type_Trk = 0x03,
-    Context_type_Synth = 0x04
+    Context_type_Synth = 0x04,
+    Context_type_PortContainer = 0x05 //Audio or midi output ports container context
 };
 
 //enum for value return types

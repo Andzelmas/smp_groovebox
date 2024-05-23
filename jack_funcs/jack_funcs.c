@@ -336,6 +336,15 @@ int app_jack_disconnect_all_ports(JACK_INFO* jack_data, unsigned int type_patter
     return return_val;
 }
 
+int app_jack_is_port(JACK_INFO* jack_data, const char* port_name){
+    if(!jack_data)return -1;
+    if(!jack_data->client)return -1;
+    jack_port_t* port = jack_port_by_name(jack_data->client, port_name);
+    if(port == NULL)return 0;
+
+    return 1;
+}
+
 int app_jack_disconnect_ports(JACK_INFO* jack_data, const char* source_port, const char* dest_port){
     if(!jack_data)return -1;
     if(!jack_data->client)return -1;
@@ -354,10 +363,10 @@ const char** app_jack_port_names(JACK_INFO *jack_data, const char* port_name_pat
 
     const char* type = NULL;
     switch(type_pattern){
-    case 0:
+    case TYPE_AUDIO:
 	type = JACK_DEFAULT_AUDIO_TYPE;
 	break;
-    case 1:
+    case TYPE_MIDI:
 	type = JACK_DEFAULT_MIDI_TYPE;
 	break;
     default:

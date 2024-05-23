@@ -204,8 +204,6 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
     }
     app_intrf->curr_cx = app_intrf->root_cx;
     app_intrf->select_cx = app_intrf->root_cx->child;
-    //connect ports after initializing the process
-    app_intrf_iterate_reset_ports(app_intrf, app_intrf->root_cx, 1);
     
     //write the song path to the log file
     CX_MAIN* root_main = (CX_MAIN*)app_intrf->root_cx;
@@ -226,10 +224,13 @@ static void cx_process_from_file(void *arg,
     //check if the context already exists
     //BUT if the type is Val_cx_e dont check for duplicates, since when a parameter is duplicate the cx wont be created
     //but the parameter will be updated with its value anyway (for cases when parameters are created with user configuration file)
-    if(app_intrf->root_cx && type != Val_cx_e){
-	CX* found_cx = cx_find_name(cx_name, app_intrf->root_cx);
-	if(found_cx !=NULL){
-	    return;
+    //same goes for the Port_cx_st
+    if(app_intrf->root_cx){
+	if(type != Val_cx_e && type != (Button_cx_e | Port_cx_st)){
+	    CX* found_cx = cx_find_name(cx_name, app_intrf->root_cx);
+	    if(found_cx !=NULL){
+		return;
+	    }
 	}
     }
     //add this context to the structure, cant be a context if there are 0 attrib values
@@ -339,6 +340,24 @@ static void cx_process_params_from_file(void *arg,
     if(val_display_name)free(val_display_name);
 }
 
+//create unique name from parent short name and name
+static char* cx_create_unique_name(const char* name, const char* parent_short_name){
+    if(!name || !parent_short_name)return NULL;
+    char* ret_name = NULL;
+    if(strstr(name, "<__>") != NULL){
+	unsigned int new_len = sizeof(char)*(strlen(name)+1);
+	ret_name = malloc(new_len);
+	snprintf(ret_name, new_len, "%s", name);
+	return ret_name;
+    }
+    unsigned int parent_size = strlen(parent_short_name)+5;
+    unsigned int whole_size = sizeof(char)*(strlen(name)+parent_size);
+    ret_name = malloc(whole_size);
+    if(!ret_name)return NULL;
+    snprintf(ret_name, whole_size, "%s<__>%s", name, parent_short_name);
+    return ret_name;
+}
+
 static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, const char *name, unsigned int type,
 		    const char *type_attribs[], const char *type_attrib_names[], int attrib_size){
     CX *ret_node = NULL;
@@ -404,6 +423,18 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 		cx_remove_this_and_children(ret_node);
 		return NULL;
 	    }
+	    //add the container for Audio ports
+	    if(!cx_init_cx_type(app_intrf, ret_node->name, "Audio_Ports", (Button_cx_e | AddList_cx_st),
+				(const char*[1]){"04"}, (const char* [1]){"uchar_val"}, 1)){
+		cx_remove_this_and_children(ret_node);
+		return NULL;
+	    }
+	    //add the container for MIDI ports
+	    if(!cx_init_cx_type(app_intrf, ret_node->name, "Midi_Ports", (Button_cx_e | AddList_cx_st),
+				(const char*[1]){"05"}, (const char* [1]){"uchar_val"}, 1)){
+		cx_remove_this_and_children(ret_node);
+		return NULL;
+	    }	    
 	}
         //if this is Sampler_cx_st add a AddList_cx_st button that adds cx from a chosen file
         if(type  == (Main_cx_e | Sampler_cx_st)){
@@ -595,14 +626,9 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
         CX_BUTTON *cx_button = (CX_BUTTON*)malloc(sizeof(CX_BUTTON));
         if(!cx_button)return NULL;
 	
-        ret_node = (CX*)cx_button;
+	ret_node = (CX*)cx_button;
 	ret_node->save = 0;
 	
-        int child_add_err = cx_add_child(parent, ret_node, name, type);
-        if(child_add_err<0){
-            free(cx_button);
-            return NULL;     
-        }
 	cx_button->str_val = NULL;
 	cx_button->uchar_val = 0;
 	cx_button->int_val = -1;
@@ -617,7 +643,56 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    cx_button->int_val_1 = str_find_value_to_int(type_attrib_names, type_attribs,
 							 "int_val_1", attrib_size);	    
 	}
-	    
+	//if this is a port find a duplicate and if found transfer connectivity to the duplicate but dont create this cx
+	if(type == (Button_cx_e | Port_cx_st)){
+	    if(app_is_port_on_client(app_intrf->app_data, cx_button->str_val) != 1){
+		if(cx_button->str_val)free(cx_button->str_val);
+		free(cx_button);
+		return NULL;		
+	    }
+	    char* dup_name = cx_create_unique_name(name, parent->short_name);
+	    if(!dup_name){
+		if(cx_button->str_val)free(cx_button->str_val);
+		free(cx_button);
+		return NULL;
+	    }
+	    CX* dupl_cx = cx_find_name(dup_name, parent);
+	    free(dup_name);	    
+	    if(dupl_cx){
+		CX_BUTTON* dup_button = (CX_BUTTON*)dupl_cx;
+		if(cx_button->uchar_val == FLOW_INPUT){
+		    if(cx_button->int_val_1 != -1){
+			dup_button->int_val_1 = cx_button->int_val_1;
+			helper_cx_connect_disconnect_ports(app_intrf, dupl_cx);
+		    }
+		}
+		if(cx_button->str_val)free(cx_button->str_val);
+		free(cx_button);
+		return NULL;
+	    }
+	}
+	
+        int child_add_err = cx_add_child(parent, ret_node, name, type);
+        if(child_add_err<0){
+	    if(cx_button->str_val)free(cx_button->str_val);
+            free(cx_button);
+            return NULL;     
+        }
+	
+	//Port_cx_st button subtype
+	if(type == (Button_cx_e | Port_cx_st)){
+	    //if this is output port create input ports inside (cx_button->int_val holds the TYPE_AUDIO or TYPE_MIDI
+	    if(cx_button->uchar_val == FLOW_OUTPUT){
+		//if no ports will be created the output port will be empty
+		helper_cx_create_cx_for_default_buttons(app_intrf, ret_node, Context_type_PortContainer, cx_button->int_val);
+	    }
+	    if(cx_button->int_val_1 == -1)cx_button->int_val_1 = 0;
+	    ret_node->save = 1;
+	    if(cx_button->uchar_val == FLOW_INPUT){
+		helper_cx_connect_disconnect_ports(app_intrf, ret_node);
+	    }
+	}
+	
         //AddList_cx_st button subtype
         if(type == (Button_cx_e | AddList_cx_st)){
 	    //this value in the AddList will be to track how deep in directory we traveled
@@ -626,20 +701,21 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    cx_button->str_val = NULL;
 	    char* cancel_name = "cancel";
 
-	    //if this AddList_cx_st is for connecting ports
-	    if(cx_button->uchar_val == Connect_audio_purp || cx_button->uchar_val == Connect_midi_purp){
-		ret_node->save = 1;
-		cancel_name = "clear";
-	    }
 	    //create a button to cancel the currently selected file and just exit if desired
-	    //for ports this creates clear button to remove ports that do not appear in audio backend
 	    cx_init_cx_type(app_intrf, ret_node->name, cancel_name,
-			    (Button_cx_e | Cancel_cx_st), NULL, NULL, 0);    
-	}
-	//settings for the Port_cx_st subtype
-	if(type == (Button_cx_e | Port_cx_st)){
-	    if(cx_button->int_val<0)cx_button->int_val = 0;
-	    if(cx_button->int_val>0 || (cx_button->uchar_val & 0x0f) == Port_type_out)ret_node->save = 1;
+			    (Button_cx_e | Cancel_cx_st), NULL, NULL, 0);
+	    //if the AddList_cx_st purpose is to hold the Audio or MIDI ports go through available ports, create their cx
+	    //if no ports will be created the container will be empty
+	    if(cx_button->uchar_val == AudioPorts_purp){
+		cx_button->int_val = TYPE_AUDIO;
+		helper_cx_create_cx_for_default_buttons(app_intrf, ret_node, Context_type_PortContainer, cx_button->int_val);
+		ret_node->save = 1;
+	    }
+	    if(cx_button->uchar_val == MIDIPorts_purp){
+		cx_button->int_val = TYPE_MIDI;
+		helper_cx_create_cx_for_default_buttons(app_intrf, ret_node, Context_type_PortContainer, cx_button->int_val);
+		ret_node->save = 1;
+	    }	    
 	}
 	
         return ret_node;
@@ -736,13 +812,8 @@ static int cx_add_child(CX *parent_cx, CX *child_cx, const char *name, unsigned 
     if(!child_cx){
         return -1;
     }
-    //malloc for the name, we will have to free it later
-    char *uniq_name = NULL;
-    uniq_name = (char*)malloc((strlen(name)+1)*sizeof(char));
-    if(uniq_name==NULL)return -1;
-    strcpy(uniq_name, name);
     //initiate the cx members
-    child_cx->name = uniq_name;
+    child_cx->name = NULL;
     child_cx->short_name = NULL;
     child_cx->child = NULL;
     child_cx->sib = NULL;
@@ -751,11 +822,13 @@ static int cx_add_child(CX *parent_cx, CX *child_cx, const char *name, unsigned 
     child_cx->user_int = -1;
     
     if(parent_cx ==NULL){
+	child_cx->name = (char*)malloc((strlen(name)+1)*sizeof(char));
 	child_cx->short_name = (char*)malloc((strlen(name)+1)*sizeof(char));
-	if(!child_cx->short_name){
+	if(!child_cx->short_name || !child_cx->name){
 	    goto abort_and_clean;
 	}
 	strcpy(child_cx->short_name, name);
+	strcpy(child_cx->name, name);
         child_cx->parent = NULL;
         return 0;
     }
@@ -763,32 +836,20 @@ static int cx_add_child(CX *parent_cx, CX *child_cx, const char *name, unsigned 
     
     //make the child name unique, by combining with the parent name
     //but only if its not already modified and does not contain <__>
-    if(strstr(child_cx->name, "<__>")==NULL){
-	child_cx->short_name = (char*)malloc((strlen(name)+1)*sizeof(char));
-	if(!child_cx->short_name){
-	    goto abort_and_clean;
-	}
-	strcpy(child_cx->short_name, name);
-	//get the parent short name
-	if(!parent_cx->short_name){
-	    goto abort_and_clean;
-	}
-	unsigned int parent_size = strlen(parent_cx->short_name)+5;
-	child_cx->name = realloc(child_cx->name, sizeof(char)*(strlen(child_cx->name)+parent_size));
-	if(!child_cx->name){
-	    goto abort_and_clean;
-	}
-	sprintf(child_cx->name, "%s<__>%s", name, parent_cx->short_name);
+    //(this will be checked in the cx_create_unique_name function)
+    child_cx->name = cx_create_unique_name(name, parent_cx->short_name);
+    if(!child_cx->name){
+	goto abort_and_clean;
     }
-    else{
-	char* after_string = NULL;
-	child_cx->short_name = str_split_string_delim(child_cx->name, "<__>", &after_string);
-	if(!child_cx->short_name){
-	    if(after_string)free(after_string);
-	    goto abort_and_clean;
-	}
+    //now make the short name without the <__> symbol
+    char* after_string = NULL;
+    child_cx->short_name = str_split_string_delim(child_cx->name, "<__>", &after_string);
+    if(!child_cx->short_name){
 	if(after_string)free(after_string);
+	goto abort_and_clean;
     }
+    if(after_string)free(after_string);
+    
     //if the parent does not have a child cx add this there
     if(parent_cx->child==NULL){
         parent_cx->child = child_cx;
@@ -1128,12 +1189,32 @@ static int cx_enter_remove_callback(APP_INTRF* app_intrf, CX* self){
 	    app_intrf->curr_cx = self->parent->parent;
 	    app_intrf->select_cx = self->parent->parent;	    
 	    helper_cx_remove_cx_and_data(app_intrf, self->parent);
-	    //reset the ports, so the ports have correct int_val values, because removing a plugin or similar
-	    //can change the ports on the audio backend
-	    app_intrf_iterate_reset_ports(app_intrf, app_intrf->root_cx, 1);
 	    ret_val = 1;
 	}
     }
+    return ret_val;
+}
+
+static int cx_enter_port_callback(APP_INTRF* app_intrf, CX* self){
+    int ret_val = 0;
+    if(!app_intrf)return -1;
+    if(!self)return -1;
+    CX_BUTTON* cx_port = (CX_BUTTON*)self;
+    if(cx_port->uchar_val == FLOW_OUTPUT){
+	if(self->child){
+	    helper_cx_iterate_with_callback(app_intrf, self->child, NULL, 1, helper_cx_remove_nan_port);
+	    //create ports incase some new input ports appeared
+	    helper_cx_create_cx_for_default_buttons(app_intrf, self, Context_type_PortContainer, cx_port->int_val);
+	    //this could have remove ports that do not exist on audio client, so structure can change
+	    ret_val = 1;	    
+	}	
+    }
+    if(cx_port->uchar_val == FLOW_INPUT){
+	if(cx_port->int_val_1 == 0)cx_port->int_val_1 = 1;
+	else if(cx_port->int_val_1 == 1)cx_port->int_val_1 = 0;
+	helper_cx_connect_disconnect_ports(app_intrf, self);
+    }
+
     return ret_val;
 }
 
@@ -1182,7 +1263,7 @@ static void cx_enter_save_callback(APP_INTRF* app_intrf, CX* self){
     //create an empty object to build the structure in and continue if its not null
     if(app_json_create_obj(&obj)==0){
 	//travel through the cx structure and call a callback, but dont go to siblings of the self->parent
-	helper_cx_iterate_with_callback(app_intrf, send_cx, obj, helper_cx_prepare_for_save);
+	helper_cx_iterate_with_callback(app_intrf, send_cx, obj, 0, helper_cx_prepare_for_save);
     }
     //write the json handle to the file in the context path
     app_json_write_handle_to_file(obj, cx_main->path, write_new, preset);
@@ -1221,30 +1302,6 @@ static int cx_enter_dir_callback(APP_INTRF *app_intrf, CX* self){
     //select the first child of this dirs parent
     if(self_parent!=NULL){
 	app_intrf->select_cx = self_parent->child;
-    }
-    return ret_val;
-}
-//returns 1 if context structure changed
-static int cx_enter_port_callback(APP_INTRF* app_intrf, CX* self){
-    if(!self->parent)return -1;
-    int ret_val = 0;
-    CX_BUTTON* cx_port = (CX_BUTTON*) self;
-    unsigned int send_type = (cx_port->uchar_val & 0xf0);
-    send_type = (send_type | Port_type_in);    
-    //if this port is output port create input ports inside of it
-    if((cx_port->uchar_val & 0x0f) == Port_type_out){
-	cx_reset_ports(app_intrf, self, send_type, 1);
-	ret_val = 1;
-    }
-    //if this is input port change the int_val and reset_ports, connecting or disconnecting ports
-    else if((cx_port->uchar_val & 0x0f) == Port_type_in){
-	if(cx_port->int_val <=0){
-	    cx_port->int_val = 1;
-	}
-	else if(cx_port->int_val >= 1){
-	    cx_port->int_val = 0;
-	}
-	cx_reset_ports(app_intrf, self->parent, send_type, 0);
     }
     return ret_val;
 }
@@ -1323,9 +1380,6 @@ static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
 	    strcpy(cx_main->path, f_path);
 	}
     }
-    //reset the ports after loading a preset, plugin or sample, because some ports might become available
-    //and we might make some connections
-    app_intrf_iterate_reset_ports(app_intrf, app_intrf->root_cx, 1);
 }
 //returns 1 if the context structure changed
 static int cx_enter_cancel_callback(APP_INTRF* app_intrf, CX* self){
@@ -1347,22 +1401,6 @@ static int cx_enter_cancel_callback(APP_INTRF* app_intrf, CX* self){
 		free(cx_parent->str_val);
 		cx_parent->str_val = NULL;
 	    }
-
-	    //if this list holds ports clear the ports that only exist on the cx structure
-	    if(cx_parent->uchar_val == Connect_audio_purp || cx_parent->uchar_val == Connect_midi_purp){
-		CX* cx_port = parent->child;
-		CX* temp_port = cx_port;
-		while(cx_port){
-		    int is_nan = 0;
-		    if(cx_port->type != (Button_cx_e | Port_cx_st))goto next_cx_port;
-		    is_nan = helper_cx_is_port_nan(app_intrf, cx_port);
-		next_cx_port:
-		    temp_port = cx_port;
-		    cx_port = cx_port->sib;
-		    if(is_nan==1)cx_remove_this_and_children(temp_port);
-		}
-		ret_val = 1;
-	    }
 	}
     }
     return ret_val;
@@ -1370,13 +1408,6 @@ static int cx_enter_cancel_callback(APP_INTRF* app_intrf, CX* self){
 
 static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
     CX_BUTTON* cx_addList = (CX_BUTTON*)self;
-    //this button has a purpose of loading and connecting ports
-    if(cx_addList->uchar_val == Connect_audio_purp){
-	cx_reset_ports(app_intrf, self, (Port_type_out | Port_type_audio), 1);
-    }
-    if(cx_addList->uchar_val == Connect_midi_purp){
-	cx_reset_ports(app_intrf, self, (Port_type_out | Port_type_midi), 1);
-    }    
     //add a new plugin in the plugin host or a plugin preset, we list the available plugins as strings,
     //not actual files in this case, add cx of a plugin or preset only if there is no cx with the same str_val already
     if(cx_addList->uchar_val == addPlugin_purp || cx_addList->uchar_val == Load_plugin_preset_purp){
@@ -1422,7 +1453,16 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 	    }
 	    free(names);
 	}    
-    }    
+    }
+    //If this AddList is a container for ports, create ports that are not yet created
+    //and remove ports that are no longer on the audio client
+    if(cx_addList->uchar_val == AudioPorts_purp || cx_addList->uchar_val == MIDIPorts_purp){
+	helper_cx_create_cx_for_default_buttons(app_intrf, self, Context_type_PortContainer, cx_addList->int_val);
+	if(self->child){
+	    helper_cx_iterate_with_callback(app_intrf, self->child, NULL, 1, helper_cx_remove_nan_port);
+	}
+    }
+    
     //if this list is already filled do not fill it again (when filled it will have more children, when empty -
     //only the cancel button. This is useful for AddList_cx_st that lets choose files
     if(self->child->sib)goto finish;
@@ -1574,65 +1614,19 @@ CX** nav_return_children(APP_INTRF* app_intrf, CX* this_cx, unsigned int* childr
     next:
 	next_cx = next_cx->sib;
     }
-    //if this_cx is a sampler or plugin or oscillator return connectAudio and connectMidi(for plugin) output if buttons are requested
-    if(ret_type==2){
-	if(this_cx->type == (Main_cx_e | Sampler_cx_st) || (this_cx->type & 0xff00) == Plugin_cx_e || (this_cx->type & 0xff00) == Osc_cx_e){
-	    CX** found_array = (CX**)malloc(sizeof(CX*));
-	    unsigned int size = 0;
-	    found_array[0] = NULL;
-	    if(found_array)cx_find_container(app_intrf->root_cx, Connect_audio_purp, &found_array, &size);
-	    if(found_array){
-		for(int i = 0; i<size; i++){
-		    CX* cur_container = found_array[i];
-		    if(cur_container){
-			CX** temp_array = realloc(cx_array, sizeof(CX*)*(total+1));
-			if(temp_array){
-			    cx_array = temp_array;
-			    cx_array[total] = cur_container;
-			    total += 1;
-			}
-		    }
-		}
-	    }
-	    if(found_array)free(found_array);
-	}
-	if((this_cx->type & 0xff00) == Plugin_cx_e){
-	    CX** found_array = (CX**)malloc(sizeof(CX*));
-	    unsigned int size = 0;
-	    found_array[0] = NULL;
-	    if(found_array)cx_find_container(app_intrf->root_cx, Connect_midi_purp, &found_array, &size);
-	    if(found_array){
-		for(int i = 0; i<size; i++){
-		    CX* cur_container = found_array[i];
-		    if(cur_container){
-			CX** temp_array = realloc(cx_array, sizeof(CX*)*(total+1));
-			if(temp_array){
-			    cx_array = temp_array;
-			    cx_array[total] = cur_container;
-			    total += 1;
-			}
-		    }
-		}
-	    }
-	    if(found_array)free(found_array);
-	}
-    }
     
     if(children_num)*children_num = total;
     return cx_array;    
 }
 
-unsigned int nav_return_need_to_highlight(CX* this_cx){
+int nav_return_need_to_highlight(CX* this_cx){
     if(!this_cx)return -1;
-    //if this is a port cx, we need to highlight the connected input ports
     if(this_cx->type == (Button_cx_e | Port_cx_st)){
 	CX_BUTTON* cx_port = (CX_BUTTON*)this_cx;
-	if((cx_port->uchar_val & 0x0f) == Port_type_in && cx_port->int_val == 1)return 1;
-	//if the port is output and int_val_1 is 0 it means this port is not for this context - we can
-	//hide or similar in the ui
-	if((cx_port->uchar_val & 0x0f) == Port_type_out && cx_port->int_val_1 == 0)return 2;
+	if(cx_port->uchar_val == FLOW_INPUT && cx_port->int_val_1 == 1){
+	    return 1;
+	}
     }
-
     return 0;
 }
 
@@ -1856,219 +1850,7 @@ static int app_intrf_close(APP_INTRF *app_intrf){
     return 0;
 }
 
-int app_intrf_iterate_reset_ports(APP_INTRF* app_intrf, CX* top_cx, unsigned int create){
-    if(!app_intrf)return -1;
-    if(!top_cx)return -1;
-    //this might be a container for ports
-    if(top_cx->type == (Button_cx_e | AddList_cx_st)){
-	CX_BUTTON* cx_addList = (CX_BUTTON*)top_cx;
-	//this is a container for output ports, check what kind and call the reset ports function
-	if(cx_addList->uchar_val == Connect_audio_purp){
-	    cx_reset_ports(app_intrf, top_cx, (Port_type_out | Port_type_audio), 1);
-	}
-	if(cx_addList->uchar_val == Connect_midi_purp){
-	    cx_reset_ports(app_intrf, top_cx, (Port_type_out | Port_type_midi), 1);
-	}    
-    }
-    
-    app_intrf_iterate_reset_ports(app_intrf, top_cx->sib, create);
-    app_intrf_iterate_reset_ports(app_intrf, top_cx->child, create);
-    
-    return 0;
-}
-
-static int cx_reset_ports(APP_INTRF* app_intrf, CX* port_parent, unsigned int type, unsigned int create){
-    if(!app_intrf)return -1;
-    if(!port_parent)return -1;
-    CX_BUTTON* port_contain = (CX_BUTTON*)port_parent;
-
-    //first disconnect all ports
-    unsigned int midi = 0;
-    if((type & 0xf0) == Port_type_midi)midi = 1;
-    helper_cx_disconnect_ports(app_intrf, port_parent, 0);
-    //return only output ports, since we connect output to input
-    unsigned int in_out = 1;
-    if((type & 0x0f) == Port_type_out) in_out = 2;
-    if(create == 1){
-	//create the cx ports, but only if no ports exist with this str_val already
-	const char** ports = app_return_ports(app_intrf->app_data, NULL, midi, in_out);
-	if(!ports)return -1;
-	if(ports){
-	    const char* port = ports[0];
-	    int iter = 0;
-	    char type_str[12];
-	    snprintf(type_str, 12, "%.2x", (unsigned int)type);
-	    while(port){
-		if(!port_parent->child){
-		    cx_init_cx_type(app_intrf, port_parent->name, port, (Button_cx_e | Port_cx_st),
-				    (const char*[2]){port, type_str}, (const char*[2]){"str_val", "uchar_val"}, 2);
-		}
-		else if(!cx_find_with_str_val(port, port_parent->child, 0)){
-		    cx_init_cx_type(app_intrf, port_parent->name, port, (Button_cx_e | Port_cx_st),
-				    (const char*[2]){port, type_str}, (const char*[2]){"str_val", "uchar_val"}, 2);
-		}
-	    
-		iter+=1;
-		port = ports[iter];
-	    }
-	    free(ports);
-	}
-    }
-    //connect the ports inside the AddList or the current output port
-    helper_cx_connect_ports(app_intrf, port_parent);
-    
-    return 0;
-}
 /*HELPER FUNCTIONS FOR MUNDAIN CX MANIPULATION*/
-static int helper_cx_is_port_nan(APP_INTRF* app_intrf, CX* cx_port){
-    if(!cx_port->parent)return -1;
-    if(cx_port->type != (Button_cx_e | Port_cx_st))return -1;
-    if(cx_port->parent->type != (Button_cx_e | AddList_cx_st))return -1;
-    CX_BUTTON* cx_parent = (CX_BUTTON*)cx_port->parent;
-    unsigned int midi = 0;
-    if(cx_parent->uchar_val == Connect_midi_purp)midi = 1;
-    const char** ports = app_return_ports(app_intrf->app_data, NULL, midi, 2);
-    if(!ports)return -1;
-    unsigned int iter = 0;
-    unsigned int found = 0;
-    CX_BUTTON* cur_port = (CX_BUTTON*)cx_port;
-    if(!cur_port->str_val)return -1;
-    const char* port = ports[0];
-    int return_val = 0;
-    while(port){
-	if(strcmp(port, cur_port->str_val)==0){
-	    found = 1;
-	    break;
-	}
-	iter +=1;
-	port = ports[iter];
-    }
-    if(found==0)return_val = 1;
-    free(ports);
-
-    return return_val;
-}
-
-static int helper_cx_disconnect_ports(APP_INTRF* app_intrf, CX* top_cx, unsigned int disc_all){
-    if(!top_cx)return -1;
-    CX* next_cx = top_cx;
-    if(top_cx->type == (Button_cx_e | AddList_cx_st))next_cx = top_cx->child;
-    while(next_cx){
-	if(next_cx->type != (Button_cx_e | Port_cx_st))goto next;
-	if(!next_cx->child)goto next;
-	CX_BUTTON* parent_port = (CX_BUTTON*)next_cx;
-	if(!parent_port->str_val)goto next;
-	//reset the int_val of the port, because it will be connected if its children have a int_val == 1
-	//in the connect function
-	parent_port->int_val = 0;	
-	CX* child_cx = next_cx->child;
-	while(child_cx){
-	    if(child_cx->type != (Button_cx_e | Port_cx_st))goto next_child;    
-	    CX_BUTTON* child_port = (CX_BUTTON*) child_cx;
-	    if(child_port->int_val>0 && disc_all == 0)goto next_child;
-	    if(!child_port->str_val)goto next_child;
-	    int con_err = app_disconnect_ports(app_intrf->app_data, parent_port->str_val, child_port->str_val);
-	    //if connection is a success increase int_val that holds how many connections the port has
-	    if(con_err == 0){
-		if(parent_port->int_val<=0){
-		    parent_port->int_val = 0;
-		}
-		if(disc_all==1)child_port->int_val = 0;
-		child_cx->save = 0;
-	    }
-	next_child:
-	    child_cx = child_cx->sib;
-	}
-    next:
-	//if the top cx is a port dont go through its siblings just disconnect this ports ports
-	if(top_cx->type == (Button_cx_e | Port_cx_st)){
-	    next_cx = NULL;
-	}
-	else{
-	//if the top cx is AddList go through the siblings, since we need to disconnect all ports
-	    next_cx = next_cx->sib;
-	}	
-    }
-    
-    return 0;
-}
-
-static int helper_cx_connect_ports(APP_INTRF* app_intrf, CX* top_cx){
-    if(!top_cx)return -1;
-    CX* next_cx = top_cx;
-    if(top_cx->type == (Button_cx_e | AddList_cx_st))next_cx = top_cx->child;
-    const char** this_cx_port_names = NULL;
-    //how many ports on this cx if its a plugin or sampler
-    unsigned int this_port_num = 0;
-    //if this sampler get the sampler port names
-    if(app_intrf->curr_cx->type == (Main_cx_e | Sampler_cx_st)){
-	this_cx_port_names = app_return_context_ports(app_intrf->app_data, &this_port_num, Context_type_Sampler, 0);
-    }
-    //if this is a plugin get port names for this plugin
-    if(app_intrf->curr_cx->type == Plugin_cx_e){
-	CX_PLUGIN* cur_plugin = (CX_PLUGIN*)app_intrf->curr_cx;
-	this_cx_port_names = app_return_context_ports(app_intrf->app_data, &this_port_num, Context_type_Plugins, cur_plugin->id);
-    }
-    //if this is an oscillator get port names for this oscillator
-    if(app_intrf->curr_cx->type == Osc_cx_e){
-	CX_OSC* cur_osc = (CX_OSC*)app_intrf->curr_cx;
-	this_cx_port_names = app_return_context_ports(app_intrf->app_data, &this_port_num, Context_type_Synth, cur_osc->id);
-    }
-    while(next_cx){
-	if(next_cx->type != (Button_cx_e | Port_cx_st))goto next;
-	CX_BUTTON* parent_port = (CX_BUTTON*)next_cx;
-	if(!parent_port->str_val)goto next;	
-	//if there is no this_cx_port_names list set int_val_1 to 1 for all ports so they are not hidden
-	//we do it before checking if this port has children because when just created output ports will not have
-	//children, until user invokes the port (goes inside of it)
-	parent_port->int_val_1 = 1;
-	if(this_cx_port_names && this_port_num>0){
-	    unsigned int found_port_name = 0;
-	    for(int i=0; i<this_port_num; i++){
-		const char* cur_name = this_cx_port_names[i];
-		if(!cur_name)continue;
-		if(strcmp(cur_name, parent_port->str_val)==0){
-		    found_port_name = 1;
-		}
-	    }
-	    if(found_port_name==0)parent_port->int_val_1 = 0;
-	}
-
-	if(!next_cx->child)goto next;
-	//reset the int_val of the port, because it will be connected if its children have a int_val == 1
-	parent_port->int_val = 0;
-	CX* child_cx = next_cx->child;
-	while(child_cx){
-	    if(child_cx->type != (Button_cx_e | Port_cx_st))goto next_child;    
-	    CX_BUTTON* child_port = (CX_BUTTON*) child_cx;
-	    if(child_port->int_val!=1)goto next_child;
-	    if(!child_port->str_val)goto next_child;
-	    int con_err = app_connect_ports(app_intrf->app_data, parent_port->str_val, child_port->str_val);
-	    //if connection is a success increase int_val that holds how many connections the port has
-	    if(con_err == 0 || con_err == EEXIST){
-		parent_port->int_val +=1;
-		child_cx->save = 1;
-	    }
-
-	next_child:
-	    child_cx = child_cx->sib;
-	}
-    next:
-	//if the top cx is a port dont go through its siblings just connect this ports ports
-	if(top_cx->type == (Button_cx_e | Port_cx_st)){
-	    next_cx = NULL;
-	}
-	else{
-	//if the top cx is AddList go through the siblings, since we need to connect all ports
-	    next_cx = next_cx->sib;
-	}
-    }
-
-    if(this_cx_port_names)free(this_cx_port_names);
-    
-    return 0;
-}
-
 static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX* top_cx){
     if(top_cx->type != Val_cx_e) return;
     //parameter cant be without a parent
@@ -2225,14 +2007,15 @@ static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_
 }
 
 
-static int helper_cx_iterate_with_callback(APP_INTRF* app_intrf, CX* top_cx, void* arg,
+static int helper_cx_iterate_with_callback(APP_INTRF* app_intrf, CX* top_cx, void* arg, unsigned int sib_only,
 					   void(*proc_func)(void* arg, APP_INTRF* app_intrf, CX* in_cx)){
     if(top_cx == NULL)
 	return -1;
-    
+    CX* sib = top_cx->sib;
     (*proc_func)(arg, app_intrf, top_cx);
-    helper_cx_iterate_with_callback(app_intrf, top_cx->sib, arg, proc_func);
-    helper_cx_iterate_with_callback(app_intrf, top_cx->child, arg, proc_func);
+    helper_cx_iterate_with_callback(app_intrf, sib, arg, sib_only, proc_func);
+    if(sib_only == 0)
+	helper_cx_iterate_with_callback(app_intrf, top_cx->child, arg, sib_only, proc_func);
 
     return 0;
 }
@@ -2248,13 +2031,6 @@ static int helper_cx_remove_cx_and_data(APP_INTRF* app_intrf, CX* rem_cx){
     if((rem_cx->type & 0xff00) == Plugin_cx_e){
 	CX_PLUGIN* cx_plug = (CX_PLUGIN*)rem_cx;
 	app_plug_remove_plug(app_intrf->app_data, cx_plug->id);
-    }
-    if(rem_cx->type == (Button_cx_e | AddList_cx_st)){
-	CX_BUTTON* cx_addList = (CX_BUTTON*)rem_cx;
-	//if this is a container for ports, disconnect ports to clear the connections
-	if(cx_addList->uchar_val == Connect_audio_purp || cx_addList->uchar_val == Connect_midi_purp){
-	    helper_cx_disconnect_ports(app_intrf, rem_cx, 1);
-	}
     }
     cx_remove_this_and_children(rem_cx);
     
@@ -2342,6 +2118,27 @@ static char* helper_cx_combine_paths(CX* self){
     return ret_path;
 }
 
+static int helper_cx_connect_disconnect_ports(APP_INTRF* app_intrf, CX* input_port){
+    if(input_port->type != (Button_cx_e | Port_cx_st))return -1;
+    if(input_port->parent == NULL) return -1;
+    CX_BUTTON* input_btn = (CX_BUTTON*)input_port;
+    CX_BUTTON* output_btn = (CX_BUTTON*)input_port->parent;
+    if(input_btn->int_val_1 == 0)app_disconnect_ports(app_intrf->app_data, output_btn->str_val, input_btn->str_val);
+    if(input_btn->int_val_1 == 1)app_connect_ports(app_intrf->app_data, output_btn->str_val, input_btn->str_val);
+
+    return 0;
+}
+
+static void helper_cx_remove_nan_port(void* arg, APP_INTRF* app_intrf, CX* parent_port){
+    if(!app_intrf)return;
+    if(!parent_port)return;
+    if(parent_port->type != (Button_cx_e | Port_cx_st))return;
+    CX_BUTTON* cx_port = (CX_BUTTON*)parent_port;
+    if(app_is_port_on_client(app_intrf->app_data, cx_port->str_val) != 1){
+	cx_remove_this_and_children(parent_port);
+    }
+}
+
 static int helper_cx_copy_str_val(CX* from_cx, CX* to_cx){
     if(!from_cx || !to_cx)return -1;
     
@@ -2403,7 +2200,7 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 	if(param_names)free(param_names);
 	JSONHANDLE* obj = NULL;
 	if(app_json_create_obj(&obj)==0){
-	    helper_cx_iterate_with_callback(app_intrf, parent_node->child, obj, helper_cx_prepare_for_param_conf);
+	    helper_cx_iterate_with_callback(app_intrf, parent_node->child, obj, 0, helper_cx_prepare_for_param_conf);
 	}
 	//write the json handle to the file in the context path
 	app_json_write_handle_to_file(obj, config_path, 1, 1);
@@ -2411,6 +2208,39 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
     else{
 	//TODO how to setup user names for parameter values - similar to lv2 ScalePoints.
 	app_json_open_iterate_callback(config_path, parent_node->name, app_intrf, cx_process_params_from_file);
+    }
+    return 0;
+}
+
+static int helper_cx_create_cx_for_default_buttons(APP_INTRF* app_intrf, CX* parent_node, unsigned char cx_type, int cx_id){
+    //if this is a port container context (can be a container for output ports or an output port, which is a container for input ports)
+    if(cx_type == Context_type_PortContainer){
+	//TYPE_AUDIO or TYPE_MIDI port type
+	int port_type = cx_id;
+	
+	int flow_type = FLOW_INPUT;
+	//if this is a AddList_cx_st then its a container for output ports, so get only output ports
+	if(parent_node->type == (Button_cx_e | AddList_cx_st))flow_type = FLOW_OUTPUT;
+
+	const char** port_names = app_return_ports(app_intrf->app_data, NULL, (unsigned int)port_type, (unsigned long)flow_type);
+	if(!port_names)return -1;
+
+	char flow_type_str[12];
+	snprintf(flow_type_str, 12, "%.2x", (unsigned int)flow_type);
+	
+	char port_type_str[12];
+	snprintf(port_type_str, 12, "%d", (int)port_type);
+
+	const char* port = port_names[0];
+	unsigned int iter = 0;	
+	while(port){
+	    cx_init_cx_type(app_intrf, parent_node->name, port, (Button_cx_e | Port_cx_st),
+			    (const char*[3]){port, flow_type_str, port_type_str}, (const char*[3]){"str_val", "uchar_val", "int_val"}, 3);
+	    iter += 1;
+	    port = port_names[iter];
+	}
+
+	free(port_names);
     }
     return 0;
 }
