@@ -56,9 +56,9 @@ static int cx_19 = KEY_F(9);
 static int cx_20 = KEY_F(10);
 static int cx_21 = KEY_F(11);
 static int cx_22 = KEY_F(12);
-static int cx_inc = '+';
+static int cx_inc = '=';
 static int cx_dec = '-';
-static int cx_enter = '*';
+static int cx_enter = KEY_RIGHT;
 static int cx_scroll_up = KEY_DOWN;
 static int cx_scroll_down = KEY_UP;
 static int cx_btn_0 = 'w';
@@ -71,7 +71,7 @@ static int cx_root_1 = 'd';
 static int cx_root_2 = 'f';
 static int cx_root_3 = 'g';
 static int cx_root_4 = 'h';
-static int cx_exit = 'q';
+static int cx_exit = KEY_LEFT;
 
 //window struct that holds the text to display in the window, the ncurses window object and cx struct if
 //aplicable
