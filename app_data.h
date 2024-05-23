@@ -78,6 +78,8 @@ int app_connect_ports(APP_INFO* app_data, const char* source_port, const char* d
 //return all ports belonging to the system, not only for this client but physical ones too
 const char** app_return_ports(APP_INFO* app_data, const char* name_pattern, unsigned int type_pattern,
 			      unsigned long flags);
+//remove the clien name from the full port name
+char* app_return_short_port(APP_INFO* app_data, const char* full_port_name);
 //return port name array for the context, like sampler or plugin in plugins
 const char** app_return_context_ports(APP_INFO* app_data, unsigned int* name_num, unsigned int cx_type, unsigned int cx_id);
 //realtime callback for the track context, as usual has to use only _rt functions

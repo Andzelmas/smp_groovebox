@@ -2234,10 +2234,18 @@ static int helper_cx_create_cx_for_default_buttons(APP_INTRF* app_intrf, CX* par
 	const char* port = port_names[0];
 	unsigned int iter = 0;	
 	while(port){
-	    cx_init_cx_type(app_intrf, parent_node->name, port, (Button_cx_e | Port_cx_st),
+	    char* short_port_name = app_return_short_port(app_intrf->app_data, port);
+	    if(!short_port_name){
+		short_port_name = malloc(sizeof(char)*(strlen(port)+1));
+		if(!short_port_name)return -1;
+		snprintf(short_port_name, sizeof(char)*(strlen(port)+1), "%s", port);
+	    }
+	    cx_init_cx_type(app_intrf, parent_node->name, short_port_name, (Button_cx_e | Port_cx_st),
 			    (const char*[3]){port, flow_type_str, port_type_str}, (const char*[3]){"str_val", "uchar_val", "int_val"}, 3);
 	    iter += 1;
 	    port = port_names[iter];
+	    
+	    free(short_port_name);
 	}
 
 	free(port_names);

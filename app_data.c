@@ -21,7 +21,8 @@
 
 //this is the global pause, to pause the rt process completely
 atomic_int pause;
-
+//the client name that will be shown in the audio client and added next to the port names
+const char* client_name = "smp_grvbox";
 //single bit of data in the ring buffers
 //it stores few ints like value and similar
 typedef struct _app_ring_data_bit{
@@ -108,7 +109,6 @@ APP_INFO* app_init(app_status_t *app_status){
     
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
-    const char* client_name = "smp_grvbox";
     JACK_INFO *trk_jack = NULL;
     trk_jack = jack_initialize(app_data, client_name, 0, 0, 0, NULL,
 			       trk_audio_process_rt, 0);
@@ -420,6 +420,15 @@ int app_connect_ports(APP_INFO* app_data, const char* source_port, const char* d
 const char** app_return_ports(APP_INFO* app_data, const char* name_pattern, unsigned int type_pattern,
 			      unsigned long flags){
     return app_jack_port_names(app_data->trk_jack, name_pattern, type_pattern, flags);
+}
+
+
+char* app_return_short_port(APP_INFO* app_data, const char* full_port_name){
+    if(!app_data)return NULL;
+    char* ret_name = NULL;
+    char* temp = str_split_string_delim(full_port_name, client_name, &ret_name);
+    if(temp)free(temp);
+    return ret_name;
 }
 
 static const char** app_return_sys_port_names(void** sys_ports, unsigned int port_num){
