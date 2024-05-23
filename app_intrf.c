@@ -618,6 +618,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    cx_remove_this_and_children(ret_node);
 	    return NULL;
 	}
+	log_append_logfile("Added %s plugin\n", ret_node->short_name);
 	return ret_node;	
     }	    
       
@@ -1351,6 +1352,7 @@ static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
 		    if(cx_plug->preset_path){
 			strcpy(cx_plug->preset_path, f_path);
 		    }
+		    log_append_logfile("Loaded plugin %s preset\n", cx_plug->preset_path);
 		}
 	    }
 	}
