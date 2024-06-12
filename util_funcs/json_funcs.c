@@ -343,6 +343,53 @@ clean:
     return ret_obj;
 }
 
+int app_json_iterate_objs_run_callback(struct json_object* parsed_fp,
+				       const char* json_name, const char* json_parent, const char* top_name,
+				       void* arg,
+				       void(*proc_func)(void*, const char* js_name, const char* parent_name,
+							const char* top_node_name, struct json_object* found_json_obj)){
+    int return_val = 0;
+
+    if(!parsed_fp){
+	return_val = -1;
+	return return_val;
+    }
+    //iterate through the parsed_fp
+    struct json_object_iterator it;
+    struct json_object_iterator itEnd;
+
+    it = json_object_iter_begin(parsed_fp);
+    itEnd = json_object_iter_end(parsed_fp);
+    
+    unsigned int iter = 0;
+    while (!json_object_iter_equal(&it, &itEnd)) {
+	const char* cur_name =  json_object_iter_peek_name(&it);
+	struct json_object* rec_obj = NULL;
+	rec_obj = json_object_iter_peek_value(&it);
+	if(json_object_get_type(rec_obj)!=json_type_object && json_object_get_type(rec_obj)!=json_type_null){
+	    iter+=1;
+	    (*proc_func)(arg, json_name, json_parent, top_name, rec_obj);
+	}
+	json_object_iter_next(&it);
+    }
+    //now go through the objects inside this json object
+    //and call this function recursevily
+    it = json_object_iter_begin(parsed_fp);
+    while(!json_object_iter_equal(&it, &itEnd)){
+	const char* cur_name =  json_object_iter_peek_name(&it);	
+	struct json_object* rec_obj = NULL;
+	const char* parent_name = json_name;
+	if(iter<=0)parent_name = json_parent;
+	rec_obj = json_object_iter_peek_value(&it);
+	if(json_object_get_type(rec_obj)==json_type_object)
+	    app_json_iterate_objs_run_callback(rec_obj, cur_name, parent_name, top_name,
+					  arg, (*proc_func));
+	json_object_iter_next(&it);
+    }
+    
+    return return_val;
+}
+
 static int app_json_iterate_run_callback(struct json_object* parsed_fp,
 					 const char* json_name, const char* json_parent, const char* top_name,
 					 const char* json_file_path, 

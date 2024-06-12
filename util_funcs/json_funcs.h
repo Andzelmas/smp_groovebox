@@ -27,6 +27,13 @@ static int app_json_write_json_to_file(struct json_object* obj, const char* file
 static char* app_json_read_to_buffer(const char* file_path);
 //iterate recursively through the json object and find a key and return the object of that key, value pair
 static struct json_object* app_json_iterate_and_find_obj(struct json_object* parsed_fp, const char* find_key);
+//recursevily iterate through json object parsed_fp and call the proc_func, where user can do something with that object
+//the object is given to the user as found_json_obj variable
+int app_json_iterate_objs_run_callback(struct json_object* parsed_fp,
+				       const char* json_name, const char* json_parent, const char* top_name,
+				       void* arg,
+				       void(*proc_func)(void*, const char* js_name, const char* parent_name,
+							const char* top_node_name, struct json_object* found_json_obj));
 //recursevily iterate through the json object and run a callback, this is external, just have to use a
 //function to retrieve the root json object
 //parsed_fp - the json object from which to start the iteration
