@@ -554,7 +554,7 @@ char* plug_return_plugin_name(PLUG_INFO* plug_data, int plug_id){
     return ret_string;
 }
 
-char** plug_return_plugin_names(PLUG_INFO* plug_data){
+char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size){
     if(!plug_data)return NULL;
     const LilvPlugins* plugins = lilv_world_get_all_plugins(plug_data->lv_world);
     if(!plugins)return NULL;
@@ -580,7 +580,7 @@ char** plug_return_plugin_names(PLUG_INFO* plug_data){
 	plug_iter = lilv_plugins_next(plugins, plug_iter);
 	iter+=1;
     }
-    
+    *size = iter;
     return name_array;
 }
 

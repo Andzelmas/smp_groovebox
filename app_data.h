@@ -19,7 +19,12 @@ enum AppStatus{
     plug_jack_init_failed = -6,
     synth_data_init_failed = -7
 };
-    
+enum AppPluginType{
+    //lv2 plugin
+    LV2_plugin_type = 0x01,
+    CLAP_plugin_type = 0x02
+};
+
 typedef enum AppStatus app_status_t;
 
 //this is the struct for the data on the whole app

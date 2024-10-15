@@ -170,7 +170,16 @@ APP_INFO* app_init(app_status_t *app_status){
 
 char** app_plug_get_plugin_names(APP_INFO* app_data){
     if(!app_data)return NULL;
-    return plug_return_plugin_names(app_data->plug_data);
+    unsigned int lv2_size = 0;
+    char** lv2_names = plug_return_plugin_names(app_data->plug_data, &lv2_size);
+    //TODO get clap_names
+    unsigned int clap_size = 0;
+    char** clap_names = NULL;
+    //TODO build and return the array for the types of the plugins per name
+    unsigned int total_size = lv2_size + clap_size;
+    //TODO combine the name arrays into one array
+    
+    return lv2_names;
 }
 
 char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned int indx){

@@ -25,7 +25,7 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate, plug_status_t* 
 //return the name of the plug_id plugin
 char* plug_return_plugin_name(PLUG_INFO* plug_data, int plug_id);
 //get the list of the plugins in a string array format, user needs to free that array
-char** plug_return_plugin_names(PLUG_INFO* plug_data);
+char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size);
 //get the list of presets belonging to the plugin
 char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx);
 //initialize a plugin instance

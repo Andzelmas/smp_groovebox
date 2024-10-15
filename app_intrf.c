@@ -73,6 +73,8 @@ typedef struct intrf_cx_plugin{
     char* plug_path;
     //the uri of the plugin preset
     char* preset_path;
+    //the type of the plugin, check AppPLugintype in app_data.h
+    char plug_type;
     //the id of the plugin instance
     int id;
 }CX_PLUGIN;
@@ -558,6 +560,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	if(!cx_plug)return NULL;	
 	cx_plug->plug_path = NULL;
 	cx_plug->preset_path = NULL;
+	cx_plug->plug_type = 0;
 	cx_plug->id = -1;
 	int init = 0;
 	ret_node = (CX*)cx_plug;
@@ -571,6 +574,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    }
 	    cx_plug->preset_path = str_find_value_from_name(type_attrib_names,
 							    type_attribs, "preset_path", attrib_size);
+	    cx_plug->plug_type = str_find_value_to_hex(type_attrib_names, type_attribs, "plug_type", attrib_size);
 	}
 	//create the plugin
 	int plug_id = app_plug_init_plugin(app_intrf->app_data, cx_plug->plug_path, cx_plug->id);
@@ -1928,8 +1932,12 @@ static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_
 	char id_string[20];
 	snprintf(id_string, 20, "%2d", cx_plug->id);
 	attrib_vals[3] = id_string;
-	    
-	iter = 4;
+
+	attrib_names[4] = "plug_type";
+	char type_string[20];
+	snprintf(type_string, 20, "%2x", cx_plug->plug_type);
+	attrib_vals[4] = type_string;
+	iter = 5;
     }
     if((top_cx->type & 0xff00) == Osc_cx_e){
 	CX_OSC* cx_osc = (CX_OSC*)top_cx;

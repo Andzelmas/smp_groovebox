@@ -14,9 +14,19 @@ void request_restart(const clap_host_t* host){};
 void request_process(const clap_host_t* host){};
 void request_callback(const clap_host_t* host){};
 
+//get the clap files in the directory
+static char** clap_plug_get_clap_files(char* file_path, unsigned int size){
+}
+//goes through the clap files stored on the clap_data struct and returns the names of these plugins
+//each clap file can have several different plugins inside of it
+char** clap_plug_return_plugin_names(CLAP_PLUG_INFO* clap_data, unsigned int size){
+}
+
 void clap_plug_init(const char* plug_path){
+    //TODO init the CLAP_PLUG_INFO struct
     void* handle;
     int* iptr;
+    //TODO should get all the clap files and store them on the CLAP_PLUG_INFO struct 
     handle = dlopen(plug_path, RTLD_LOCAL | RTLD_LAZY);
     if(!handle){
 	log_append_logfile("failed to load %s dso \n", plug_path);
@@ -53,7 +63,9 @@ void clap_plug_init(const char* plug_path){
     clap_info_host.request_restart = request_restart;
     clap_info_host.request_process = request_process;
     clap_info_host.request_callback = request_callback;
-    
+    //TODO iterating through the clap files should be in the clap_plug_return_plugin_names function
+    //TODO when user chooses which plugin to load, go through the clap files (and the plugins in the files) and compare the plugin name
+    //to the name the user sent, if its the same load this plugin
     for(uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++){
 	const clap_plugin_descriptor_t* plug_desc = plug_fac->get_plugin_descriptor(plug_fac, pl_iter);
 	if(!plug_desc)continue;
