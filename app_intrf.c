@@ -74,7 +74,7 @@ typedef struct intrf_cx_plugin{
     //the uri of the plugin preset
     char* preset_path;
     //the type of the plugin, check AppPLugintype in app_data.h
-    char plug_type;
+    unsigned char plug_type;
     //the id of the plugin instance
     int id;
 }CX_PLUGIN;
@@ -211,7 +211,6 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
     CX_MAIN* root_main = (CX_MAIN*)app_intrf->root_cx;
     log_append_logfile("Opened song %s \n", root_main->path);
     
-    //clap_plug_init("/usr/lib/clap/CHOWTapeModel.clap");
     return app_intrf;
 }
 
@@ -1152,14 +1151,6 @@ static int context_list_from_dir(APP_INTRF* app_intrf,
     return 0;
 }
 
-static int context_list_from_string(APP_INTRF* app_intrf, const char* disp_name,
-			     const char* string_name, const char* parent_name){
-    if(!string_name)return -1;
-    cx_init_cx_type(app_intrf, parent_name, disp_name, (Button_cx_e | Item_cx_st),
-		    (const char*[1]){string_name}, (const char*[1]){"str_val"}, 1);
-    return 0;
-}
-
 /*CALLBACK FUNCTIONS FOR THE CX CONTEXTS, FOR INTERNAL USE*/
 /*--------------------------------------------------------*/
 static float cx_get_value_callback(APP_INTRF* app_intrf, CX* self, unsigned char* ret_type){
@@ -1341,8 +1332,11 @@ static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
     }
     if(cx_addList->uchar_val == addPlugin_purp){
 	//create the cx_plugin, the plugin instance on plug_data will be created in cx_init_cx_type
+	//the type of plugin
+	char plug_type[20];
+	snprintf(plug_type, 20, "%2x", cx_file->uchar_val);
 	cx_init_cx_type(app_intrf, self->parent->parent->name, "Plug", Plugin_cx_e,
-			(const char*[2]){f_path, "1"}, (const char*[2]){"plug_path", "init"}, 2);
+			(const char*[3]){f_path, "1", plug_type}, (const char*[3]){"plug_path", "init", "plug_type"}, 3);
     }
     if(cx_addList->uchar_val == Load_plugin_preset_purp){
 	//load the plugin preset
@@ -1418,9 +1412,11 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
     //not actual files in this case, add cx of a plugin or preset only if there is no cx with the same str_val already
     if(cx_addList->uchar_val == addPlugin_purp || cx_addList->uchar_val == Load_plugin_preset_purp){
 	char** names = NULL;
+	unsigned int plug_name_size = 0;
+	unsigned char* plug_types = NULL;
 	//if list plugin strings
 	if(cx_addList->uchar_val == addPlugin_purp){
-	    names = app_plug_get_plugin_names(app_intrf->app_data);
+	    names = app_plug_get_plugin_names(app_intrf->app_data, &plug_name_size, &plug_types);
 	}
 	//if list plugin preset names
 	else if(cx_addList->uchar_val == Load_plugin_preset_purp){
@@ -1428,14 +1424,14 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 		if(self->parent->type == Plugin_cx_e){
 		    CX_PLUGIN* plugin = (CX_PLUGIN*)self->parent;
 		    unsigned int plug_id = plugin->id;
-		    names = app_plug_get_plugin_presets(app_intrf->app_data, plug_id);
+		    names = app_plug_get_plugin_presets(app_intrf->app_data, plug_id, &plug_name_size);
 		}
 	    }
 	}
 	if(names){
-	    char* cur_name = names[0];
-	    int iter = 0;
-	    while(cur_name){
+	    for(int name_iter = 0; name_iter < plug_name_size; name_iter++){
+		char* cur_name = names[name_iter];
+		if(!cur_name)goto next_name;
 		if(cx_find_with_str_val(cur_name, self->child, 1))goto next_name;
 		char* disp_name = str_return_file_from_path(cur_name);
 		//disp_name_with_iter is here so that the display name for the plugin or its preset item in the list is unique
@@ -1444,20 +1440,27 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 		//+10 next to disp_name because there can be a lot of plugins
 		if(disp_name)disp_name_with_iter = (char*)malloc(sizeof(char)*(strlen(disp_name)+10));
 		if(disp_name_with_iter){
-		    sprintf(disp_name_with_iter, "%.1d_", iter);
+		    sprintf(disp_name_with_iter, "%.1d_", name_iter);
 		    strcat(disp_name_with_iter, disp_name);
 		    if(disp_name)free(disp_name);		    
 		}
-		if(disp_name_with_iter)context_list_from_string(app_intrf, disp_name_with_iter, cur_name, self->name);
-		if(!disp_name_with_iter)context_list_from_string(app_intrf, cur_name, cur_name, self->name);
+		char plug_type[20];
+		unsigned char plug_type_hex = 0;
+		if(plug_types){
+		    plug_type_hex = plug_types[name_iter];
+		}
+		snprintf(plug_type, 20, "%2x", plug_type_hex);
+		if(disp_name_with_iter)cx_init_cx_type(app_intrf, self->name, disp_name_with_iter, (Button_cx_e | Item_cx_st),
+						       (const char*[2]){cur_name, plug_type}, (const char*[2]){"str_val", "uchar_val"}, 2);
+		if(!disp_name_with_iter)cx_init_cx_type(app_intrf, self->name, cur_name, (Button_cx_e | Item_cx_st),
+						       (const char*[2]){cur_name, plug_type}, (const char*[2]){"str_val", "uchar_val"}, 2);
 		if(disp_name_with_iter)free(disp_name_with_iter);
 		
 	    next_name:
-		free(cur_name);		
-		iter+=1;
-		cur_name = names[iter];
+		if(cur_name)free(cur_name);		
 	    }
 	    free(names);
+	    if(plug_types)free(plug_types);
 	}    
     }
     //If this AddList is a container for ports, create ports that are not yet created

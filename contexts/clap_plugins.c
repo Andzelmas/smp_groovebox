@@ -1,9 +1,31 @@
 #include "clap_plugins.h"
+#include <stdio.h>
+#include <string.h>
+#include <dirent.h>
 #include "../util_funcs/log_funcs.h"
 #include <clap/clap.h>
+#include <stdlib.h>
 #include <dlfcn.h>
+#include "../util_funcs/log_funcs.h"
+#include "../util_funcs/string_funcs.h"
 //what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
+#define CLAP_PATH "/usr/lib/clap/"
+//the single clap plugin struct
+typedef struct _clap_plug_plug{
+}CLAP_PLUG_PLUG;
+
+//the main clap struct
+typedef struct _clap_plug_info{
+    struct _clap_plug_plug** plugins; //array with single clap plugins
+    unsigned int total_plugs; //how many plugins there are
+    int max_id; //the biggest id of a plugin in the system, if its -1 - there are no active plugins
+    double sample_rate;
+    //for clap there can be min and max buffer sizes, for not changing buffer sizes set as the same
+    uint32_t min_buffer_size;
+    uint32_t max_buffer_size;
+}CLAP_PLUG_INFO;
+
 const void* get_extension(const clap_host_t* host, const char* ex_id){
     log_append_logfile("clap_plugin requested extension %s\n", ex_id);
 
@@ -14,19 +36,153 @@ void request_restart(const clap_host_t* host){};
 void request_process(const clap_host_t* host){};
 void request_callback(const clap_host_t* host){};
 
+static char** clap_plug_get_plugin_names_from_file(const char* plug_path, unsigned int* num_of_plugins){
+    void* handle;
+    int* iptr;
+    handle = dlopen(plug_path, RTLD_LOCAL | RTLD_LAZY);
+    if(!handle){
+	log_append_logfile("failed to load %s dso \n", plug_path);
+    }
+    
+    iptr = (int*)dlsym(handle, "clap_entry");
+    clap_plugin_entry_t* plug_entry = (clap_plugin_entry_t*)iptr;
+    
+    unsigned int init_err = plug_entry->init(plug_path);
+    if(!init_err){
+	log_append_logfile("failed to init the %s plugin entry\n", plug_path);
+	return NULL;
+    }
+    
+    const clap_plugin_factory_t* plug_fac = plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
+    uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
+    if(plug_count <= 0){
+	log_append_logfile("no plugins in %s dso \n", plug_path);
+	return NULL;
+    }
+    char** plug_names = malloc(sizeof(char*));
+    if(!plug_names)return NULL;
+    unsigned int name_count = 0;
+    for(uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++){
+	const clap_plugin_descriptor_t* plug_desc = plug_fac->get_plugin_descriptor(plug_fac, pl_iter);
+	if(!plug_desc)continue;
+	if(!(plug_desc->name))continue;
+	char** temp_names = realloc(plug_names, sizeof(char*) * (name_count+1));
+	if(!temp_names)continue;
+	plug_names = temp_names;
+	plug_names[name_count] = NULL;
+	unsigned int cur_name_size = strlen(plug_desc->name) + 1;
+	char* cur_name = malloc(sizeof(char) * cur_name_size);
+	if(!cur_name)continue;
+	snprintf(cur_name, cur_name_size, "%s", plug_desc->name);
+	plug_names[name_count] = cur_name;
+	name_count += 1;
+    }
+
+    if(name_count == 0){
+	free(plug_names);
+	return NULL;
+    }
+    plug_entry->deinit();
+    
+    *num_of_plugins = name_count;
+    return plug_names;
+}
+
 //get the clap files in the directory
-static char** clap_plug_get_clap_files(char* file_path, unsigned int size){
+static char** clap_plug_get_clap_files(const char* file_path, unsigned int* size){
+    char** ret_files = NULL;
+    *size = 0;
+    DIR* d;
+    struct dirent* dir = NULL;
+    d = opendir(file_path);
+    if(d){
+	ret_files = malloc(sizeof(char*));
+	unsigned int iter = 0;
+	while((dir = readdir(d)) != NULL){
+	    if(strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)continue;
+	    char* after_delim = NULL;
+	    char* before_delim = str_split_string_delim(dir->d_name, ".", &after_delim);
+	    if(!after_delim){
+		if(before_delim)free(before_delim);
+		continue;
+	    }
+	    if(strcmp(after_delim, "clap") != 0){
+		if(after_delim)free(after_delim);
+		if(before_delim)free(before_delim);
+		continue;
+	    }
+	    if(after_delim)free(after_delim);
+	    if(before_delim)free(before_delim);
+	    char** temp_files = realloc(ret_files, sizeof(char*) * (iter+1));
+	    if(!temp_files)continue;
+	    ret_files = temp_files;
+	    ret_files[iter] = NULL;
+	    unsigned int cur_file_len = strlen(dir->d_name) + 1;
+	    char* cur_file = malloc(sizeof(char) * cur_file_len);
+	    if(!cur_file){
+		continue;
+	    }
+	    snprintf(cur_file, cur_file_len, "%s", dir->d_name);
+	    ret_files[iter] = cur_file;
+	    iter += 1;
+	}
+	closedir(d);
+	*size = iter;
+    }
+    return ret_files;
 }
 //goes through the clap files stored on the clap_data struct and returns the names of these plugins
 //each clap file can have several different plugins inside of it
-char** clap_plug_return_plugin_names(CLAP_PLUG_INFO* clap_data, unsigned int size){
+char** clap_plug_return_plugin_names(unsigned int* size){
+    unsigned int total_files = 0;
+    char** clap_files = clap_plug_get_clap_files(CLAP_PATH, &total_files);
+    if(!clap_files)return NULL;
+    char** return_names = malloc(sizeof(char*));
+    unsigned int total_names_found = 0;
+    for(int i = 0; i < total_files; i++){
+	char* cur_file = clap_files[i];
+	if(!cur_file)continue;
+	unsigned int total_file_name_size = strlen(CLAP_PATH) + strlen(cur_file) + 1;
+	char* total_file_path = malloc(sizeof(char) * total_file_name_size);
+	if(!total_file_path){
+	    free(cur_file);
+	    continue;
+	}
+	snprintf(total_file_path, total_file_name_size, "%s%s", CLAP_PATH, cur_file);
+
+	unsigned int plug_name_count = 0;
+	char** plug_names = clap_plug_get_plugin_names_from_file(total_file_path, &plug_name_count);
+	if(plug_names){
+	    for(int j = 0; j < plug_name_count; j++){
+		char* cur_plug_name = plug_names[j];
+		if(!cur_plug_name)continue;
+		char** temp_return_names = realloc(return_names, sizeof(char*) * (total_names_found +1));
+		if(!temp_return_names){
+		    free(cur_plug_name);
+		    continue;
+		}
+		return_names = temp_return_names;
+		return_names[total_names_found] = cur_plug_name;
+		total_names_found += 1;
+	    }
+	    free(plug_names);
+	}
+	free(total_file_path);
+	free(cur_file);
+    }
+    free(clap_files);
+    if(total_names_found == 0){
+	free(return_names);
+	return NULL;
+    }
+    *size = total_names_found;
+    return return_names;
 }
 
 void clap_plug_init(const char* plug_path){
     //TODO init the CLAP_PLUG_INFO struct
     void* handle;
     int* iptr;
-    //TODO should get all the clap files and store them on the CLAP_PLUG_INFO struct 
     handle = dlopen(plug_path, RTLD_LOCAL | RTLD_LAZY);
     if(!handle){
 	log_append_logfile("failed to load %s dso \n", plug_path);

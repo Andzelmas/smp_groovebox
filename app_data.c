@@ -168,23 +168,75 @@ APP_INFO* app_init(app_status_t *app_status){
     return app_data;
 }
 
-char** app_plug_get_plugin_names(APP_INFO* app_data){
+char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types){
     if(!app_data)return NULL;
     unsigned int lv2_size = 0;
     char** lv2_names = plug_return_plugin_names(app_data->plug_data, &lv2_size);
-    //TODO get clap_names
     unsigned int clap_size = 0;
-    char** clap_names = NULL;
-    //TODO build and return the array for the types of the plugins per name
-    unsigned int total_size = lv2_size + clap_size;
-    //TODO combine the name arrays into one array
+    char** clap_names = clap_plug_return_plugin_names(&clap_size);
+    unsigned char* plugin_types = malloc(sizeof(unsigned char) * (lv2_size + clap_size));
+    memset(plugin_types, '\0', sizeof(unsigned char) * (lv2_size + clap_size));
     
-    return lv2_names;
+    if(!plugin_types)goto fail_clean;
+    char** all_names = malloc(sizeof(char*));
+    if(!all_names)goto fail_clean;
+    unsigned int total_names_size = 0;
+    //add lv2 and clap names to all_names
+    for(int i = 0; i < (lv2_size + clap_size); i++){
+	char** names = lv2_names;
+	int real_iter = i;
+	if(i >= lv2_size){
+	    names = clap_names;
+	    real_iter = i - lv2_size;
+	}
+	if(!names)continue;
+	char* cur_name = names[real_iter];
+	if(!cur_name)continue;
+	char** temp_names = realloc(all_names, sizeof(char*)*(total_names_size + 1));
+	if(!temp_names){
+	    free(cur_name);
+	    continue;
+	}
+	all_names = temp_names;
+	all_names[total_names_size] = cur_name;
+	plugin_types[total_names_size] = LV2_plugin_type;
+	if(names == clap_names)plugin_types[total_names_size] = CLAP_plugin_type;
+	total_names_size += 1;
+    }
+
+    if(total_names_size == 0){
+	goto fail_clean;
+    }
+
+    if(lv2_names)free(lv2_names);
+    if(clap_names)free(clap_names);
+    *names_size = total_names_size;
+    *return_plug_types = plugin_types;
+    return all_names;
+    
+fail_clean:
+    for(int i = 0; i < (lv2_size + clap_size); i++){
+	char** names = lv2_names;
+	int real_iter = i;
+	if(i >= lv2_size){
+	    names = clap_names;
+	    real_iter = i - lv2_size;
+	}
+	if(!names)continue;
+	char* cur_name = names[real_iter];
+	if(!cur_name)continue;
+	free(cur_name);
+    }
+    if(all_names)free(all_names);
+    if(plugin_types)free(plugin_types);
+    if(lv2_names)free(lv2_names);
+    if(clap_names)free(clap_names);
+    return NULL;
 }
 
-char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned int indx){
+char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned int indx, unsigned int* total_presets){
     if(!app_data)return NULL;
-    return plug_return_plugin_presets_names(app_data->plug_data, indx);
+    return plug_return_plugin_presets_names(app_data->plug_data, indx, total_presets);
 }
 
 int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, const int id){

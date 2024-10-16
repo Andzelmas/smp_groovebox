@@ -584,7 +584,7 @@ char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size){
     return name_array;
 }
 
-char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx){
+char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx, unsigned int* total_presets){
     if(!plug_data)return NULL;
     if(!plug_data->plugins)return NULL;
     PLUG_PLUG* plug = plug_data->plugins[indx];
@@ -616,7 +616,7 @@ char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx)
 	preset_iter = lilv_nodes_next(presets, preset_iter);
 	iter+=1;
     }
-    
+    *total_presets = iter;
     lilv_nodes_free(presets);
     return preset_name_array;
 }

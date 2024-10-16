@@ -27,7 +27,7 @@ char* plug_return_plugin_name(PLUG_INFO* plug_data, int plug_id);
 //get the list of the plugins in a string array format, user needs to free that array
 char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size);
 //get the list of presets belonging to the plugin
-char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx);
+char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx, unsigned int* total_presets);
 //initialize a plugin instance
 //if id is not -1 a plugin will be created in that plugin index, if that index is already occupied, the previous
 //plugin will be cleared
