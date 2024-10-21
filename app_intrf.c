@@ -73,8 +73,6 @@ typedef struct intrf_cx_plugin{
     char* plug_path;
     //the uri of the plugin preset
     char* preset_path;
-    //the type of the plugin, check AppPLugintype in app_data.h
-    unsigned char plug_type;
     //the id of the plugin instance
     int id;
 }CX_PLUGIN;
@@ -281,6 +279,8 @@ static void cx_process_params_from_file(void *arg,
     if(top_cx->type == Plugin_cx_e){
 	CX_PLUGIN* cx_plug = (CX_PLUGIN*)top_cx;
 	cx_type = Context_type_Plugins;
+	if(top_cx->type == (Plugin_cx_e | Plugin_Clap_cx_st))
+	    cx_type = Context_type_Clap_Plugins;
 	cx_id = cx_plug->id;
     }
     if(top_cx->type == (Main_cx_e | Trk_cx_st)){
@@ -556,10 +556,9 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
     }
     if((type & 0xff00) == Plugin_cx_e){
 	CX_PLUGIN *cx_plug = (CX_PLUGIN*)malloc(sizeof(CX_PLUGIN));
-	if(!cx_plug)return NULL;	
+	if(!cx_plug)return NULL;
 	cx_plug->plug_path = NULL;
 	cx_plug->preset_path = NULL;
-	cx_plug->plug_type = 0;
 	cx_plug->id = -1;
 	int init = 0;
 	ret_node = (CX*)cx_plug;
@@ -573,10 +572,12 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    }
 	    cx_plug->preset_path = str_find_value_from_name(type_attrib_names,
 							    type_attribs, "preset_path", attrib_size);
-	    cx_plug->plug_type = str_find_value_to_hex(type_attrib_names, type_attribs, "plug_type", attrib_size);
 	}
 	//create the plugin
-	int plug_id = app_plug_init_plugin(app_intrf->app_data, cx_plug->plug_path, cx_plug->id);
+
+	unsigned char plugin_type = Context_type_Plugins;
+	if(type == (Plugin_cx_e | Plugin_Clap_cx_st))plugin_type = Context_type_Clap_Plugins;
+	int plug_id = app_plug_init_plugin(app_intrf->app_data, cx_plug->plug_path,  plugin_type, cx_plug->id);
 	//if adding the plugin to plug_data failed we clear this cx
 	if(plug_id<0){
 	    if(cx_plug->plug_path)free(cx_plug->plug_path);
@@ -585,7 +586,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	}
 	int child_add_err = -1;
 	//get the name
-	char* plug_name = app_return_cx_name(app_intrf->app_data, Context_type_Plugins, plug_id, 1);
+	char* plug_name = app_return_cx_name(app_intrf->app_data, plugin_type, plug_id, 1);
 	if(plug_name){
 	    child_add_err = cx_add_child(parent, ret_node, plug_name, type);
 	    free(plug_name);
@@ -602,7 +603,8 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    return NULL;
 	}
 	//load preset if there is a preset path
-	if(cx_plug->preset_path)app_plug_load_preset(app_intrf->app_data, cx_plug->preset_path, cx_plug->id);
+	//TODO app_plug_load_preset needs an argument for the type of plugin, or rather cx_type argument
+	if(cx_plug->preset_path)app_plug_load_preset(app_intrf->app_data, cx_plug->preset_path, plugin_type, cx_plug->id);
 	//button to load a preset for the plugin, if we fail to create it no big deal - presets wont load
 	cx_init_cx_type(app_intrf, ret_node->name, "load_preset", (Button_cx_e | AddList_cx_st),
 			(const char*[1]){"06"}, (const char*[1]){"uchar_val"}, 1);
@@ -610,14 +612,14 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	//create the Val_cx_e for each plugin control port
 	//this function also tries to find a configuration file for parameters and use user info from there
 	char plugin_config_file[MAX_PARAM_CONFIG_STRING];
-	plug_name = app_return_cx_name(app_intrf->app_data, Context_type_Plugins, cx_plug->id, 0);
+	plug_name = app_return_cx_name(app_intrf->app_data, plugin_type, cx_plug->id, 0);
 	if(!plug_name){
 	    cx_remove_this_and_children(ret_node);
 	    return NULL;
 	}
 	snprintf(plugin_config_file, MAX_PARAM_CONFIG_STRING, "%s_param_conf.json", plug_name);
 	free(plug_name);
-	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, plugin_config_file, Context_type_Plugins, cx_plug->id)<0){
+	if(helper_cx_create_cx_for_default_params(app_intrf, ret_node, plugin_config_file, plugin_type, cx_plug->id)<0){
 	    cx_remove_this_and_children(ret_node);
 	    return NULL;
 	}
@@ -1333,17 +1335,20 @@ static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
     if(cx_addList->uchar_val == addPlugin_purp){
 	//create the cx_plugin, the plugin instance on plug_data will be created in cx_init_cx_type
 	//the type of plugin
-	char plug_type[20];
-	snprintf(plug_type, 20, "%2x", cx_file->uchar_val);
-	cx_init_cx_type(app_intrf, self->parent->parent->name, "Plug", Plugin_cx_e,
-			(const char*[3]){f_path, "1", plug_type}, (const char*[3]){"plug_path", "init", "plug_type"}, 3);
+	unsigned int plug_type = Plugin_cx_e;
+	if(cx_file->uchar_val == CLAP_plugin_type)plug_type = (Plugin_cx_e | Plugin_Clap_cx_st);
+	cx_init_cx_type(app_intrf, self->parent->parent->name, "Plug", plug_type,
+			(const char*[2]){f_path, "1"}, (const char*[2]){"plug_path", "init"}, 2);
     }
     if(cx_addList->uchar_val == Load_plugin_preset_purp){
 	//load the plugin preset
 	if(self->parent->parent){
-	    if(self->parent->parent->type == Plugin_cx_e){
+	    if((self->parent->parent->type & 0xff00) == Plugin_cx_e){
 		CX_PLUGIN* cx_plug = (CX_PLUGIN*)self->parent->parent;
-		int load_preset = app_plug_load_preset(app_intrf->app_data, f_path, cx_plug->id);
+		unsigned int plugin_type = Context_type_Plugins;
+		if(self->parent->parent->type == (Plugin_cx_e | Plugin_Clap_cx_st))
+		    plugin_type = Context_type_Clap_Plugins;
+		int load_preset = app_plug_load_preset(app_intrf->app_data, f_path, plugin_type, cx_plug->id);
 		if(load_preset >= 0){
 		    //copy the preset name to preset_path of the plugin
 		    cx_plug->preset_path = (char*)malloc(sizeof(char)*(strlen(f_path)+1));
@@ -1936,11 +1941,7 @@ static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_
 	snprintf(id_string, 20, "%2d", cx_plug->id);
 	attrib_vals[3] = id_string;
 
-	attrib_names[4] = "plug_type";
-	char type_string[20];
-	snprintf(type_string, 20, "%2x", cx_plug->plug_type);
-	attrib_vals[4] = type_string;
-	iter = 5;
+	iter = 4;
     }
     if((top_cx->type & 0xff00) == Osc_cx_e){
 	CX_OSC* cx_osc = (CX_OSC*)top_cx;

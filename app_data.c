@@ -50,6 +50,9 @@ typedef struct _app_info{
     JACK_INFO* trk_jack;
     //plugin data
     PLUG_INFO* plug_data;
+    //CLAP plugin data
+    CLAP_PLUG_INFO* clap_plug_data;
+    //built in synth data
     SYNTH_DATA* synth_data;
     
     //hold here if we launched the jack client process
@@ -89,6 +92,7 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->smp_data = NULL;
     app_data->trk_jack = NULL;
     app_data->plug_data = NULL;
+    app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
     app_data->trk_process_launched = 0;
     app_data->rt_cycle = 0;
@@ -148,7 +152,13 @@ APP_INFO* app_init(app_status_t *app_status){
 	*app_status = plug_data_init_failed;
 	return NULL;
     }
-
+    clap_plug_status_t clap_plug_errors = 0;
+    app_data->clap_plug_data = clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors, trk_jack);
+    if(!(app_data->clap_plug_data)){
+	clean_memory(app_data);
+	*app_status = clap_plug_data_init_failed;
+	return NULL;
+    }
     //initiate the Synth data
     app_data->synth_data = synth_init((unsigned int)buffer_size, samplerate, "Synth", 1, app_data->trk_jack);
     if(!app_data->synth_data){
@@ -239,16 +249,20 @@ char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned int indx, unsign
     return plug_return_plugin_presets_names(app_data->plug_data, indx, total_presets);
 }
 
-int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, const int id){
+int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id){
     if(!plugin_uri)return -1;
     //before adding the plugin request the rt process for the plug_data to pause for a while
-    app_wait_for_pause(&pause);    
-    int return_id = plug_load_and_activate(app_data->plug_data, plugin_uri, id);
+    app_wait_for_pause(&pause);
+    int return_id = -1;
+    if(cx_type == Context_type_Plugins)
+	return_id = plug_load_and_activate(app_data->plug_data, plugin_uri, id);
+    if(cx_type == Context_type_Clap_Plugins)
+	return_id = -1; //TODO initiate the clap plugin
     atomic_store(&pause, 0);    
     return return_id;
 }
 
-int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, const int plug_id){
+int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, unsigned int cx_type, const int plug_id){
     if(!app_data)return -1;
     if(!preset_uri)return -1;
     if(plug_id<0) return -1;
@@ -257,7 +271,12 @@ int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, const int p
     //a function in plugins to check if plugin has safe_restore and when loading a preset in such a way
     //we would need to set the control ports values with circle buffers
     app_wait_for_pause(&pause);
-    int return_val = plug_load_preset(app_data->plug_data, plug_id, preset_uri);
+    int return_val = -1;
+    if(cx_type == Context_type_Plugins)
+	return_val = plug_load_preset(app_data->plug_data, plug_id, preset_uri);
+    //TODO load preset for the CLAP plugin
+    if(cx_type == Context_type_Clap_Plugins)
+	return_val = -1;
     atomic_store(&pause, 0);
     
     return return_val;
@@ -455,7 +474,9 @@ char* app_return_cx_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, u
 	ret_name = plug_return_plugin_name(app_data->plug_data, cx_id);
 	app_make_name_from_file_cx_id(app_data, &ret_name, cx_id, add_id);
     }
-    
+    //TODO return the name of the CLAP plugin
+    if(cx_type == Context_type_Clap_Plugins){
+    }
     return ret_name;
 }
 
@@ -691,6 +712,8 @@ int clean_memory(APP_INFO *app_data){
     if(app_data->trk_process_launched == 1){
 	app_wait_for_pause(&pause);
     }
+    //clean the clap plug_data memory
+    if(app_data->clap_plug_data)clap_plug_clean_memory(app_data->clap_plug_data);
     //clean the plug_data memory
     if(app_data->plug_data)plug_clean_memory(app_data->plug_data);
     //clean the sampler memory

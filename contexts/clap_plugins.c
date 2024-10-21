@@ -11,19 +11,23 @@
 //what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
 #define CLAP_PATH "/usr/lib/clap/"
+//how many clap plugins can there be in the plugin array
+#define MAX_INSTANCES 5
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
 }CLAP_PLUG_PLUG;
 
 //the main clap struct
 typedef struct _clap_plug_info{
-    struct _clap_plug_plug** plugins; //array with single clap plugins
+    struct _clap_plug_plug* plugins[MAX_INSTANCES]; //array with single clap plugins
     unsigned int total_plugs; //how many plugins there are
     int max_id; //the biggest id of a plugin in the system, if its -1 - there are no active plugins
-    double sample_rate;
+    SAMPLE_T sample_rate;
     //for clap there can be min and max buffer sizes, for not changing buffer sizes set as the same
     uint32_t min_buffer_size;
     uint32_t max_buffer_size;
+    //the clap host needed for clap function. It has the address of the CLAP_PLUG_INFO too
+    clap_host_t clap_host_info;
 }CLAP_PLUG_INFO;
 
 const void* get_extension(const clap_host_t* host, const char* ex_id){
@@ -179,8 +183,41 @@ char** clap_plug_return_plugin_names(unsigned int* size){
     return return_names;
 }
 
-void clap_plug_init(const char* plug_path){
-    //TODO init the CLAP_PLUG_INFO struct
+CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_size, SAMPLE_T samplerate, clap_plug_status_t* plug_error, void* audio_backend){
+    CLAP_PLUG_INFO* plug_data = (CLAP_PLUG_INFO*)malloc(sizeof(CLAP_PLUG_INFO));
+    if(!plug_data){
+	*plug_error = clap_plug_failed_malloc;
+	return NULL;
+    }
+    memset(plug_data, '\0', sizeof(*plug_data));
+    plug_data->min_buffer_size = min_buffer_size;
+    plug_data->max_buffer_size = max_buffer_size;
+    plug_data->max_id = -1;
+    plug_data->sample_rate = samplerate;
+    plug_data->total_plugs = 0;
+    for(int i = 0; i < MAX_INSTANCES; i++){
+	plug_data->plugins[i] = NULL;
+    }
+
+    clap_host_t clap_info_host;
+    clap_version_t clap_v;
+    clap_v.major = CLAP_VERSION_MAJOR;
+    clap_v.minor = CLAP_VERSION_MINOR;
+    clap_v.revision = CLAP_VERSION_REVISION;
+    clap_info_host.clap_version = clap_v;
+    clap_info_host.host_data = (void*)plug_data;
+    clap_info_host.name = "smp_groovebox";
+    clap_info_host.vendor = "bru";
+    clap_info_host.url = "https://brumakes.com";
+    clap_info_host.version = "0.2";
+    clap_info_host.get_extension = get_extension;
+    clap_info_host.request_restart = request_restart;
+    clap_info_host.request_process = request_process;
+    clap_info_host.request_callback = request_callback;
+
+    plug_data->clap_host_info = clap_info_host;
+
+    /*
     void* handle;
     int* iptr;
     handle = dlopen(plug_path, RTLD_LOCAL | RTLD_LAZY);
@@ -204,21 +241,6 @@ void clap_plug_init(const char* plug_path){
 	return;
     }
 
-    clap_host_t clap_info_host;
-    clap_version_t clap_v;
-    clap_v.major = CLAP_VERSION_MAJOR;
-    clap_v.minor = CLAP_VERSION_MINOR;
-    clap_v.revision = CLAP_VERSION_REVISION;
-    clap_info_host.clap_version = clap_v;
-    clap_info_host.host_data = NULL;
-    clap_info_host.name = "smp_groovebox";
-    clap_info_host.vendor = "bru";
-    clap_info_host.url = "https://brumakes.com";
-    clap_info_host.version = "0.2";
-    clap_info_host.get_extension = get_extension;
-    clap_info_host.request_restart = request_restart;
-    clap_info_host.request_process = request_process;
-    clap_info_host.request_callback = request_callback;
     //TODO iterating through the clap files should be in the clap_plug_return_plugin_names function
     //TODO when user chooses which plugin to load, go through the clap files (and the plugins in the files) and compare the plugin name
     //to the name the user sent, if its the same load this plugin
@@ -275,6 +297,15 @@ void clap_plug_init(const char* plug_path){
 	plug_inst->deactivate(plug_inst);
 	plug_inst->destroy(plug_inst);
     }
-    
+
     plug_entry->deinit();
+    */
+}
+
+void clap_plug_clean_memory(CLAP_PLUG_INFO* plug_data){
+    if(!plug_data)return;
+    for(int i = 0; i < plug_data->max_id + 1; i++){
+	//TODO should be a function that cleans this individual plugin
+    }
+    free(plug_data);
 }

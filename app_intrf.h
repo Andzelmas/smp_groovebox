@@ -49,6 +49,8 @@ enum cx_types_enum{
 
     //one plugin context
     Plugin_cx_e = 0x0400,
+    //this plugin is CLAP plugin subtype
+    Plugin_Clap_cx_st = 0x0001,
     
     //cx to hold values, that can be set and get by the user - a parameter
     //val_type intrfReturntype enum of what type the float returns, val_id - which value to set/get

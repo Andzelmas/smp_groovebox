@@ -17,7 +17,8 @@ enum AppStatus{
     trk_jack_init_failed = -4,
     plug_data_init_failed = -5,
     plug_jack_init_failed = -6,
-    synth_data_init_failed = -7
+    synth_data_init_failed = -7,
+    clap_plug_data_init_failed = -8
 };
 enum AppPluginType{
     //lv2 plugin
@@ -38,9 +39,9 @@ char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, u
 //return the available names of the presets available for the plugin
 char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned int indx, unsigned int* total_presets);
 //initialize a plugin on the plug_data context
-int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, const int id);
+int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id);
 //load a new preset for the plugin
-int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, const int plug_id);
+int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, unsigned int cx_type, const int plug_id);
 //initialize a sample on sampler context
 int app_smp_sample_init(APP_INFO* app_data, const char* samp_path, int in_id);
 //get the apropriate parameter container depending on the context (trk, sampler etc.)
