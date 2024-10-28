@@ -8,6 +8,7 @@
 #include <dlfcn.h>
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/string_funcs.h"
+#include "params.h"
 //what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
 #define CLAP_PATH "/usr/lib/clap/"
@@ -15,6 +16,12 @@
 #define MAX_INSTANCES 5
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
+    int id; //plugin id on the clap_plug_info plugin array
+    clap_plugin_entry_t* plug_entry; //the clap library file for this plugin
+    clap_plugin_t* plug_inst; //the plugin instance
+    unsigned int plug_inst_id; //the plugin instance id in the plugin factory
+    char* plug_path; //the path for the clap file
+    PRM_CONTAIN* plug_params; //plugin parameter container for params.c
 }CLAP_PLUG_PLUG;
 
 //the main clap struct
