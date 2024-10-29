@@ -257,7 +257,7 @@ int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned ch
     if(cx_type == Context_type_Plugins)
 	return_id = plug_load_and_activate(app_data->plug_data, plugin_uri, id);
     if(cx_type == Context_type_Clap_Plugins)
-	return_id = -1; //TODO initiate the clap plugin
+	return_id = clap_plug_load_and_activate(app_data->clap_plug_data, plugin_uri, id);
     atomic_store(&pause, 0);    
     return return_id;
 }

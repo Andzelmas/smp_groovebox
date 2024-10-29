@@ -18,8 +18,10 @@
 typedef struct _clap_plug_plug{
     int id; //plugin id on the clap_plug_info plugin array
     clap_plugin_entry_t* plug_entry; //the clap library file for this plugin
-    clap_plugin_t* plug_inst; //the plugin instance
-    unsigned int plug_inst_id; //the plugin instance id in the plugin factory
+    const clap_plugin_t* plug_inst; //the plugin instance
+    unsigned int plug_inst_initiated;
+    unsigned int plug_inst_activated;
+    int plug_inst_id; //the plugin instance id in the plugin factory
     char* plug_path; //the path for the clap file
     PRM_CONTAIN* plug_params; //plugin parameter container for params.c
 }CLAP_PLUG_PLUG;
@@ -46,6 +48,41 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
 void request_restart(const clap_host_t* host){};
 void request_process(const clap_host_t* host){};
 void request_callback(const clap_host_t* host){};
+
+//return the clap_plug_plug id on the plugins array that has the same plug_entry (initiated) if no plugin has this plug_entry return -1
+static int clap_plug_return_plug_id_with_same_plug_entry(CLAP_PLUG_INFO* plug_data, clap_plugin_entry_t* plug_entry){
+    int return_id = -1;
+    if(!plug_data)return -1;
+    if(!plug_entry)return -1;
+
+    for(unsigned int plug_num = 0; plug_num < plug_data->total_plugs; plug_num++){
+	CLAP_PLUG_PLUG* cur_plug = plug_data->plugins[plug_num];
+	if(!cur_plug)continue;
+	if(cur_plug->plug_entry != plug_entry)continue;
+	return_id = cur_plug->id;
+	break;
+    }
+    
+    return return_id;
+}
+
+//clean the single plugin struct
+static void clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug){
+    if(!plug_data)return;
+    if(!plug)return;
+    if(plug->plug_inst){
+	if(plug->plug_inst_activated == 1)
+	    plug->plug_inst->deactivate(plug->plug_inst);
+	if(plug->plug_inst_initiated == 1)
+	    plug->plug_inst->destroy(plug->plug_inst);
+    }
+    if(plug->plug_entry){
+	if(clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug->plug_entry) == -1)plug->plug_entry->deinit();
+    }
+    if(plug->plug_path)free(plug->plug_path);
+    if(plug->plug_params)param_clean_param_container(plug->plug_params);
+    free(plug);
+}
 
 static char** clap_plug_get_plugin_names_from_file(const char* plug_path, unsigned int* num_of_plugins){
     void* handle;
@@ -309,10 +346,160 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     */
 }
 
+//return the clap_plug_plug with plugin entry (initiated), plug_path and plug_inst_id from the plugins name, checks if  the same entry is already loaded or not first
+static CLAP_PLUG_PLUG* clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char* plug_name){
+    CLAP_PLUG_PLUG* return_plug = NULL;
+    return_plug = malloc(sizeof(CLAP_PLUG_PLUG));
+    if(!return_plug)return NULL;
+    return_plug->id = -1;
+    return_plug->plug_entry = NULL;
+    return_plug->plug_inst = NULL;
+    return_plug->plug_inst_initiated = 0;
+    return_plug->plug_inst_activated = 0;
+    return_plug->plug_inst_id = -1;
+    return_plug->plug_params = NULL;
+    return_plug->plug_path = NULL;
+    
+    if(!plug_data)return NULL;
+    unsigned int clap_files_num = 0;
+    char** clap_files = clap_plug_get_clap_files(CLAP_PATH, &clap_files_num);
+    for(unsigned int i = 0; i < clap_files_num; i++){
+	char* cur_clap_file = clap_files[i];
+	if(!cur_clap_file)continue;
+	
+	//check if a plugin with the same name already exists if yes get its plugin entry
+	for(unsigned int plug_num = 0; plug_num < plug_data->total_plugs; plug_num++){
+	    CLAP_PLUG_PLUG* cur_plug = plug_data->plugins[plug_num];
+	    if(!cur_plug)continue;
+	    char* cur_path = cur_plug->plug_path;
+	    if(!cur_path)continue;
+	    if(strcmp(cur_clap_file, cur_path) != 0)continue;
+	    if(!(cur_plug->plug_entry))continue;
+	    char* plug_path = malloc(sizeof(char) * (strlen(cur_clap_file)+1));
+	    if(!plug_path)continue;
+	    snprintf(plug_path, (strlen(cur_clap_file)+1), "%s", cur_clap_file);
+	    return_plug->plug_entry = cur_plug->plug_entry;
+	    return_plug->plug_path = plug_path;
+	}
+
+	//if return_plug was not created it means a plugin with the same cur_clap_file path is not loaded, we need to load it
+	if(!(return_plug->plug_path)){
+	    void* handle;
+	    int* iptr;
+	    unsigned int total_file_name_size = strlen(CLAP_PATH) + strlen(cur_clap_file) + 1;
+	    char* total_file_path = malloc(sizeof(char) * total_file_name_size);
+	    if(!total_file_path)continue;
+	    snprintf(total_file_path, total_file_name_size, "%s%s", CLAP_PATH, cur_clap_file);
+	    
+	    handle = dlopen(total_file_path, RTLD_LOCAL | RTLD_LAZY);
+	    if(!handle)continue;
+    
+	    iptr = (int*)dlsym(handle, "clap_entry");
+	    clap_plugin_entry_t* plug_entry = (clap_plugin_entry_t*)iptr;
+    
+	    unsigned int init_err = plug_entry->init(total_file_path);
+	    free(total_file_path);
+	    if(!init_err)continue;
+	    char* plug_path = malloc(sizeof(char) * (strlen(cur_clap_file)+1));
+	    if(!plug_path){
+		plug_entry->deinit();
+		continue;
+	    }
+	    snprintf(plug_path, (strlen(cur_clap_file)+1), "%s", cur_clap_file);
+	    return_plug->plug_path = plug_path;
+	    return_plug->plug_entry = plug_entry;
+	}
+	if(!(return_plug->plug_path))continue;
+	//now we have the plug_entry and path, find the plugin name and init the plugin
+	const clap_plugin_factory_t* plug_fac = return_plug->plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
+	uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
+	
+	for(uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++){
+	    const clap_plugin_descriptor_t* plug_desc = plug_fac->get_plugin_descriptor(plug_fac, pl_iter);
+	    if(!plug_desc)continue;
+	    if(!(plug_desc->name))continue;
+	    if(strcmp(plug_desc->name, plug_name) != 0)continue;
+	    return_plug->plug_inst_id = pl_iter;
+	    break;
+	}
+	if(return_plug->plug_inst_id == -1){
+	    if(clap_plug_return_plug_id_with_same_plug_entry(plug_data, return_plug->plug_entry) == -1)
+		return_plug->plug_entry->deinit();
+	    return_plug->plug_entry = NULL;
+	    free(return_plug->plug_path);
+	    return_plug->plug_path = NULL;
+	    continue;
+	}
+	break;
+    }
+
+    //free the clap_files entries
+    for(unsigned int i = 0; i < clap_files_num; i++){
+	if(clap_files[i])free(clap_files[i]);
+    }
+    if(clap_files)free(clap_files);
+    if(!(return_plug->plug_path)){
+	clap_plug_plug_clean(plug_data, return_plug);
+	return_plug = NULL;
+    }
+    return return_plug;
+}
+
+int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_name, int id){
+    int return_id = -1;
+    if(!plug_data)return -1;
+    if(!plugin_name)return -1;
+    if(plug_data->total_plugs >= MAX_INSTANCES)return -1;
+    //get the plug from the name, this plug will only have the entry, plug_path and which plug_inst_id this plugin_name is in the plugin factory at this point
+    CLAP_PLUG_PLUG* plug = clap_plug_create_plug_from_name(plug_data, plugin_name);
+    if(!plug){
+	log_append_logfile("could not load plugin from name %s\n", plugin_name);
+	return -1;
+    }
+    const clap_plugin_factory_t* plug_fac = plug->plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
+    const clap_plugin_descriptor_t* plug_desc = plug_fac->get_plugin_descriptor(plug_fac, plug->plug_inst_id);
+    if(!plug_desc){
+	log_append_logfile("Could not get plugin %s descriptor \n", plug->plug_path);
+	clap_plug_plug_clean(plug_data, plug);
+	return -1;
+    }
+    if(plug_desc->name){
+	log_append_logfile("Got clap_plugin %s descriptor\n", plug_desc->name);
+    }
+    if(plug_desc->description){
+	log_append_logfile("%s info: %s\n", plug_desc->name, plug_desc->description);
+    }
+
+    const clap_plugin_t* plug_inst = plug_fac->create_plugin(plug_fac, &(plug_data->clap_host_info) , plug_desc->id);
+    if(!plug_inst){
+	log_append_logfile("Failed to create %s plugin\n", plugin_name);
+	clap_plug_plug_clean(plug_data, plug);
+	return -1;
+    }
+    plug->plug_inst_initiated = 1;
+    
+    bool inst_err = plug_inst->init(plug_inst);
+    if(!inst_err){
+	log_append_logfile("Failed to init %s plugin\n", plugin_name);
+	clap_plug_plug_clean(plug_data, plug);
+	return -1;
+    }
+    plug->plug_inst = plug_inst;
+    //TODO need to activate the plugin, create parameters, get ports, create ports on the audio_client and etc.
+
+    //TODO after everything need to add the plugin to the plugin array on the plug_data
+    
+    //TODO now cleaning for testing
+    clap_plug_plug_clean(plug_data, plug);
+    
+    return return_id;
+}
+
 void clap_plug_clean_memory(CLAP_PLUG_INFO* plug_data){
     if(!plug_data)return;
     for(int i = 0; i < plug_data->max_id + 1; i++){
-	//TODO should be a function that cleans this individual plugin
+	clap_plug_plug_clean(plug_data, plug_data->plugins[i]);
+	plug_data->plugins[i] = NULL;
     }
     free(plug_data);
 }
