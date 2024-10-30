@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <dirent.h>
+#include <threads.h>
 #include "../util_funcs/log_funcs.h"
 #include <clap/clap.h>
 #include <stdlib.h>
@@ -14,6 +15,10 @@
 #define CLAP_PATH "/usr/lib/clap/"
 //how many clap plugins can there be in the plugin array
 #define MAX_INSTANCES 5
+
+static thread_local bool is_audio_thread = false;
+
+
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
     int id; //plugin id on the clap_plug_info plugin array
@@ -41,7 +46,6 @@ typedef struct _clap_plug_info{
 
 const void* get_extension(const clap_host_t* host, const char* ex_id){
     log_append_logfile("clap_plugin requested extension %s\n", ex_id);
-
     return NULL;
 }
 
