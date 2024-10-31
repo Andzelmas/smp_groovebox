@@ -18,7 +18,6 @@
 
 static thread_local bool is_audio_thread = false;
 
-
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
     int id; //plugin id on the clap_plug_info plugin array
@@ -42,9 +41,17 @@ typedef struct _clap_plug_info{
     uint32_t max_buffer_size;
     //the clap host needed for clap function. It has the address of the CLAP_PLUG_INFO too
     clap_host_t clap_host_info;
+    //from here hold various host extension implementation structs
+    clap_host_thread_check_t ext_thread_check; //struct that holds functions to check if the thread is main or audio
 }CLAP_PLUG_INFO;
 
 const void* get_extension(const clap_host_t* host, const char* ex_id){
+    CLAP_PLUG_INFO* plug_data = (CLAP_PLUG_INFO*)host->host_data;
+    if(!plug_data)return NULL;
+    if(strcmp(ex_id, CLAP_EXT_THREAD_CHECK) == 0){
+	return &(plug_data->ext_thread_check);
+    }
+    //TODO just for testing purposes since this function should be [thread-safe] cant have logging functions here
     log_append_logfile("clap_plugin requested extension %s\n", ex_id);
     return NULL;
 }
@@ -52,6 +59,18 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
 void request_restart(const clap_host_t* host){};
 void request_process(const clap_host_t* host){};
 void request_callback(const clap_host_t* host){};
+
+//return if this is audio_thread or not
+static bool clap_plug_return_is_audio_thread(){
+    return is_audio_thread;
+}
+//functions to return is this audio or main thread for the clap_host_thread_t extension
+static bool clap_plug_ext_is_audio_thread(const clap_host_t* host){
+    return clap_plug_return_is_audio_thread();
+}
+static bool clap_plug_ext_is_main_thread(const clap_host_t* host){
+    return !(clap_plug_return_is_audio_thread());
+}
 
 //return the clap_plug_plug id on the plugins array that has the same plug_entry (initiated) if no plugin has this plug_entry return -1
 static int clap_plug_return_plug_id_with_same_plug_entry(CLAP_PLUG_INFO* plug_data, clap_plugin_entry_t* plug_entry){
@@ -231,12 +250,13 @@ char** clap_plug_return_plugin_names(unsigned int* size){
     return return_names;
 }
 
-CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_size, SAMPLE_T samplerate, clap_plug_status_t* plug_error, void* audio_backend){
+CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_size, SAMPLE_T samplerate,
+			       clap_plug_status_t* plug_error, void* audio_backend){
     CLAP_PLUG_INFO* plug_data = (CLAP_PLUG_INFO*)malloc(sizeof(CLAP_PLUG_INFO));
     if(!plug_data){
 	*plug_error = clap_plug_failed_malloc;
 	return NULL;
-    }
+    }   
     memset(plug_data, '\0', sizeof(*plug_data));
     plug_data->min_buffer_size = min_buffer_size;
     plug_data->max_buffer_size = max_buffer_size;
@@ -265,6 +285,11 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 
     plug_data->clap_host_info = clap_info_host;
 
+    //initiate the host clap extension structs
+    //thread check extension
+    plug_data->ext_thread_check.is_audio_thread = clap_plug_ext_is_audio_thread;
+    plug_data->ext_thread_check.is_main_thread = clap_plug_ext_is_main_thread;
+    
     /*
     void* handle;
     int* iptr;
@@ -348,6 +373,7 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 
     plug_entry->deinit();
     */
+    return plug_data;
 }
 
 //return the clap_plug_plug with plugin entry (initiated), plug_path and plug_inst_id from the plugins name, checks if  the same entry is already loaded or not first
@@ -501,9 +527,10 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 
 void clap_plug_clean_memory(CLAP_PLUG_INFO* plug_data){
     if(!plug_data)return;
-    for(int i = 0; i < plug_data->max_id + 1; i++){
+    for(int i = 0; i < MAX_INSTANCES; i++){
 	clap_plug_plug_clean(plug_data, plug_data->plugins[i]);
 	plug_data->plugins[i] = NULL;
     }
+
     free(plug_data);
 }

@@ -4,9 +4,13 @@
 //my libraries includes
 //functions to interact with the app_data, user interface basically
 #include "app_intrf.h"
+#include "util_funcs/log_funcs.h"
+//maximum length for the display_text of the window
+#define MAX_DISPLAY_TEXT 100
 
 int main(){
-
+    //clear the log file
+    log_clear_logfile();
     //init the app interface
     intrf_status_t intrf_status = 0;
     APP_INTRF *app_intrf = NULL;
@@ -30,8 +34,12 @@ int main(){
 	CX* sel_cx = NULL;
 	sel_cx = nav_ret_select_cx(app_intrf);
 	//enter the selected cx, also showing its value if thats a sort of cx that has a value
-	printf("Val %s\n", nav_get_cx_value_as_string(app_intrf, sel_cx));
-	
+	char* disp_string = malloc(sizeof(char) * MAX_DISPLAY_TEXT);
+	int disp_err = nav_get_cx_value_as_string(app_intrf, sel_cx, disp_string, MAX_DISPLAY_TEXT);
+	if(disp_string){
+	    if(disp_err == 0)printf("Val %s\n", disp_string);
+	    free(disp_string);
+	}
         if(q=='q'){
 	    int exit_err =  nav_exit_cur_context(app_intrf);	    
             if(exit_err==-2){

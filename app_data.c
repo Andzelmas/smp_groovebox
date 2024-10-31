@@ -153,12 +153,14 @@ APP_INFO* app_init(app_status_t *app_status){
 	return NULL;
     }
     clap_plug_status_t clap_plug_errors = 0;
+    app_data->clap_plug_data = NULL;
     app_data->clap_plug_data = clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors, trk_jack);
     if(!(app_data->clap_plug_data)){
 	clean_memory(app_data);
 	*app_status = clap_plug_data_init_failed;
 	return NULL;
     }
+    
     //initiate the Synth data
     app_data->synth_data = synth_init((unsigned int)buffer_size, samplerate, "Synth", 1, app_data->trk_jack);
     if(!app_data->synth_data){
@@ -551,6 +553,7 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     //get the app data
     APP_INFO *app_data = (APP_INFO*)arg;
     if(app_data==NULL)return 1;
+
     //Get the trk_jack first, because we need to clear the main ports in case the app shutsdown, to not
     //make any artifacts
     JACK_INFO *trk_jack = app_data->trk_jack;
@@ -595,6 +598,8 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
 
     //process the PLUGIN DATA
     plug_process_data_rt(plug_data, nframes);
+
+    //TODO process the CLAP PLUGIN DATA
 
     //process the SYNTH DATA
     synth_process_rt(app_data->synth_data, nframes);
