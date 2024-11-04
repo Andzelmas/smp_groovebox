@@ -66,3 +66,10 @@ enum PortType{
     TYPE_MIDI,
     TYPE_CV
 };    
+
+enum MsgFromRT{
+    MSG_DO_NOTHING = 0,
+    MSG_PLUGIN_RESTART = 1,
+    MSG_PLUGIN_PROCESS = 2,
+    MSG_PLUGIN_REQUEST_CALLBACK = 3
+};

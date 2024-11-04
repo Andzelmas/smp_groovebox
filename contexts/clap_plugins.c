@@ -9,14 +9,23 @@
 #include <dlfcn.h>
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/string_funcs.h"
+#include "../util_funcs/ring_buffer.h"
 #include "params.h"
 //what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
 #define CLAP_PATH "/usr/lib/clap/"
 //how many clap plugins can there be in the plugin array
 #define MAX_INSTANCES 5
+//number of items in the ring arrays
+#define MAX_RING_BUFFER_ARRAY_SIZE 256
 
 static thread_local bool is_audio_thread = false;
+
+//struct that holds a system message (like restart plugin or similar)
+typedef struct _clap_ring_sys_msg{
+    unsigned int msg_enum; //what to do with the plugin
+    int plug_id; //plugin id on the plugins array that needs to be changed somehow
+}CLAP_RING_SYS_MSG;
 
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
@@ -41,6 +50,8 @@ typedef struct _clap_plug_info{
     uint32_t max_buffer_size;
     //the clap host needed for clap function. It has the address of the CLAP_PLUG_INFO too
     clap_host_t clap_host_info;
+    //ring buffer for messages from rt to ui
+    RING_BUFFER* rt_to_ui_msgs;
     //from here hold various host extension implementation structs
     clap_host_thread_check_t ext_thread_check; //struct that holds functions to check if the thread is main or audio
 }CLAP_PLUG_INFO;
@@ -56,7 +67,12 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
     return NULL;
 }
 
-void request_restart(const clap_host_t* host){};
+void request_restart(const clap_host_t* host){
+    //TODO check if called from main_thread or audio_thread,
+    //if from main_thread tell app_data to pause the clap process and then restart the plugin, otherwise write to the rt_to_ui_msgs a message that a plugin needs to be restarted.
+    //this ring buffer will be read on the main_thread and the app_data will be informed that clap process needs to be paused
+    //and then the plugin will be restarted on the main_thread
+};
 void request_process(const clap_host_t* host){};
 void request_callback(const clap_host_t* host){};
 
@@ -266,7 +282,14 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     for(int i = 0; i < MAX_INSTANCES; i++){
 	plug_data->plugins[i] = NULL;
     }
-
+    //init the realtime audio thread messages to the main thread ring buffer
+    plug_data->rt_to_ui_msgs = ring_buffer_init(sizeof(CLAP_RING_SYS_MSG), MAX_RING_BUFFER_ARRAY_SIZE);
+    if(!(plug_data->rt_to_ui_msgs)){
+	clap_plug_clean_memory(plug_data);
+	*plug_error = clap_plug_failed_malloc;
+	return NULL;
+    }
+    
     clap_host_t clap_info_host;
     clap_version_t clap_v;
     clap_v.major = CLAP_VERSION_MAJOR;
@@ -531,6 +554,7 @@ void clap_plug_clean_memory(CLAP_PLUG_INFO* plug_data){
 	clap_plug_plug_clean(plug_data, plug_data->plugins[i]);
 	plug_data->plugins[i] = NULL;
     }
-
+    //clean the ring buffers
+    ring_buffer_clean(plug_data->rt_to_ui_msgs);
     free(plug_data);
 }
