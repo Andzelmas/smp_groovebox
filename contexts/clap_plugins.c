@@ -69,10 +69,10 @@ void request_restart(const clap_host_t* host){
     //if from main_thread write to ui_to_ui_msgs buffer to restart, otherwise write to the rt_to_ui_msgs a message that a plugin needs to be restarted.
     //TODO the ring buffers should be read on the app_data, so need a function to return the ring buffers and a function to restart the plugin (this function will be called from app_data)
     //TODO HOW TO KNOW WHICH PLUGIN TO RESTART???
-    //TODO workaround: create a lighter struct of the CLAP_PLUG_INFO, that does not have the whole plugin array, but just this initiated plugin.
-    //Will need to initiate the clap_host_t struct per plugin too (that will hold the lighter struct of the CLAP_PLUG_INFO).
-    //Then the plugin will send the specific clap_host_t of this plugin to the request_restart and it will be possible to look up in the struct what plugin requested the restart
-    //Though this does not seem elegant and there will be a bunch of clap_host_t and lighter versions of CLAP_PLUG_INFO struct copies. And then will there be a need of CLAP_PLUG_INFO at all?
+    //TODO workaround:
+    //CLAP_PLUG_PLUG should have its own clap_host_t struct, with values copied from the one in CLAP_PLUG_INFO, except in (void*)host not address of CLAP_PLUG_INFO but of CLAP_PLUG_PLUG
+    //CLAP_PLUG_PLUG should have the CLAP_PLUG_INFO address too (to use the ring buffers etc), so when the request_restart function is called in the clap_host_t struct there will be the CLAP_PLUG_PLUG data
+    //and it will be clear which plugin to restart
 };
 void request_process(const clap_host_t* host){};
 void request_callback(const clap_host_t* host){};
@@ -564,5 +564,6 @@ void clap_plug_clean_memory(CLAP_PLUG_INFO* plug_data){
     }
     //clean the ring buffers
     ring_buffer_clean(plug_data->rt_to_ui_msgs);
+    ring_buffer_clean(plug_data->ui_to_ui_msgs);
     free(plug_data);
 }
