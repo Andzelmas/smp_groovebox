@@ -19,13 +19,7 @@
 //number of items in the ring arrays
 #define MAX_RING_BUFFER_ARRAY_SIZE 256
 
-static thread_local bool is_audio_thread = false;
-
-//struct that holds a system message (like restart plugin or similar)
-typedef struct _clap_ring_sys_msg{
-    unsigned int msg_enum; //what to do with the plugin
-    int plug_id; //plugin id on the plugins array that needs to be changed somehow
-}CLAP_RING_SYS_MSG;
+static thread_local bool is_audio_thread = false; //TODO need to set this to true in the process function of the plugin
 
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
@@ -52,6 +46,9 @@ typedef struct _clap_plug_info{
     clap_host_t clap_host_info;
     //ring buffer for messages from rt to ui
     RING_BUFFER* rt_to_ui_msgs;
+    //ring buffer for messages from callback functions like request_restart that originate from the main thread
+    //(for example a messages that a plugin needs a restart so before calling the restart function the rt process is paused)
+    RING_BUFFER* ui_to_ui_msgs;
     //from here hold various host extension implementation structs
     clap_host_thread_check_t ext_thread_check; //struct that holds functions to check if the thread is main or audio
 }CLAP_PLUG_INFO;
@@ -69,9 +66,13 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
 
 void request_restart(const clap_host_t* host){
     //TODO check if called from main_thread or audio_thread,
-    //if from main_thread tell app_data to pause the clap process and then restart the plugin, otherwise write to the rt_to_ui_msgs a message that a plugin needs to be restarted.
-    //this ring buffer will be read on the main_thread and the app_data will be informed that clap process needs to be paused
-    //and then the plugin will be restarted on the main_thread
+    //if from main_thread write to ui_to_ui_msgs buffer to restart, otherwise write to the rt_to_ui_msgs a message that a plugin needs to be restarted.
+    //TODO the ring buffers should be read on the app_data, so need a function to return the ring buffers and a function to restart the plugin (this function will be called from app_data)
+    //TODO HOW TO KNOW WHICH PLUGIN TO RESTART???
+    //TODO workaround: create a lighter struct of the CLAP_PLUG_INFO, that does not have the whole plugin array, but just this initiated plugin.
+    //Will need to initiate the clap_host_t struct per plugin too (that will hold the lighter struct of the CLAP_PLUG_INFO).
+    //Then the plugin will send the specific clap_host_t of this plugin to the request_restart and it will be possible to look up in the struct what plugin requested the restart
+    //Though this does not seem elegant and there will be a bunch of clap_host_t and lighter versions of CLAP_PLUG_INFO struct copies. And then will there be a need of CLAP_PLUG_INFO at all?
 };
 void request_process(const clap_host_t* host){};
 void request_callback(const clap_host_t* host){};
@@ -285,6 +286,13 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     //init the realtime audio thread messages to the main thread ring buffer
     plug_data->rt_to_ui_msgs = ring_buffer_init(sizeof(CLAP_RING_SYS_MSG), MAX_RING_BUFFER_ARRAY_SIZE);
     if(!(plug_data->rt_to_ui_msgs)){
+	clap_plug_clean_memory(plug_data);
+	*plug_error = clap_plug_failed_malloc;
+	return NULL;
+    }
+    //init the ui main thread messages to the main thread ring buffer
+    plug_data->ui_to_ui_msgs = ring_buffer_init(sizeof(CLAP_RING_SYS_MSG), MAX_RING_BUFFER_ARRAY_SIZE);
+    if(!(plug_data->ui_to_ui_msgs)){
 	clap_plug_clean_memory(plug_data);
 	*plug_error = clap_plug_failed_malloc;
 	return NULL;

@@ -6,6 +6,12 @@ enum ClapPlugStatus{
 };
 typedef enum ClapPlugStatus clap_plug_status_t;
 
+//this holds the plugin id and the enum (from type.h MSGfromRT) to tell what to do with the plugin
+typedef struct _clap_ring_sys_msg{
+    unsigned int msg_enum; //what to do with the plugin
+    int plug_id; //plugin id on the plugins array that needs to be changed somehow
+}CLAP_RING_SYS_MSG;
+
 typedef struct _clap_plug_info CLAP_PLUG_INFO; //the struct that holds all the plugin info
 //return the names of the plugins in the plugin directory
 char** clap_plug_return_plugin_names(unsigned int* size);
