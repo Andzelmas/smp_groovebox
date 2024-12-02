@@ -26,11 +26,13 @@ typedef struct _clap_plug_plug{
     int id; //plugin id on the clap_plug_info plugin array
     clap_plugin_entry_t* plug_entry; //the clap library file for this plugin
     const clap_plugin_t* plug_inst; //the plugin instance
-    unsigned int plug_inst_initiated;
+    unsigned int plug_inst_created;
     unsigned int plug_inst_activated;
     int plug_inst_id; //the plugin instance id in the plugin factory
     char* plug_path; //the path for the clap file
     PRM_CONTAIN* plug_params; //plugin parameter container for params.c
+    clap_host_t clap_host_info; //need when creating the plugin instance, this struct has this CLAP_PLUG_PLUG in the host var as (void*)
+    CLAP_PLUG_INFO* plug_data; //CLAP_PLUG_INFO struct address for convenience
 }CLAP_PLUG_PLUG;
 
 //the main clap struct
@@ -54,13 +56,15 @@ typedef struct _clap_plug_info{
 }CLAP_PLUG_INFO;
 
 const void* get_extension(const clap_host_t* host, const char* ex_id){
-    CLAP_PLUG_INFO* plug_data = (CLAP_PLUG_INFO*)host->host_data;
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
+    if(!plug)return NULL;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
     if(!plug_data)return NULL;
     if(strcmp(ex_id, CLAP_EXT_THREAD_CHECK) == 0){
 	return &(plug_data->ext_thread_check);
     }
     //TODO just for testing purposes since this function should be [thread-safe] cant have logging functions here
-    log_append_logfile("clap_plugin requested extension %s\n", ex_id);
+    log_append_logfile("plugin %s requested extension %s\n", plug->plug_path, ex_id);
     return NULL;
 }
 
@@ -68,12 +72,6 @@ void request_restart(const clap_host_t* host){
     //TODO check if called from main_thread or audio_thread,
     //if from main_thread write to ui_to_ui_msgs buffer to restart, otherwise write to the rt_to_ui_msgs a message that a plugin needs to be restarted.
     //TODO the ring buffers should be read on the app_data, so need a function to return the ring buffers and a function to restart the plugin (this function will be called from app_data)
-    //TODO HOW TO KNOW WHICH PLUGIN TO RESTART???
-    //TODO workaround:
-    //CLAP_PLUG_PLUG should have its own clap_host_t struct, with values copied from the one in CLAP_PLUG_INFO, except in (void*)host not address of CLAP_PLUG_INFO but of CLAP_PLUG_PLUG
-    //CLAP_PLUG_PLUG should have the CLAP_PLUG_INFO address too (to use the ring buffers etc), so when the request_restart function is called in the clap_host_t struct there will be the CLAP_PLUG_PLUG data
-    //and it will be clear which plugin to restart
-    //The clap_host_t should probably be const on CLAP_PLUG_INFO and when copying when creating a new plugin
 };
 void request_process(const clap_host_t* host){};
 void request_callback(const clap_host_t* host){};
@@ -114,7 +112,7 @@ static void clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug
     if(plug->plug_inst){
 	if(plug->plug_inst_activated == 1)
 	    plug->plug_inst->deactivate(plug->plug_inst);
-	if(plug->plug_inst_initiated == 1)
+	if(plug->plug_inst_created == 1)
 	    plug->plug_inst->destroy(plug->plug_inst);
     }
     if(plug->plug_entry){
@@ -416,11 +414,12 @@ static CLAP_PLUG_PLUG* clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data
     return_plug->id = -1;
     return_plug->plug_entry = NULL;
     return_plug->plug_inst = NULL;
-    return_plug->plug_inst_initiated = 0;
+    return_plug->plug_inst_created = 0;
     return_plug->plug_inst_activated = 0;
     return_plug->plug_inst_id = -1;
     return_plug->plug_params = NULL;
     return_plug->plug_path = NULL;
+    return_plug->plug_data = plug_data;
     
     if(!plug_data)return NULL;
     unsigned int clap_files_num = 0;
@@ -531,14 +530,28 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     if(plug_desc->description){
 	log_append_logfile("%s info: %s\n", plug_desc->name, plug_desc->description);
     }
-
-    const clap_plugin_t* plug_inst = plug_fac->create_plugin(plug_fac, &(plug_data->clap_host_info) , plug_desc->id);
+    //add the clap_host_t struct to the plug
+    clap_host_t clap_info_host;
+    clap_info_host.clap_version = plug_data->clap_host_info.clap_version;
+    clap_info_host.host_data = (void*)plug;
+    clap_info_host.name = plug_data->clap_host_info.name;
+    clap_info_host.vendor = plug_data->clap_host_info.vendor;
+    clap_info_host.url = plug_data->clap_host_info.url;
+    clap_info_host.version = plug_data->clap_host_info.version;
+    clap_info_host.get_extension = plug_data->clap_host_info.get_extension;
+    clap_info_host.request_restart = plug_data->clap_host_info.request_restart;
+    clap_info_host.request_process = plug_data->clap_host_info.request_process;
+    clap_info_host.request_callback = plug_data->clap_host_info.request_callback;
+    plug->clap_host_info = clap_info_host;
+    //create plugin instance
+    const clap_plugin_t* plug_inst = plug_fac->create_plugin(plug_fac, &(plug->clap_host_info) , plug_desc->id);
     if(!plug_inst){
 	log_append_logfile("Failed to create %s plugin\n", plugin_name);
 	clap_plug_plug_clean(plug_data, plug);
 	return -1;
     }
-    plug->plug_inst_initiated = 1;
+    
+    plug->plug_inst_created = 1;
     
     bool inst_err = plug_inst->init(plug_inst);
     if(!inst_err){
@@ -547,8 +560,10 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	return -1;
     }
     plug->plug_inst = plug_inst;
-    //TODO need to activate the plugin, create parameters, get ports, create ports on the audio_client and etc.
 
+    //TODO the order of the further todo list should be considered, at this point the plugin is created but in its deactivated state, but the plugin can access all the host extension functions at this point
+    //Thats why need to consider if the plugin should be added to the plugin array even before the creation of the plugin instance (for the correc plug->id and etc.)
+    //TODO need to activate the plugin, create parameters, get ports, create ports on the audio_client and etc.
     //TODO after everything need to add the plugin to the plugin array on the plug_data
     
     //TODO now cleaning for testing
