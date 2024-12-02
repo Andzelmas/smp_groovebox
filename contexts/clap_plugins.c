@@ -73,6 +73,7 @@ void request_restart(const clap_host_t* host){
     //CLAP_PLUG_PLUG should have its own clap_host_t struct, with values copied from the one in CLAP_PLUG_INFO, except in (void*)host not address of CLAP_PLUG_INFO but of CLAP_PLUG_PLUG
     //CLAP_PLUG_PLUG should have the CLAP_PLUG_INFO address too (to use the ring buffers etc), so when the request_restart function is called in the clap_host_t struct there will be the CLAP_PLUG_PLUG data
     //and it will be clear which plugin to restart
+    //The clap_host_t should probably be const on CLAP_PLUG_INFO and when copying when creating a new plugin
 };
 void request_process(const clap_host_t* host){};
 void request_callback(const clap_host_t* host){};
