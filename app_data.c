@@ -685,9 +685,43 @@ static int app_read_ring_buffer(APP_INFO* app_data, unsigned int rt_to_ui){
     return 1;
 }
 
+static void app_read_clap_ring_buffer(APP_INFO* app_data, RING_BUFFER* ring_buffer, unsigned int ring_items){
+    if(!app_data)return;
+    if(!ring_buffer)return;
+    if(ring_items <= 0)return;
+    
+    for(int i = 0; i < ring_items; i++){
+	CLAP_RING_SYS_MSG cur_bit;
+	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
+	if(read_buffer <= 0)continue;
+	if(cur_bit.msg_enum == MSG_PLUGIN_SENT_STRING){
+	    log_append_logfile(cur_bit.msg);
+	}
+	if(cur_bit.msg_enum == MSG_PLUGIN_RESTART){
+	    app_wait_for_pause(&pause);
+	    clap_plug_restart(app_data->clap_plug_data, cur_bit.plug_id);
+	    atomic_store(&pause, 0);
+	}
+	//TODO should not need a proccess pause but need to be sure
+	if(cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK){
+	    clap_plug_callback(app_data->clap_plug_data, cur_bit.plug_id);
+	}
+    }    
+}
 int app_update_ui_params(APP_INFO* app_data){
     int return_val = -1;
-    return_val = app_read_ring_buffer(app_data, RT_TO_UI_RING_E);
+    //update parameter on ui side, with values from the rt side
+    app_read_ring_buffer(app_data, RT_TO_UI_RING_E);
+
+    //read the clap plugin messages from the rt thread or from the ui to ui buffer
+    unsigned int cur_items = 0;
+    RING_BUFFER* ring_buffer = clap_get_rt_to_ui_msg_buffer(app_data->clap_plug_data, &cur_items);
+    app_read_clap_ring_buffer(app_data, ring_buffer, cur_items);
+    //now read the clap plugin messages from the ui to ui buffer
+    ring_buffer = clap_get_ui_to_ui_msg_buffer(app_data->clap_plug_data, &cur_items);
+    app_read_clap_ring_buffer(app_data, ring_buffer, cur_items);
+
+    return_val = 0;
     return return_val;
 }
 

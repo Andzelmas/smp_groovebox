@@ -1,5 +1,8 @@
 #pragma once
 #include "../structs.h"
+#include "../util_funcs/ring_buffer.h"
+
+#define MAX_STRING_MSG_LENGTH 128
 
 enum ClapPlugStatus{
     clap_plug_failed_malloc = -1,
@@ -9,10 +12,20 @@ typedef enum ClapPlugStatus clap_plug_status_t;
 //this holds the plugin id and the enum (from type.h MSGfromRT) to tell what to do with the plugin
 typedef struct _clap_ring_sys_msg{
     unsigned int msg_enum; //what to do with the plugin
+    char msg[MAX_STRING_MSG_LENGTH];
     int plug_id; //plugin id on the plugins array that needs to be changed somehow
 }CLAP_RING_SYS_MSG;
 
 typedef struct _clap_plug_info CLAP_PLUG_INFO; //the struct that holds all the plugin info
+
+//call the on_main_thread callback function on plug_id plugin, usually done after request_callback call
+int clap_plug_callback(CLAP_PLUG_INFO* plug_data, int plug_id);
+//restart the plug_id plugin, should be called only from main thread and will only restart a plugin that is activated
+int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id);
+//return the rt to ui communication buffer, and put how many items are there into items var
+RING_BUFFER* clap_get_rt_to_ui_msg_buffer(CLAP_PLUG_INFO* plug_data, unsigned int* items);
+//return the ui to ui communication buffer, and put how many items are there into items var
+RING_BUFFER* clap_get_ui_to_ui_msg_buffer(CLAP_PLUG_INFO* plug_data, unsigned int* items);
 //return the names of the plugins in the plugin directory
 char** clap_plug_return_plugin_names(unsigned int* size);
 //initiate the main plugin data struct. 

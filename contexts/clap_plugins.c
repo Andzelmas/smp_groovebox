@@ -9,7 +9,7 @@
 #include <dlfcn.h>
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/string_funcs.h"
-#include "../util_funcs/ring_buffer.h"
+#include "../types.h"
 #include "params.h"
 //what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
@@ -55,27 +55,6 @@ typedef struct _clap_plug_info{
     clap_host_thread_check_t ext_thread_check; //struct that holds functions to check if the thread is main or audio
 }CLAP_PLUG_INFO;
 
-const void* get_extension(const clap_host_t* host, const char* ex_id){
-    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
-    if(!plug)return NULL;
-    CLAP_PLUG_INFO* plug_data = plug->plug_data;
-    if(!plug_data)return NULL;
-    if(strcmp(ex_id, CLAP_EXT_THREAD_CHECK) == 0){
-	return &(plug_data->ext_thread_check);
-    }
-    //TODO just for testing purposes since this function should be [thread-safe] cant have logging functions here
-    log_append_logfile("plugin %s requested extension %s\n", plug->plug_path, ex_id);
-    return NULL;
-}
-
-void request_restart(const clap_host_t* host){
-    //TODO check if called from main_thread or audio_thread,
-    //if from main_thread write to ui_to_ui_msgs buffer to restart, otherwise write to the rt_to_ui_msgs a message that a plugin needs to be restarted.
-    //TODO the ring buffers should be read on the app_data, so need a function to return the ring buffers and a function to restart the plugin (this function will be called from app_data)
-};
-void request_process(const clap_host_t* host){};
-void request_callback(const clap_host_t* host){};
-
 //return if this is audio_thread or not
 static bool clap_plug_return_is_audio_thread(){
     return is_audio_thread;
@@ -86,6 +65,90 @@ static bool clap_plug_ext_is_audio_thread(const clap_host_t* host){
 }
 static bool clap_plug_ext_is_main_thread(const clap_host_t* host){
     return !(clap_plug_return_is_audio_thread());
+}
+
+const void* get_extension(const clap_host_t* host, const char* ex_id){
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
+    if(!plug)return NULL;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return NULL;
+    if(strcmp(ex_id, CLAP_EXT_THREAD_CHECK) == 0){
+	return &(plug_data->ext_thread_check);
+    }
+    //if there is no extension implemented that the plugin needs send the name of the extension to the ui
+    RING_BUFFER* msg_buffer = plug_data->ui_to_ui_msgs;
+    if(clap_plug_return_is_audio_thread())
+	msg_buffer = plug_data->rt_to_ui_msgs;
+
+    CLAP_RING_SYS_MSG send_bit;
+    snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s asked for ext %s\n", plug->plug_path, ex_id);
+    send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
+    send_bit.plug_id = plug->id;
+    int ret = ring_buffer_write(msg_buffer, &send_bit, sizeof(send_bit));
+    return NULL;
+}
+
+void request_restart(const clap_host_t* host){
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    
+    RING_BUFFER* msg_buffer = plug_data->ui_to_ui_msgs;
+    if(clap_plug_return_is_audio_thread())
+	msg_buffer = plug_data->rt_to_ui_msgs;
+    //send to ui a message that the plugin needs a restart
+    CLAP_RING_SYS_MSG send_bit;
+    send_bit.msg_enum = MSG_PLUGIN_RESTART;
+    send_bit.plug_id = plug->id;
+    ring_buffer_write(msg_buffer, &send_bit, sizeof(send_bit));    
+}
+//TODO not tested yet
+int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id){
+    if(!plug_data)return -1;
+    if(plug_id < 0)return -1;
+    if(plug_id > plug_data->max_id)return -1;
+
+    CLAP_PLUG_PLUG* plug = plug_data->plugins[plug_id];
+    if(!plug)return -1;
+    if(plug->plug_inst_activated != 1)return -1;
+
+    //now restart the plugin - deactivate and activate it
+    plug->plug_inst->deactivate(plug->plug_inst);
+    plug->plug_inst_activated = 0;
+    bool active = plug->plug_inst->activate(plug->plug_inst, plug_data->sample_rate, plug_data->min_buffer_size, plug_data->max_buffer_size);
+    if(!active)return -1;
+    plug->plug_inst_activated = 1;
+    return 0;
+}
+
+void request_process(const clap_host_t* host){}
+
+void request_callback(const clap_host_t* host){
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    
+    RING_BUFFER* msg_buffer = plug_data->ui_to_ui_msgs;
+    if(clap_plug_return_is_audio_thread())
+	msg_buffer = plug_data->rt_to_ui_msgs;
+    //send to ui a message that the plugin needs to call the on_main_thread function 
+    CLAP_RING_SYS_MSG send_bit;
+    send_bit.msg_enum = MSG_PLUGIN_REQUEST_CALLBACK;
+    send_bit.plug_id = plug->id;
+    ring_buffer_write(msg_buffer, &send_bit, sizeof(send_bit));    
+}
+//TODO not tested yet
+int clap_plug_callback(CLAP_PLUG_INFO* plug_data, int plug_id){
+    if(!plug_data)return -1;
+    if(plug_id < 0)return -1;
+    if(plug_id > plug_data->max_id)return -1;
+
+    CLAP_PLUG_PLUG* plug = plug_data->plugins[plug_id];
+    if(!plug)return -1;
+    plug->plug_inst->on_main_thread(plug->plug_inst);
+    return 0;
 }
 
 //return the clap_plug_plug id on the plugins array that has the same plug_entry (initiated) if no plugin has this plug_entry return -1
@@ -217,6 +280,19 @@ static char** clap_plug_get_clap_files(const char* file_path, unsigned int* size
 	*size = iter;
     }
     return ret_files;
+}
+
+RING_BUFFER* clap_get_rt_to_ui_msg_buffer(CLAP_PLUG_INFO* plug_data, unsigned int* items){
+    if(!plug_data)return NULL;
+    if(!(plug_data->rt_to_ui_msgs))return NULL;
+    *items = ring_buffer_return_items(plug_data->rt_to_ui_msgs);
+    return plug_data->rt_to_ui_msgs;
+}
+RING_BUFFER* clap_get_ui_to_ui_msg_buffer(CLAP_PLUG_INFO* plug_data, unsigned int* items){
+    if(!plug_data)return NULL;
+    if(!(plug_data->ui_to_ui_msgs))return NULL;
+    *items = ring_buffer_return_items(plug_data->ui_to_ui_msgs);
+    return plug_data->ui_to_ui_msgs;
 }
 //goes through the clap files stored on the clap_data struct and returns the names of these plugins
 //each clap file can have several different plugins inside of it
