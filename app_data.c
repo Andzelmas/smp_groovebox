@@ -548,6 +548,22 @@ const char** app_return_context_ports(APP_INFO* app_data, unsigned int* name_num
     if(sys_ports)free(sys_ports);
     return name_array;
 }
+//read ring buffers sent from ui to rt thread - this is not for parameter values, but for messages like start processing a plugin and similar
+static void app_read_rt_messages(APP_INFO* app_data){
+    if(!app_data)return;
+    //first read the clap plugin rt messages
+    unsigned int cur_items = 0;
+    RING_BUFFER* ring_buffer = clap_get_ui_to_rt_msg_buffer(app_data->clap_plug_data, &cur_items);
+    
+    for(int i = 0; i < cur_items; i++){
+	CLAP_RING_SYS_MSG cur_bit;
+	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
+	if(read_buffer <= 0)continue;
+	if(cur_bit.msg_enum == MSG_PLUGIN_PROCESS){
+	    clap_plug_start_processing(app_data->clap_plug_data, cur_bit.plug_id);
+	}
+    }    
+}
 
 int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     //get the app data
@@ -579,7 +595,10 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     PLUG_INFO* plug_data = app_data->plug_data;
     if(plug_data==NULL)return 1;
 
+    //TODO should call a stop processing function for each context, or send a special var to the process function to stop the process
+    //BEST if different pause for different context so there would not be pause in plugins if only the sampler needs to pause
     //if there is a request to pause evertyhing in the rt process
+    //TODO the clap plugins must have a call to the stop_processing function
     expected = 1;
     if(atomic_compare_exchange_weak(&pause, &expected, 1)){
 	memset(trk_out_L, '\0', sizeof(SAMPLE_T)*nframes);
@@ -592,6 +611,8 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     //initiate the various transport processes depending on the trk parameters
     //also process the metronome
     app_transport_control_rt(app_data, nframes);
+    //process misc messages from ui to rt thread, like start processing a plugin and similar
+    app_read_rt_messages(app_data);
     
     //process the SAMPLER DATA
     smp_sample_process_rt(smp_data, nframes);    
@@ -699,12 +720,14 @@ static void app_read_clap_ring_buffer(APP_INFO* app_data, RING_BUFFER* ring_buff
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_RESTART){
 	    app_wait_for_pause(&pause);
-	    clap_plug_restart(app_data->clap_plug_data, cur_bit.plug_id);
+	    clap_plug_restart(app_data->clap_plug_data, cur_bit.plug_id, 0);
 	    atomic_store(&pause, 0);
 	}
-	//TODO should not need a proccess pause but need to be sure
 	if(cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK){
 	    clap_plug_callback(app_data->clap_plug_data, cur_bit.plug_id);
+	}
+	if(cur_bit.msg_enum == MSG_PLUGIN_ACTIVATE_PROCESS){
+	    clap_plug_activate(app_data->clap_plug_data, cur_bit.plug_id, 1);
 	}
     }    
 }

@@ -18,10 +18,19 @@ typedef struct _clap_ring_sys_msg{
 
 typedef struct _clap_plug_info CLAP_PLUG_INFO; //the struct that holds all the plugin info
 
+//call the start_processing function on the plugin, can only be used on the audio rt thread
+//also the plugin has to be activated (plug_inst_activated == 1), since this function cant even check this var, because of a data race
+int clap_plug_start_processing(CLAP_PLUG_INFO* plug_data, int plug_id);
 //call the on_main_thread callback function on plug_id plugin, usually done after request_callback call
 int clap_plug_callback(CLAP_PLUG_INFO* plug_data, int plug_id);
+//activate the plugin, start_processing - send a message to the rt audio thread to call the start_processing function too
+int clap_plug_activate(CLAP_PLUG_INFO* plug_data, int plug_id, unsigned int start_processing);
 //restart the plug_id plugin, should be called only from main thread and will only restart a plugin that is activated
-int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id);
+//start_processing - should the plugin call start_processing function (will happen on the audio thread possibly with a delay)
+int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id, unsigned int start_processing);
+//return the ui to rt communication buffer, and put how many items are there into items var
+//should be called only on the rt audio thread
+RING_BUFFER* clap_get_ui_to_rt_msg_buffer(CLAP_PLUG_INFO* plug_data, unsigned int* items);
 //return the rt to ui communication buffer, and put how many items are there into items var
 RING_BUFFER* clap_get_rt_to_ui_msg_buffer(CLAP_PLUG_INFO* plug_data, unsigned int* items);
 //return the ui to ui communication buffer, and put how many items are there into items var

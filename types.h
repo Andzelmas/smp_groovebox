@@ -69,8 +69,9 @@ enum PortType{
 
 enum MsgFromRT{
     MSG_DO_NOTHING = 0,
-    MSG_PLUGIN_RESTART = 1,
-    MSG_PLUGIN_PROCESS = 2,
-    MSG_PLUGIN_REQUEST_CALLBACK = 3,
-    MSG_PLUGIN_SENT_STRING = 4
+    MSG_PLUGIN_RESTART = 1, //message to deactivate and activate the plugin, first need to pause the process
+    MSG_PLUGIN_PROCESS = 2, //start processing the plugin, needs to be activated first
+    MSG_PLUGIN_REQUEST_CALLBACK = 3, //message to call a on_main_thread function in the main thread on the plugin
+    MSG_PLUGIN_SENT_STRING = 4, //plugin side sent a debug string message
+    MSG_PLUGIN_ACTIVATE_PROCESS = 5 //message that plugin needs to be activated on main thread and then start_processing function called on the audio thread
 };
