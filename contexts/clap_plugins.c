@@ -128,6 +128,7 @@ send_processing_msg:
     CLAP_RING_SYS_MSG send_bit;
     send_bit.msg_enum = MSG_PLUGIN_PROCESS;
     send_bit.plug_id = plug_id;
+
     ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
     
     return 0;

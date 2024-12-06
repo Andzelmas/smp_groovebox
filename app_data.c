@@ -71,6 +71,12 @@ typedef struct _app_info{
     void* main_out_R;
 }APP_INFO;
 
+//before unpausing the main audio thread process write messages to the ring buffers of different contexts, if they need to do something before resuming the process
+//for example call clap_plug_activate_all function with start_processing = 1 to wake up all the plugins
+static void app_messages_before_resume(APP_INFO* app_data){
+
+}
+
 //internal function to wait on a atomic pause
 static void app_wait_for_pause(atomic_int* atomic_pause){
     int expected = 0;
