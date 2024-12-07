@@ -71,21 +71,40 @@ typedef struct _app_info{
     void* main_out_R;
 }APP_INFO;
 
+//before pausing the audio thread, send messages to stop processing plugins and similar [main-thread]
+static void app_messages_before_pause(APP_INFO* app_data){
+    if(!app_data)return;
+    //TODO stop_processing all clap plugins - in main-thread check if plugin active if yes write to ui_to_rt buffer that it should be stopped
+
+}
 //before unpausing the main audio thread process write messages to the ring buffers of different contexts, if they need to do something before resuming the process
 //for example call clap_plug_activate_all function with start_processing = 1 to wake up all the plugins
+//[main-thread]
 static void app_messages_before_resume(APP_INFO* app_data){
+    if(!app_data)return;
+    //TODO start_processing all clap plugins - in main-thread check if plugin is activated, activated it if not and send ui_to_rt message to start_processing it
 
 }
 
-//internal function to wait on a atomic pause
-static void app_wait_for_pause(atomic_int* atomic_pause){
+//internal function to wait on an atomic pause
+static void app_wait_for_pause(APP_INFO* app_data, atomic_int* atomic_pause){
     int expected = 0;
-    if(atomic_compare_exchange_weak(atomic_pause, &expected, 1)){
+    //if atomic_pause == expected == 0 will set atomic_pause to 1, otherwise atomic_pause can already be 1 or 2, regardless wait for it to become 2
+    atomic_compare_exchange_weak(atomic_pause, &expected, 1);
+    //call functions on main-thread and write to various contexts ring buffers so the contexts know that soon the process will be paused and stop_processing
+    //for example
+    app_messages_before_pause(app_data);
+    //set expected to 2, since if atomic_pause != expected, expected will be set to atomic_pause value
+    expected = 2;
+    while(!atomic_compare_exchange_weak(atomic_pause, &expected, 2)){
 	expected = 2;
-	while(!atomic_compare_exchange_weak(atomic_pause, &expected, 2)){
-	    expected = 2;
-	}
-    }        
+    }     
+}
+
+static void app_resume_from_pause(APP_INFO* app_data, atomic_int* atomic_pause){
+    //before resuming the process on audio thread call functions, and write messages to various contexts rt buffers to inform for example to start_processing
+    app_messages_before_resume(app_data);
+    atomic_store(atomic_pause, 0); 
 }
 
 APP_INFO* app_init(app_status_t *app_status){
@@ -260,13 +279,13 @@ char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned int indx, unsign
 int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id){
     if(!plugin_uri)return -1;
     //before adding the plugin request the rt process for the plug_data to pause for a while
-    app_wait_for_pause(&pause);
+    app_wait_for_pause(app_data, &pause);
     int return_id = -1;
     if(cx_type == Context_type_Plugins)
 	return_id = plug_load_and_activate(app_data->plug_data, plugin_uri, id);
     if(cx_type == Context_type_Clap_Plugins)
 	return_id = clap_plug_load_and_activate(app_data->clap_plug_data, plugin_uri, id);
-    atomic_store(&pause, 0);    
+    app_resume_from_pause(app_data, &pause);
     return return_id;
 }
 
@@ -278,14 +297,14 @@ int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, unsigned in
     //TODO if plug has safe_restore we can skip the pause and load the preset, but for that we would need
     //a function in plugins to check if plugin has safe_restore and when loading a preset in such a way
     //we would need to set the control ports values with circle buffers
-    app_wait_for_pause(&pause);
+    app_wait_for_pause(app_data, &pause);
     int return_val = -1;
     if(cx_type == Context_type_Plugins)
 	return_val = plug_load_preset(app_data->plug_data, plug_id, preset_uri);
     //TODO load preset for the CLAP plugin
     if(cx_type == Context_type_Clap_Plugins)
 	return_val = -1;
-    atomic_store(&pause, 0);
+    app_resume_from_pause(app_data, &pause);
     
     return return_val;
 }
@@ -294,9 +313,9 @@ int app_smp_sample_init(APP_INFO* app_data, const char* samp_path, int in_id){
     if(!samp_path)return -1;
     if(!app_data)return -1;
     int return_id = -1;
-    app_wait_for_pause(&pause);
+    app_wait_for_pause(app_data, &pause);
     return_id = smp_add(app_data->smp_data, samp_path, in_id);
-    atomic_store(&pause, 0);
+    app_resume_from_pause(app_data, &pause);
     return return_id;
 }
 
@@ -601,23 +620,12 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     PLUG_INFO* plug_data = app_data->plug_data;
     if(plug_data==NULL)return 1;
 
-    //TODO should call a stop processing function for each context, or send a special var to the process function to stop the process
-    //BEST if different pause for different context so there would not be pause in plugins if only the sampler needs to pause
-    //if there is a request to pause evertyhing in the rt process
-    //TODO the clap plugins must have a call to the stop_processing function
-    expected = 1;
-    if(atomic_compare_exchange_weak(&pause, &expected, 1)){
-	memset(trk_out_L, '\0', sizeof(SAMPLE_T)*nframes);
-	memset(trk_out_R, '\0', sizeof(SAMPLE_T)*nframes);	
-	atomic_store(&pause, 2);
-	goto finish;
-    }
     //read the ui_to_rt ring buffer and update the appropriate context rt_param arrays
     app_read_ring_buffer(app_data, UI_TO_RT_RING_E);
     //initiate the various transport processes depending on the trk parameters
     //also process the metronome
     app_transport_control_rt(app_data, nframes);
-    //process misc messages from ui to rt thread, like start processing a plugin and similar
+    //process misc messages from ui to rt thread, like start processing a plugin, stop_processing a plugin and similar
     app_read_rt_messages(app_data);
     
     //process the SAMPLER DATA
@@ -631,10 +639,20 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     //process the SYNTH DATA
     synth_process_rt(app_data->synth_data, nframes);
 
+    //Before setting the pause as 2 (paused), the different contexts will get a message to stop processing (with app_messages_before_pause)
+    //(these messages will be read with app_read_rt_messages function)
+    expected = 1;
+    if(atomic_compare_exchange_weak(&pause, &expected, 1)){
+	//read the messages for stop processes and similar again, since the messages can be sent at any point of this function
+	//because of asynchronous main and audio threads
+	app_read_rt_messages(app_data);
+	atomic_store(&pause, 2);
+    }
+    
     //copy the Master track in  - to the Master track out
     memcpy(trk_out_L, trk_in_L, sizeof(SAMPLE_T)*nframes);
     memcpy(trk_out_R, trk_in_R, sizeof(SAMPLE_T)*nframes);
-
+    
 finish:
     //update the rt cycle
     app_data->rt_cycle += 1;
@@ -725,9 +743,9 @@ static void app_read_clap_ring_buffer(APP_INFO* app_data, RING_BUFFER* ring_buff
 	    log_append_logfile(cur_bit.msg);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_RESTART){
-	    app_wait_for_pause(&pause);
+	    app_wait_for_pause(app_data, &pause);
 	    clap_plug_restart(app_data->clap_plug_data, cur_bit.plug_id, 0);
-	    atomic_store(&pause, 0);
+	    app_resume_from_pause(app_data, &pause);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK){
 	    clap_plug_callback(app_data->clap_plug_data, cur_bit.plug_id);
@@ -758,9 +776,9 @@ int app_smp_remove_sample(APP_INFO* app_data, unsigned int idx){
     int return_val = 0;
     if(!app_data)return -1;
     //before removing sample request the rt process to pause
-    app_wait_for_pause(&pause);
+    app_wait_for_pause(app_data, &pause);
     return_val = smp_remove_sample(app_data->smp_data, idx);
-    atomic_store(&pause, 0);
+    app_resume_from_pause(app_data, &pause);
     return return_val;
 }
 
@@ -768,9 +786,9 @@ int app_plug_remove_plug(APP_INFO* app_data, const int id){
     int return_val = 0;
     if(!app_data)return -1;
     //before removing the plugin wait for the rt process to pause
-    app_wait_for_pause(&pause);    
+    app_wait_for_pause(app_data, &pause);    
     return_val = plug_remove_plug(app_data->plug_data, id);
-    atomic_store(&pause, 0);
+    app_resume_from_pause(app_data, &pause);
     return return_val;
 }
 
@@ -778,7 +796,7 @@ int clean_memory(APP_INFO *app_data){
     if(!app_data)return -1;
     //if the process was launched we need to pause it before clearing data
     if(app_data->trk_process_launched == 1){
-	app_wait_for_pause(&pause);
+	app_wait_for_pause(app_data, &pause);
     }
     //clean the clap plug_data memory
     if(app_data->clap_plug_data)clap_plug_clean_memory(app_data->clap_plug_data);
