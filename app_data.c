@@ -71,29 +71,11 @@ typedef struct _app_info{
     void* main_out_R;
 }APP_INFO;
 
-//before pausing the audio thread, send messages to stop processing plugins and similar [main-thread]
-static void app_messages_before_pause(APP_INFO* app_data){
-    if(!app_data)return;
-    //TODO stop_processing all clap plugins - in main-thread check if plugin active if yes write to ui_to_rt buffer that it should be stopped
-
-}
-//before unpausing the main audio thread process write messages to the ring buffers of different contexts, if they need to do something before resuming the process
-//for example call clap_plug_activate_all function with start_processing = 1 to wake up all the plugins
-//[main-thread]
-static void app_messages_before_resume(APP_INFO* app_data){
-    if(!app_data)return;
-    //TODO start_processing all clap plugins - in main-thread check if plugin is activated, activated it if not and send ui_to_rt message to start_processing it
-
-}
-
 //internal function to wait on an atomic pause
 static void app_wait_for_pause(APP_INFO* app_data, atomic_int* atomic_pause){
     int expected = 0;
     //if atomic_pause == expected == 0 will set atomic_pause to 1, otherwise atomic_pause can already be 1 or 2, regardless wait for it to become 2
     atomic_compare_exchange_weak(atomic_pause, &expected, 1);
-    //call functions on main-thread and write to various contexts ring buffers so the contexts know that soon the process will be paused and stop_processing
-    //for example
-    app_messages_before_pause(app_data);
     //set expected to 2, since if atomic_pause != expected, expected will be set to atomic_pause value
     expected = 2;
     while(!atomic_compare_exchange_weak(atomic_pause, &expected, 2)){
@@ -102,8 +84,6 @@ static void app_wait_for_pause(APP_INFO* app_data, atomic_int* atomic_pause){
 }
 
 static void app_resume_from_pause(APP_INFO* app_data, atomic_int* atomic_pause){
-    //before resuming the process on audio thread call functions, and write messages to various contexts rt buffers to inform for example to start_processing
-    app_messages_before_resume(app_data);
     atomic_store(atomic_pause, 0); 
 }
 
@@ -576,18 +556,7 @@ const char** app_return_context_ports(APP_INFO* app_data, unsigned int* name_num
 //read ring buffers sent from ui to rt thread - this is not for parameter values, but for messages like start processing a plugin and similar
 static void app_read_rt_messages(APP_INFO* app_data){
     if(!app_data)return;
-    //first read the clap plugin rt messages
-    unsigned int cur_items = 0;
-    RING_BUFFER* ring_buffer = clap_get_ui_to_rt_msg_buffer(app_data->clap_plug_data, &cur_items);
-    
-    for(int i = 0; i < cur_items; i++){
-	CLAP_RING_SYS_MSG cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.msg_enum == MSG_PLUGIN_PROCESS){
-	    clap_plug_start_processing(app_data->clap_plug_data, cur_bit.plug_id);
-	}
-    }    
+    //TODO read the CLAP messages sent from ui thread
 }
 
 int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
@@ -715,9 +684,9 @@ static int app_read_ring_buffer(APP_INFO* app_data, unsigned int rt_to_ui){
     
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
   
-    if(cur_items<=0)return -1;
+    if(cur_items <= 0)return -1;
+    
     for(int i = 0; i<cur_items; i++){
-
 	RING_DATA_BIT cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
 	if(read_buffer<=0)continue;
@@ -730,44 +699,12 @@ static int app_read_ring_buffer(APP_INFO* app_data, unsigned int rt_to_ui){
     return 1;
 }
 
-static void app_read_clap_ring_buffer(APP_INFO* app_data, RING_BUFFER* ring_buffer, unsigned int ring_items){
-    if(!app_data)return;
-    if(!ring_buffer)return;
-    if(ring_items <= 0)return;
-    
-    for(int i = 0; i < ring_items; i++){
-	CLAP_RING_SYS_MSG cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.msg_enum == MSG_PLUGIN_SENT_STRING){
-	    log_append_logfile(cur_bit.msg);
-	}
-	if(cur_bit.msg_enum == MSG_PLUGIN_RESTART){
-	    app_wait_for_pause(app_data, &pause);
-	    clap_plug_restart(app_data->clap_plug_data, cur_bit.plug_id, 0);
-	    app_resume_from_pause(app_data, &pause);
-	}
-	if(cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK){
-	    clap_plug_callback(app_data->clap_plug_data, cur_bit.plug_id);
-	}
-	if(cur_bit.msg_enum == MSG_PLUGIN_ACTIVATE_PROCESS){
-	    clap_plug_activate(app_data->clap_plug_data, cur_bit.plug_id, 1);
-	}
-    }    
-}
 int app_update_ui_params(APP_INFO* app_data){
     int return_val = -1;
     //update parameter on ui side, with values from the rt side
     app_read_ring_buffer(app_data, RT_TO_UI_RING_E);
-
-    //read the clap plugin messages from the rt thread or from the ui to ui buffer
-    unsigned int cur_items = 0;
-    RING_BUFFER* ring_buffer = clap_get_rt_to_ui_msg_buffer(app_data->clap_plug_data, &cur_items);
-    app_read_clap_ring_buffer(app_data, ring_buffer, cur_items);
-    //now read the clap plugin messages from the ui to ui buffer
-    ring_buffer = clap_get_ui_to_ui_msg_buffer(app_data->clap_plug_data, &cur_items);
-    app_read_clap_ring_buffer(app_data, ring_buffer, cur_items);
-
+    //read messages from rt thread for CLAP plugins
+    clap_read_rt_to_ui_messages(app_data->clap_plug_data);
     return_val = 0;
     return return_val;
 }
