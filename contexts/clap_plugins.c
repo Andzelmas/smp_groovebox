@@ -99,58 +99,6 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
 
     return NULL;
 }
-
-static int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id){
-    if(!plug_data)return -1;
-    if(plug_id < 0)return -1;
-    if(plug_id > (MAX_INSTANCES - 1))return -1;
-
-    CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    //send a message to rt thread to stop the plugin process
-    CLAP_RING_SYS_MSG send_bit;
-    send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
-    send_bit.plug_id = plug->id;
-    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-    //lock the main thread and wait for the audio thread to stop processing the plugin
-    int expected = 0;
-    while(!atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 0)){
-	expected = 0;
-    }
-    if(plug->plug_inst_activated == 1){
-	plug->plug_inst->deactivate(plug->plug_inst);
-	plug->plug_inst_activated = 0;
-    }
-
-    if(plug->plug_inst->activate(plug->plug_inst, plug_data->sample_rate, plug_data->min_buffer_size, plug_data->max_buffer_size)){
-	plug->plug_inst_activated = 1;
-	//send message to the audio thread that the plugin can be started to process again
-	send_bit.msg_enum = MSG_PLUGIN_PROCESS;
-	send_bit.plug_id = plug->id;
-	ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-	return 0;
-    }
-    
-    return -1; //this would mean the plugin didnt activate after the deactivation, the restart was not finished
-}
-void request_restart(const clap_host_t* host){
-    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
-    if(!plug)return;
-    CLAP_PLUG_INFO* plug_data = plug->plug_data;
-    if(!plug_data)return;
-    
-    if(clap_plug_return_is_audio_thread()){
-	//send to ui a message that the plugin needs a restart
-	CLAP_RING_SYS_MSG send_bit;
-	send_bit.msg_enum = MSG_PLUGIN_RESTART;
-	send_bit.plug_id = plug->id;
-	ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
-    }
-    else{
-	clap_plug_restart(plug_data, plug->id);
-    }
-  
-}
-
 static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return -1;
     if(plug_id < 0)return -1;
@@ -183,6 +131,48 @@ static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int pl
 
     return 0;
 }
+static int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id){
+    if(!plug_data)return -1;
+    if(plug_id < 0)return -1;
+    if(plug_id > (MAX_INSTANCES - 1))return -1;
+
+    CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+    //send a message to rt thread to stop the plugin process
+    CLAP_RING_SYS_MSG send_bit;
+    send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
+    send_bit.plug_id = plug->id;
+    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
+    //lock the main thread and wait for the audio thread to stop processing the plugin
+    int expected = 0;
+    while(!atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 0)){
+	expected = 0;
+    }
+    if(plug->plug_inst_activated == 1){
+	plug->plug_inst->deactivate(plug->plug_inst);
+	plug->plug_inst_activated = 0;
+    }
+    //now when the plugin was deactivated simply call the activate and process function, that will reactivate the plugin and send a message to [audio-thread] to start processing it
+    return clap_plug_activate_start_processing(plug_data, plug_id);
+}
+void request_restart(const clap_host_t* host){
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    
+    if(clap_plug_return_is_audio_thread()){
+	//send to ui a message that the plugin needs a restart
+	CLAP_RING_SYS_MSG send_bit;
+	send_bit.msg_enum = MSG_PLUGIN_RESTART;
+	send_bit.plug_id = plug->id;
+	ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
+    }
+    else{
+	clap_plug_restart(plug_data, plug->id);
+    }
+  
+}
+
 void request_process(const clap_host_t* host){
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
