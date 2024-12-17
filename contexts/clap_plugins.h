@@ -10,7 +10,8 @@ enum ClapPlugStatus{
 typedef enum ClapPlugStatus clap_plug_status_t;
 
 typedef struct _clap_plug_info CLAP_PLUG_INFO; //the struct that holds all the plugin info
-
+//read the ui_to_rt messages on the [audio-thread] and call functions to stop or start processing the plugin or the whole clap context.
+int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data);
 //read the rt_to_ui messages on the [main-thread] and call functions to restart, activate, write to log and similar main thread functions.
 //some of these called functions will block main-thread, to wait for the plugin or the whole process to stop.
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data);

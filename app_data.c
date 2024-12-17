@@ -556,7 +556,8 @@ const char** app_return_context_ports(APP_INFO* app_data, unsigned int* name_num
 //read ring buffers sent from ui to rt thread - this is not for parameter values, but for messages like start processing a plugin and similar
 static void app_read_rt_messages(APP_INFO* app_data){
     if(!app_data)return;
-    //TODO read the CLAP messages sent from ui thread
+    //read the CLAP plugins inner messages on the [audio-thread]
+    clap_read_ui_to_rt_messages(app_data->clap_plug_data);
 }
 
 int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
@@ -588,14 +589,14 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     //get the plug_data
     PLUG_INFO* plug_data = app_data->plug_data;
     if(plug_data==NULL)return 1;
-
+    
+    //process misc messages from ui to rt thread, like start processing a plugin, stop_processing a plugin and similar
+    app_read_rt_messages(app_data);
     //read the ui_to_rt ring buffer and update the appropriate context rt_param arrays
     app_read_ring_buffer(app_data, UI_TO_RT_RING_E);
     //initiate the various transport processes depending on the trk parameters
     //also process the metronome
     app_transport_control_rt(app_data, nframes);
-    //process misc messages from ui to rt thread, like start processing a plugin, stop_processing a plugin and similar
-    app_read_rt_messages(app_data);
     
     //process the SAMPLER DATA
     smp_sample_process_rt(smp_data, nframes);    
@@ -703,8 +704,9 @@ int app_update_ui_params(APP_INFO* app_data){
     int return_val = -1;
     //update parameter on ui side, with values from the rt side
     app_read_ring_buffer(app_data, RT_TO_UI_RING_E);
-    //read messages from rt thread for CLAP plugins
+    //read messages from rt thread on [main-thread] for CLAP plugins
     clap_read_rt_to_ui_messages(app_data->clap_plug_data);
+    
     return_val = 0;
     return return_val;
 }
