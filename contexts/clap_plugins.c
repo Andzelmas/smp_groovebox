@@ -54,7 +54,8 @@ typedef struct _clap_plug_info{
     //for clap there can be min and max buffer sizes, for not changing buffer sizes set as the same
     uint32_t min_buffer_size;
     uint32_t max_buffer_size;
-    //the clap host needed for clap function. It has the address of the CLAP_PLUG_INFO too
+    //placeholder for the host data that plugins send to the host, this has clap_host_info.host_data = NULL,
+    //the clap_host_t has the CLAP_PLUG_PLUG* plug in clap_host_info.host_data. This is just for convenience - to copy to plug clap_host_info the necessary info.
     clap_host_t clap_host_info;
     //ring buffer for messages from rt to ui
     RING_BUFFER* rt_to_ui_msgs;
@@ -62,18 +63,57 @@ typedef struct _clap_plug_info{
     RING_BUFFER* ui_to_rt_msgs;
     //from here hold various host extension implementation structs
     clap_host_thread_check_t ext_thread_check; //struct that holds functions to check if the thread is main or audio
+    clap_host_log_t ext_log; //struct that holds function for logging messages (severity is not sent)
 }CLAP_PLUG_INFO;
+
+static void clap_plug_plug_wait_for_stop(CLAP_PLUG_PLUG* plug){
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    
+    CLAP_RING_SYS_MSG send_bit;
+    send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
+    send_bit.plug_id = plug->id;
+    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
+    //lock the main thread and wait for the audio thread to stop processing the plugin
+    int expected = 0;
+    while(!atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 0)){
+	expected = 0;
+    }
+}
 
 //return if this is audio_thread or not
 static bool clap_plug_return_is_audio_thread(){
     return is_audio_thread;
 }
-//functions to return is this audio or main thread for the clap_host_thread_t extension
+//extension functions for thread-check.h to return is this audio or main thread for the clap_host_thread_t extension
 static bool clap_plug_ext_is_audio_thread(const clap_host_t* host){
     return clap_plug_return_is_audio_thread();
 }
 static bool clap_plug_ext_is_main_thread(const clap_host_t* host){
     return !(clap_plug_return_is_audio_thread());
+}
+//send a [thread-safe] message - check if thread is audio or main
+static void clap_plug_send_msg(CLAP_PLUG_INFO* plug_data, const char* msg){
+    if(!plug_data)return;
+    if(clap_plug_return_is_audio_thread()){
+	CLAP_RING_SYS_MSG send_bit;
+	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
+	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
+	int ret = ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
+    }
+    else{
+	log_append_logfile("%s", msg);
+    }
+}
+//extension function for log.h to send messages in [thread-safe] manner
+static void clap_plug_ext_log(const clap_host_t* host, clap_log_severity severity, const char* msg){
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    //severity is not sent, right now dont see the need to send severity - this should be obvious from the message
+    clap_plug_send_msg(plug_data, msg);
 }
 
 const void* get_extension(const clap_host_t* host, const char* ex_id){
@@ -84,18 +124,14 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
     if(strcmp(ex_id, CLAP_EXT_THREAD_CHECK) == 0){
 	return &(plug_data->ext_thread_check);
     }
+    if(strcmp(ex_id, CLAP_EXT_LOG) == 0){
+	return &(plug_data->ext_log);
+    }
+ 
     //if there is no extension implemented that the plugin needs send the name of the extension to the ui
-    //TODO should use a log system that can be used for the plugin log extension too 
-    if(clap_plug_return_is_audio_thread()){
-	CLAP_RING_SYS_MSG send_bit;
-	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s asked for ext %s\n", plug->plug_path, ex_id);
-	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
-	send_bit.plug_id = plug->id;
-	int ret = ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
-    }
-    else{
-	log_append_logfile("%s asked for ext %s\n", plug->plug_path, ex_id);
-    }
+    char msg[MAX_STRING_MSG_LENGTH];
+    snprintf(msg, MAX_STRING_MSG_LENGTH, "%s asked for ext %s\n", plug->plug_path, ex_id);
+    clap_plug_send_msg(plug_data, msg);
 
     return NULL;
 }
@@ -109,15 +145,8 @@ static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int pl
     //since there was a request to start processing the plugin, it should be stopped, but just in case, send a request to stop it
     //TODO On the audio thread process function, atomic_compare_exchange(plug_inst_processing, &expected, 1), expected = 1,
     //and only process the plugin if returns true. (skip to another plugin if false).
-    CLAP_RING_SYS_MSG send_bit;
-    send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
-    send_bit.plug_id = plug->id;
-    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-    //lock the main thread and wait for the audio thread to stop processing the plugin
-    int expected = 0;
-    while(!atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 0)){
-	expected = 0;
-    }
+    clap_plug_plug_wait_for_stop(plug);
+    
     if(plug->plug_inst_activated == 0){
 	if(!plug->plug_inst->activate(plug->plug_inst, plug_data->sample_rate, plug_data->min_buffer_size, plug_data->max_buffer_size)){
 	    return -1;
@@ -125,6 +154,7 @@ static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int pl
     }
     plug->plug_inst_activated = 1;
     //send message to the audio thread that the plugin can be started to process
+    CLAP_RING_SYS_MSG send_bit;
     send_bit.msg_enum = MSG_PLUGIN_PROCESS;
     send_bit.plug_id = plug->id;
     ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
@@ -137,16 +167,9 @@ static int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(plug_id > (MAX_INSTANCES - 1))return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    //send a message to rt thread to stop the plugin process
-    CLAP_RING_SYS_MSG send_bit;
-    send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
-    send_bit.plug_id = plug->id;
-    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-    //lock the main thread and wait for the audio thread to stop processing the plugin
-    int expected = 0;
-    while(!atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 0)){
-	expected = 0;
-    }
+    //send a message to rt thread to stop the plugin process and block while its stopping
+    clap_plug_plug_wait_for_stop(plug);
+    
     if(plug->plug_inst_activated == 1){
 	plug->plug_inst->deactivate(plug->plug_inst);
 	plug->plug_inst_activated = 0;
@@ -328,15 +351,8 @@ static void clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug
     if(!plug)return;
     //stop this plugin process if its processing before cleaning.
     //this is why the plug_inst_processing must be 0 if the plugin is not fully initiated otherwise infinite loop
-    CLAP_RING_SYS_MSG send_bit;
-    send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
-    send_bit.plug_id = plug->id;
-    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-    //lock the main thread and wait for the audio thread to stop processing the plugin
-    int expected = 0;
-    while(!atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 0)){
-	expected = 0;
-    }    
+    clap_plug_plug_wait_for_stop(plug);
+    
     if(plug->plug_inst){
 	if(plug->plug_inst_activated == 1){
 	    plug->plug_inst->deactivate(plug->plug_inst);
@@ -541,7 +557,7 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     clap_v.minor = CLAP_VERSION_MINOR;
     clap_v.revision = CLAP_VERSION_REVISION;
     clap_info_host.clap_version = clap_v;
-    clap_info_host.host_data = (void*)plug_data;
+    clap_info_host.host_data = NULL;
     clap_info_host.name = "smp_groovebox";
     clap_info_host.vendor = "bru";
     clap_info_host.url = "https://brumakes.com";
@@ -557,6 +573,9 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     //thread check extension
     plug_data->ext_thread_check.is_audio_thread = clap_plug_ext_is_audio_thread;
     plug_data->ext_thread_check.is_main_thread = clap_plug_ext_is_main_thread;
+    //log extension
+    plug_data->ext_log.log = clap_plug_ext_log;
+    
     //create shells of the plugins to 0 data
     plug_data->total_plugs = 0;
     for(int i = 0; i < MAX_INSTANCES; i++){
