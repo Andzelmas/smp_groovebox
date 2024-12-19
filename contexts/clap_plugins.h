@@ -2,8 +2,6 @@
 #include "../structs.h"
 #include "../util_funcs/ring_buffer.h"
 
-#define MAX_STRING_MSG_LENGTH 128
-
 enum ClapPlugStatus{
     clap_plug_failed_malloc = -1,
 };

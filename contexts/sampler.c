@@ -11,7 +11,7 @@
 //how many samples to read to SMP_SMP buffer at once
 #define SINGLE_READ_SAMPLE_B 12000
 //max samples that there can be
-#define MAX_SAMPLES 100
+#define MAX_SAMPLES 3
 //number of the parameters on each sample
 #define NUM_PARAMS 1
 //number of output ports for the sampler
@@ -64,11 +64,8 @@ typedef struct _smp_info{
     unsigned int buffer_size;
     //the samplerate of the system;
     SAMPLE_T samplerate;
-    //what is the maximum id in the smp_data currently, this is for optimization, so that for loops dont go
-    //through the whole MAX_SAMPLES array
-    int sample_max_id;
     //this is the sample array
-    SMP_SMP* samples [MAX_SAMPLES];
+    SMP_SMP samples [MAX_SAMPLES+1]; //one sample too many in array, the last one will be to check for the end of the array
     //the array of ports for the audio_client;
     SMP_PORT* ports;
     //number of available ports
@@ -92,8 +89,6 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
     smp_data->midi_cont = NULL;
     smp_data->buffer_size = buffer_size;
     smp_data->samplerate = samplerate;
-    
-    smp_data->sample_max_id = -1;  
     //init the ports
     smp_data->num_ports = IN_MIDI + OUTS;
     smp_data->ports = (SMP_PORT*)calloc(smp_data->num_ports, sizeof(SMP_PORT));
@@ -121,8 +116,18 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 	    smp_data->ports[i].port_name = "sampler|out_R";	    
 	}	
     }
-     for(int i = 0; i < MAX_SAMPLES; i++){
-	smp_data->samples[i] = NULL;
+    for(int i = 0; i < (MAX_SAMPLES+1); i++){
+	 SMP_SMP* samp = &(smp_data->samples[i]);
+	 samp->buffer = NULL;
+	 samp->chans = 0;
+	 samp->file_path = NULL;
+	 samp->id = i;
+	 samp->midi_vel = (SAMPLE_T)1.0;
+	 samp->offset = 0;
+	 samp->params = NULL;
+	 samp->playing = 0;
+	 samp->samplerate = 0;
+	 samp->samples_loaded = 0;
     }
      
      //inititalize the callbacks from the audio backend
@@ -151,31 +156,32 @@ int smp_activate_backend_ports(SMP_INFO* smp_data){
 }
 
 int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
-    int return_var = -1;
-    SMP_SMP *cur_smp = (SMP_SMP*)malloc(sizeof(SMP_SMP)); 
-    if(!cur_smp){
-	return_var = sample_malloc_failed;
-	goto done;
+    if(!smp_data)return -1;
+    if(in_id >= MAX_SAMPLES)return -1;
+    int smp_id = in_id;
+    //find empty sample if id is -1
+    if(smp_id == -1){
+	for(int i = 0; i < (MAX_SAMPLES+1); i++){
+	    SMP_SMP* cur_smp = &(smp_data->samples[i]);
+	    if(cur_smp->file_path)continue;
+	    smp_id = cur_smp->id;
+	    break;
+	}
     }
-
+    if(smp_id == -1 || smp_id >= MAX_SAMPLES)return -1;
+    //remove sample if this sample slot is occupied for some reason
+    smp_remove_sample(smp_data, smp_id);
+    
+    SMP_SMP *cur_smp = &(smp_data->samples[smp_id]);
     //init the sample parameters to default values
     cur_smp->params = params_init_param_container(NUM_PARAMS, (char*[1]){"Note"}, (float[1]){40}, (float[1]){0},
 						  (float[1]){127}, (float[1]){1}, (unsigned char[1]){Uchar_type});
     
-    //first populate the new sample members
-    cur_smp->offset = 0;
     //TODO samplerate is not needed, when we load sample to memory we also need to convert it to the system
     //sample rate, when system sample rate changes, the jack callback of samplerate change
     //calls a function in app_data to change variables on various structs that depend on the samplerate
     //one of those members is the cur_smp->buffer- the app_data function will call the function in
     //smp_data to adapt the buffer to the new sample rate.
-    cur_smp->file_path = NULL;
-    cur_smp->samplerate = 0;
-    cur_smp->chans = 0;
-    cur_smp->playing = 0;
-    cur_smp->midi_vel = (SAMPLE_T)1.0;
-    cur_smp->buffer = NULL;
-    cur_smp->samples_loaded = 0;
     SF_INFO samp_props;
     //load sample to memory, remember that sample channels can differ
     int load_err = 0;
@@ -183,29 +189,14 @@ int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
 			    samp_path, &cur_smp->buffer);
     //if could not load the file, free memory this sample will not be loaded
     if(load_err<0){
-	if(cur_smp->buffer)free(cur_smp->buffer);
-	free(cur_smp);
-	return_var = sample_load_memory_failed;
-	goto done;
+	smp_remove_sample(smp_data, smp_id);
+        return sample_load_memory_failed;
     }
-    //if the buffer was loaded succesfuy the load_err will contain the number of samples loaded
+    //if the buffer was loaded succesfuly the load_err will contain the number of samples loaded
     cur_smp->samples_loaded = load_err;
     //write the samplerate and number of channels
     cur_smp->samplerate = samp_props.samplerate;
     cur_smp->chans = samp_props.channels;
-    
-    int cur_id = smp_add_smp_to_array(smp_data, cur_smp, in_id);
-    if(cur_id == -1){
-	return_var = -1;
-	if(cur_smp->buffer)free(cur_smp->buffer);
-	free(cur_smp);
-	goto done;
-    }
-    cur_smp->id = cur_id;
-    int max_id = smp_data->sample_max_id;
-    if(cur_id > max_id){
-	smp_data->sample_max_id = cur_id;
-    }
 
     //malloc the file_path of the sample
     cur_smp->file_path = (char*)malloc(sizeof(char) * (strlen(samp_path)+1));
@@ -215,38 +206,8 @@ int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
     }
 
     strcpy(cur_smp->file_path, samp_path);
-
-   
-    return_var = cur_smp->id;
     
-done:
-    return return_var;
-}
-
-static int smp_add_smp_to_array(SMP_INFO* smp_data, SMP_SMP* smp, int in_id){
-    int return_val = -1;
-    if(in_id!=-1){
-	if(in_id>=MAX_SAMPLES)goto finish;
-	if(smp_data->samples[in_id] !=NULL){
-	    smp_remove_sample(smp_data, in_id);
-	}
-	smp_data->samples[in_id] = smp;
-	return_val = in_id;
-	goto finish;
-    }
-    else{
-	int max_id = smp_data->sample_max_id;
-	for(int i = 0; i < max_id+2; i++){
-	    if(smp_data->samples[i] == NULL){
-		smp_data->samples[i] = smp;
-		return_val = i;
-		goto finish;
-	    }
-	}
-    }
-    
-finish:
-    return return_val;
+    return smp_id;
 }
 
 int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
@@ -256,22 +217,18 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
     void* midi_buffer = app_jack_get_buffer_rt(midi_port->sys_port , nframes);
     SAMPLE_T* out_L = app_jack_get_buffer_rt(out_L_port->sys_port, nframes);
     SAMPLE_T* out_R = app_jack_get_buffer_rt(out_R_port->sys_port, nframes);
-    //if there are no samples do nothing
-    int max_sample = smp_data->sample_max_id;
     memset(out_L, '\0', sizeof(SAMPLE_T)*nframes);
     memset(out_R, '\0', sizeof(SAMPLE_T)*nframes); 
-    if(max_sample < 0){
-	return -1;
-    }
+
     if(!smp_data->midi_cont)return -1;
     //get the notes
     app_jack_midi_cont_reset(smp_data->midi_cont);
     app_jack_return_notes_vels_rt(midi_buffer, smp_data->midi_cont);
     JACK_MIDI_CONT* midi_cont = smp_data->midi_cont;
     //go through each sample
-    for(unsigned int iter = 0; iter < max_sample+1; iter++){
-	if(smp_data->samples[iter] == NULL)continue;
-	SMP_SMP* cur_smp = smp_data->samples[iter];
+    for(unsigned int iter = 0; iter < MAX_SAMPLES; iter++){
+	SMP_SMP* cur_smp = &(smp_data->samples[iter]);
+	//TODO should check sample atomic int if its playing, if not continue to other sample
 	if(!cur_smp->params)continue;
         //if the sample is not ready go to another
         if(cur_smp->buffer==NULL)continue;
@@ -371,17 +328,16 @@ void** smp_return_sys_ports(SMP_INFO* smp_data, unsigned int* number_ports){
 
 PRM_CONTAIN* smp_get_sample_param_container(SMP_INFO* smp_data, int smp_id){
     if(!smp_data)return NULL;
-    if(smp_id > smp_data->sample_max_id)return NULL;
-    SMP_SMP* cur_sample = smp_data->samples[smp_id];
-    if(!cur_sample)return NULL;
+    if(smp_id >= MAX_SAMPLES)return NULL;
+    SMP_SMP* cur_sample = &(smp_data->samples[smp_id]);
+    if(!cur_sample->params)return NULL;
     return cur_sample->params;
 }
 
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){
     if(!smp_data)return NULL;
-    if(smp_id > smp_data->sample_max_id)return NULL;
-    SMP_SMP* cur_smp = smp_data->samples[smp_id];
-    if(!cur_smp)return NULL;
+    if(smp_id >= MAX_SAMPLES)return NULL;
+    SMP_SMP* cur_smp = &(smp_data->samples[smp_id]);
     if(!cur_smp->file_path)return NULL;
     char* ret_name = (char*)malloc(sizeof(char) * (strlen(cur_smp->file_path) + 1));
     if(!ret_name)return NULL;
@@ -390,57 +346,35 @@ char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){
 }
 
 int smp_remove_sample(SMP_INFO* smp_data, unsigned int idx){
-    //dont do anything while the structure is being read
-    int return_val = 0;
-    int expected = 0;
+    if(!smp_data)return -1;
+    if(idx >= MAX_SAMPLES)return -1;
     //clear the sample audio buffer
-    SMP_SMP* cur_smp = smp_data->samples[idx];
-    if(!cur_smp){
-	return_val = -1;
-	goto done;
-    }
-    int max_sample = smp_data->sample_max_id;
-    if(idx > max_sample){
-	return_val = -1;
-	goto done;
-    }    
-    if(cur_smp->buffer!=NULL)free(cur_smp->buffer);
+    SMP_SMP* cur_smp = &(smp_data->samples[idx]);
+ 
+    if(cur_smp->buffer)free(cur_smp->buffer);
+    cur_smp->buffer = NULL;
     if(cur_smp->file_path)free(cur_smp->file_path);
+    cur_smp->file_path = NULL;
     //clean the parameter container
     if(cur_smp->params)param_clean_param_container(cur_smp->params);
-    
-    cur_smp->buffer = NULL;
-    
-    smp_data->samples[idx] = NULL;    
-    free(cur_smp);
-    //find the biggest id if this idx was the biggest
-    if(max_sample == idx){
-	int max_id = -1;
-	for(unsigned int i = 0; i<max_sample+1; i++){
-	    cur_smp = smp_data->samples[i];
-	    if(!cur_smp)continue;
-	    if(cur_smp->id >= max_id){
-		max_id = cur_smp->id;
-	    }
-	}
-	smp_data->sample_max_id = max_id;
-    }
+    cur_smp->params = NULL;
 
-done:
-    return return_val;
+    cur_smp->chans = 0;
+    cur_smp->midi_vel = (SAMPLE_T)1.0;
+    cur_smp->offset = 0;
+    cur_smp->playing = 0;
+    cur_smp->samplerate = 0;
+    cur_smp->samples_loaded = 0;
+
+    return 0;
 }
 
 int smp_clean_memory(SMP_INFO *smp_data){
-    if(!smp_data)return -1;
-    //clean the samples and their buffers
-    int max_sample = smp_data->sample_max_id;  
-    if(max_sample < 0)goto no_clean_samples;
-    
-    for(int i = 0; i<max_sample+1; i++){
-	if(smp_data->samples[i]==NULL)continue;
+    if(!smp_data)return -1;    
+    for(int i = 0; i<MAX_SAMPLES; i++){
 	smp_remove_sample(smp_data, i);
     }
-no_clean_samples:
+
     if(smp_data->ports){
 	for(int i = 0; i< smp_data->num_ports; i++){
 	    SMP_PORT* port = &(smp_data->ports[i]);
@@ -450,12 +384,13 @@ no_clean_samples:
 	}
 	free(smp_data->ports);
     }
+    smp_data->ports = NULL;
     //remove the midi_container
     if(smp_data->midi_cont){
 	app_jack_clean_midi_cont(smp_data->midi_cont);
 	free(smp_data->midi_cont);
     }
-    
+    smp_data->midi_cont = NULL;
     free(smp_data);
 
     return 0;

@@ -22,8 +22,6 @@ int smp_activate_backend_ports(SMP_INFO* smp_data);
 //the function that adds a new sample and gets its buffer from a file to memory
 //if succesfull returns the id of the new sample
 int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id);
-//add sample to the sample array
-static int smp_add_smp_to_array(SMP_INFO* smp_data, SMP_SMP* smp, int in_id);
 //process the samples and return summed audio buffer
 //uses one callback to get_buffer from the sys_ports and another to get_notes from the midi sys_port
 int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes);

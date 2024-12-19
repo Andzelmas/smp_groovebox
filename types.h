@@ -1,4 +1,6 @@
 #pragma once
+#define MAX_STRING_MSG_LENGTH 128 //max string size for sys messages
+#define MAX_SYS_BUFFER_ARRAY_SIZE 256 //max size for ring buffer arrays in sys messages between threads
 //enum for context types
 enum appContextTypes{
     Context_type_Sampler = 0x01,
@@ -76,3 +78,9 @@ enum MsgFromRT{
     MSG_PLUGIN_ACTIVATE_PROCESS = 5, //message that plugin needs to be activated on main thread and then start_processing function called on the audio thread
     MSG_PLUGIN_STOP_PROCESS = 6 //message to stop processing the plugin 
 };
+//this holds the subcontext id (plugin for example) and the enum (from MSGfromRT) to tell what to do with the subcontext
+typedef struct _ring_sys_msg{
+    unsigned int msg_enum; //what to do with the plugin
+    char msg[MAX_STRING_MSG_LENGTH];
+    int scx_id; //subcontext id on the context array that needs to be changed somehow
+}RING_SYS_MSG;

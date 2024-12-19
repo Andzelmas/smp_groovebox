@@ -58,8 +58,6 @@ PRM_CONTAIN* plug_return_param_container(PLUG_INFO* plug_data, unsigned int plug
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes);
 //run the plugin for nframes
 static void plug_run_rt(PLUG_PLUG* plug, unsigned int nframes);
-//add the plugin to the plugin array on the plug_data
-static int plug_add_plug_to_array(PLUG_INFO* plug_data, PLUG_PLUG* plug, int in_id);
 //remove a plugin
 int  plug_remove_plug(PLUG_INFO* plug_data, const int id);
 //clean the plug_data memory

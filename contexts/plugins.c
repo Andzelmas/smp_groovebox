@@ -204,11 +204,7 @@ typedef struct _plug_control{
     bool is_readable;
 }PLUG_CONTROL;
 
-typedef struct _plug_plug{
-    //uri map
-    Symap* symap;
-    //symap lock
-    ZixSem symap_lock;    
+typedef struct _plug_plug{   
     //the plugin data that is used by the instance
     const LilvPlugin* plug;
     //the activated plugin instance
@@ -258,11 +254,7 @@ typedef struct _plug_info{
     //lilv world object
     LilvWorld* lv_world;
     //array of plugins 
-    struct _plug_plug* plugins[MAX_INSTANCES];
-    //how many plugins there are
-    int total_plugs;
-    //the biggest id of a plugin in the system, if its -1, no plugins are active right now
-    int max_id;
+    struct _plug_plug plugins[MAX_INSTANCES+1]; //create one more plugin, the last one is a NULL shell to check if there are not too many plugins
     //sample_rate
     float sample_rate;
     //block_length
@@ -509,12 +501,6 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 	return NULL;
     }
     plug_data->lv_world = lilv_world_new();
-    //init the plugin instances to 0
-    for(int i = 0; i<MAX_INSTANCES; i++){
-	plug_data->plugins[i] = NULL;
-    }
-    plug_data->max_id = -1;
-    plug_data->total_plugs = 0;
     plug_data->sample_rate = (float)samplerate;
     plug_data->block_length = (uint32_t)block_length;
     plug_data->midi_buf_size = (size_t)DEFAULT_MIDI_BUF_SIZE;
@@ -529,18 +515,90 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_init_urids(plug_data->symap, &(plug_data->urids));
     plug_init_nodes(plug_data->lv_world, &(plug_data->nodes));
 
-    plug_data->audio_backend = audio_backend;
+    plug_data->audio_backend = audio_backend;    
     
+    //init the plugin instances to shell
+    for(int i = 0; i<(MAX_INSTANCES+1); i++){
+	PLUG_PLUG* plug = &(plug_data->plugins[i]);
+	plug->midi_cont = NULL;
+	plug->plug = NULL;
+	plug->plug_instance = NULL;
+	plug->num_ports = 0;
+	plug->feature_list = NULL;
+	plug->worker = NULL;
+	plug->state_worker = NULL;   
+	plug->preset = NULL;
+	plug->controls = NULL;
+	plug->num_controls = 0;
+	plug->request_update = false;
+	plug->control_in = -1;
+	plug->plug_params = NULL;
+	plug->safe_restore = false;
+	plug->id = i;
+	
+	//initialize the plug urids, they are the same as plug_data, used for convenience
+	plug->urids = &(plug_data->urids);
+	//init the features
+	//log feature
+	plug->features.log.handle = plug_data;
+	plug->features.log.printf = plug_printf;
+	plug->features.log.vprintf = plug_vprintf;
+	plug->features.log_feature.URI = LV2_LOG__log;
+	plug->features.log_feature.data =  &(plug->features.log);
+	//state:threadSafeRestore
+	plug->features.safe_restore_feature.URI = LV2_STATE__threadSafeRestore;
+	plug->features.safe_restore_feature.data = NULL;
+	//map to id feature
+	plug->map.handle = plug_data;
+	plug->map.map = map_uri;
+	plug->features.map_feature.URI = LV2_URID__map;
+	plug->features.map_feature.data = &(plug->map);
+	//map id to uri feature
+	plug->unmap.handle = plug_data;
+	plug->unmap.unmap = unmap_uri;
+	plug->features.unmap_feature.URI = LV2_URID__unmap;
+	plug->features.unmap_feature.data = &(plug->unmap);
+	//worker features
+	plug->features.sched.schedule_work = jalv_worker_schedule;
+	plug->features.sched_feature.URI = LV2_WORKER__schedule;
+	plug->features.sched_feature.data = &(plug->features.sched);
+	plug->features.ssched.schedule_work = jalv_worker_schedule;
+	plug->features.state_sched_feature.URI = LV2_WORKER__schedule;
+	plug->features.state_sched_feature.data = &(plug->features.ssched);
+	//init options features
+	const LV2_Options_Option options[(sizeof(plug->features.options))/
+					 (sizeof(plug->features.options[0]))] = {
+	    {LV2_OPTIONS_INSTANCE, 0, plug_data->urids.param_sampleRate, sizeof(float), plug_data->urids.atom_Float,
+	     &(plug_data->sample_rate)},
+	
+	    {LV2_OPTIONS_INSTANCE, 0, plug_data->urids.bufsz_minBlockLength, sizeof(int32_t),
+	     plug_data->urids.atom_Int, &(plug_data->block_length)},
+	
+	    {LV2_OPTIONS_INSTANCE, 0, plug_data->urids.bufsz_maxBlockLength, sizeof(int32_t),
+	     plug_data->urids.atom_Int, &(plug_data->block_length)},
+	
+	    {LV2_OPTIONS_INSTANCE, 0, plug_data->urids.bufsz_sequenceSize, sizeof(int32_t),
+	     plug_data->urids.atom_Int, &(plug_data->midi_buf_size)},
+	
+	    {LV2_OPTIONS_INSTANCE, 0, 0, 0, 0, NULL}	
+	};
+	memcpy(plug->features.options, options, sizeof(plug->features.options));
+	plug->features.options_feature.URI = LV2_OPTIONS__options;
+	plug->features.options_feature.data = (void*)plug->features.options;
+
+	//init atom forge
+	lv2_atom_forge_init(&(plug->forge), &(plug->map));
+    }
+
     return plug_data;
 }
 
 char* plug_return_plugin_name(PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return NULL;
-    if(plug_data->max_id < 0)return NULL;
-    if(plug_id > plug_data->max_id)return NULL;
+    if(plug_id >= MAX_INSTANCES)return NULL;
 
-    PLUG_PLUG* cur_plug = plug_data->plugins[plug_id];
-    if(!cur_plug)return NULL;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug)return NULL;
 
     char* ret_string = NULL;
     
@@ -587,8 +645,8 @@ char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size){
 char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx, unsigned int* total_presets){
     if(!plug_data)return NULL;
     if(!plug_data->plugins)return NULL;
-    PLUG_PLUG* plug = plug_data->plugins[indx];
-    if(!plug)return NULL;
+    PLUG_PLUG* plug = &(plug_data->plugins[indx]);
+    if(!plug->plug)return NULL;
     LilvNodes* presets = lilv_plugin_get_related(plug->plug, plug_data->nodes.pset_Preset);
     if(!presets)return NULL;
     LilvIter* preset_iter = lilv_nodes_begin(presets);
@@ -624,109 +682,53 @@ char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx,
 int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const int id){
     int return_val = -1;
     if(!plug_data){
-	return_val = -1;
-	goto done;
+	return -1;
     }
     if(!plug_data->lv_world){
-	return_val = -1;
-	goto done;
+	return -1;
     }
     if(!plugin_uri){
-	return_val = -1;
-	goto done;
+	return -1;
     }
-    if(plug_data->total_plugs >= MAX_INSTANCES)goto done;
+    if(id >= MAX_INSTANCES)return -1;
     
     const LilvPlugin* plugins = lilv_world_get_all_plugins(plug_data->lv_world);
     LilvNode* name_uri = lilv_new_uri(plug_data->lv_world, plugin_uri);
     const LilvPlugin* plugin = lilv_plugins_get_by_uri(plugins, name_uri);
     lilv_node_free(name_uri);    
     if(!plugin){
-	return_val = -1;
-	goto done;
+	return -1;
     }
-    //malloc fill the members of the plugin
-    PLUG_PLUG* plug = (PLUG_PLUG*)malloc(sizeof(PLUG_PLUG));
-    if(!plug){
-	return_val = -1;
-	goto done;
+    int plug_id = id;
+    //find next empty plugin and fill it in
+    if(plug_id == -1){
+	for(int i = 0; i < (MAX_INSTANCES+1); i++){
+	    PLUG_PLUG* cur_plug = &(plug_data->plugins[i]);
+	    if(cur_plug->plug_instance)continue;
+	    plug_id = cur_plug->id;
+	    break;
+	}
     }
-    plug->midi_cont = NULL;
-    plug->plug = NULL;
-    plug->plug_instance = NULL;
+    if(plug_id == -1 || plug_id >= MAX_INSTANCES)return -1;
+    //just in case clean the plugin up
+    plug_remove_plug(plug_data, plug_id);
+
+    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+    return_val = plug_id;
     plug->plug = plugin;
-    plug->feature_list = NULL;
-    plug->worker = NULL;
-    plug->state_worker = NULL;   
-    plug->preset = NULL;
-    plug->controls = NULL;
-    plug->num_controls = 0;
-    plug->request_update = false;
-    plug->control_in = -1;
-    plug->plug_params = NULL;
+    
     zix_sem_init(&(plug->work_lock), 1);
-    //Check for thread-safe state restore() method
-    plug->safe_restore = false;
+    //check safe restore
     LilvNode* state_threadSafeRestore = lilv_new_uri(plug_data->lv_world, LV2_STATE__threadSafeRestore);
     if(lilv_plugin_has_feature(plug->plug, state_threadSafeRestore)){
 	plug->safe_restore = true;
     }
     lilv_node_free(state_threadSafeRestore);
-    
-    //initialize the plug urids, they are the same as plug_data, used for convenience
-    plug->urids = &(plug_data->urids);
-    //init the features
-    //log feature
-    plug->features.log.handle = plug_data;
-    plug->features.log.printf = plug_printf;
-    plug->features.log.vprintf = plug_vprintf;
-    plug->features.log_feature.URI = LV2_LOG__log;
-    plug->features.log_feature.data =  &(plug->features.log);
-    //state:threadSafeRestore
-    plug->features.safe_restore_feature.URI = LV2_STATE__threadSafeRestore;
-    plug->features.safe_restore_feature.data = NULL;
-    //map to id feature
-    plug->map.handle = plug_data;
-    plug->map.map = map_uri;
-    plug->features.map_feature.URI = LV2_URID__map;
-    plug->features.map_feature.data = &(plug->map);
-    //map id to uri feature
-    plug->unmap.handle = plug_data;
-    plug->unmap.unmap = unmap_uri;
-    plug->features.unmap_feature.URI = LV2_URID__unmap;
-    plug->features.unmap_feature.data = &(plug->unmap);
-    //worker features
-    plug->features.sched.schedule_work = jalv_worker_schedule;
-    plug->features.sched_feature.URI = LV2_WORKER__schedule;
-    plug->features.sched_feature.data = &(plug->features.sched);
-    plug->features.ssched.schedule_work = jalv_worker_schedule;
-    plug->features.state_sched_feature.URI = LV2_WORKER__schedule;
-    plug->features.state_sched_feature.data = &(plug->features.ssched);
-    //init options features
-    const LV2_Options_Option options[(sizeof(plug->features.options))/
-				      (sizeof(plug->features.options[0]))] = {
-	{LV2_OPTIONS_INSTANCE, 0, plug_data->urids.param_sampleRate, sizeof(float), plug_data->urids.atom_Float,
-	 &(plug_data->sample_rate)},
-	
-	{LV2_OPTIONS_INSTANCE, 0, plug_data->urids.bufsz_minBlockLength, sizeof(int32_t),
-	 plug_data->urids.atom_Int, &(plug_data->block_length)},
-	
-	{LV2_OPTIONS_INSTANCE, 0, plug_data->urids.bufsz_maxBlockLength, sizeof(int32_t),
-	 plug_data->urids.atom_Int, &(plug_data->block_length)},
-	
-	{LV2_OPTIONS_INSTANCE, 0, plug_data->urids.bufsz_sequenceSize, sizeof(int32_t),
-	 plug_data->urids.atom_Int, &(plug_data->midi_buf_size)},
-	
-	{LV2_OPTIONS_INSTANCE, 0, 0, 0, 0, NULL}	
-    };
-    memcpy(plug->features.options, options, sizeof(plug->features.options));
-    plug->features.options_feature.URI = LV2_OPTIONS__options;
-    plug->features.options_feature.data = (void*)plug->features.options;
     //init features that have no data
     const LV2_Feature static_features[] = {{LV2_STATE__loadDefaultState, NULL},
-						  {LV2_BUF_SIZE__powerOf2BlockLength, NULL},
-						  {LV2_BUF_SIZE__fixedBlockLength, NULL},
-						  {LV2_BUF_SIZE__boundedBlockLength, NULL}
+					   {LV2_BUF_SIZE__powerOf2BlockLength, NULL},
+					   {LV2_BUF_SIZE__fixedBlockLength, NULL},
+					   {LV2_BUF_SIZE__boundedBlockLength, NULL}
     };
     //build the features list to pass to plugins
     const LV2_Feature* const features[] = {&(plug->features.map_feature),
@@ -739,15 +741,10 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     
     plug->feature_list = (const LV2_Feature**)calloc(1, sizeof(features));
     if(!plug->feature_list){
-	plug_remove_plug(plug_data, plug->id);
-	return_val = -1;
-	goto done;
+	plug_remove_plug(plug_data, plug_id);
+	return -1;
     }
-    memcpy(plug->feature_list, features, sizeof(features));
-
-    //init atom forge
-    lv2_atom_forge_init(&(plug->forge), &(plug->map));
-    
+    memcpy(plug->feature_list, features, sizeof(features));    
     //instantiate and activate the plugin
     plug->plug_instance = lilv_plugin_instantiate(plugin, plug_data->sample_rate, plug->feature_list);
     
@@ -768,18 +765,6 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     jalv_worker_start(plug->worker, worker_iface, plug->plug_instance->lv2_handle);
     jalv_worker_start(plug->state_worker, worker_iface, plug->plug_instance->lv2_handle);
        
-    //add the plugin to the plugin array
-    return_val = plug_add_plug_to_array(plug_data, plug, id);
-    if(return_val == -1){
-	plug_remove_plug(plug_data, plug->id);
-	goto done;
-    }
-    plug->id = return_val;
-    plug_data->total_plugs += 1;
-    if(return_val > plug_data->max_id){
-	plug_data->max_id = return_val;
-    }
- 
     //create the ports on audio_client from the sys_ports
     plug_activate_backend_ports(plug_data, plug);
 
@@ -897,7 +882,6 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     //activate the plugin instance
     lilv_instance_activate(plug->plug_instance);
     
-done:
     return return_val;
 }
 
@@ -906,8 +890,8 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
     if(!plug_data->plugins)return -1;
     if(!preset_name)return -1;
     int return_val = 0;
-    PLUG_PLUG* plug = (PLUG_PLUG*)plug_data->plugins[plug_id];
-    if(!plug)return -1;
+    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+    if(!plug->plug)return -1;
     if(plug->preset){
 	const LilvNode* old_preset = lilv_state_get_uri(plug->preset);
 	if(old_preset){
@@ -1321,9 +1305,9 @@ finish:
 
 void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigned int* number_ports){
     if(!plug_data)return NULL;
-    if(plug_id>plug_data->max_id)return NULL;
-    PLUG_PLUG* cur_plug = plug_data->plugins[plug_id];
-    if(!cur_plug)return NULL;
+    if(plug_id >= MAX_INSTANCES)return NULL;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug)return NULL;
     int port_num = cur_plug->num_ports;
     if(port_num<=0)return NULL;
     if(number_ports)*number_ports = port_num;
@@ -1342,19 +1326,19 @@ void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigne
 
 PRM_CONTAIN* plug_return_param_container(PLUG_INFO* plug_data, unsigned int plug_id){
     if(!plug_data)return NULL;
-    if(plug_id > plug_data->max_id)return NULL;
-    PLUG_PLUG* cur_plug = plug_data->plugins[plug_id];
-    if(!cur_plug)return NULL;
+    if(plug_id >= MAX_INSTANCES)return NULL;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug_params)return NULL;
     return cur_plug->plug_params;
 }
 
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
     if(!plug_data)return;    
     if(!plug_data->plugins)return;    
-    if(plug_data->max_id<0)return;
-    for(int id = 0; id < plug_data->max_id+1; id++){
-	PLUG_PLUG* plug = plug_data->plugins[id];
-	if(!plug)continue;
+    for(int id = 0; id < MAX_INSTANCES; id++){
+	PLUG_PLUG* plug = &(plug_data->plugins[id]);
+	//TODO should first check plugin atomic int if its processing, if not continue to other plugin
+	if(!plug->plug)continue;
 	if(!plug->ports)continue;
 	//----------------------------------------------------------------------------------------------------
 	//first connect the ports for processing
@@ -1563,51 +1547,41 @@ static void plug_run_rt(PLUG_PLUG* plug, unsigned int nframes){
     jalv_worker_end_run(plug->worker);
 }
 
-static int plug_add_plug_to_array(PLUG_INFO* plug_data, PLUG_PLUG* plug, int in_id){
-    int return_val = -1;
-    if(in_id!=-1){
-	if(in_id>=MAX_INSTANCES)goto finish;
-	if(plug_data->plugins[in_id] !=NULL){
-	    plug_remove_plug(plug_data, in_id);
-	}
-	plug_data->plugins[in_id] = plug;
-	return_val = in_id;
-	goto finish;
-    }
-    else{
-	if(plug_data->total_plugs >= MAX_INSTANCES)goto finish;
-	for(int i = 0; i<plug_data->max_id+2; i++){
-	    if(plug_data->plugins[i] == NULL){
-		plug_data->plugins[i] = plug;
-		return_val = i;
-		goto finish;
-	    }
-	}
-    }
-    
-finish:
-    return return_val;    
-    
-}
 int  plug_remove_plug(PLUG_INFO* plug_data, const int id){
     if(!plug_data)return -1;
     if(!plug_data->audio_backend)return -1;
-    int return_val = 0;       
-    PLUG_PLUG* cur_plug = plug_data->plugins[id];
-    if(!cur_plug){
-	return_val = -1;
-	goto done;
+    if(id >= MAX_INSTANCES)return -1;
+      
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[id]);
+
+    if(!cur_plug->plug)return -1;
+    //remove preset
+    if(cur_plug->preset){
+	const LilvNode* old_preset = lilv_state_get_uri(cur_plug->preset);
+	if(old_preset){
+	    lilv_world_unload_resource(plug_data->lv_world, old_preset);
+	}
+	lilv_state_free(cur_plug->preset);
+	cur_plug->preset = NULL;
     }
+    //free instance
+    if(cur_plug->plug_instance){
+	LilvInstance* cur_instance = cur_plug->plug_instance;
+	lilv_instance_deactivate(cur_instance);
+	lilv_instance_free(cur_instance);	
+	cur_plug->plug_instance = NULL;		
+    }    
     //Terminate the worker
     if(cur_plug->worker){
 	jalv_worker_exit(cur_plug->worker);
-	jalv_worker_free(cur_plug->worker);	
+	jalv_worker_free(cur_plug->worker);
+	cur_plug->worker = NULL;
     }
     if(cur_plug->state_worker){
 	jalv_worker_exit(cur_plug->state_worker);
 	jalv_worker_free(cur_plug->state_worker);
+	cur_plug->state_worker = NULL;
     }
-    zix_sem_destroy(&(cur_plug->work_lock));
     //clean the ports
     for(uint32_t i = 0; i< cur_plug->num_ports; i++){
 	PLUG_PORT* const cur_port = &(cur_plug->ports[i]);
@@ -1617,32 +1591,25 @@ int  plug_remove_plug(PLUG_INFO* plug_data, const int id){
 	    if(cur_port->evbuf)free(cur_port->evbuf);
     }
     if(cur_plug->ports)free(cur_plug->ports);
-    cur_plug->ports = NULL;  
+    cur_plug->ports = NULL;
+    cur_plug->num_ports = 0;
+    
+    zix_sem_destroy(&(cur_plug->work_lock));
+
     //free the features_list
     if(cur_plug->feature_list)free(cur_plug->feature_list);
-    //remove preset
-    if(cur_plug->preset){
-	const LilvNode* old_preset = lilv_state_get_uri(cur_plug->preset);
-	if(old_preset){
-	    lilv_world_unload_resource(plug_data->lv_world, old_preset);
-	}
-	lilv_state_free(cur_plug->preset);
-    }
-    //free instance
-    if(cur_plug->plug_instance){
-	LilvInstance* cur_instance = cur_plug->plug_instance;
-	lilv_instance_deactivate(cur_instance);
-	lilv_instance_free(cur_instance);
-	cur_plug->plug_instance = NULL;		
-    }
+    cur_plug->feature_list = NULL;
+
     //clean the midi container
     if(cur_plug->midi_cont){
 	app_jack_clean_midi_cont(cur_plug->midi_cont);
 	free(cur_plug->midi_cont);
+	cur_plug->midi_cont = NULL;
     }
 
     //clean the controls
     if(cur_plug->plug_params)param_clean_param_container(cur_plug->plug_params);
+    cur_plug->plug_params = NULL;
     if(cur_plug->controls){
 	for(unsigned int i = 0; i < cur_plug->num_controls; i++){
 	    PLUG_CONTROL* const control = cur_plug->controls[i];
@@ -1665,29 +1632,18 @@ int  plug_remove_plug(PLUG_INFO* plug_data, const int id){
 	}
 	free(cur_plug->controls);
     }
-    
+    cur_plug->controls = NULL;
+    cur_plug->num_controls = 0;
+    cur_plug->control_in = -1;
+    cur_plug->request_update = false;
+    cur_plug->safe_restore = false;
     cur_plug->plug = NULL;    
-    free(cur_plug);
-    plug_data->plugins[id] = NULL;
-    //find what the biggest id is now
-    if(plug_data->max_id == id){
-	int max_id = -1;
-	for(unsigned int i = 0; i<plug_data->max_id+1; i++){
-	    PLUG_PLUG* this_plug = plug_data->plugins[i];
-	    if(!this_plug)continue;
-	    if(this_plug->id >= max_id){
-		max_id = this_plug->id;
-	    }
-	}
-	plug_data->max_id = max_id;
-    }
-    if(plug_data->total_plugs>0)plug_data->total_plugs -= 1;
-done:
-    return return_val;
+
+    return 0;
 }
 void plug_clean_memory(PLUG_INFO* plug_data){
-    if(!plug_data)goto finish;
-    for(int i = 0; i< plug_data->max_id+1; i++){
+    if(!plug_data)return;
+    for(int i = 0; i< MAX_INSTANCES; i++){
 	plug_remove_plug(plug_data, i);
     }
     if(plug_data->symap)symap_free(plug_data->symap);
@@ -1697,5 +1653,4 @@ void plug_clean_memory(PLUG_INFO* plug_data){
     }    
     if(plug_data->lv_world)lilv_world_free(plug_data->lv_world);
     free(plug_data);
-finish:
 }

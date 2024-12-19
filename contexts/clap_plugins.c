@@ -17,19 +17,10 @@
 #define CLAP_PATH "/usr/lib/clap/"
 //how many clap plugins can there be in the plugin array
 #define MAX_INSTANCES 5
-//number of items in the ring arrays
-#define MAX_RING_BUFFER_ARRAY_SIZE 256
 
 static thread_local bool is_audio_thread = false; //TODO need to set this to true in the process function of the plugin
 
 atomic_int clap_processing; //atomic var, to check if the whole clap process is paused, if clap_process == 0, the process function wont even get the CLAP_PLUG_INFO struct
-
-//this holds the plugin id and the enum (from type.h MSGfromRT) to tell what to do with the plugin
-typedef struct _clap_ring_sys_msg{
-    unsigned int msg_enum; //what to do with the plugin
-    char msg[MAX_STRING_MSG_LENGTH];
-    int plug_id; //plugin id on the plugins array that needs to be changed somehow
-}CLAP_RING_SYS_MSG;
 
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
@@ -48,8 +39,7 @@ typedef struct _clap_plug_plug{
 
 //the main clap struct
 typedef struct _clap_plug_info{
-    struct _clap_plug_plug plugins[MAX_INSTANCES]; //array with single clap plugins
-    unsigned int total_plugs; //how many plugins there are
+    struct _clap_plug_plug plugins[MAX_INSTANCES+1]; //array with single clap plugins
     SAMPLE_T sample_rate;
     //for clap there can be min and max buffer sizes, for not changing buffer sizes set as the same
     uint32_t min_buffer_size;
@@ -71,9 +61,9 @@ static void clap_plug_plug_wait_for_stop(CLAP_PLUG_PLUG* plug){
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
     if(!plug_data)return;
     
-    CLAP_RING_SYS_MSG send_bit;
+    RING_SYS_MSG send_bit;
     send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
-    send_bit.plug_id = plug->id;
+    send_bit.scx_id = plug->id;
     ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
     //lock the main thread and wait for the audio thread to stop processing the plugin
     int expected = 0;
@@ -97,7 +87,7 @@ static bool clap_plug_ext_is_main_thread(const clap_host_t* host){
 static void clap_plug_send_msg(CLAP_PLUG_INFO* plug_data, const char* msg){
     if(!plug_data)return;
     if(clap_plug_return_is_audio_thread()){
-	CLAP_RING_SYS_MSG send_bit;
+	RING_SYS_MSG send_bit;
 	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
 	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
 	int ret = ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
@@ -138,7 +128,7 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
 static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return -1;
     if(plug_id < 0)return -1;
-    if(plug_id > (MAX_INSTANCES - 1))return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     if(!plug)return -1;
@@ -154,9 +144,9 @@ static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int pl
     }
     plug->plug_inst_activated = 1;
     //send message to the audio thread that the plugin can be started to process
-    CLAP_RING_SYS_MSG send_bit;
+    RING_SYS_MSG send_bit;
     send_bit.msg_enum = MSG_PLUGIN_PROCESS;
-    send_bit.plug_id = plug->id;
+    send_bit.scx_id = plug->id;
     ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
 
     return 0;
@@ -164,7 +154,7 @@ static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int pl
 static int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return -1;
     if(plug_id < 0)return -1;
-    if(plug_id > (MAX_INSTANCES - 1))return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     //send a message to rt thread to stop the plugin process and block while its stopping
@@ -185,9 +175,9 @@ void request_restart(const clap_host_t* host){
     
     if(clap_plug_return_is_audio_thread()){
 	//send to ui a message that the plugin needs a restart
-	CLAP_RING_SYS_MSG send_bit;
+	RING_SYS_MSG send_bit;
 	send_bit.msg_enum = MSG_PLUGIN_RESTART;
-	send_bit.plug_id = plug->id;
+	send_bit.scx_id = plug->id;
 	ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
     }
     else{
@@ -207,9 +197,9 @@ void request_process(const clap_host_t* host){
     //to call the start_processing function
     if(clap_plug_return_is_audio_thread()){
 	//send to ui a message that the plugin needs to be activated and then the start_processing function called
-	CLAP_RING_SYS_MSG send_bit;
+	RING_SYS_MSG send_bit;
 	send_bit.msg_enum = MSG_PLUGIN_ACTIVATE_PROCESS;
-	send_bit.plug_id = plug->id;
+	send_bit.scx_id = plug->id;
 	ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
     }
     else{
@@ -221,7 +211,7 @@ void request_process(const clap_host_t* host){
 static int clap_plug_callback(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return -1;
     if(plug_id < 0)return -1;
-    if(plug_id > (MAX_INSTANCES - 1))return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     if(!plug)return -1;
@@ -236,9 +226,9 @@ void request_callback(const clap_host_t* host){
     
     if(clap_plug_return_is_audio_thread()){
 	//send to ui a message that the plugin needs to call the on_main_thread function 
-	CLAP_RING_SYS_MSG send_bit;
+	RING_SYS_MSG send_bit;
 	send_bit.msg_enum = MSG_PLUGIN_REQUEST_CALLBACK;
-	send_bit.plug_id = plug->id;
+	send_bit.scx_id = plug->id;
 	ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
     }
     else{
@@ -250,7 +240,7 @@ void request_callback(const clap_host_t* host){
 static int clap_plug_start_process(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return -1;
     if(plug_id < 0)return -1;
-    if(plug_id > (MAX_INSTANCES - 1))return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     if(!plug)return -1;
@@ -269,7 +259,7 @@ static int clap_plug_start_process(CLAP_PLUG_INFO* plug_data, int plug_id){
 static int clap_plug_stop_process(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return -1;
     if(plug_id < 0)return -1;
-    if(plug_id > (MAX_INSTANCES - 1))return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     if(!plug)return -1;
@@ -291,14 +281,14 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data){
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
     if(cur_items <= 0)return 0;
     for(unsigned int i = 0; i < cur_items; i++){
-	CLAP_RING_SYS_MSG cur_bit;
+	RING_SYS_MSG cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
 	if(read_buffer <= 0)continue;
 	if(cur_bit.msg_enum == MSG_PLUGIN_PROCESS){
-	    clap_plug_start_process(plug_data, cur_bit.plug_id);
+	    clap_plug_start_process(plug_data, cur_bit.scx_id);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_STOP_PROCESS){
-	    clap_plug_stop_process(plug_data, cur_bit.plug_id);
+	    clap_plug_stop_process(plug_data, cur_bit.scx_id);
 	}
     }
 }
@@ -309,17 +299,17 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data){
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
     if(cur_items <= 0)return 0;
     for(unsigned int i = 0; i < cur_items; i++){
-	CLAP_RING_SYS_MSG cur_bit;
+	RING_SYS_MSG cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
 	if(read_buffer <= 0)continue;
 	if(cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK){
-	    clap_plug_callback(plug_data, cur_bit.plug_id);
+	    clap_plug_callback(plug_data, cur_bit.scx_id);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_ACTIVATE_PROCESS){
-	    clap_plug_activate_start_processing(plug_data, cur_bit.plug_id);
+	    clap_plug_activate_start_processing(plug_data, cur_bit.scx_id);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_RESTART){
-	    clap_plug_restart(plug_data, cur_bit.plug_id);
+	    clap_plug_restart(plug_data, cur_bit.scx_id);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_SENT_STRING){
 	    log_append_logfile("%s", cur_bit.msg);
@@ -362,7 +352,7 @@ static void clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug
 	    plug->plug_inst->destroy(plug->plug_inst);
 	    plug->plug_inst_created = 0;
 	}
-	plug->plug_inst = NULL;
+	plug->plug_inst = NULL;	
     }
     if(plug->plug_entry){
 	if(clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug->plug_entry) == -1)plug->plug_entry->deinit();
@@ -377,6 +367,7 @@ static void clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug
 	plug->plug_params = NULL;
     }
     plug->plug_inst_id = -1;
+    atomic_store(&(plug->plug_inst_processing), 0);
 }
 
 static char** clap_plug_get_plugin_names_from_file(const char* plug_path, unsigned int* num_of_plugins){
@@ -537,14 +528,14 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     plug_data->max_buffer_size = max_buffer_size;
     plug_data->sample_rate = samplerate;
     //init the realtime audio thread messages to the main thread ring buffer
-    plug_data->rt_to_ui_msgs = ring_buffer_init(sizeof(CLAP_RING_SYS_MSG), MAX_RING_BUFFER_ARRAY_SIZE);
+    plug_data->rt_to_ui_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
     if(!(plug_data->rt_to_ui_msgs)){
 	clap_plug_clean_memory(plug_data);
 	*plug_error = clap_plug_failed_malloc;
 	return NULL;
     }
     //init the ui main thread to audio realtime thread messages ring buffer
-    plug_data->ui_to_rt_msgs = ring_buffer_init(sizeof(CLAP_RING_SYS_MSG), MAX_RING_BUFFER_ARRAY_SIZE);
+    plug_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
     if(!(plug_data->ui_to_rt_msgs)){
 	clap_plug_clean_memory(plug_data);
 	*plug_error = clap_plug_failed_malloc;
@@ -575,10 +566,9 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     plug_data->ext_thread_check.is_main_thread = clap_plug_ext_is_main_thread;
     //log extension
     plug_data->ext_log.log = clap_plug_ext_log;
-    
-    //create shells of the plugins to 0 data
-    plug_data->total_plugs = 0;
-    for(int i = 0; i < MAX_INSTANCES; i++){
+
+    //the array holds one more plugin, it will be an empty shell to check if the total number of plugins arent too many
+    for(int i = 0; i < (MAX_INSTANCES+1); i++){
         CLAP_PLUG_PLUG* plug = &(plug_data->plugins[i]);
 	plug->clap_host_info = clap_info_host;
 	plug->id = i;
@@ -682,18 +672,8 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 //return the clap_plug_plug with plugin entry (initiated), plug_path and plug_inst_id from the plugins name, checks if  the same entry is already loaded or not first
 static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char* plug_name, int plug_id){
     if(!plug_data)return -1;
-    if(plug_id > (MAX_INSTANCES - 1))return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
     CLAP_PLUG_PLUG* return_plug = &(plug_data->plugins[plug_id]);
-    return_plug->id = -1;
-    return_plug->plug_entry = NULL;
-    return_plug->plug_inst = NULL;
-    return_plug->plug_inst_created = 0;
-    return_plug->plug_inst_activated = 0;
-    atomic_store(&(return_plug->plug_inst_processing), 0);
-    return_plug->plug_inst_id = -1;
-    return_plug->plug_params = NULL;
-    return_plug->plug_path = NULL;
-    return_plug->plug_data = plug_data;
     
     unsigned int clap_files_num = 0;
     char** clap_files = clap_plug_get_clap_files(CLAP_PATH, &clap_files_num);
@@ -783,29 +763,26 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     int return_id = -1;
     if(!plug_data)return -1;
     if(!plugin_name)return -1;
-    if(id > (MAX_INSTANCES - 1))return -1;
-    if(plug_data->total_plugs >= MAX_INSTANCES)return -1;
+    if(id >= MAX_INSTANCES)return -1;
     //if id is negative find an empty slot in the plugins array and create the plugin there
     if(id < 0){
-	for(int i = 0; i < MAX_INSTANCES; i++){
+	for(int i = 0; i < (MAX_INSTANCES+1); i++){
 	    CLAP_PLUG_PLUG cur_plug = plug_data->plugins[i];
 	    //if there is a path for this plugin the slot is not empty
-	    if(cur_plug.plug_path)continue;
-	    id = i;
+	    if(cur_plug.plug_inst)continue;
+	    id = cur_plug.id;
 	    break;
 	}
     }
     //if the id is still not within range an error happened, cant create the plugin
-    if(id < 0)return -1;
+    if(id < 0 || id >= MAX_INSTANCES)return -1;
     //if id is in the possible range, clean the slot just in case its occupied 
-    if(id >= 0){
-	clap_plug_plug_clean(plug_data, &(plug_data->plugins[id]));
-    }
+    clap_plug_plug_clean(plug_data, &(plug_data->plugins[id]));
+    
     if(clap_plug_create_plug_from_name(plug_data, plugin_name, id) < 0){
 	log_append_logfile("could not load plugin from name %s\n", plugin_name);
 	return -1;
     }
-    plug_data->total_plugs += 1;
     //this plug will only have the entry, plug_path and which plug_inst_id this plugin_name is in the plugin factory array at this point
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[id]);
     const clap_plugin_factory_t* plug_fac = plug->plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
@@ -855,7 +832,6 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     //TODO the order of the further todo list should be considered, at this point the plugin is created but in its deactivated state, but the plugin can access all the host extension functions at this point
     //Thats why need to consider if the plugin should be added to the plugin array even before the creation of the plugin instance (for the correc plug->id and etc.)
     //TODO need to activate the plugin, create parameters, get ports, create ports on the audio_client and etc.
-    
     //TODO now cleaning for testing
     clap_plug_plug_clean(plug_data, plug);
     return_id = plug->id;
