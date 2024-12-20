@@ -58,7 +58,11 @@
 #endif
 
 static thread_local bool is_audio_thread = false; //can be used to check what thread this is, useful for thread safe functions
-atomic_int lv2_processing; //if lv2_processing == 0 the whole PLUGIN_INFO struct will not be used in the audio thread and is save to remove for example
+//if lv2_processing == 0 the whole PLUGIN_INFO struct will not be used in the audio thread and is save to remove
+//should be atomic_store set to 1 on main-thread in init function and atomic_store set to 0 on audio-thread before cleaning memory
+//for temp stopping of everything each plugin should be stopped, lv2_processing should not be used for that
+//(only for permanent stop of the whole context before program exit)
+atomic_int lv2_processing; 
 
 //lilv nodes for more convinient coding, when for ex we need to tell port class by providing a livnode
 typedef struct _plug_nodes{
