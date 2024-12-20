@@ -10,6 +10,7 @@
 #include <dlfcn.h>
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/string_funcs.h"
+#include "../util_funcs/ring_buffer.h"
 #include "../types.h"
 #include "params.h"
 //what is the size of the buffer to get the formated param values to
@@ -69,6 +70,22 @@ static void clap_plug_plug_wait_for_stop(CLAP_PLUG_PLUG* plug){
     int expected = 0;
     while(!atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 0)){
 	expected = 0;
+    }
+}
+//start processing also blocks main thread, so the order of commands does not get mixed
+static void clap_plug_plug_wait_for_sart(CLAP_PLUG_PLUG* plug){
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    
+    RING_SYS_MSG send_bit;
+    send_bit.msg_enum = MSG_PLUGIN_PROCESS;
+    send_bit.scx_id = plug->id;
+    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
+    //lock the main thread and wait for the audio thread to start processing the plugin
+    int expected = 1;
+    while(!atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 1)){
+	expected = 1;
     }
 }
 
@@ -144,10 +161,8 @@ static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int pl
     }
     plug->plug_inst_activated = 1;
     //send message to the audio thread that the plugin can be started to process
-    RING_SYS_MSG send_bit;
-    send_bit.msg_enum = MSG_PLUGIN_PROCESS;
-    send_bit.scx_id = plug->id;
-    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
+    //and wait for it to start
+    clap_plug_plug_wait_for_sart(plug);
 
     return 0;
 }
@@ -243,8 +258,7 @@ static int clap_plug_start_process(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(plug_id >= MAX_INSTANCES)return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!plug)return -1;
-    if(!plug->plug_path || !plug->plug_entry || !plug->plug_inst)return -1;
+    if(!plug->plug_inst)return -1;
     int expected = 1;
     //if plugin is already processing do nothing
     if(atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 1)){
@@ -262,8 +276,7 @@ static int clap_plug_stop_process(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(plug_id >= MAX_INSTANCES)return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!plug)return -1;
-    if(!plug->plug_path || !plug->plug_entry || !plug->plug_inst)return -1;
+    if(!plug->plug_inst)return -1;
     //if plugin is already stopped and not processing do nothing
     int expected = 0;
     if(atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 0)){
@@ -291,6 +304,7 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data){
 	    clap_plug_stop_process(plug_data, cur_bit.scx_id);
 	}
     }
+    return 0;
 }
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data){
     if(!plug_data)return -1;
@@ -315,6 +329,7 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data){
 	    log_append_logfile("%s", cur_bit.msg);
 	}
     }
+    return 0;
 }
 
 //return the clap_plug_plug id on the plugins array that has the same plug_entry (initiated) if no plugin has this plug_entry return -1
@@ -530,14 +545,15 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     //init the realtime audio thread messages to the main thread ring buffer
     plug_data->rt_to_ui_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
     if(!(plug_data->rt_to_ui_msgs)){
-	clap_plug_clean_memory(plug_data);
+        free(plug_data);
 	*plug_error = clap_plug_failed_malloc;
 	return NULL;
     }
     //init the ui main thread to audio realtime thread messages ring buffer
     plug_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
     if(!(plug_data->ui_to_rt_msgs)){
-	clap_plug_clean_memory(plug_data);
+        free(plug_data);
+	ring_buffer_clean(plug_data->rt_to_ui_msgs);
 	*plug_error = clap_plug_failed_malloc;
 	return NULL;
     }

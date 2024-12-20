@@ -28,6 +28,9 @@ char* plug_return_plugin_name(PLUG_INFO* plug_data, int plug_id);
 char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size);
 //get the list of presets belonging to the plugin
 char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx, unsigned int* total_presets);
+//read the main-thread audio-thread comm messages and launch apropriate functions (stop, start processes etc.)
+int plug_read_rt_to_ui_messages(PLUG_INFO* plug_data);
+int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data);
 //initialize a plugin instance
 //if id is not -1 a plugin will be created in that plugin index, if that index is already occupied, the previous
 //plugin will be cleared
