@@ -382,7 +382,6 @@ static void clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug
 	plug->plug_params = NULL;
     }
     plug->plug_inst_id = -1;
-    atomic_store(&(plug->plug_inst_processing), 0);
 }
 
 static char** clap_plug_get_plugin_names_from_file(const char* plug_path, unsigned int* num_of_plugins){
