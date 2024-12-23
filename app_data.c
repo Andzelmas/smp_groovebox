@@ -550,8 +550,9 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     //process the PLUGIN DATA
     plug_process_data_rt(app_data->plug_data, nframes);
 
-    //TODO process the CLAP PLUGIN DATA
-
+    //process the CLAP PLUGIN DATA
+    clap_process_data_rt(app_data->clap_plug_data, nframes);
+    
     //process the SYNTH DATA
     synth_process_rt(app_data->synth_data, nframes);
 

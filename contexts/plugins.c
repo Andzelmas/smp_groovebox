@@ -168,7 +168,6 @@ typedef struct _plug_port {
 }PLUG_PORT;
 
 typedef struct _plug_features{
-    //TODO now the log feature is barebones and very simple, just vprintf or printf
     LV2_Log_Log log;
     LV2_Feature log_feature;
     LV2_Feature map_feature;
@@ -531,24 +530,39 @@ static const char* unmap_uri(LV2_URID_Unmap_Handle handle, LV2_URID urid){
   zix_sem_post(&(plug_data->symap_lock));  
   return uri;
 }
-//internal function for printf for the log feature
-//TODO now does nothing
-static int plug_vprintf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, va_list ap){
-    PLUG_INFO* const plug_data = (PLUG_INFO*)handle;
-    //return vfprintf(stderr, fmt, ap);
-    return 0;
+
+//send a [thread-safe] message - check if thread is audio or main
+static void plug_send_msg(PLUG_INFO* plug_data, const char* msg){
+    if(!plug_data)return;
+    if(is_audio_thread){
+	RING_SYS_MSG send_bit;
+	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
+	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
+	int ret = ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
+    }
+    else{
+	log_append_logfile("%s", msg);
+    }
 }
-//TODO now does nothing
+//internal function for printf for the log feature
+static int plug_vprintf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, va_list ap){
+    PLUG_INFO* plug_data = (PLUG_INFO*)handle;
+    if(!plug_data)return -1;
+    int ret = -1;
+    char send_msg[MAX_STRING_MSG_LENGTH];
+    ret = vsnprintf(send_msg, MAX_STRING_MSG_LENGTH, fmt, ap);
+    plug_send_msg(plug_data, send_msg);    
+    return ret;
+}
 static int plug_printf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, ...){
-    /*
+    int ret = -1;
     va_list args;
     va_start(args, fmt);
-    const int ret = plug_vprintf(handle, type, fmt, args);
+    ret = plug_vprintf(handle, type, fmt, args);
     va_end(args);
     return ret;
-    */
-    return 0;
 }
+
 PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 		     plug_status_t* plug_errors,
 		     void* audio_backend){
