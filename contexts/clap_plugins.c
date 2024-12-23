@@ -20,8 +20,11 @@
 #define MAX_INSTANCES 5
 
 static thread_local bool is_audio_thread = false;
-
-atomic_int clap_processing; //atomic var, to check if the whole clap process is paused, if clap_process == 0, the process function wont even get the CLAP_PLUG_INFO struct
+//atomic var, to check if the whole clap process is paused, if clap_process == 0, the process function wont even get the CLAP_PLUG_INFO struct
+//before atomi_store clap_processing to 0, all the plugins plug_inst_processing must be == 0 (all plugins stopped).
+//Also this is for permanent stopping of the whole CLAP_PLUG_INFO struct, before cleaning the memory (on program close)
+//for temp stopping stop all the plugins in the struct.
+atomic_int clap_processing; 
 
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
