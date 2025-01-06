@@ -286,6 +286,9 @@ typedef struct _plug_info{
     //ring buffers for audio-thread and main-thread communication
     RING_BUFFER* rt_to_ui_msgs;
     RING_BUFFER* ui_to_rt_msgs;
+    //ring buffers for parameter manipulation communication
+    RING_BUFFER* param_rt_to_ui;
+    RING_BUFFER* param_ui_to_rt;
 }PLUG_INFO;
 //functions that block main thread and waits for the plugin process to stop or start (waiting for start necessary to keep the order of the tasks)
 static void plug_plug_wait_for_stop(PLUG_INFO* plug_data, int plug_id, unsigned int stop_all){
@@ -581,8 +584,25 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
     }
     plug_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
     if(!(plug_data->ui_to_rt_msgs)){
-	free(plug_data);
 	ring_buffer_clean(plug_data->rt_to_ui_msgs);
+	free(plug_data);
+	*plug_errors = plug_failed_malloc;
+	return NULL;
+    }
+    plug_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
+    if(!(plug_data->param_rt_to_ui)){
+	ring_buffer_clean(plug_data->rt_to_ui_msgs);
+	ring_buffer_clean(plug_data->ui_to_rt_msgs);
+	free(plug_data);
+	*plug_errors = plug_failed_malloc;
+	return NULL;
+    }
+    plug_data->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
+    if(!(plug_data->param_ui_to_rt)){
+	ring_buffer_clean(plug_data->rt_to_ui_msgs);
+	ring_buffer_clean(plug_data->ui_to_rt_msgs);
+	ring_buffer_clean(plug_data->param_rt_to_ui);
+	free(plug_data);
 	*plug_errors = plug_failed_malloc;
 	return NULL;
     }
@@ -823,7 +843,6 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
     RING_BUFFER* ring_buffer = plug_data->ui_to_rt_msgs;
     if(!ring_buffer)return -1;
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    if(cur_items <= 0)return 0;
     for(unsigned int i = 0; i < cur_items; i++){
 	RING_SYS_MSG cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
@@ -838,6 +857,19 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
 	    plug_plug_stop_process(plug_data, 0, 1);
 	}
     }
+    //read the param ui_to_rt messages and set the parameter values
+    ring_buffer = plug_data->param_ui_to_rt;
+    if(!ring_buffer)return -1;
+    cur_items = ring_buffer_return_items(ring_buffer);
+    for(unsigned int i = 0; i < cur_items; i++){
+	PARAM_RING_DATA_BIT cur_bit;
+	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
+	if(read_buffer <= 0)continue;
+	if(cur_bit.cx_id >= MAX_INSTANCES)continue;
+	PLUG_PLUG* cur_plug = &(plug_data->plugins[cur_bit.cx_id]);
+	if(!cur_plug->plug_instance || !cur_plug->plug_params)continue;
+	param_set_value(cur_plug->plug_params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 1);
+    }
     return 0;
 }
 int plug_read_rt_to_ui_messages(PLUG_INFO* plug_data){
@@ -845,7 +877,6 @@ int plug_read_rt_to_ui_messages(PLUG_INFO* plug_data){
     RING_BUFFER* ring_buffer = plug_data->rt_to_ui_msgs;
     if(!ring_buffer)return -1;
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    if(cur_items <= 0)return 0;
     for(unsigned int i = 0; i < cur_items; i++){
 	RING_SYS_MSG cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
@@ -863,6 +894,19 @@ int plug_read_rt_to_ui_messages(PLUG_INFO* plug_data){
 	    log_append_logfile("%s", cur_bit.msg);
 	}
     }
+    //read the param rt_to_ui messages and set the parameter values
+    ring_buffer = plug_data->param_rt_to_ui;
+    if(!ring_buffer)return -1;
+    cur_items = ring_buffer_return_items(ring_buffer);
+    for(unsigned int i = 0; i < cur_items; i++){
+	PARAM_RING_DATA_BIT cur_bit;
+	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
+	if(read_buffer <= 0)continue;
+	if(cur_bit.cx_id >= MAX_INSTANCES)continue;
+	PLUG_PLUG* cur_plug = &(plug_data->plugins[cur_bit.cx_id]);
+	if(!cur_plug->plug_instance || !cur_plug->plug_params)continue;
+	param_set_value(cur_plug->plug_params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 0);
+    }    
     return 0;
 }
 
@@ -1512,12 +1556,69 @@ void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigne
     return ret_sys_ports;
 }
 
-PRM_CONTAIN* plug_return_param_container(PLUG_INFO* plug_data, unsigned int plug_id){
+int plug_param_set_value(PLUG_INFO* plug_data, int plug_id, int param_id, float param_val, unsigned char param_op){
+    if(!plug_data)return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
+    //set the parameter directly on the ui thread
+    param_set_value(cur_plug->plug_params, param_id, param_val, param_op, 0);
+    //now send the message to set the parameter on the rt [audio-thread] too
+    PARAM_RING_DATA_BIT send_bit;
+    send_bit.cx_id = plug_id;
+    send_bit.param_id = param_id;
+    send_bit.param_op = param_op;
+    send_bit.param_value = param_val;
+    ring_buffer_write(plug_data->param_ui_to_rt, &send_bit, sizeof(send_bit));
+    return 0;
+}
+
+SAMPLE_T plug_param_get_increment(PLUG_INFO* plug_data, int plug_id, int param_id){
+    if(!plug_data)return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
+    return param_get_increment(cur_plug->plug_params, param_id, 0);
+}
+
+SAMPLE_T plug_param_get_value(PLUG_INFO* plug_data, unsigned char* val_type, unsigned int curved, int plug_id, int param_id){
+    if(!plug_data)return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
+    return param_get_value(cur_plug->plug_params, param_id, val_type, curved, 0, 0);
+}
+
+int plug_param_id_from_name(PLUG_INFO* plug_data, int plug_id, const char* param_name){
+    if(!plug_data)return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
+    return param_find_name(cur_plug->plug_params, param_name, 0);
+}
+
+const char* plug_param_get_string(PLUG_INFO* plug_data, int plug_id, int param_id){
     if(!plug_data)return NULL;
     if(plug_id >= MAX_INSTANCES)return NULL;
     PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_params)return NULL;
-    return cur_plug->plug_params;
+    if(!cur_plug->plug_instance || !cur_plug->plug_params)return NULL;
+    return param_get_param_string(cur_plug->plug_params, param_id, 0);
+}
+
+int plug_param_get_num_of_params(PLUG_INFO* plug_data, int plug_id){
+    if(!plug_data)return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
+    return param_return_num_params(cur_plug->plug_params, 0);
+}
+
+const char* plug_param_get_name(PLUG_INFO* plug_data, int plug_id, int param_id){
+    if(!plug_data)return NULL;
+    if(plug_id >= MAX_INSTANCES)return NULL;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug_instance || !cur_plug->plug_params)return NULL;
+    return param_get_name(cur_plug->plug_params, param_id, 0);
 }
 
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
@@ -1528,7 +1629,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
         return;
     }    
     if(!plug_data)return;    
-    if(!plug_data->plugins)return;    
+    if(!plug_data->plugins)return;
     for(int id = 0; id < MAX_INSTANCES; id++){
 	PLUG_PLUG* plug = &(plug_data->plugins[id]);
 	int expected = 1;
@@ -1538,6 +1639,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	}
 	if(!plug->plug)continue;
 	if(!plug->ports)continue;
+
 	//----------------------------------------------------------------------------------------------------
 	//first connect the ports for processing
 	for(uint32_t i = 0; i< plug->num_ports; i++){
@@ -1857,5 +1959,7 @@ void plug_clean_memory(PLUG_INFO* plug_data){
     if(plug_data->lv_world)lilv_world_free(plug_data->lv_world);
     ring_buffer_clean(plug_data->rt_to_ui_msgs);
     ring_buffer_clean(plug_data->ui_to_rt_msgs);
+    ring_buffer_clean(plug_data->param_rt_to_ui);
+    ring_buffer_clean(plug_data->param_ui_to_rt);
     free(plug_data);
 }

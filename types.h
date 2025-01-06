@@ -1,6 +1,8 @@
 #pragma once
 #define MAX_STRING_MSG_LENGTH 128 //max string size for sys messages
 #define MAX_SYS_BUFFER_ARRAY_SIZE 256 //max size for ring buffer arrays in sys messages between threads
+#define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 2048 //max size for the parameter ring buffer messaging arrays
+
 //enum for context types
 enum appContextTypes{
     Context_type_Sampler = 0x01,
@@ -85,3 +87,15 @@ typedef struct _ring_sys_msg{
     char msg[MAX_STRING_MSG_LENGTH];
     int scx_id; //subcontext id on the context array that needs to be changed somehow
 }RING_SYS_MSG;
+
+//Parameter ring data struct. A message to manipulate the parameter
+typedef struct _app_param_ring_data_bit{
+    //the id of the object in the contex, a sample, track or plugin id or similar.
+    int cx_id;
+    //the parameter id of the object.
+    int param_id;
+    //the parameter value to what to set the parameter or what the parameter value is now
+    float param_value;
+    //what to do with parameter? check paramOperType
+    unsigned char param_op;
+}PARAM_RING_DATA_BIT;

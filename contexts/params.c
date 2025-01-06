@@ -51,7 +51,8 @@ typedef struct _params_container{
     PRM_PARAM** rt_params;
     PRM_PARAM** ui_params;
     //how many parameters are there
-    unsigned int num_of_params;
+    unsigned int num_of_params_ui;
+    unsigned int num_of_params_rt;
 }PRM_CONTAIN;
 
 PRM_INTERP_VAL* params_init_interpolated_val(SAMPLE_T max_range, unsigned int total_samples){
@@ -104,12 +105,13 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
     if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types) return NULL;
     PRM_CONTAIN* param_container = (PRM_CONTAIN*)malloc(sizeof(PRM_CONTAIN));
     if(!param_container)return NULL;
-    param_container->num_of_params = num_of_params;
+    param_container->num_of_params_rt = num_of_params;
     param_container->rt_params = (PRM_PARAM**)malloc(sizeof(PRM_PARAM*) * num_of_params);
     if(!param_container->rt_params){
 	if(param_container)free(param_container);
 	return NULL;
     }
+    param_container->num_of_params_ui = num_of_params;
     param_container->ui_params = (PRM_PARAM**)malloc(sizeof(PRM_PARAM*) * num_of_params);
     if(!param_container->ui_params){
 	if(param_container)free(param_container);
@@ -190,7 +192,7 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
 int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_TABLE* table){
     if(!param_container)return -1;
     
-    if(val_id >= param_container->num_of_params)return -1;
+    if(val_id >= param_container->num_of_params_ui)return -1;
     PRM_PARAM** param_array_rt = param_container->rt_params;
     PRM_PARAM** param_array_ui = param_container->ui_params;
     if(!param_array_rt || !param_array_ui)return -1;
@@ -208,11 +210,17 @@ int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_T
 int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, unsigned char param_op,
 		    unsigned int rt_params){
     if(!param_container)return -1;
-    
-    if(val_id >= param_container->num_of_params)return -1;
-    PRM_PARAM** param_array = param_container->rt_params;
-    //if we dont want the rt_params
-    if(rt_params == 0)param_array = param_container->ui_params;
+    PRM_PARAM** param_array = NULL;
+    int num_of_params = -1;
+    if(rt_params == 0){
+	param_array = param_container->ui_params;
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	param_array = param_container->rt_params;
+	num_of_params = param_container->num_of_params_rt;
+    }
+    if(val_id >= num_of_params)return -1;
 
     PRM_PARAM* cur_param = param_array[val_id];
     SAMPLE_T prev_value = cur_param->val;
@@ -251,11 +259,17 @@ int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, u
 
 SAMPLE_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
     if(!param_container)return -1;
-    
-    if(val_id >= param_container->num_of_params)return -1;
-    PRM_PARAM** param_array = param_container->rt_params;
-    //if we dont want the rt_params
-    if(rt_params == 0)param_array = param_container->ui_params;
+    PRM_PARAM** param_array = NULL;
+    int num_of_params = -1;
+    if(rt_params == 0){
+	param_array = param_container->ui_params;
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	param_array = param_container->rt_params;
+	num_of_params = param_container->num_of_params_rt;
+    }
+    if(val_id >= num_of_params)return -1;
 
     PRM_PARAM* cur_param = param_array[val_id];
 
@@ -267,11 +281,17 @@ SAMPLE_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned 
 SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char* val_type,
 			 unsigned int curved, unsigned int interp, unsigned int rt_params){
     if(!param_container)return -1;
-    
-    if(val_id >= param_container->num_of_params)return -1;
-    PRM_PARAM** param_array = param_container->rt_params;
-    //if we dont want the rt_params
-    if(rt_params == 0)param_array = param_container->ui_params;
+    PRM_PARAM** param_array = NULL;
+    int num_of_params = -1;
+    if(rt_params == 0){
+	param_array = param_container->ui_params;
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	param_array = param_container->rt_params;
+	num_of_params = param_container->num_of_params_rt;
+    }
+    if(val_id >= num_of_params)return -1;
 
     PRM_PARAM* cur_param = param_array[val_id];
     *val_type = cur_param->val_type;
@@ -307,7 +327,7 @@ SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char
 int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings){
     if(!param_container)return -1;
     if(!strings)return -1;
-    if(val_id >= param_container->num_of_params)return -1;
+    if(val_id >= param_container->num_of_params_ui)return -1;
     PRM_PARAM** param_array_rt = param_container->rt_params;
     PRM_PARAM** param_array_ui = param_container->ui_params;
 
@@ -343,9 +363,17 @@ int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** str
 
 const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
     if(!param_container)return NULL;
-    if(val_id >= param_container->num_of_params)return NULL;
-    PRM_PARAM** param_array = param_container->rt_params;
-    if(rt_params == 0) param_array = param_container->ui_params;
+    PRM_PARAM** param_array = NULL;
+    int num_of_params = -1;
+    if(rt_params == 0){
+	param_array = param_container->ui_params;
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	param_array = param_container->rt_params;
+	num_of_params = param_container->num_of_params_rt;
+    }
+    if(val_id >= num_of_params)return NULL;
 
     PRM_PARAM* cur_param = param_array[val_id];
     int cur_val = cur_param->val;
@@ -357,11 +385,17 @@ const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, uns
 
 int param_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
     if(!param_container)return -1;
-    
-    if(val_id >= param_container->num_of_params)return -1;
-    PRM_PARAM** param_array = param_container->rt_params;
-    //if we dont want the rt_params
-    if(rt_params == 0)param_array = param_container->ui_params;
+    PRM_PARAM** param_array = NULL;
+    int num_of_params = -1;
+    if(rt_params == 0){
+	param_array = param_container->ui_params;
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	param_array = param_container->rt_params;
+	num_of_params = param_container->num_of_params_rt;
+    }
+    if(val_id >= num_of_params)return -1;
 
     PRM_PARAM* cur_param = param_array[val_id];
     if(!cur_param)return -1;
@@ -371,7 +405,7 @@ int param_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int 
 int param_get_if_any_changed(PRM_CONTAIN* param_container, unsigned int rt_params){
     if(!param_container)return -1;
     int params_changed = 0;
-    unsigned int num_params = param_return_num_params(param_container);
+    unsigned int num_params = param_return_num_params(param_container, rt_params);
     if(num_params<=0)return -1;
     for(int i=0; i < num_params; i++){
 	int changed = param_get_if_changed(param_container, i, rt_params);
@@ -385,11 +419,17 @@ int param_get_if_any_changed(PRM_CONTAIN* param_container, unsigned int rt_param
 
 const char* param_get_name(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
     if(!param_container)return NULL;
-
-    if(val_id >= param_container->num_of_params)return NULL;
-    PRM_PARAM** param_array = param_container->rt_params;
-    //if we dont want the rt_params
-    if(rt_params == 0)param_array = param_container->ui_params;
+    PRM_PARAM** param_array = NULL;
+    int num_of_params = -1;
+    if(rt_params == 0){
+	param_array = param_container->ui_params;
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	param_array = param_container->rt_params;
+	num_of_params = param_container->num_of_params_rt;
+    }
+    if(val_id >= num_of_params)return NULL;
 
     PRM_PARAM* cur_param = param_array[val_id];
     const char* cur_name = cur_param->name;
@@ -399,10 +439,18 @@ const char* param_get_name(PRM_CONTAIN* param_container, int val_id, unsigned in
 int param_find_name(PRM_CONTAIN* param_container, const char* param_name, unsigned int rt_params){
     if(!param_container)return -1;
     if(!param_name)return -1;
-    PRM_PARAM** param_array = param_container->rt_params;
-    //if we dont want the rt_params
-    if(rt_params == 0)param_array = param_container->ui_params;
-    for(int i = 0; i < param_container->num_of_params; i++){
+    PRM_PARAM** param_array = NULL;
+    int num_of_params = -1;
+    if(rt_params == 0){
+	param_array = param_container->ui_params;
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	param_array = param_container->rt_params;
+	num_of_params = param_container->num_of_params_rt;
+    }
+
+    for(int i = 0; i < num_of_params; i++){
 	const char* cur_name = param_array[i]->name;
 	if(strcmp(param_name, cur_name)==0){
 	    return i;
@@ -411,9 +459,17 @@ int param_find_name(PRM_CONTAIN* param_container, const char* param_name, unsign
     return -1;
 }
 
-unsigned int param_return_num_params(PRM_CONTAIN* param_container){
+unsigned int param_return_num_params(PRM_CONTAIN* param_container, unsigned int rt_params){
     if(!param_container)return 0;
-    return param_container->num_of_params;    
+    int num_of_params = -1;
+    if(rt_params == 0){
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	num_of_params = param_container->num_of_params_rt;
+    }
+
+    return num_of_params;
 }
 
 static void param_clean_param(PRM_PARAM* param){
@@ -433,7 +489,7 @@ static void param_clean_param(PRM_PARAM* param){
 
 void param_clean_param_container(PRM_CONTAIN* param_container){
     if(!param_container)return;
-    for(int i = 0; i < param_container->num_of_params; i++){
+    for(int i = 0; i < param_container->num_of_params_ui; i++){
 	if(param_container->rt_params[i]){
 	    param_clean_param(param_container->rt_params[i]);
 	    free(param_container->rt_params[i]);

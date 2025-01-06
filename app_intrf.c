@@ -308,14 +308,14 @@ static void cx_process_params_from_file(void *arg,
 	return;
     }
 
-    int val_id = app_param_id_from_name(app_intrf->app_data, cx_type, cx_id, val_name, 0);
+    int val_id = app_param_id_from_name(app_intrf->app_data, cx_type, cx_id, val_name);
     if(val_id == -1)return;
     
     char* val_display_name = str_find_value_from_name(attrib_names, attribs, "display_name", attrib_size);
     float float_val = str_find_value_to_float(attrib_names, attribs, "default_val", attrib_size);
     float incr = str_find_value_to_float(attrib_names, attribs, "increment", attrib_size);
     unsigned char val_type = 0;
-    app_param_get_value(app_intrf->app_data, cx_type, cx_id, val_id, &val_type, 0, 0);
+    app_param_get_value(app_intrf->app_data, cx_type, cx_id, val_id, &val_type, 0);
 
     new_attrib_names[3] = "val_display_name";
     new_attribs[3] = val_display_name;
@@ -783,7 +783,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	CX* val_duplicate = cx_find_with_val_name(cx_val->val_name, search_duplicate_root, 1);
 	if(val_duplicate){
 	    //find the param id in case the order changed
-	    cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name, 0);
+	    cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name);
 	    //set value and remove this cx
 	    if(cx_val->val_id != -1)cx_set_value_callback(app_intrf, ret_node, cx_val->float_val, Operation_SetValue);
 	    if(cx_val->val_name)free(cx_val->val_name);
@@ -800,7 +800,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 
 	//find the parameter id, sometimes what is saved in the json file can be in a different order from the parameters in params
 	//here we check the id of the same name for this purpose
-	cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name, 0);
+	cx_val->val_id = app_param_id_from_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_name);
 
 	if(cx_val->val_id == -1){
 	    cx_remove_this_and_children(ret_node);
@@ -1158,7 +1158,7 @@ static int context_list_from_dir(APP_INTRF* app_intrf,
 static float cx_get_value_callback(APP_INTRF* app_intrf, CX* self, unsigned char* ret_type){
     CX_VAL* cx_val = (CX_VAL*)self;
     float ret_val = 0;
-    ret_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_type, 0, 0);
+    ret_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_type, 0);
     if(ret_val == -1 && *ret_type == 0) return -1;
     cx_val->float_val = ret_val;
 
@@ -1167,7 +1167,7 @@ static float cx_get_value_callback(APP_INTRF* app_intrf, CX* self, unsigned char
     //because it would be save converted to the save file, we need saved values for these parameters to be linear
     //otherwise on song load the converted value would be set on the parameter
     if((*ret_type & 0xff) == Curve_Float_Return_Type)
-	ret_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_type, 1, 0);
+	ret_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_type, 1);
 
     return ret_val;
 }
@@ -1175,8 +1175,7 @@ static void cx_set_value_callback(APP_INTRF* app_intrf, CX* self, float set_to, 
     if(!app_intrf)return;
     if(self->type != Val_cx_e)return;
     CX_VAL* cx_val = (CX_VAL*)self;
-    app_param_set_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id,
-			set_to, param_op, 0);
+    app_param_set_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, set_to, param_op);
 }
 //return 1 if context structure changed
 static int cx_enter_remove_callback(APP_INTRF* app_intrf, CX* self){
@@ -1806,7 +1805,7 @@ int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_strin
 	if((ret_type & 0xff) == DB_Return_Type)snprintf(ret_string, name_len, "%0.3gDB", log10((double)cx_val) * 20);
 	if((ret_type & 0xff) == Curve_Float_Return_Type)snprintf(ret_string, name_len, "%g", cx_val);
 	if((ret_type & 0xff) == String_Return_Type && param_cx != NULL){
-	    const char* param_string = app_param_get_string(app_intrf->app_data, param_cx->cx_type, param_cx->cx_id, param_cx->val_id, 0);
+	    const char* param_string = app_param_get_string(app_intrf->app_data, param_cx->cx_type, param_cx->cx_id, param_cx->val_id);
 	    if(param_string == NULL){
 		return -1;
 	    }
@@ -1890,7 +1889,7 @@ static void helper_cx_prepare_for_param_conf(void* arg, APP_INTRF* app_intrf, CX
 
     attrib_names[3] = "increment";
     char incr_val[100];
-    snprintf(incr_val, 100, "%g", app_param_get_increment(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, 0));
+    snprintf(incr_val, 100, "%g", app_param_get_increment(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id));
     attrib_vals[3] = incr_val;
     app_json_write_json_callback(arg, cx_val->val_name, NULL, NULL, attrib_names, attrib_vals, 4);
 }
@@ -1959,7 +1958,7 @@ static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_
 	//but dont do this if its a subtype of Val_cx_e, for example a container
 	if(top_cx->type == Val_cx_e){
 	    unsigned char ret_type = 0;
-	    float updated_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, &ret_type, 0, 0);
+	    float updated_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, &ret_type, 0);
 	    if(updated_val != -1 && ret_type != 0){
 		cx_val->float_val = updated_val;
 	    }

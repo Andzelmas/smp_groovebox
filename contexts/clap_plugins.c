@@ -383,11 +383,12 @@ static char** clap_plug_get_plugin_names_from_file(const char* plug_path, unsign
     handle = dlopen(plug_path, RTLD_LOCAL | RTLD_LAZY);
     if(!handle){
 	log_append_logfile("failed to load %s dso \n", plug_path);
+	return NULL;
     }
     
     iptr = (int*)dlsym(handle, "clap_entry");
     clap_plugin_entry_t* plug_entry = (clap_plugin_entry_t*)iptr;
-    
+    if(!plug_entry)return NULL;
     unsigned int init_err = plug_entry->init(plug_path);
     if(!init_err){
 	log_append_logfile("failed to init the %s plugin entry\n", plug_path);

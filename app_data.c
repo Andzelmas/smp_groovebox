@@ -1,20 +1,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-#include "contexts/params.h"
 //my libraries
 #include "app_data.h"
 //string functions
 #include "util_funcs/string_funcs.h"
 //math helper functions
 #include "util_funcs/math_funcs.h"
-//funcs for ring buffer manipulation
-#include "util_funcs/ring_buffer.h"
 //jack init functions
 #include "jack_funcs/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
-//the size of the ring buffer arrays for ui to rt and rt to ui communication
-#define MAX_RING_BUFFER_ARRAY_SIZE 2048
 //how many rt cycles should pass before the rt thread sends info to the ui thread, so it does not fill the
 //ring buffer too fast
 #define RT_TO_UI_TICK 25
@@ -55,11 +50,6 @@ typedef struct _app_info{
     
     //hold here if we launched the jack client process
     unsigned int trk_process_launched;
-
-    //ring buffer for ui to real time thread communication
-    RING_BUFFER* ui_to_rt_ring;
-    //ring buffer for real time thread to ui communication
-    RING_BUFFER* rt_to_ui_ring;
     //rt thread cycles, they go up to RT_TO_UI_TICK and then restarts
     unsigned int rt_cycle;
      //ports for trk_jack
@@ -83,19 +73,6 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->synth_data = NULL;
     app_data->trk_process_launched = 0;
     app_data->rt_cycle = 0;
-
-    //initiate the ring buffers
-    app_data->ui_to_rt_ring = ring_buffer_init(sizeof(RING_DATA_BIT), MAX_RING_BUFFER_ARRAY_SIZE);
-    if(!app_data->ui_to_rt_ring){
-	*app_status = app_failed_malloc;
-	return NULL;
-    }
-    app_data->rt_to_ui_ring = ring_buffer_init(sizeof(RING_DATA_BIT), MAX_RING_BUFFER_ARRAY_SIZE);
-    if(!app_data->rt_to_ui_ring){
-	*app_status = app_failed_malloc;
-	ring_buffer_clean(app_data->ui_to_rt_ring);
-	return NULL;
-    }
     
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
@@ -269,97 +246,108 @@ int app_smp_sample_init(APP_INFO* app_data, const char* samp_path, int in_id){
     return return_id;
 }
 
-static PRM_CONTAIN* app_return_param_container(APP_INFO* app_data, unsigned char cx_type, int cx_id){
-    PRM_CONTAIN* return_container = NULL;
-
-    if(!app_data)return NULL;
+int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, float param_value, unsigned char param_op){
+    if(!app_data)return -1;
     if(cx_type == Context_type_Sampler){
-	return_container = smp_get_sample_param_container(app_data->smp_data, cx_id);
+	//TODO set sampler params
     }
-    //if this is general trk settings
     if(cx_type == Context_type_Trk){
-	return_container = app_jack_return_param_container(app_data->trk_jack);
+	//TODO set trk params
     }
-    //if this is the synth
     if(cx_type == Context_type_Synth){
-	return_container = synth_return_param_container(app_data->synth_data, cx_id);
+	//TODO set Synth params
     }
     if(cx_type == Context_type_Plugins){
-	return_container = plug_return_param_container(app_data->plug_data, cx_id);
+	return plug_param_set_value(app_data->plug_data, cx_id, param_id, param_value, param_op);
     }
-    return return_container;
+    return -1;
 }
 
-int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, float param_value,
-			unsigned char param_op, unsigned int rt_to_ui){
-    //first get the parameter container and set the parameter for the current thread directly
-    //so set rt param if rt_to_ui==1 or set ui param if rt_to_ui==0
-    PRM_CONTAIN* param_container = app_return_param_container(app_data, cx_type, cx_id);
-    if(!param_container)return -1;
-    param_set_value(param_container, param_id, param_value, param_op, rt_to_ui);
-    
-    RING_DATA_BIT send_bit;
-    send_bit.param_container = param_container;
-    send_bit.cx_id = cx_id;
-    send_bit.param_id = param_id;
-    send_bit.param_value = param_value;
-    send_bit.param_op = param_op;
-    send_bit.value_type = Float_type;
-    RING_BUFFER* ring_buffer = app_data->ui_to_rt_ring;
-    if(rt_to_ui == RT_TO_UI_RING_E)ring_buffer = app_data->rt_to_ui_ring;
-    int ret = ring_buffer_write(ring_buffer, &send_bit, sizeof(send_bit));
-    //for testing how many items are in the ring_buffer
-    /*
-    if(rt_to_ui==0)
-	log_append_logfile("ringbuffer size %d after sending %s\n", ring_buffer_return_items(ring_buffer),param_get_name(param_container, param_id, rt_to_ui));
-    */
-    return ret;
-}
-
-SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, unsigned int rt_param){
+SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
     if(!app_data)return -1;
-    //get the appropriate parameter container depending on the context
-    PRM_CONTAIN* param_container = app_return_param_container(app_data, cx_type, cx_id);
-    if(!param_container)return -1;
-
-    return param_get_increment(param_container, param_id, rt_param);
+    if(cx_type == Context_type_Sampler){
+	//TODO set sampler params
+    }
+    if(cx_type == Context_type_Trk){
+	//TODO set trk params
+    }
+    if(cx_type == Context_type_Synth){
+	//TODO set Synth params
+    }
+    if(cx_type == Context_type_Plugins){
+	return plug_param_get_increment(app_data->plug_data, cx_id, param_id);
+    }
+    return -1;
 }
 
 SAMPLE_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
-			     unsigned char* val_type, unsigned int curved, unsigned int rt_param){
+			     unsigned char* val_type, unsigned int curved){
     if(!app_data)return -1;
-    //get the appropriate parameter container depending on the context
-    PRM_CONTAIN* param_container = app_return_param_container(app_data, cx_type, cx_id);
-    if(!param_container)return -1;
-
-    return param_get_value(param_container, param_id, val_type, curved, 0, rt_param);
+    if(cx_type == Context_type_Sampler){
+	//TODO set sampler params
+    }
+    if(cx_type == Context_type_Trk){
+	//TODO set trk params
+    }
+    if(cx_type == Context_type_Synth){
+	//TODO set Synth params
+    }
+    if(cx_type == Context_type_Plugins){
+	return plug_param_get_value(app_data->plug_data, val_type, curved, cx_id, param_id);
+    }
+    return -1;
 }
 
-int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name, unsigned int rt_param){
+int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name){
     if(!app_data)return -1;
-    PRM_CONTAIN* param_container = app_return_param_container(app_data, cx_type, cx_id);
-    if(!param_container)return -1;
-    return param_find_name(param_container, param_name, rt_param);
+    if(cx_type == Context_type_Sampler){
+	//TODO set sampler params
+    }
+    if(cx_type == Context_type_Trk){
+	//TODO set trk params
+    }
+    if(cx_type == Context_type_Synth){
+	//TODO set Synth params
+    }
+    if(cx_type == Context_type_Plugins){
+	return plug_param_id_from_name(app_data->plug_data, cx_id, param_name);
+    }
+    return -1;
 }
 
-const char* app_param_get_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
-			      unsigned int rt_param){
+const char* app_param_get_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
     if(!app_data)return NULL;
-    //get the appropriate parameter container depending on the context
-    PRM_CONTAIN* param_container = app_return_param_container(app_data, cx_type, cx_id);
-    if(!param_container)return NULL;
-
-    return param_get_param_string(param_container, param_id, rt_param);
+    if(cx_type == Context_type_Sampler){
+	//TODO set sampler params
+    }
+    if(cx_type == Context_type_Trk){
+	//TODO set trk params
+    }
+    if(cx_type == Context_type_Synth){
+	//TODO set Synth params
+    }
+    if(cx_type == Context_type_Plugins){
+	return plug_param_get_string(app_data->plug_data, cx_id, param_id);
+    }
+    return NULL;
 }
 
 int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, char*** param_names, char*** param_vals,
 			 char*** param_types, unsigned int* param_num){
     if(!app_data)return -1;
-    //get the parameter container depending on the context
-    PRM_CONTAIN* param_container = app_return_param_container(app_data, cx_type, cx_id);
-    if(!param_container)return -1;
     *param_num = 0;
-    *param_num = param_return_num_params(param_container);
+    if(cx_type == Context_type_Sampler){
+	//TODO set sampler params
+    }
+    if(cx_type == Context_type_Trk){
+	//TODO set trk params
+    }
+    if(cx_type == Context_type_Synth){
+	//TODO set Synth params
+    }
+    if(cx_type == Context_type_Plugins){
+	*param_num = plug_param_get_num_of_params(app_data->plug_data, cx_id);
+    }
     
     if(*param_num<=0)return -1;
     char** this_names = (char**)malloc(sizeof(char*) * (*param_num));
@@ -373,7 +361,18 @@ int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, in
 	this_vals[i] = NULL;
 	this_types[i] = NULL;
 	const char* cur_name = NULL;
-	cur_name = param_get_name(param_container, i, UI_PARAM_E);
+	if(cx_type == Context_type_Sampler){
+	    //TODO set sampler params
+	}
+	if(cx_type == Context_type_Trk){
+	    //TODO set trk params
+	}
+	if(cx_type == Context_type_Synth){
+	    //TODO set Synth params
+	}
+	if(cx_type == Context_type_Plugins){
+	    cur_name = plug_param_get_name(app_data->plug_data, cx_id, i);
+	}
 	
 	if(!cur_name)continue;
 	char* param_name = (char*)malloc(sizeof(char) * (strlen(cur_name)+1));
@@ -383,7 +382,7 @@ int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, in
 	
 	unsigned char cur_type = 0;
         float cur_val = -1;
-	cur_val = param_get_value(param_container, i, &cur_type, 0, 0, UI_PARAM_E);
+	cur_val = app_param_get_value(app_data, cx_type, cx_id, i, &cur_type, 0);
 
 	if(cur_type == 0)continue;
 	int name_len = 0;
@@ -536,13 +535,12 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     //get the app data
     APP_INFO *app_data = (APP_INFO*)arg;
     if(app_data==NULL)return 1;
-    //process misc messages from ui to rt thread, like start processing a plugin, stop_processing a plugin and similar
+    //process messages from ui to rt thread, like start processing a plugin, stop_processing a plugin, update rt param values etc.
     app_read_rt_messages(app_data);
-    //read the ui_to_rt ring buffer and update the appropriate context rt_param arrays
-    app_read_ring_buffer(app_data, UI_TO_RT_RING_E);
     //initiate the various transport processes depending on the trk parameters
     //also process the metronome
-    app_transport_control_rt(app_data, nframes);
+    //TODO should be in the trk context
+    //app_transport_control_rt(app_data, nframes);
     
     //process the SAMPLER DATA
     smp_sample_process_rt(app_data->smp_data, nframes);    
@@ -571,7 +569,7 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
 
     return 0;
 }
-
+/*
 static int app_transport_control_rt(APP_INFO* app_data, NFRAMES_T nframes){
     if(!app_data)return -1;
     //if rt params just got new parameter values from the ui they will be just changed
@@ -614,37 +612,9 @@ static int app_transport_control_rt(APP_INFO* app_data, NFRAMES_T nframes){
 	}
     }
 }
-
-static int app_read_ring_buffer(APP_INFO* app_data, unsigned int rt_to_ui){
-    RING_BUFFER* ring_buffer = NULL;
-    if(rt_to_ui == UI_TO_RT_RING_E)ring_buffer = app_data->ui_to_rt_ring;
-    if(rt_to_ui == RT_TO_UI_RING_E)ring_buffer = app_data->rt_to_ui_ring;
-    if(!ring_buffer)return -1;
-
-    unsigned int rt_params = UI_PARAM_E;
-    if(rt_to_ui==UI_TO_RT_RING_E)rt_params = RT_PARAM_E;
-    
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-  
-    if(cur_items <= 0)return -1;
-    
-    for(int i = 0; i<cur_items; i++){
-	RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer<=0)continue;
-	float new_val = -1;
-	unsigned char val_type = 0;
-	PRM_CONTAIN* param_container = cur_bit.param_container;
-	if(!param_container)continue;
-	param_set_value(param_container, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, rt_params);
-    }
-    return 1;
-}
-
+*/
 int app_update_ui_params(APP_INFO* app_data){
     int return_val = -1;
-    //update parameter on ui side, with values from the rt side
-    app_read_ring_buffer(app_data, RT_TO_UI_RING_E);
     //read messages from rt thread on [main-thread] for CLAP plugins
     clap_read_rt_to_ui_messages(app_data->clap_plug_data);
     //read messages from the rt thread on the [main-thread] for lv2 plugins
@@ -681,10 +651,6 @@ int clean_memory(APP_INFO *app_data){
     //TODO this context when paused should stop the process function too
     //clean the track jack memory
     if(app_data->trk_jack)jack_clean_memory(app_data->trk_jack);
-
-    //clean the ring buffers
-    ring_buffer_clean(app_data->ui_to_rt_ring);
-    ring_buffer_clean(app_data->rt_to_ui_ring);
 
     //clean the app_data
     if(app_data)free(app_data);

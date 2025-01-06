@@ -42,6 +42,6 @@ const char* param_get_name(PRM_CONTAIN* param_container, int val_id, unsigned in
 //return id of parameter given its name, will return -1 if name was not found
 int param_find_name(PRM_CONTAIN* param_container, const char* param_name, unsigned int rt_params);
 //return how many parameters are there on the param container
-unsigned int param_return_num_params(PRM_CONTAIN* param_container);
+unsigned int param_return_num_params(PRM_CONTAIN* param_container, unsigned int rt_params);
 //cleans the parameter containerx
 void param_clean_param_container(PRM_CONTAIN* param_container);
