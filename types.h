@@ -2,6 +2,7 @@
 #define MAX_STRING_MSG_LENGTH 128 //max string size for sys messages
 #define MAX_SYS_BUFFER_ARRAY_SIZE 256 //max size for ring buffer arrays in sys messages between threads
 #define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 2048 //max size for the parameter ring buffer messaging arrays
+#define RT_CYCLES 25 //in what interval the rt thread should give info to the ui thread to not overwhelm it. 
 
 //enum for context types
 enum appContextTypes{

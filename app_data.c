@@ -10,9 +10,6 @@
 //jack init functions
 #include "jack_funcs/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
-//how many rt cycles should pass before the rt thread sends info to the ui thread, so it does not fill the
-//ring buffer too fast
-#define RT_TO_UI_TICK 25
 
 //the client name that will be shown in the audio client and added next to the port names
 const char* client_name = "smp_grvbox";
@@ -50,8 +47,6 @@ typedef struct _app_info{
     
     //hold here if we launched the jack client process
     unsigned int trk_process_launched;
-    //rt thread cycles, they go up to RT_TO_UI_TICK and then restarts
-    unsigned int rt_cycle;
      //ports for trk_jack
     void* main_in_L;
     void* main_in_R;
@@ -72,7 +67,6 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
     app_data->trk_process_launched = 0;
-    app_data->rt_cycle = 0;
     
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
@@ -248,11 +242,11 @@ int app_smp_sample_init(APP_INFO* app_data, const char* samp_path, int in_id){
 
 int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, float param_value, unsigned char param_op){
     if(!app_data)return -1;
+    if(cx_type == Context_type_Trk){
+	return app_jack_param_set_value(app_data->trk_jack, param_id, param_value, param_op);
+    }    
     if(cx_type == Context_type_Sampler){
 	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Trk){
-	//TODO set trk params
     }
     if(cx_type == Context_type_Synth){
 	//TODO set Synth params
@@ -265,11 +259,11 @@ int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, in
 
 SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
     if(!app_data)return -1;
+    if(cx_type == Context_type_Trk){
+	return app_jack_param_get_increment(app_data->trk_jack, param_id);
+    }    
     if(cx_type == Context_type_Sampler){
 	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Trk){
-	//TODO set trk params
     }
     if(cx_type == Context_type_Synth){
 	//TODO set Synth params
@@ -283,11 +277,11 @@ SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int 
 SAMPLE_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
 			     unsigned char* val_type, unsigned int curved){
     if(!app_data)return -1;
+    if(cx_type == Context_type_Trk){
+	return app_jack_param_get_value(app_data->trk_jack, val_type, curved, param_id);
+    }    
     if(cx_type == Context_type_Sampler){
 	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Trk){
-	//TODO set trk params
     }
     if(cx_type == Context_type_Synth){
 	//TODO set Synth params
@@ -300,11 +294,11 @@ SAMPLE_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_i
 
 int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name){
     if(!app_data)return -1;
+   if(cx_type == Context_type_Trk){
+       return app_jack_param_id_from_name(app_data->trk_jack, param_name);
+    }    
     if(cx_type == Context_type_Sampler){
 	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Trk){
-	//TODO set trk params
     }
     if(cx_type == Context_type_Synth){
 	//TODO set Synth params
@@ -317,11 +311,11 @@ int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id,
 
 const char* app_param_get_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
     if(!app_data)return NULL;
+    if(cx_type == Context_type_Trk){
+	return app_jack_param_get_string(app_data->trk_jack, param_id);
+    }    
     if(cx_type == Context_type_Sampler){
 	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Trk){
-	//TODO set trk params
     }
     if(cx_type == Context_type_Synth){
 	//TODO set Synth params
@@ -336,11 +330,11 @@ int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, in
 			 char*** param_types, unsigned int* param_num){
     if(!app_data)return -1;
     *param_num = 0;
+    if(cx_type == Context_type_Trk){
+	*param_num = app_jack_param_get_num_of_params(app_data->trk_jack);
+    }
     if(cx_type == Context_type_Sampler){
 	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Trk){
-	//TODO set trk params
     }
     if(cx_type == Context_type_Synth){
 	//TODO set Synth params
@@ -361,11 +355,11 @@ int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, in
 	this_vals[i] = NULL;
 	this_types[i] = NULL;
 	const char* cur_name = NULL;
+	if(cx_type == Context_type_Trk){
+	    cur_name = app_jack_param_get_name(app_data->trk_jack, i);
+	}
 	if(cx_type == Context_type_Sampler){
 	    //TODO set sampler params
-	}
-	if(cx_type == Context_type_Trk){
-	    //TODO set trk params
 	}
 	if(cx_type == Context_type_Synth){
 	    //TODO set Synth params
@@ -525,6 +519,8 @@ const char** app_return_context_ports(APP_INFO* app_data, unsigned int* name_num
 //read ring buffers sent from ui to rt thread - this is not for parameter values, but for messages like start processing a plugin and similar
 static void app_read_rt_messages(APP_INFO* app_data){
     if(!app_data)return;
+    //read the jack inner messages on the [audio-thread]
+    app_jack_read_ui_to_rt_messages(app_data->trk_jack);
     //read the CLAP plugins inner messages on the [audio-thread]
     clap_read_ui_to_rt_messages(app_data->clap_plug_data);
     //read the lv2 plugin messages on the [audio-thread]
@@ -537,10 +533,6 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     if(app_data==NULL)return 1;
     //process messages from ui to rt thread, like start processing a plugin, stop_processing a plugin, update rt param values etc.
     app_read_rt_messages(app_data);
-    //initiate the various transport processes depending on the trk parameters
-    //also process the metronome
-    //TODO should be in the trk context
-    //app_transport_control_rt(app_data, nframes);
     
     //process the SAMPLER DATA
     smp_sample_process_rt(app_data->smp_data, nframes);    
@@ -562,65 +554,19 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     //copy the Master track in  - to the Master track out
     memcpy(trk_out_L, trk_in_L, sizeof(SAMPLE_T)*nframes);
     memcpy(trk_out_R, trk_in_R, sizeof(SAMPLE_T)*nframes);
-    
-    //update the rt cycle
-    app_data->rt_cycle += 1;
-    if(app_data->rt_cycle > RT_TO_UI_TICK)app_data->rt_cycle = 0;
 
     return 0;
 }
-/*
-static int app_transport_control_rt(APP_INFO* app_data, NFRAMES_T nframes){
-    if(!app_data)return -1;
-    //if rt params just got new parameter values from the ui they will be just changed
-    //in that case jack will create a new transport object and request a transport change
-    app_jack_update_transport_from_params_rt(app_data->trk_jack);
 
-     //now send transport info to the ui thread, we do it only on rt_cycle 0
-    //so to not overwhelm the ui thread buffer
-    if(app_data->rt_cycle == 0){
-	int32_t bar = 1;
-	int32_t beat = 1;
-	int32_t tick = 0;
-	SAMPLE_T ticks_per_beat = 0;
-	NFRAMES_T total_frames = 0;
-	//bpm, beat_type and beats_per_bar are used from the params so they are not used here
-	float bpm = 0;
-	float beat_type = 0;
-	float beats_per_bar = 0;
-	int isPlaying = app_jack_return_transport(app_data->trk_jack, &bar, &beat, &tick, &ticks_per_beat, &total_frames,
-						  &bpm, &beat_type, &beats_per_bar);
-	if(isPlaying != -1){
-	    //we also get the tranport parameter container, so we can look up the value after sending it
-	    //to the ring buffer, otherwise just_changed will be 1 again and the new transport object
-	    //would be created each time the rt_cycle == 0
-	    PRM_CONTAIN* transport_cntr = app_return_param_container(app_data, Context_type_Trk, 0);
-	    unsigned char val_type = 0;	    
-	    app_param_set_value(app_data, Context_type_Trk, 0, 1, (float)bar, Operation_SetValue, RT_TO_UI_RING_E);
-	    param_get_value(transport_cntr, 1, &val_type, 0, 0, RT_PARAM_E);
-	    
-	    app_param_set_value(app_data, Context_type_Trk, 0, 2, (float)beat, Operation_SetValue, RT_TO_UI_RING_E);
-	    param_get_value(transport_cntr, 2, &val_type, 0, 0, RT_PARAM_E);
-
-	    app_param_set_value(app_data, Context_type_Trk, 0, 3, (float)tick, Operation_SetValue, RT_TO_UI_RING_E);
-	    param_get_value(transport_cntr, 3, &val_type, 0, 0, RT_PARAM_E);
-
-	    //also set the play value on the ui, just in case the transport started in some external way,
-	    //not through the parameter play
-	    app_param_set_value(app_data, Context_type_Trk, 0, 4, (float)isPlaying, Operation_SetValue, RT_TO_UI_RING_E);
-	    param_get_value(transport_cntr, 4, &val_type, 0, 0, RT_PARAM_E);
-	}
-    }
-}
-*/
 int app_update_ui_params(APP_INFO* app_data){
-    int return_val = -1;
+    if(!app_data)return -1;
+    //read messages for jack from rt thread on [main-thread]
+    app_jack_read_rt_to_ui_messages(app_data->trk_jack);
     //read messages from rt thread on [main-thread] for CLAP plugins
     clap_read_rt_to_ui_messages(app_data->clap_plug_data);
     //read messages from the rt thread on the [main-thread] for lv2 plugins
     plug_read_rt_to_ui_messages(app_data->plug_data);
-    return_val = 0;
-    return return_val;
+    return 0;
 }
 
 int app_smp_remove_sample(APP_INFO* app_data, unsigned int idx){
