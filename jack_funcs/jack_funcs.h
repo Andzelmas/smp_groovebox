@@ -106,16 +106,10 @@ void jack_clean_memory(void* jack_data);
 //callback to update the *pos struct that holds bar, beat, tick, etc information. Realtime function, cant wait!
 void timebbt_callback_rt(jack_transport_state_t state, jack_nframes_t nframes, jack_position_t *pos,
 			 int new_pos, void *arg);
-//return the jack transport position info to the various variables
-int app_jack_return_transport(void* audio_client, int32_t* cur_bar, int32_t* cur_beat,
-			      int32_t* cur_tick, SAMPLE_T* ticks_per_beat, jack_nframes_t* total_frames,
-			      float* bmp, float* beat_type, float* beats_per_bar);
 //check if any parameters that control the transport head have changed, if yes - request an update with the new
 //parameters to the transport head
 void app_jack_update_transport_from_params_rt(JACK_INFO* jack_data);
-//return the trk parameters, like bpm bar etc
-PRM_CONTAIN* app_jack_return_param_container(JACK_INFO* jack_data);
-//function that changes the transport head
-//transport_type: 0 - transport_stop; 1 - transport_start;
-//should be realtime safe, but better double check before using in realtime processes
-int app_jack_transport(JACK_INFO* jack_data, unsigned int transport_type);
+//return the jack transport position info to the various variables
+int app_jack_return_transport_rt(void* audio_client, int32_t* cur_bar, int32_t* cur_beat,
+				 int32_t* cur_tick, SAMPLE_T* ticks_per_beat, jack_nframes_t* total_frames,
+				 float* bmp, float* beat_type, float* beats_per_bar);

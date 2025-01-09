@@ -773,8 +773,8 @@ int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes){
 	float bpm = 0;
 	float beat_type = 0;
 	float beats_per_bar = 0;
-	int isPlaying = app_jack_return_transport(synth_data->audio_backend, &bar, &beat, &tick, &ticks_per_beat, &total_frames,
-						  &bpm, &beat_type, &beats_per_bar);
+	int isPlaying = app_jack_return_transport_rt(synth_data->audio_backend, &bar, &beat, &tick, &ticks_per_beat, &total_frames,
+						     &bpm, &beat_type, &beats_per_bar);
 	if(isPlaying != -1){
 	    SYNTH_OSC* cur_osc = &(synth_data->osc_array[0]);
 	    if(!cur_osc)return -1;

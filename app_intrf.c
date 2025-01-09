@@ -145,43 +145,12 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
     APP_INFO *app_data = NULL;
     app_status_t app_status = 0;
     app_data = app_init(&app_status);
+    if(!app_data){
+	free(app_intrf);
+	*err_status = AppFailedMalloc;
+	return NULL;
+    }
     app_intrf->app_data = app_data;
-    //app_data failed to initialize, clean what we have so far, critical error
-    if(app_status == app_failed_malloc){
-        free(app_intrf);
-        *err_status = AppFailedMalloc;
-        return NULL;
-    }    
-    //smp_data failed to initialize, clean what we have so far, critical error
-    if(app_status == smp_data_init_failed){
-        free(app_intrf);
-        *err_status = SmpFailedMalloc;
-        return NULL;
-    }
-    //smp_jack failed to initialize, clean what we have, close
-    if(app_status == smp_jack_init_failed){
-        free(app_intrf);
-        *err_status = SmpJackFailedMalloc;
-        return NULL;
-    }
-    //trk_jack failed to initialize, clean what we have, close
-    if(app_status == trk_jack_init_failed){
-        free(app_intrf);
-        *err_status = TrkJackFailedInit;
-        return NULL;
-    }    
-    //plugin data failed to initialize
-    if(app_status == plug_data_init_failed){
-	free(app_intrf);
-	*err_status = PlugDataFailedMalloc;
-	return NULL;
-    }
-    //plugin jack client failed to initialize
-    if(app_status == plug_jack_init_failed){
-	free(app_intrf);
-	*err_status = PlugJackFailedInit;
-	return NULL;
-    }
     
     //read the conf file if its not in this dir create it and the dir structure and the Song_01
     if(app_json_read_conf(&app_intrf->shared_dir, song_path, NULL, &app_intrf->load_from_conf, app_intrf, cx_process_from_file)!=0){

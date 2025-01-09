@@ -45,8 +45,6 @@ typedef struct _app_info{
     //built in synth data
     SYNTH_DATA* synth_data;
     
-    //hold here if we launched the jack client process
-    unsigned int trk_process_launched;
      //ports for trk_jack
     void* main_in_L;
     void* main_in_R;
@@ -66,7 +64,6 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->plug_data = NULL;
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
-    app_data->trk_process_launched = 0;
     
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
@@ -79,14 +76,19 @@ APP_INFO* app_init(app_status_t *app_status){
 	return NULL;
     }
     app_data->trk_jack = trk_jack;
+    uint32_t buffer_size = (uint32_t)app_jack_return_buffer_size(app_data->trk_jack);
+    SAMPLE_T samplerate = (SAMPLE_T)app_jack_return_samplerate(app_data->trk_jack);
     //create ports for trk_jack
     app_data->main_in_L = app_jack_create_port_on_client(app_data->trk_jack, 0, 1, "master_in_L");
     app_data->main_in_R = app_jack_create_port_on_client(app_data->trk_jack, 0, 1, "master_in_R");
     app_data->main_out_L = app_jack_create_port_on_client(app_data->trk_jack, 0, 2, "master_out_L");
     app_data->main_out_R = app_jack_create_port_on_client(app_data->trk_jack, 0, 2, "master_out_R");
-
-    uint32_t buffer_size = (uint32_t)app_jack_return_buffer_size(app_data->trk_jack);
-    SAMPLE_T samplerate = (SAMPLE_T)app_jack_return_samplerate(app_data->trk_jack);
+    //now activate the jack client, it will launch the rt thread (trk_audio_process_rt function)
+    if(app_jack_activate(app_data->trk_jack)!=0){
+	clean_memory(app_data);
+	*app_status = trk_jack_init_failed;
+	return NULL;	
+    }
     /*initiate the sampler it will be empty initialy*/
     /*-----------------------------------------------*/
     smp_status_t smp_status_err = 0;
@@ -109,8 +111,8 @@ APP_INFO* app_init(app_status_t *app_status){
 	*app_status = plug_data_init_failed;
 	return NULL;
     }
+    
     clap_plug_status_t clap_plug_errors = 0;
-    app_data->clap_plug_data = NULL;
     app_data->clap_plug_data = clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors, trk_jack);
     if(!(app_data->clap_plug_data)){
 	clean_memory(app_data);
@@ -125,14 +127,6 @@ APP_INFO* app_init(app_status_t *app_status){
 	*app_status = synth_data_init_failed;
 	return NULL;
     }
-
-    //now activate the jack client, it will launch the rt thread (trk_audio_process_rt function)
-    if(app_jack_activate(app_data->trk_jack)!=0){
-	clean_memory(app_data);
-	*app_status = trk_jack_init_failed;
-	return NULL;	
-    }
-    app_data->trk_process_launched = 1;
 
     return app_data;
 }
@@ -535,7 +529,7 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     app_read_rt_messages(app_data);
     
     //process the SAMPLER DATA
-    smp_sample_process_rt(app_data->smp_data, nframes);    
+    //smp_sample_process_rt(app_data->smp_data, nframes);    
 
     //process the PLUGIN DATA
     plug_process_data_rt(app_data->plug_data, nframes);
@@ -544,14 +538,15 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     clap_process_data_rt(app_data->clap_plug_data, nframes);
     
     //process the SYNTH DATA
-    synth_process_rt(app_data->synth_data, nframes);
-
+    //synth_process_rt(app_data->synth_data, nframes);
+    
     //get the buffers for the trk_data, that is used as track summer
     SAMPLE_T *trk_in_L = app_jack_get_buffer_rt(app_data->main_in_L, nframes);
     SAMPLE_T *trk_in_R = app_jack_get_buffer_rt(app_data->main_in_R, nframes);    
     SAMPLE_T *trk_out_L = app_jack_get_buffer_rt(app_data->main_out_L, nframes);
     SAMPLE_T *trk_out_R = app_jack_get_buffer_rt(app_data->main_out_R, nframes);    
     //copy the Master track in  - to the Master track out
+    if(!trk_in_L || !trk_in_R || !trk_out_L || !trk_out_R)return 0;
     memcpy(trk_out_L, trk_in_L, sizeof(SAMPLE_T)*nframes);
     memcpy(trk_out_R, trk_in_R, sizeof(SAMPLE_T)*nframes);
 
@@ -590,11 +585,12 @@ int clean_memory(APP_INFO *app_data){
     //clean the lv2 plug_data memory
     if(app_data->plug_data)plug_clean_memory(app_data->plug_data);
     //clean the sampler memory
+    //TODO implement pause in smp_clean_memory
     if(app_data->smp_data) smp_clean_memory(app_data->smp_data);
     //clean the synth memory
+    //TODO implement pause in synth_clean_memory
     if(app_data->synth_data) synth_clean_memory(app_data->synth_data);
 
-    //TODO this context when paused should stop the process function too
     //clean the track jack memory
     if(app_data->trk_jack)jack_clean_memory(app_data->trk_jack);
 

@@ -217,6 +217,7 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
     void* midi_buffer = app_jack_get_buffer_rt(midi_port->sys_port , nframes);
     SAMPLE_T* out_L = app_jack_get_buffer_rt(out_L_port->sys_port, nframes);
     SAMPLE_T* out_R = app_jack_get_buffer_rt(out_R_port->sys_port, nframes);
+    if(!midi_buffer || !out_L || !out_R)return -1;
     memset(out_L, '\0', sizeof(SAMPLE_T)*nframes);
     memset(out_R, '\0', sizeof(SAMPLE_T)*nframes); 
 

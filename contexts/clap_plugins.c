@@ -115,8 +115,9 @@ static bool clap_plug_ext_is_main_thread(const clap_host_t* host){
 }
 //send a [thread-safe] message - check if thread is audio or main
 static void clap_plug_send_msg(CLAP_PLUG_INFO* plug_data, const char* msg){
-    if(!plug_data)return;
     if(clap_plug_return_is_audio_thread()){
+	if(!plug_data)return;
+	
 	RING_SYS_MSG send_bit;
 	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
 	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
@@ -128,6 +129,11 @@ static void clap_plug_send_msg(CLAP_PLUG_INFO* plug_data, const char* msg){
 }
 //extension function for log.h to send messages in [thread-safe] manner
 static void clap_plug_ext_log(const clap_host_t* host, clap_log_severity severity, const char* msg){
+    int global_expected = 1;
+    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
+    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
+	return;
+    }    
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -137,6 +143,12 @@ static void clap_plug_ext_log(const clap_host_t* host, clap_log_severity severit
 }
 
 const void* get_extension(const clap_host_t* host, const char* ex_id){
+    int global_expected = 1;
+    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
+    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
+	return NULL;
+    }
+    
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return NULL;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -196,6 +208,12 @@ static int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id){
     return clap_plug_activate_start_processing(plug_data, plug_id);
 }
 void request_restart(const clap_host_t* host){
+    int global_expected = 1;
+    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
+    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
+	return;
+    }
+    
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -215,6 +233,12 @@ void request_restart(const clap_host_t* host){
 }
 
 void request_process(const clap_host_t* host){
+    int global_expected = 1;
+    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
+    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
+	return;
+    }
+    
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -247,6 +271,12 @@ static int clap_plug_callback(CLAP_PLUG_INFO* plug_data, int plug_id){
     return 0;
 }
 void request_callback(const clap_host_t* host){
+    int global_expected = 1;
+    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
+    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
+	return;
+    }
+    
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -308,11 +338,15 @@ static int clap_plug_stop_process(CLAP_PLUG_INFO* plug_data, int plug_id, unsign
     return 0;
 }
 int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data){
+    //this is a local thread var its false on [main-thread] and true on [audio-thread]
+    is_audio_thread = true;
+    
     int global_expected = 1;
-    //if the whole clap plugin process is sopped dont even get plug_data, since it can be in a process of cleaning
+    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
     if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1)){
 	return 0;
     }
+    
     if(!plug_data)return -1;
     RING_BUFFER* ring_buffer = plug_data->ui_to_rt_msgs;
     if(!ring_buffer)return -1;
@@ -847,8 +881,6 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 }
 
 void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
-    //this is a local thread var its false on [main-thread] and true on [audio-thread]
-    is_audio_thread = true;
     int global_expected = 1;
     //if the whole CLAP_PLUG_INFO struct is stopped dont event check if its NULL
     if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1)){

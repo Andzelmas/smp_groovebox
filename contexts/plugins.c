@@ -536,8 +536,14 @@ static const char* unmap_uri(LV2_URID_Unmap_Handle handle, LV2_URID urid){
 
 //send a [thread-safe] message - check if thread is audio or main
 static void plug_send_msg(PLUG_INFO* plug_data, const char* msg){
-    if(!plug_data)return;
     if(is_audio_thread){
+	int global_expected = 1;
+	//if the whole process is stopped dont touch the plug struct
+	if(!(atomic_compare_exchange_weak(&(lv2_processing), &global_expected, 1))){
+	    return;
+	}
+	if(!plug_data)return;
+	
 	RING_SYS_MSG send_bit;
 	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
 	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
@@ -549,6 +555,12 @@ static void plug_send_msg(PLUG_INFO* plug_data, const char* msg){
 }
 //internal function for printf for the log feature
 static int plug_vprintf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, va_list ap){
+    int global_expected = 1;
+    //if the whole process is stopped dont touch the plug struct
+    if(!(atomic_compare_exchange_weak(&(lv2_processing), &global_expected, 1)) && is_audio_thread){
+	return 0;
+    }
+	
     PLUG_INFO* plug_data = (PLUG_INFO*)handle;
     if(!plug_data)return -1;
     int ret = -1;
@@ -807,7 +819,6 @@ static int plug_plug_start_process(PLUG_INFO* plug_data, int plug_id){
     return 0;
 }
 static int plug_plug_stop_process(PLUG_INFO* plug_data, int plug_id, unsigned int stop_all){
-    if(!plug_data)return -1;
     int expected = 0;
     if(stop_all == 1){
 	//if context already stopped do nothing
@@ -817,6 +828,7 @@ static int plug_plug_stop_process(PLUG_INFO* plug_data, int plug_id, unsigned in
 	atomic_store(&(lv2_processing), 0);
 	return 0;
     }
+    if(!plug_data)return -1;
     if(plug_id < 0)return -1;
     if(plug_id >= MAX_INSTANCES)return -1;
 
@@ -833,6 +845,9 @@ static int plug_plug_stop_process(PLUG_INFO* plug_data, int plug_id, unsigned in
     return 0;
 }
 int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
+    //set the is_audio_thread to true so its false on [main-thread] and true on [audio-thread]
+    is_audio_thread = true;
+    
     int global_expected = 1;
     //if the whole PLUG_INFO process is stopped dont read the messages on the rt thread since
     //the plug_data can be in the process of a removal
@@ -1622,7 +1637,6 @@ const char* plug_param_get_name(PLUG_INFO* plug_data, int plug_id, int param_id)
 }
 
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
-    is_audio_thread = true;
     int global_expected = 1;
     //if the whole PLUG_INFO process is stopped do nothing
     if(!(atomic_compare_exchange_weak(&(lv2_processing), &global_expected, 1))){
@@ -1687,8 +1701,8 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		float bpm = plug_data->bpm;
 		float beat_type = 0;
 		float beats_per_bar = 0;
-		unsigned int tr_playing = app_jack_return_transport(plug_data->audio_backend, &cur_bar, &cur_beat, &cur_tick, &ticks_per_beat, &total_frames,
-								    &bpm, &beat_type, &beats_per_bar);
+		unsigned int tr_playing = app_jack_return_transport_rt(plug_data->audio_backend, &cur_bar, &cur_beat, &cur_tick, &ticks_per_beat, &total_frames,
+								       &bpm, &beat_type, &beats_per_bar);
 		if(tr_playing != -1){
 		    unsigned int pos_change = 0;
 		    pos_change = (tr_playing != plug_data->isPlaying || total_frames != plug_data->posFrame || bpm != plug_data->bpm);
