@@ -124,6 +124,7 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
     //if rt params just got new parameter values from the ui they will be just changed
     //in that case jack will create a new transport object and request a transport change
     app_jack_update_transport_from_params_rt(jack_data);
+    //now update the bar, beat, tick and is playing parameters from the jack transport for [audio-thread] and [main-thread]
     jack_position_t pos;
     jack_transport_state_t state = jack_transport_query(jack_data->client, &pos);
     unsigned int pos_ready = 1;
@@ -132,9 +133,10 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
     if(pos_ready == 1){
 	//if transport is rolling update the parameters on the [audio-thread], otherwise each time playhead stopps the params for ui resets to the
 	//values before the play was pressed
-	//also get the values right away so isChanged for the parameter becomes 0 and app_jack_update_transport_from_params_rt function does not create the transport object when its not needed
-	if(state != JackTransportStopped){
-	    unsigned char val_type = 0;
+	//also get the values right away so isChanged for the parameter becomes 0 and
+	//app_jack_update_transport_from_params_rt function does not create the transport object when its not needed
+	unsigned char val_type = 0;
+	if(state == JackTransportRolling){
 	    param_set_value(jack_data->trk_params, 1, (float)pos.bar, Operation_SetValue, 1);
 	    param_get_value(jack_data->trk_params, 1, &val_type, 0, 0, 1);
 	    param_set_value(jack_data->trk_params, 2, (float)pos.beat, Operation_SetValue, 1);
@@ -142,13 +144,15 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
 	    param_set_value(jack_data->trk_params, 3, (float)pos.tick, Operation_SetValue, 1);
 	    param_get_value(jack_data->trk_params, 3, &val_type, 0, 0, 1);
 	}
+	param_set_value(jack_data->trk_params, 4, (float)state, Operation_SetValue, 1);
+	param_get_value(jack_data->trk_params, 4, &val_type, 0, 0, 1);
 	//send transport info from  rt to ui thread but only when rt_tick is 0, to not overwhelm the ui thread with messages
 	if(jack_data->rt_tick ==0){
 	    PARAM_RING_DATA_BIT send_bit;
 	    send_bit.cx_id = 0;
 	    send_bit.param_op = Operation_SetValue;
 	    //only send bar beat and tick info to ui if the transport is rolling
-	    if(state != JackTransportStopped){	    
+	    if(state == JackTransportRolling){	    
 		send_bit.param_id = 1;
 		send_bit.param_value = (float)pos.bar;
 		ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
