@@ -87,5 +87,5 @@ int plug_audio_process_rt(NFRAMES_T nframes, void *arg);
 int app_smp_remove_sample(APP_INFO* app_data, unsigned int idx);
 //remove a plugin, before that ask the rt process to pause
 int app_plug_remove_plug(APP_INFO* app_data, const int id);
-//clean memory of the app_data
-int clean_memory(APP_INFO *app_data);
+//pause the [audio-thread] processing with a mutex and clean memory of the app_data
+int app_stop_and_clean(APP_INFO *app_data);

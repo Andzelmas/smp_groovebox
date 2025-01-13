@@ -52,7 +52,8 @@ void plug_set_samplerate(PLUG_INFO* plug_data, float new_sample_rate);
 //set the buffer size, should be usually done before launching any plugins
 void plug_set_block_length(PLUG_INFO* plug_data, uint32_t block_length);
 //activate the ports, that the backend needs to activate, uses the callback function sent here
-void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug);
+//returns 0 on success
+int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug);
 //return the system ports of the plugin - plug_id is the number of the plugin in the plugins array.
 void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigned int* number_ports);
 //set param value on the param container, also send a message to the [audio-thread] to set the value on the same rt param
@@ -73,7 +74,8 @@ const char* plug_param_get_name(PLUG_INFO* plug_data, int plug_id, int param_id)
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes);
 //run the plugin for nframes
 static void plug_run_rt(PLUG_PLUG* plug, unsigned int nframes);
-//remove a plugin
-int  plug_remove_plug(PLUG_INFO* plug_data, const int id);
+//stop processing the plugin and remove it.
+//plugin will be stopped on [audio-thread], if there is no [audio-thread] this  can result in an infinite loop
+int plug_stop_and_remove_plug(PLUG_INFO* plug_data, const int id);
 //clean the plug_data memory
 void plug_clean_memory(PLUG_INFO* plug_data);

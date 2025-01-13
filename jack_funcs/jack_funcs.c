@@ -14,9 +14,6 @@
 #define MAX_BARS 1000
 
 static thread_local bool is_audio_thread = false;
-//if jack_processing == 0 the JACK_INFO struct will not be touched and is save to remove.
-//should be set to 1 in the [main-thread] and set to 0 on [audio-thread] before cleaning memory of the program
-atomic_int jack_processing;
 
 //jack main struct
 typedef struct _jack_info{
@@ -46,22 +43,16 @@ double time_ticks_per_beat = 1920.0;
 
 //[thread-safe] method to send log messages in the jack context
 static void app_jack_send_msg(JACK_INFO* jack_data, const char* msg){
+    if(!jack_data)return;
     if(is_audio_thread){
-	int global_expected = 1;
-	//if the whole process is stopped dont touch the plug struct
-	if(!(atomic_compare_exchange_weak(&(jack_processing), &global_expected, 1))){
-	    return;
-	}
-	if(!jack_data)return;
-	
 	RING_SYS_MSG send_bit;
 	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
 	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
 	int ret = ring_buffer_write(jack_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
+	return;
     }
-    else{
-	log_append_logfile("%s", msg);
-    }    
+    
+    log_append_logfile("%s", msg);
 }
 
 JACK_INFO* jack_initialize(void *arg, const char *client_name,
@@ -98,7 +89,7 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
 	jack_clean_memory(jack_data);
 	return NULL;
     }
-    atomic_store(&(jack_processing), 0);
+
     jack_status_t *server_name = NULL;
     jack_options_t options = JackNullOption;
     jack_status_t status = 0;
@@ -145,49 +136,10 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
     
     return jack_data;
 }
-//block [main-thread] and wait to stop the jack processes
-//now stop_all should always be 1 to stop the whole jack process.
-//stop_all is here for future proofing
-static void app_jack_wait_for_stop(JACK_INFO* jack_data, unsigned int stop_all){
-    if(!jack_data)return;
-    RING_SYS_MSG send_bit;
-    int expected = 0;
-    if(stop_all == 1){
-	send_bit.msg_enum = MSG_STOP_ALL;
-	send_bit.scx_id = 0;
-	ring_buffer_write(jack_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-	//lock the [main-thread] and wait for the jack context to stop
-	while(!atomic_compare_exchange_weak(&(jack_processing), &expected, 0)){
-	    expected = 0;
-	}
-	return;
-    }
-}
-
-//stop the jack process, should be called on [audio-thread]
-//stop_all should be always 1, the var is here for future proof, if jack context will get some subcontexts
-static int app_jack_stop_process(JACK_INFO* jack_data, unsigned int stop_all){
-    int expected = 0;
-    if(stop_all == 1){
-	//if already stopped
-	if(atomic_compare_exchange_weak(&(jack_processing), &expected, 0)){
-	    return 0;
-	}
-	atomic_store(&(jack_processing), 0);
-	return 0;
-    }
-    return -1;
-}
 
 int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
     //set the is_audio_thread to true so its false on [main-thread] and true on [audio-thread]
     is_audio_thread = true;
-    
-    //if the whole jack process is stopped dont touch the JACK_INFO struct at all
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return 0;
-    }
 
     if(!jack_data)return -1;
     //update the rt_tick
@@ -202,9 +154,6 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
 	RING_SYS_MSG cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
 	if(read_buffer <= 0)continue;
-	if(cur_bit.msg_enum == MSG_STOP_ALL){
-	    app_jack_stop_process(jack_data, 1);
-	}
     }
     
     //read the param ui_to_rt messages and set the parameter values
@@ -476,11 +425,8 @@ int app_jack_return_buffer_size(JACK_INFO* jack_data){
 }
 
 int app_jack_activate(JACK_INFO* jack_data){
-    atomic_store(&(jack_processing), 1);
     //activate the client and launch the process function
     if(jack_activate (jack_data->client)){
-	//the [audio-thread] failed to launch so simply reset the processing atomic var
-	atomic_store(&(jack_processing), 0);
         return -1;
     }
     return 0;
@@ -516,13 +462,7 @@ const char* app_jack_return_port_name(void* port){
     return jack_port_name(cur_port);
 }
 
-void* app_jack_get_buffer_rt(void* port, jack_nframes_t nframes){
-    //do nothing if the jack_process is stopped
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return NULL;
-    }
-    
+void* app_jack_get_buffer_rt(void* port, jack_nframes_t nframes){ 
     jack_port_t* cur_port = (jack_port_t*)port;
     if(!cur_port)return NULL;
     void* out = NULL;
@@ -530,26 +470,14 @@ void* app_jack_get_buffer_rt(void* port, jack_nframes_t nframes){
     return out;
 }
 
-void app_jack_midi_clear_buffer_rt(void* buffer){
-    //do nothing if jack process is stopped
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return;
-    }
-    
+void app_jack_midi_clear_buffer_rt(void* buffer){    
     if(buffer){
 	jack_midi_clear_buffer(buffer);
     }
 }
 
 int app_jack_midi_events_write_rt(void* buffer, jack_nframes_t time, const jack_midi_data_t* data,
-				  size_t data_size){
-    //do nothing if jack process is stopped
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return 0;
-    }
-    
+				  size_t data_size){  
     int return_val = -1;
     if(buffer){
 	return_val = jack_midi_event_write(buffer, time, data, data_size);
@@ -557,13 +485,7 @@ int app_jack_midi_events_write_rt(void* buffer, jack_nframes_t time, const jack_
     return return_val;
 }
 
-void app_jack_return_notes_vels_rt(void* midi_in, JACK_MIDI_CONT* midi_cont){
-    //do nothing if jack process is stopped
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return;
-    }
-    
+void app_jack_return_notes_vels_rt(void* midi_in, JACK_MIDI_CONT* midi_cont){  
     if(midi_in == NULL)return;
     int event_count = 0;
     event_count = jack_midi_get_event_count(midi_in);
@@ -664,11 +586,6 @@ const char** app_jack_port_names(JACK_INFO *jack_data, const char* port_name_pat
 
 
 int sample_rate_change(jack_nframes_t new_sample_rate, void *arg){
-    //do nothing if the jack process is stopped
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return 0;
-    }  
     JACK_INFO *jack_data = (JACK_INFO*) arg;
     if(!jack_data)return -1;
     //TODO this should be [thread-safe] and not a simple var change
@@ -688,10 +605,7 @@ void app_jack_unregister_port(void* client_in, void* port){
 
 void jack_clean_memory(void* jack_data_in){
     JACK_INFO* jack_data = (JACK_INFO*)jack_data_in;
-    if(!jack_data)return;
-    //first pause the whole jack process
-    app_jack_wait_for_stop(jack_data, 1);
-    
+    if(!jack_data)return;   
     //close the jack client
     if(jack_data->client!=NULL)jack_client_close(jack_data->client);
     //clear the jack_data itself
@@ -709,11 +623,6 @@ void jack_clean_memory(void* jack_data_in){
 }
 
 static int app_jack_transport(JACK_INFO* jack_data, unsigned int transport_type){
-    //do nothing if the jack process is stopped
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return 0;
-    }  
     int ret_int = -1;
     if(!jack_data)return -1;
     if(transport_type==0){
@@ -729,12 +638,7 @@ static int app_jack_transport(JACK_INFO* jack_data, unsigned int transport_type)
 }
 
 void timebbt_callback_rt(jack_transport_state_t state, jack_nframes_t nframes, jack_position_t *pos,
-	      int new_pos, void *arg){
-    //do nothing if jack process is stopped
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return;
-    }  
+	      int new_pos, void *arg){ 
     //the struct will be used to get a struct from the circle buffer for the time_beats_per_bar and such
     JACK_INFO* jack_data = (JACK_INFO*) arg;
     if(!jack_data)return;
@@ -826,14 +730,7 @@ void timebbt_callback_rt(jack_transport_state_t state, jack_nframes_t nframes, j
     }
 }
 
-void app_jack_update_transport_from_params_rt(JACK_INFO* jack_data){
-    //do nothing if the jack process is stopped, though this function is only called from ui_to_rt messages func
-    //cant be too safe...
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return;
-    }
-    
+void app_jack_update_transport_from_params_rt(JACK_INFO* jack_data){   
     if(!jack_data)return;
 
     PRM_CONTAIN* transport_cntr = jack_data->trk_params;
@@ -886,11 +783,6 @@ void app_jack_update_transport_from_params_rt(JACK_INFO* jack_data){
 int app_jack_return_transport_rt(void* audio_client, int32_t* cur_bar, int32_t* cur_beat,
 			      int32_t* cur_tick, SAMPLE_T* ticks_per_beat, jack_nframes_t* total_frames,
 			      float* bpm, float* beat_type, float* beats_per_bar){
-    //do nothing if the jack process is stopped
-    int expected = 1;
-    if(!(atomic_compare_exchange_weak(&(jack_processing), &expected, 1))){
-	return 0;
-    }  
     if(!audio_client)return -1;
     JACK_INFO* jack_data = (JACK_INFO*)audio_client;
     if(!jack_data)return -1;

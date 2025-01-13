@@ -142,15 +142,13 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
         
     /*Initialize the app info struct, that will hold the context data*/
     //everything will be empty first    
-    APP_INFO *app_data = NULL;
     app_status_t app_status = 0;
-    app_data = app_init(&app_status);
-    if(!app_data){
-	free(app_intrf);
+    app_intrf->app_data = app_init(&app_status);
+    if(!app_intrf->app_data){
+        app_intrf_close(app_intrf);
 	*err_status = AppFailedMalloc;
 	return NULL;
     }
-    app_intrf->app_data = app_data;
     
     //read the conf file if its not in this dir create it and the dir structure and the Song_01
     if(app_json_read_conf(&app_intrf->shared_dir, song_path, NULL, &app_intrf->load_from_conf, app_intrf, cx_process_from_file)!=0){
@@ -1819,7 +1817,7 @@ static int app_intrf_close(APP_INTRF *app_intrf){
     if(!app_intrf)return -1;
     //clean the whole app context and contexts owned by it
     //this function is in app_data.c
-    clean_memory(app_intrf->app_data);
+    app_stop_and_clean(app_intrf->app_data);
     
     //clean the app_intrf struct itself
     if(app_intrf->root_cx)cx_remove_child(app_intrf->root_cx, 0, 0);

@@ -58,11 +58,6 @@
 #endif
 
 static thread_local bool is_audio_thread = false; //can be used to check what thread this is, useful for thread safe functions
-//if lv2_processing == 0 the whole PLUGIN_INFO struct will not be used in the audio thread and is save to remove
-//should be atomic_store set to 1 on main-thread in init function and atomic_store set to 0 on audio-thread before cleaning memory
-//for temp stopping of everything each plugin should be stopped, lv2_processing should not be used for that
-//(only for permanent stop of the whole context before program exit)
-atomic_int lv2_processing; 
 
 //lilv nodes for more convinient coding, when for ex we need to tell port class by providing a livnode
 typedef struct _plug_nodes{
@@ -290,24 +285,32 @@ typedef struct _plug_info{
     RING_BUFFER* param_rt_to_ui;
     RING_BUFFER* param_ui_to_rt;
 }PLUG_INFO;
+
+//send a [thread-safe] message - check if thread is audio or main
+static void plug_send_msg(PLUG_INFO* plug_data, const char* msg){
+    if(!plug_data){
+	return;
+    }
+    if(is_audio_thread){
+	RING_SYS_MSG send_bit;
+	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
+	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
+	int ret = ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
+	return;
+    }
+    
+    log_append_logfile("%s", msg);
+}
+
 //functions that block main thread and waits for the plugin process to stop or start (waiting for start necessary to keep the order of the tasks)
 static void plug_plug_wait_for_stop(PLUG_INFO* plug_data, int plug_id, unsigned int stop_all){
     if(!plug_data)return;
     RING_SYS_MSG send_bit;
     int expected = 0;
-    if(stop_all == 1){
-	send_bit.msg_enum = MSG_STOP_ALL;
-	send_bit.scx_id = plug_id;
-	ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-	//lock the main thread and wait for the whole context to stop
-	while(!atomic_compare_exchange_weak(&(lv2_processing), &expected, 0)){
-	    expected = 0;
-	}
-	return;
-    }
+    unsigned int spin_counter = 0;
+ 
     if(plug_id >= MAX_INSTANCES || plug_id < 0)return;
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!(plug->plug_instance))return;
     
     send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
     send_bit.scx_id = plug_id;
@@ -321,7 +324,6 @@ static void plug_plug_wait_for_start(PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return; 
     if(plug_id >= MAX_INSTANCES || plug_id < 0)return;
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!(plug->plug_instance))return;
     
     RING_SYS_MSG send_bit;
     send_bit.msg_enum = MSG_PLUGIN_PROCESS;
@@ -332,6 +334,104 @@ static void plug_plug_wait_for_start(PLUG_INFO* plug_data, int plug_id){
     while(!atomic_compare_exchange_weak(&(plug->is_processing), &expected, 1)){
 	expected = 1;
     }
+}
+
+static int  plug_remove_plug(PLUG_INFO* plug_data, const int id){
+    if(!plug_data)return -1;
+    if(id >= MAX_INSTANCES)return -1;
+      
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[id]);
+    
+    //remove preset
+    if(cur_plug->preset){
+	const LilvNode* old_preset = lilv_state_get_uri(cur_plug->preset);
+	if(old_preset){
+	    lilv_world_unload_resource(plug_data->lv_world, old_preset);
+	}
+	lilv_state_free(cur_plug->preset);
+	cur_plug->preset = NULL;
+    }
+    //free instance
+    if(cur_plug->plug_instance){
+	LilvInstance* cur_instance = cur_plug->plug_instance;
+	lilv_instance_deactivate(cur_instance);
+	lilv_instance_free(cur_instance);	
+	cur_plug->plug_instance = NULL;		
+    }    
+    //Terminate the worker
+    if(cur_plug->worker){
+	jalv_worker_exit(cur_plug->worker);
+	jalv_worker_free(cur_plug->worker);
+	cur_plug->worker = NULL;
+    }
+    if(cur_plug->state_worker){
+	jalv_worker_exit(cur_plug->state_worker);
+	jalv_worker_free(cur_plug->state_worker);
+	cur_plug->state_worker = NULL;
+    }
+    //clean the ports
+    if(plug_data->audio_backend && cur_plug->ports){
+	for(uint32_t i = 0; i< cur_plug->num_ports; i++){
+	    PLUG_PORT* const cur_port = &(cur_plug->ports[i]);
+	    if(cur_port->sys_port)
+		app_jack_unregister_port(plug_data->audio_backend, cur_port->sys_port);
+	    if(cur_port)
+		if(cur_port->evbuf)free(cur_port->evbuf);
+	}
+    }
+    if(cur_plug->ports)free(cur_plug->ports);
+    cur_plug->ports = NULL;
+    cur_plug->num_ports = 0;
+    
+    zix_sem_destroy(&(cur_plug->work_lock));
+
+    //free the features_list
+    if(cur_plug->feature_list)free(cur_plug->feature_list);
+    cur_plug->feature_list = NULL;
+
+    //clean the midi container
+    if(cur_plug->midi_cont){
+	app_jack_clean_midi_cont(cur_plug->midi_cont);
+	free(cur_plug->midi_cont);
+	cur_plug->midi_cont = NULL;
+    }
+
+    //clean the controls
+    if(cur_plug->plug_params)param_clean_param_container(cur_plug->plug_params);
+    cur_plug->plug_params = NULL;
+    if(cur_plug->controls){
+	for(unsigned int i = 0; i < cur_plug->num_controls; i++){
+	    PLUG_CONTROL* const control = cur_plug->controls[i];
+	    lilv_node_free(control->node);
+	    lilv_node_free(control->symbol);
+	    lilv_node_free(control->label);
+	    lilv_node_free(control->group);
+	    lilv_node_free(control->min);
+	    lilv_node_free(control->max);
+	    lilv_node_free(control->def);
+	    if(control->points){
+		for(unsigned int pt_iter = 0; pt_iter < control->n_points; pt_iter++){
+		    ScalePoint pt = control->points[pt_iter];
+		    if(pt.label)
+			free(pt.label);
+		}
+		free(control->points);
+	    }
+	    free(control);
+	}
+	free(cur_plug->controls);
+    }
+    cur_plug->controls = NULL;
+    cur_plug->num_controls = 0;
+    cur_plug->control_in = -1;
+    cur_plug->request_update = false;
+    cur_plug->safe_restore = false;
+    cur_plug->plug = NULL;
+    
+    //just in case zero out the plugin processing atomics
+    atomic_store(&(cur_plug->is_processing), 0);
+    
+    return 0;
 }
 
 //internal functions to manipulate evbuf buffer for midi and other events
@@ -534,35 +634,9 @@ static const char* unmap_uri(LV2_URID_Unmap_Handle handle, LV2_URID urid){
   return uri;
 }
 
-//send a [thread-safe] message - check if thread is audio or main
-static void plug_send_msg(PLUG_INFO* plug_data, const char* msg){
-    if(is_audio_thread){
-	int global_expected = 1;
-	//if the whole process is stopped dont touch the plug struct
-	if(!(atomic_compare_exchange_weak(&(lv2_processing), &global_expected, 1))){
-	    return;
-	}
-	if(!plug_data)return;
-	
-	RING_SYS_MSG send_bit;
-	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
-	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
-	int ret = ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
-    }
-    else{
-	log_append_logfile("%s", msg);
-    }
-}
 //internal function for printf for the log feature
 static int plug_vprintf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, va_list ap){
-    int global_expected = 1;
-    //if the whole process is stopped dont touch the plug struct
-    if(!(atomic_compare_exchange_weak(&(lv2_processing), &global_expected, 1)) && is_audio_thread){
-	return 0;
-    }
-	
     PLUG_INFO* plug_data = (PLUG_INFO*)handle;
-    if(!plug_data)return -1;
     int ret = -1;
     char send_msg[MAX_STRING_MSG_LENGTH];
     ret = vsnprintf(send_msg, MAX_STRING_MSG_LENGTH, fmt, ap);
@@ -587,37 +661,7 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 	return NULL;
     }
     memset(plug_data, '\0', sizeof(*plug_data));
-    atomic_store(&lv2_processing, 0);
-    plug_data->rt_to_ui_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
-    if(!(plug_data->rt_to_ui_msgs)){
-	free(plug_data);
-	*plug_errors = plug_failed_malloc;
-	return NULL;
-    }
-    plug_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
-    if(!(plug_data->ui_to_rt_msgs)){
-	ring_buffer_clean(plug_data->rt_to_ui_msgs);
-	free(plug_data);
-	*plug_errors = plug_failed_malloc;
-	return NULL;
-    }
-    plug_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    if(!(plug_data->param_rt_to_ui)){
-	ring_buffer_clean(plug_data->rt_to_ui_msgs);
-	ring_buffer_clean(plug_data->ui_to_rt_msgs);
-	free(plug_data);
-	*plug_errors = plug_failed_malloc;
-	return NULL;
-    }
-    plug_data->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    if(!(plug_data->param_ui_to_rt)){
-	ring_buffer_clean(plug_data->rt_to_ui_msgs);
-	ring_buffer_clean(plug_data->ui_to_rt_msgs);
-	ring_buffer_clean(plug_data->param_rt_to_ui);
-	free(plug_data);
-	*plug_errors = plug_failed_malloc;
-	return NULL;
-    }
+
     plug_data->lv_world = lilv_world_new();
     plug_data->sample_rate = (float)samplerate;
     plug_data->block_length = (uint32_t)block_length;
@@ -708,9 +752,33 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 	//init atom forge
 	lv2_atom_forge_init(&(plug->forge), &(plug->map));
     }
-    //can start processing the whole context now, dont wait or send a message, because at this point the audio-thread can be still not launched
-    //so an infinite loop would happen
-    atomic_store(&(lv2_processing), 1);
+
+    //init the messaging ring buffers for sys calls and parameters
+    plug_data->rt_to_ui_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
+    if(!(plug_data->rt_to_ui_msgs)){
+        plug_clean_memory(plug_data);
+	*plug_errors = plug_failed_malloc;
+	return NULL;
+    }
+    plug_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
+    if(!(plug_data->ui_to_rt_msgs)){
+	plug_clean_memory(plug_data);
+	*plug_errors = plug_failed_malloc;
+	return NULL;
+    }
+    plug_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
+    if(!(plug_data->param_rt_to_ui)){
+	plug_clean_memory(plug_data);
+	*plug_errors = plug_failed_malloc;
+	return NULL;
+    }
+    plug_data->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
+    if(!(plug_data->param_ui_to_rt)){
+	plug_clean_memory(plug_data);
+	*plug_errors = plug_failed_malloc;
+	return NULL;
+    }
+    
     return plug_data;
 }
 
@@ -806,7 +874,6 @@ static int plug_plug_start_process(PLUG_INFO* plug_data, int plug_id){
     if(plug_id >= MAX_INSTANCES)return -1;
 
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!plug->plug_instance)return -1;
     
     int expected = 1;
     //if plugin is already processing do nothing
@@ -819,21 +886,13 @@ static int plug_plug_start_process(PLUG_INFO* plug_data, int plug_id){
     return 0;
 }
 static int plug_plug_stop_process(PLUG_INFO* plug_data, int plug_id, unsigned int stop_all){
-    int expected = 0;
-    if(stop_all == 1){
-	//if context already stopped do nothing
-	if(atomic_compare_exchange_weak(&(lv2_processing), &expected, 0)){
-	    return 0;
-	}
-	atomic_store(&(lv2_processing), 0);
-	return 0;
-    }
     if(!plug_data)return -1;
     if(plug_id < 0)return -1;
     if(plug_id >= MAX_INSTANCES)return -1;
 
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!plug->plug_instance)return -1;
+
+    int expected = 0;
     //if plugin is already stopped and not processing do nothing
     if(atomic_compare_exchange_weak(&(plug->is_processing), &expected, 0)){
 	return 0;
@@ -848,15 +907,13 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
     //set the is_audio_thread to true so its false on [main-thread] and true on [audio-thread]
     is_audio_thread = true;
     
-    int global_expected = 1;
-    //if the whole PLUG_INFO process is stopped dont read the messages on the rt thread since
-    //the plug_data can be in the process of a removal
-    if(!(atomic_compare_exchange_weak(&(lv2_processing), &global_expected, 1))){
-        return 0;
-    }        
-    if(!plug_data)return -1;
+    if(!plug_data){
+	return -1;
+    }
     RING_BUFFER* ring_buffer = plug_data->ui_to_rt_msgs;
-    if(!ring_buffer)return -1;
+    if(!ring_buffer){
+	return -1;
+    }
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
     for(unsigned int i = 0; i < cur_items; i++){
 	RING_SYS_MSG cur_bit;
@@ -868,19 +925,19 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
 	if(cur_bit.msg_enum == MSG_PLUGIN_STOP_PROCESS){
 	    plug_plug_stop_process(plug_data, cur_bit.scx_id, 0);
 	}
-	if(cur_bit.msg_enum == MSG_STOP_ALL){
-	    plug_plug_stop_process(plug_data, 0, 1);
-	}
     }
     //read the param ui_to_rt messages and set the parameter values
     ring_buffer = plug_data->param_ui_to_rt;
-    if(!ring_buffer)return -1;
+    if(!ring_buffer){
+	return -1;
+    }
     cur_items = ring_buffer_return_items(ring_buffer);
     for(unsigned int i = 0; i < cur_items; i++){
 	PARAM_RING_DATA_BIT cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
 	if(read_buffer <= 0)continue;
 	if(cur_bit.cx_id >= MAX_INSTANCES)continue;
+	//TODO check if plugin is not stopped
 	PLUG_PLUG* cur_plug = &(plug_data->plugins[cur_bit.cx_id]);
 	if(!cur_plug->plug_instance || !cur_plug->plug_params)continue;
 	param_set_value(cur_plug->plug_params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 1);
@@ -957,7 +1014,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     }
     if(plug_id == -1 || plug_id >= MAX_INSTANCES)return -1;
     //just in case clean the plugin up
-    plug_remove_plug(plug_data, plug_id);
+    plug_stop_and_remove_plug(plug_data, plug_id);
 
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     return_val = plug_id;
@@ -987,7 +1044,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     
     plug->feature_list = (const LV2_Feature**)calloc(1, sizeof(features));
     if(!plug->feature_list){
-	plug_remove_plug(plug_data, plug_id);
+	plug_stop_and_remove_plug(plug_data, plug_id);
 	return -1;
     }
     memcpy(plug->feature_list, features, sizeof(features));    
@@ -1012,7 +1069,10 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     jalv_worker_start(plug->state_worker, worker_iface, plug->plug_instance->lv2_handle);
        
     //create the ports on audio_client from the sys_ports
-    plug_activate_backend_ports(plug_data, plug);
+    if(plug_activate_backend_ports(plug_data, plug) != 0){
+	plug_stop_and_remove_plug(plug_data, plug_id);
+	return -1;
+    }
 
     //--------------------------------------------------
     //create controls if they are properties and not ports
@@ -1120,7 +1180,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 
     plug->midi_cont = app_jack_init_midi_cont(MIDI_CONT_SIZE);
     if(!plug->midi_cont){
-	plug_remove_plug(plug_data, plug->id);
+	plug_stop_and_remove_plug(plug_data, plug->id);
 	return -1;
     }
     
@@ -1394,15 +1454,14 @@ finish:
 }
 
 void plug_set_block_length(PLUG_INFO* plug_data, uint32_t new_block_length){
-    if(!plug_data)goto finish;
-    plug_data->block_length = new_block_length;
-finish:    
+    if(!plug_data)return;
+    plug_data->block_length = new_block_length;  
 }
 
-void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
-    if(!plug_data)goto finish;
-    if(!plug)goto finish;
-    if(!plug_data->audio_backend)goto finish;
+int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
+    if(!plug_data)return -1;
+    if(!plug)return -1;
+    if(!plug_data->audio_backend)return -1;
     const LV2_URID atom_Chunk = plug->map.map(plug->map.handle,
 						   lilv_node_as_string(plug_data->nodes.atom_Chunk));
     const LV2_URID atom_Sequence = plug->map.map(plug->map.handle,
@@ -1413,13 +1472,11 @@ void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
     plug->num_ports = lilv_plugin_get_num_ports(plug->plug);
     plug->ports = (PLUG_PORT*)calloc(plug->num_ports, sizeof(PLUG_PORT));
     if(plug->ports==NULL){
-	plug_remove_plug(plug_data, plug->id);
-	goto finish;
+        return -1;
     }
     float* default_values = (float*)calloc(plug->num_ports, sizeof(float));
     if(!default_values){
-	plug_remove_plug(plug_data, plug->id);
-	goto finish;
+        return -1;
     }    
     lilv_plugin_get_port_ranges_float(plug->plug, NULL, NULL, default_values);
    
@@ -1472,8 +1529,7 @@ void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	    cur_port->flow = FLOW_OUTPUT;
 	}
 	else if(!optional){
-	    plug_remove_plug(plug_data, plug->id);
-	    goto finish;
+	    return -1;
 	}	
 	//Set port types
 	//control port
@@ -1519,8 +1575,7 @@ void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	}
 	//if not optional but we dont know the type we cant load this plugin
 	else if(!optional){
-	    plug_remove_plug(plug_data, plug->id);
-	    goto finish;	    
+	    return -1;	    
 	}
 	//if the type is unknown connect to null
 	if(cur_port->type == FLOW_UNKNOWN || cur_port->type == TYPE_UNKNOWN){
@@ -1545,9 +1600,8 @@ void plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	}
     }
     free(default_values);
-
-
-finish:
+    
+    return 0;
 }
 
 void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigned int* number_ports){
@@ -1636,14 +1690,13 @@ const char* plug_param_get_name(PLUG_INFO* plug_data, int plug_id, int param_id)
     return param_get_name(cur_plug->plug_params, param_id, 0);
 }
 
-void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
-    int global_expected = 1;
-    //if the whole PLUG_INFO process is stopped do nothing
-    if(!(atomic_compare_exchange_weak(&(lv2_processing), &global_expected, 1))){
-        return;
-    }    
-    if(!plug_data)return;    
-    if(!plug_data->plugins)return;
+void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){ 
+    if(!plug_data){
+	return;
+    }
+    if(!plug_data->plugins){
+	return;
+    }
     for(int id = 0; id < MAX_INSTANCES; id++){
 	PLUG_PLUG* plug = &(plug_data->plugins[id]);
 	int expected = 1;
@@ -1861,109 +1914,17 @@ static void plug_run_rt(PLUG_PLUG* plug, unsigned int nframes){
     jalv_worker_end_run(plug->worker);
 }
 
-int  plug_remove_plug(PLUG_INFO* plug_data, const int id){
-    if(!plug_data)return -1;
-    if(!plug_data->audio_backend)return -1;
-    if(id >= MAX_INSTANCES)return -1;
-      
-    PLUG_PLUG* cur_plug = &(plug_data->plugins[id]);
+int plug_stop_and_remove_plug(PLUG_INFO* plug_data, const int id){
     //first stop the plugin process
     plug_plug_wait_for_stop(plug_data, id, 0);
-    
-    if(!cur_plug->plug_instance)return -1;
-    //remove preset
-    if(cur_plug->preset){
-	const LilvNode* old_preset = lilv_state_get_uri(cur_plug->preset);
-	if(old_preset){
-	    lilv_world_unload_resource(plug_data->lv_world, old_preset);
-	}
-	lilv_state_free(cur_plug->preset);
-	cur_plug->preset = NULL;
-    }
-    //free instance
-    if(cur_plug->plug_instance){
-	LilvInstance* cur_instance = cur_plug->plug_instance;
-	lilv_instance_deactivate(cur_instance);
-	lilv_instance_free(cur_instance);	
-	cur_plug->plug_instance = NULL;		
-    }    
-    //Terminate the worker
-    if(cur_plug->worker){
-	jalv_worker_exit(cur_plug->worker);
-	jalv_worker_free(cur_plug->worker);
-	cur_plug->worker = NULL;
-    }
-    if(cur_plug->state_worker){
-	jalv_worker_exit(cur_plug->state_worker);
-	jalv_worker_free(cur_plug->state_worker);
-	cur_plug->state_worker = NULL;
-    }
-    //clean the ports
-    for(uint32_t i = 0; i< cur_plug->num_ports; i++){
-	PLUG_PORT* const cur_port = &(cur_plug->ports[i]);
-	if(cur_port->sys_port)
-	    app_jack_unregister_port(plug_data->audio_backend, cur_port->sys_port);
-	if(cur_port)
-	    if(cur_port->evbuf)free(cur_port->evbuf);
-    }
-    if(cur_plug->ports)free(cur_plug->ports);
-    cur_plug->ports = NULL;
-    cur_plug->num_ports = 0;
-    
-    zix_sem_destroy(&(cur_plug->work_lock));
-
-    //free the features_list
-    if(cur_plug->feature_list)free(cur_plug->feature_list);
-    cur_plug->feature_list = NULL;
-
-    //clean the midi container
-    if(cur_plug->midi_cont){
-	app_jack_clean_midi_cont(cur_plug->midi_cont);
-	free(cur_plug->midi_cont);
-	cur_plug->midi_cont = NULL;
-    }
-
-    //clean the controls
-    if(cur_plug->plug_params)param_clean_param_container(cur_plug->plug_params);
-    cur_plug->plug_params = NULL;
-    if(cur_plug->controls){
-	for(unsigned int i = 0; i < cur_plug->num_controls; i++){
-	    PLUG_CONTROL* const control = cur_plug->controls[i];
-	    lilv_node_free(control->node);
-	    lilv_node_free(control->symbol);
-	    lilv_node_free(control->label);
-	    lilv_node_free(control->group);
-	    lilv_node_free(control->min);
-	    lilv_node_free(control->max);
-	    lilv_node_free(control->def);
-	    if(control->points){
-		for(unsigned int pt_iter = 0; pt_iter < control->n_points; pt_iter++){
-		    ScalePoint pt = control->points[pt_iter];
-		    if(pt.label)
-			free(pt.label);
-		}
-		free(control->points);
-	    }
-	    free(control);
-	}
-	free(cur_plug->controls);
-    }
-    cur_plug->controls = NULL;
-    cur_plug->num_controls = 0;
-    cur_plug->control_in = -1;
-    cur_plug->request_update = false;
-    cur_plug->safe_restore = false;
-    cur_plug->plug = NULL;    
-
-    return 0;
+    return plug_remove_plug(plug_data, id);
 }
+
 void plug_clean_memory(PLUG_INFO* plug_data){
     if(!plug_data)return;
     for(int i = 0; i< MAX_INSTANCES; i++){
 	plug_remove_plug(plug_data, i);
     }
-    //stop the whole context before removing data from it
-    plug_plug_wait_for_stop(plug_data, 0, 1);
     
     if(plug_data->symap)symap_free(plug_data->symap);
     zix_sem_destroy(&(plug_data->symap_lock));    
@@ -1975,5 +1936,7 @@ void plug_clean_memory(PLUG_INFO* plug_data){
     ring_buffer_clean(plug_data->ui_to_rt_msgs);
     ring_buffer_clean(plug_data->param_rt_to_ui);
     ring_buffer_clean(plug_data->param_ui_to_rt);
+    
     free(plug_data);
 }
+

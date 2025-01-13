@@ -20,11 +20,6 @@
 #define MAX_INSTANCES 5
 
 static thread_local bool is_audio_thread = false;
-//atomic var, to check if the whole clap process is paused, if clap_process == 0, the process function wont even get the CLAP_PLUG_INFO struct
-//before atomi_store clap_processing to 0, all the plugins plug_inst_processing must be == 0 (all plugins stopped).
-//Also this is for permanent stopping of the whole CLAP_PLUG_INFO struct, before cleaning the memory (on program close)
-//for temp stopping stop all the plugins in the struct.
-atomic_int clap_processing; 
 
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
@@ -60,23 +55,15 @@ typedef struct _clap_plug_info{
     clap_host_log_t ext_log; //struct that holds function for logging messages (severity is not sent)
 }CLAP_PLUG_INFO;
 
-static void clap_plug_plug_wait_for_stop(CLAP_PLUG_INFO* plug_data, int plug_id, unsigned int stop_all){
+static void clap_plug_plug_wait_for_stop(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return;
-    
-    RING_SYS_MSG send_bit;
-    int expected = 0;
-    if(stop_all == 1){
-	send_bit.msg_enum = MSG_STOP_ALL;
-	send_bit.scx_id = 0;
-	ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-	while(!atomic_compare_exchange_weak(&(clap_processing), &expected, 0)){
-	    expected = 0;
-	}
-	return;
-    }
+
     if(plug_id < 0) return;
     if(plug_id >= MAX_INSTANCES)return;
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+        
+    RING_SYS_MSG send_bit;
+    int expected = 0;
     send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
     send_bit.scx_id = plug_id;
     ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
@@ -86,7 +73,7 @@ static void clap_plug_plug_wait_for_stop(CLAP_PLUG_INFO* plug_data, int plug_id,
     }
 }
 //start processing also blocks main thread, so the order of commands does not get mixed
-static void clap_plug_plug_wait_for_sart(CLAP_PLUG_PLUG* plug){
+static void clap_plug_plug_wait_for_start(CLAP_PLUG_PLUG* plug){
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
     if(!plug_data)return;
@@ -100,6 +87,68 @@ static void clap_plug_plug_wait_for_sart(CLAP_PLUG_PLUG* plug){
     while(!atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 1)){
 	expected = 1;
     }
+}
+
+//return the clap_plug_plug id on the plugins array that has the same plug_entry (initiated) if no plugin has this plug_entry return -1
+static int clap_plug_return_plug_id_with_same_plug_entry(CLAP_PLUG_INFO* plug_data, clap_plugin_entry_t* plug_entry){
+    int return_id = -1;
+    if(!plug_data)return -1;
+    if(!plug_entry)return -1;
+
+    for(unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++){
+	CLAP_PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_num]);
+	if(!cur_plug)continue;
+	if(cur_plug->plug_entry != plug_entry)continue;
+	return_id = cur_plug->id;
+	break;
+    }
+    
+    return return_id;
+}
+
+//clean the single plugin struct
+//before calling this the plug_inst_processing should be == 0 (stopped on the [audio-thread])
+static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
+    if(!plug_data)return -1;
+    if(plug_id < 0)return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
+    CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+      
+    if(plug->plug_inst){
+	if(plug->plug_inst_activated == 1){
+	    plug->plug_inst->deactivate(plug->plug_inst);
+	    plug->plug_inst_activated = 0;
+	}
+	if(plug->plug_inst_created == 1){
+	    plug->plug_inst->destroy(plug->plug_inst);
+	    plug->plug_inst_created = 0;
+	}
+	plug->plug_inst = NULL;	
+    }
+    if(plug->plug_entry){
+	if(clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug->plug_entry) == -1)plug->plug_entry->deinit();
+	plug->plug_entry = NULL;
+    }
+    if(plug->plug_path){
+	free(plug->plug_path);
+	plug->plug_path = NULL;
+    }
+    if(plug->plug_params){
+	param_clean_param_container(plug->plug_params);
+	plug->plug_params = NULL;
+    }
+    plug->plug_inst_id = -1;
+
+    //just in case reinit the plugin processing atomic to zero
+    atomic_store(&(plug->plug_inst_processing), 0);
+    return 0;
+}
+
+static int clap_plug_plug_stop_and_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
+    //stop this plugin process if its processing before cleaning.
+    //this is why the plug_inst_processing must be 0 if the plugin is not fully initiated otherwise infinite loop
+    clap_plug_plug_wait_for_stop(plug_data, plug_id);
+    return clap_plug_plug_clean(plug_data, plug_id);
 }
 
 //return if this is audio_thread or not
@@ -129,11 +178,6 @@ static void clap_plug_send_msg(CLAP_PLUG_INFO* plug_data, const char* msg){
 }
 //extension function for log.h to send messages in [thread-safe] manner
 static void clap_plug_ext_log(const clap_host_t* host, clap_log_severity severity, const char* msg){
-    int global_expected = 1;
-    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
-    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
-	return;
-    }    
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -142,13 +186,7 @@ static void clap_plug_ext_log(const clap_host_t* host, clap_log_severity severit
     clap_plug_send_msg(plug_data, msg);
 }
 
-const void* get_extension(const clap_host_t* host, const char* ex_id){
-    int global_expected = 1;
-    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
-    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
-	return NULL;
-    }
-    
+const void* get_extension(const clap_host_t* host, const char* ex_id){    
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return NULL;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -175,11 +213,10 @@ static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int pl
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     if(!plug)return -1;
     //since there was a request to start processing the plugin, it should be stopped, but just in case, send a request to stop it
-    //TODO On the audio thread process function, atomic_compare_exchange(plug_inst_processing, &expected, 1), expected = 1,
-    //and only process the plugin if returns true. (skip to another plugin if false).
-    clap_plug_plug_wait_for_stop(plug->plug_data, plug_id, 0);
+    clap_plug_plug_wait_for_stop(plug->plug_data, plug_id);
     
     if(plug->plug_inst_activated == 0){
+	if(!plug->plug_inst)return -1;
 	if(!plug->plug_inst->activate(plug->plug_inst, plug_data->sample_rate, plug_data->min_buffer_size, plug_data->max_buffer_size)){
 	    return -1;
 	}
@@ -187,7 +224,7 @@ static int clap_plug_activate_start_processing(CLAP_PLUG_INFO* plug_data, int pl
     plug->plug_inst_activated = 1;
     //send message to the audio thread that the plugin can be started to process
     //and wait for it to start
-    clap_plug_plug_wait_for_sart(plug);
+    clap_plug_plug_wait_for_start(plug);
 
     return 0;
 }
@@ -198,7 +235,7 @@ static int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id){
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     //send a message to rt thread to stop the plugin process and block while its stopping
-    clap_plug_plug_wait_for_stop(plug->plug_data, plug_id, 0);
+    clap_plug_plug_wait_for_stop(plug->plug_data, plug_id);
     
     if(plug->plug_inst_activated == 1){
 	plug->plug_inst->deactivate(plug->plug_inst);
@@ -207,13 +244,7 @@ static int clap_plug_restart(CLAP_PLUG_INFO* plug_data, int plug_id){
     //now when the plugin was deactivated simply call the activate and process function, that will reactivate the plugin and send a message to [audio-thread] to start processing it
     return clap_plug_activate_start_processing(plug_data, plug_id);
 }
-void request_restart(const clap_host_t* host){
-    int global_expected = 1;
-    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
-    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
-	return;
-    }
-    
+void request_restart(const clap_host_t* host){   
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -232,13 +263,7 @@ void request_restart(const clap_host_t* host){
   
 }
 
-void request_process(const clap_host_t* host){
-    int global_expected = 1;
-    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
-    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
-	return;
-    }
-    
+void request_process(const clap_host_t* host){   
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -267,16 +292,11 @@ static int clap_plug_callback(CLAP_PLUG_INFO* plug_data, int plug_id){
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     if(!plug)return -1;
+    if(!plug->plug_inst)return -1;
     plug->plug_inst->on_main_thread(plug->plug_inst);
     return 0;
 }
-void request_callback(const clap_host_t* host){
-    int global_expected = 1;
-    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
-    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1) && clap_plug_return_is_audio_thread()){
-	return;
-    }
-    
+void request_callback(const clap_host_t* host){   
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -301,38 +321,34 @@ static int clap_plug_start_process(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(plug_id >= MAX_INSTANCES)return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!plug->plug_inst)return -1;
+
     int expected = 1;
     //if plugin is already processing do nothing
     if(atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 1)){
 	return 0;
     }
+
+    if(!plug->plug_inst)return -1;
     if(!(plug->plug_inst->start_processing(plug->plug_inst))){
 	return -1;
     }
     atomic_store(&(plug->plug_inst_processing), 1);
     return 0;
 }
-static int clap_plug_stop_process(CLAP_PLUG_INFO* plug_data, int plug_id, unsigned int stop_all){
+static int clap_plug_stop_process(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return -1;
-    int expected = 0;
-    if(stop_all == 1){
-	if(atomic_compare_exchange_weak(&(clap_processing), &expected, 0)){
-	    return 0;
-	}
-	atomic_store(&(clap_processing), 0);
-	return 0;
-    }
+    
     if(plug_id < 0)return -1;
     if(plug_id >= MAX_INSTANCES)return -1;
 
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!plug->plug_inst)return -1;
+
+    int expected = 0;
     //if plugin is already stopped and not processing do nothing
     if(atomic_compare_exchange_weak(&(plug->plug_inst_processing), &expected, 0)){
 	return 0;
     }
-    
+    if(!plug->plug_inst)return -1;
     plug->plug_inst->stop_processing(plug->plug_inst);
     atomic_store(&(plug->plug_inst_processing), 0);
     return 0;
@@ -340,12 +356,6 @@ static int clap_plug_stop_process(CLAP_PLUG_INFO* plug_data, int plug_id, unsign
 int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data){
     //this is a local thread var its false on [main-thread] and true on [audio-thread]
     is_audio_thread = true;
-    
-    int global_expected = 1;
-    //if the whole clap plugin process is stopped dont even get plug_data, since it can be in a process of cleaning
-    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1)){
-	return 0;
-    }
     
     if(!plug_data)return -1;
     RING_BUFFER* ring_buffer = plug_data->ui_to_rt_msgs;
@@ -360,10 +370,7 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data){
 	    clap_plug_start_process(plug_data, cur_bit.scx_id);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_STOP_PROCESS){
-	    clap_plug_stop_process(plug_data, cur_bit.scx_id, 0);
-	}
-	if(cur_bit.msg_enum == MSG_STOP_ALL){
-	    clap_plug_stop_process(plug_data, 0, 1);
+	    clap_plug_stop_process(plug_data, cur_bit.scx_id);
 	}
     }
     return 0;
@@ -392,23 +399,6 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data){
 	}
     }
     return 0;
-}
-
-//return the clap_plug_plug id on the plugins array that has the same plug_entry (initiated) if no plugin has this plug_entry return -1
-static int clap_plug_return_plug_id_with_same_plug_entry(CLAP_PLUG_INFO* plug_data, clap_plugin_entry_t* plug_entry){
-    int return_id = -1;
-    if(!plug_data)return -1;
-    if(!plug_entry)return -1;
-
-    for(unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++){
-	CLAP_PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_num]);
-	if(!cur_plug)continue;
-	if(cur_plug->plug_entry != plug_entry)continue;
-	return_id = cur_plug->id;
-	break;
-    }
-    
-    return return_id;
 }
 
 static char** clap_plug_get_plugin_names_from_file(const char* plug_path, unsigned int* num_of_plugins){
@@ -562,9 +552,7 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     if(!plug_data){
 	*plug_error = clap_plug_failed_malloc;
 	return NULL;
-    }
-    atomic_store(&clap_processing, 0);
-    
+    }    
     memset(plug_data, '\0', sizeof(*plug_data));
     plug_data->min_buffer_size = min_buffer_size;
     plug_data->max_buffer_size = max_buffer_size;
@@ -708,7 +696,6 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 
     plug_entry->deinit();
     */
-    atomic_store(&clap_processing, 1);
     return plug_data;
 }
 
@@ -796,7 +783,7 @@ static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char
     }
     if(clap_files)free(clap_files);
     if(!(return_plug->plug_path)){
-	clap_plug_plug_clean(plug_data, return_plug->id);
+	clap_plug_plug_stop_and_clean(plug_data, return_plug->id);
 	return -1;
     }
     return 0;
@@ -820,7 +807,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     //if the id is still not within range an error happened, cant create the plugin
     if(id < 0 || id >= MAX_INSTANCES)return -1;
     //if id is in the possible range, clean the slot just in case its occupied 
-    clap_plug_plug_clean(plug_data, id);
+    clap_plug_plug_stop_and_clean(plug_data, id);
     
     if(clap_plug_create_plug_from_name(plug_data, plugin_name, id) < 0){
 	log_append_logfile("could not load plugin from name %s\n", plugin_name);
@@ -832,7 +819,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     const clap_plugin_descriptor_t* plug_desc = plug_fac->get_plugin_descriptor(plug_fac, plug->plug_inst_id);
     if(!plug_desc){
 	log_append_logfile("Could not get plugin %s descriptor \n", plug->plug_path);
-	clap_plug_plug_clean(plug_data, plug->id);
+	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
     if(plug_desc->name){
@@ -858,7 +845,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     const clap_plugin_t* plug_inst = plug_fac->create_plugin(plug_fac, &(plug->clap_host_info) , plug_desc->id);
     if(!plug_inst){
 	log_append_logfile("Failed to create %s plugin\n", plugin_name);
-	clap_plug_plug_clean(plug_data, plug->id);
+	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
     
@@ -867,7 +854,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     bool inst_err = plug_inst->init(plug_inst);
     if(!inst_err){
 	log_append_logfile("Failed to init %s plugin\n", plugin_name);
-	clap_plug_plug_clean(plug_data, plug->id);
+	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
     plug->plug_inst = plug_inst;
@@ -875,18 +862,12 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     //TODO the order of the further todo list should be considered, at this point the plugin is created but in its deactivated state, but the plugin can access all the host extension functions at this point
     //TODO need to activate the plugin, create parameters, get ports, create ports on the audio_client and etc.
     //TODO now cleaning for testing
-    clap_plug_plug_clean(plug_data, plug->id);
+    clap_plug_plug_stop_and_clean(plug_data, plug->id);
     return_id = plug->id;
     return return_id;
 }
 
 void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
-    int global_expected = 1;
-    //if the whole CLAP_PLUG_INFO struct is stopped dont event check if its NULL
-    if(!atomic_compare_exchange_weak(&(clap_processing), &global_expected, 1)){
-	return;
-    }
-
     if(!plug_data)return;
     if(!plug_data->plugins)return;
     for(int id = 0; id < MAX_INSTANCES; id++){
@@ -900,53 +881,12 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
     }
 }
 
-//clean the single plugin struct
-//before calling this the plug_inst_processing should be == 0 (stopped on the [audio-thread])
-int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
-    if(!plug_data)return -1;
-    if(plug_id < 0)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-    CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    
-    //stop this plugin process if its processing before cleaning.
-    //this is why the plug_inst_processing must be 0 if the plugin is not fully initiated otherwise infinite loop
-    clap_plug_plug_wait_for_stop(plug_data, plug_id, 0);
-    
-    if(plug->plug_inst){
-	if(plug->plug_inst_activated == 1){
-	    plug->plug_inst->deactivate(plug->plug_inst);
-	    plug->plug_inst_activated = 0;
-	}
-	if(plug->plug_inst_created == 1){
-	    plug->plug_inst->destroy(plug->plug_inst);
-	    plug->plug_inst_created = 0;
-	}
-	plug->plug_inst = NULL;	
-    }
-    if(plug->plug_entry){
-	if(clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug->plug_entry) == -1)plug->plug_entry->deinit();
-	plug->plug_entry = NULL;
-    }
-    if(plug->plug_path){
-	free(plug->plug_path);
-	plug->plug_path = NULL;
-    }
-    if(plug->plug_params){
-	param_clean_param_container(plug->plug_params);
-	plug->plug_params = NULL;
-    }
-    plug->plug_inst_id = -1;
-
-    return 0;
-}
-
 void clap_plug_clean_memory(CLAP_PLUG_INFO* plug_data){
     if(!plug_data)return;
     for(int i = 0; i < MAX_INSTANCES; i++){
 	clap_plug_plug_clean(plug_data, i);
     }
-    //stop the whole plug_data struct to stop processing
-    clap_plug_plug_wait_for_stop(plug_data, 0, 1);
+
     //clean the ring buffers
     ring_buffer_clean(plug_data->rt_to_ui_msgs);
     ring_buffer_clean(plug_data->ui_to_rt_msgs);

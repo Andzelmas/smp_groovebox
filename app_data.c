@@ -10,6 +10,9 @@
 //jack init functions
 #include "jack_funcs/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
+//mutext to pause or process the rt thread
+//will be locked only on init of the contextes and on clean memory
+pthread_mutex_t rt_processing;
 
 //the client name that will be shown in the audio client and added next to the port names
 const char* client_name = "smp_grvbox";
@@ -52,6 +55,27 @@ typedef struct _app_info{
     void* main_out_R;
 }APP_INFO;
 
+//clean memory for internal purposes, for example when error occures and the rt_processing mutex is already locked
+static int clean_memory(APP_INFO* app_data){
+    if(!app_data)return -1;
+    //clean the clap plug_data memory
+    if(app_data->clap_plug_data)clap_plug_clean_memory(app_data->clap_plug_data);
+    //clean the lv2 plug_data memory
+    if(app_data->plug_data)plug_clean_memory(app_data->plug_data);
+    //clean the sampler memory
+    if(app_data->smp_data) smp_clean_memory(app_data->smp_data);
+    //clean the synth memory
+    if(app_data->synth_data) synth_clean_memory(app_data->synth_data);
+
+    //clean the track jack memory
+    if(app_data->trk_jack)jack_clean_memory(app_data->trk_jack);
+
+    //clean the app_data
+    if(app_data)free(app_data);
+    
+    return 0;
+}
+
 APP_INFO* app_init(app_status_t *app_status){
     APP_INFO *app_data = (APP_INFO*) malloc(sizeof(APP_INFO));
     if(!app_data){
@@ -64,18 +88,25 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->plug_data = NULL;
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
+
+    //init and lock the processing mutex
+    if(pthread_mutex_init(&rt_processing, NULL) != 0){
+        clean_memory(app_data);
+	*app_status = app_failed_malloc;
+	return NULL;
+    }
+    pthread_mutex_lock(&rt_processing);
     
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
-    JACK_INFO *trk_jack = NULL;
-    trk_jack = jack_initialize(app_data, client_name, 0, 0, 0, NULL,
-			       trk_audio_process_rt, 0);
-    if(!trk_jack){
+    app_data->trk_jack = jack_initialize(app_data, client_name, 0, 0, 0, NULL, trk_audio_process_rt, 0);
+    if(!app_data->trk_jack){
 	clean_memory(app_data);
 	*app_status = trk_jack_init_failed;
+	pthread_mutex_unlock(&rt_processing);
 	return NULL;
     }
-    app_data->trk_jack = trk_jack;
+
     uint32_t buffer_size = (uint32_t)app_jack_return_buffer_size(app_data->trk_jack);
     SAMPLE_T samplerate = (SAMPLE_T)app_jack_return_samplerate(app_data->trk_jack);
     //create ports for trk_jack
@@ -87,36 +118,38 @@ APP_INFO* app_init(app_status_t *app_status){
     if(app_jack_activate(app_data->trk_jack)!=0){
 	clean_memory(app_data);
 	*app_status = trk_jack_init_failed;
+	pthread_mutex_unlock(&rt_processing);
 	return NULL;	
     }
     /*initiate the sampler it will be empty initialy*/
     /*-----------------------------------------------*/
     smp_status_t smp_status_err = 0;
-    SMP_INFO *smp_data = NULL;
-    smp_data = smp_init(buffer_size, samplerate, &smp_status_err, trk_jack);
-    if(!smp_data){
+    app_data->smp_data = smp_init(buffer_size, samplerate, &smp_status_err, app_data->trk_jack);
+    if(!app_data->smp_data){
         //clean app_data
         clean_memory(app_data);
         *app_status = smp_data_init_failed;
+	pthread_mutex_unlock(&rt_processing);
         return NULL;
     } 
-    app_data->smp_data = smp_data;    
 
     /*--------------------------------------------------*/
     //Init the plugin data object, it will not run any plugins yet
     plug_status_t plug_errors = 0;
-    app_data->plug_data = plug_init(buffer_size, samplerate, &plug_errors, trk_jack);
+    app_data->plug_data = plug_init(buffer_size, samplerate, &plug_errors, app_data->trk_jack);
     if(!app_data->plug_data){
 	clean_memory(app_data);
 	*app_status = plug_data_init_failed;
+	pthread_mutex_unlock(&rt_processing);
 	return NULL;
     }
     
     clap_plug_status_t clap_plug_errors = 0;
-    app_data->clap_plug_data = clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors, trk_jack);
+    app_data->clap_plug_data = clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors, app_data->trk_jack);
     if(!(app_data->clap_plug_data)){
 	clean_memory(app_data);
 	*app_status = clap_plug_data_init_failed;
+	pthread_mutex_unlock(&rt_processing);
 	return NULL;
     }
     
@@ -125,9 +158,11 @@ APP_INFO* app_init(app_status_t *app_status){
     if(!app_data->synth_data){
 	clean_memory(app_data);
 	*app_status = synth_data_init_failed;
+	pthread_mutex_unlock(&rt_processing);
 	return NULL;
     }
 
+    pthread_mutex_unlock(&rt_processing);
     return app_data;
 }
 
@@ -522,9 +557,16 @@ static void app_read_rt_messages(APP_INFO* app_data){
 }
 
 int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
+    if(pthread_mutex_trylock(&rt_processing) != 0){
+	return 0;
+    }
+    
     //get the app data
     APP_INFO *app_data = (APP_INFO*)arg;
-    if(app_data==NULL)return 1;
+    if(app_data==NULL){
+	pthread_mutex_unlock(&rt_processing);
+	return -1;
+    }
     //process messages from ui to rt thread, like start processing a plugin, stop_processing a plugin, update rt param values etc.
     app_read_rt_messages(app_data);
     
@@ -538,7 +580,7 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     clap_process_data_rt(app_data->clap_plug_data, nframes);
     
     //process the SYNTH DATA
-    //synth_process_rt(app_data->synth_data, nframes);
+    synth_process_rt(app_data->synth_data, nframes);
     
     //get the buffers for the trk_data, that is used as track summer
     SAMPLE_T *trk_in_L = app_jack_get_buffer_rt(app_data->main_in_L, nframes);
@@ -546,10 +588,14 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     SAMPLE_T *trk_out_L = app_jack_get_buffer_rt(app_data->main_out_L, nframes);
     SAMPLE_T *trk_out_R = app_jack_get_buffer_rt(app_data->main_out_R, nframes);    
     //copy the Master track in  - to the Master track out
-    if(!trk_in_L || !trk_in_R || !trk_out_L || !trk_out_R)return 0;
+    if(!trk_in_L || !trk_in_R || !trk_out_L || !trk_out_R){
+	pthread_mutex_unlock(&rt_processing);
+	return -1;
+    }
     memcpy(trk_out_L, trk_in_L, sizeof(SAMPLE_T)*nframes);
     memcpy(trk_out_R, trk_in_R, sizeof(SAMPLE_T)*nframes);
 
+    pthread_mutex_unlock(&rt_processing);
     return 0;
 }
 
@@ -574,28 +620,17 @@ int app_smp_remove_sample(APP_INFO* app_data, unsigned int idx){
 int app_plug_remove_plug(APP_INFO* app_data, const int id){
     int return_val = 0;
     if(!app_data)return -1;  
-    return_val = plug_remove_plug(app_data->plug_data, id);
+    return_val = plug_stop_and_remove_plug(app_data->plug_data, id);
     return return_val;
 }
 
-int clean_memory(APP_INFO *app_data){
-    if(!app_data)return -1;
-    //clean the clap plug_data memory
-    if(app_data->clap_plug_data)clap_plug_clean_memory(app_data->clap_plug_data);
-    //clean the lv2 plug_data memory
-    if(app_data->plug_data)plug_clean_memory(app_data->plug_data);
-    //clean the sampler memory
-    //TODO implement pause in smp_clean_memory
-    if(app_data->smp_data) smp_clean_memory(app_data->smp_data);
-    //clean the synth memory
-    //TODO implement pause in synth_clean_memory
-    if(app_data->synth_data) synth_clean_memory(app_data->synth_data);
+int app_stop_and_clean(APP_INFO *app_data){
+    pthread_mutex_lock(&rt_processing);
 
-    //clean the track jack memory
-    if(app_data->trk_jack)jack_clean_memory(app_data->trk_jack);
+    clean_memory(app_data);
 
-    //clean the app_data
-    if(app_data)free(app_data);
-
+    pthread_mutex_unlock(&rt_processing);
+    pthread_mutex_destroy(&rt_processing);
+    
     return 0;
 }

@@ -84,6 +84,7 @@ unsigned int ring_buffer_return_items(RING_BUFFER* ring_buf){
 }
 
 void ring_buffer_clean(RING_BUFFER* ring_buffer){
+    if(!ring_buffer)return;
     if(ring_buffer->data)free(ring_buffer->data);
     if(ring_buffer)free(ring_buffer);
 }

@@ -20,7 +20,5 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_name, int id);
 //process the clap plugins, must be called on the [audio-thread]
 void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes);
-//cleans the plugin, stopping its process before that, and blocking the [main-thread] while waiting for the plugin process to stop
-int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id);
 //clean the plugin struct and free memory
 void clap_plug_clean_memory(CLAP_PLUG_INFO* plug_data);
