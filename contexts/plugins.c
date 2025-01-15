@@ -937,8 +937,13 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
 	if(read_buffer <= 0)continue;
 	if(cur_bit.cx_id >= MAX_INSTANCES)continue;
-	//TODO check if plugin is not stopped
+	//check if plugin is processing
 	PLUG_PLUG* cur_plug = &(plug_data->plugins[cur_bit.cx_id]);
+	int expected = 1;
+	//do nothing if this plugin is not processing
+	if(!(atomic_compare_exchange_weak(&(cur_plug->is_processing), &expected, 1))){
+	    continue;
+	}
 	if(!cur_plug->plug_instance || !cur_plug->plug_params)continue;
 	param_set_value(cur_plug->plug_params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 1);
     }
