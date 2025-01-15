@@ -29,7 +29,7 @@ typedef struct _clap_plug_plug{
     const clap_plugin_t* plug_inst; //the plugin instance
     unsigned int plug_inst_created; //was a init function called in the descriptor for this plugin
     unsigned int plug_inst_activated; //was the activate function called on this plugin
-    atomic_int plug_inst_processing; //is the plugin instance processing, touch only on [audio_thread]
+    unsigned int plug_inst_processing; //is the plugin instance processing, touch only on [audio_thread]
     int plug_inst_id; //the plugin instance index in the array of the plugin factory
     char* plug_path; //the path for the clap file
     PRM_CONTAIN* plug_params; //plugin parameter container for params.c
