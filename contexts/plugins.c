@@ -307,12 +307,9 @@ static void plug_send_msg(PLUG_INFO* plug_data, const char* msg){
 }
 
 //functions that block main thread and waits for the plugin process to stop or start (waiting for start necessary to keep the order of the tasks)
-static void plug_plug_wait_for_stop(PLUG_INFO* plug_data, int plug_id, unsigned int stop_all){
+static void plug_plug_wait_for_stop(PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return;
     RING_SYS_MSG send_bit;
-    int expected = 0;
-    unsigned int spin_counter = 0;
- 
     if(plug_id >= MAX_INSTANCES || plug_id < 0)return;
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     
@@ -877,7 +874,6 @@ static int plug_plug_start_process(PLUG_INFO* plug_data, int plug_id){
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     
     plug->is_processing = 1;
-    sem_post(&plug_data->wait_for_rt);
     return 0;
 }
 static int plug_plug_stop_process(PLUG_INFO* plug_data, int plug_id, unsigned int stop_all){
@@ -888,13 +884,11 @@ static int plug_plug_stop_process(PLUG_INFO* plug_data, int plug_id, unsigned in
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     //TODO before stopping would be nice to clear midi events, and fadeout audio
     plug->is_processing = 0;
-    sem_post(&plug_data->wait_for_rt);
     return 0;
 }
 int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
     //set the is_audio_thread to true so its false on [main-thread] and true on [audio-thread]
     is_audio_thread = true;
-    
     if(!plug_data){
 	return -1;
     }
@@ -909,9 +903,13 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
 	if(read_buffer <= 0)continue;
 	if(cur_bit.msg_enum == MSG_PLUGIN_PROCESS){
 	    plug_plug_start_process(plug_data, cur_bit.scx_id);
+	    //this messages will be sent from [main-thread] only with sam_wait, so error or no error, release the semaphore
+	    sem_post(&plug_data->wait_for_rt);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_STOP_PROCESS){
 	    plug_plug_stop_process(plug_data, cur_bit.scx_id, 0);
+	    //this messages will be sent from [main-thread] only with sam_wait, so error or no error, release the semaphore
+	    sem_post(&plug_data->wait_for_rt);
 	}
     }
     //read the param ui_to_rt messages and set the parameter values
@@ -1186,7 +1184,7 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
     if(!plug_data->plugins)return -1;
     if(!preset_name)return -1;
     int return_val = 0;
-    plug_plug_wait_for_stop(plug_data, plug_id, 0);
+    plug_plug_wait_for_stop(plug_data, plug_id);
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     if(!plug->plug_instance)return -1;
     if(plug->preset){
@@ -1903,7 +1901,7 @@ static void plug_run_rt(PLUG_PLUG* plug, unsigned int nframes){
 
 int plug_stop_and_remove_plug(PLUG_INFO* plug_data, const int id){
     //first stop the plugin process
-    plug_plug_wait_for_stop(plug_data, id, 0);
+    plug_plug_wait_for_stop(plug_data, id);
     return plug_remove_plug(plug_data, id);
 }
 

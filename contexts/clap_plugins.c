@@ -320,21 +320,17 @@ static int clap_plug_start_process(CLAP_PLUG_INFO* plug_data, int plug_id){
 
     //if plugin is already processing do nothing
     if(plug->plug_inst_processing == 1){
-	sem_post(&plug_data->wait_for_rt);
 	return 0;
     }
 
     if(!plug->plug_inst){
-	sem_post(&plug_data->wait_for_rt);
 	return -1;
     }
     if(!(plug->plug_inst->start_processing(plug->plug_inst))){
-	sem_post(&plug_data->wait_for_rt);
 	return -1;
     }
 
     plug->plug_inst_processing = 1;
-    sem_post(&plug_data->wait_for_rt);
     return 0;
 }
 static int clap_plug_stop_process(CLAP_PLUG_INFO* plug_data, int plug_id){
@@ -347,17 +343,14 @@ static int clap_plug_stop_process(CLAP_PLUG_INFO* plug_data, int plug_id){
 
     //if plugin is already stopped and not processing do nothing
     if(plug->plug_inst_processing == 0){
-	sem_post(&plug_data->wait_for_rt);
 	return 0;
     }
     if(!plug->plug_inst){
-	sem_post(&plug_data->wait_for_rt);
 	return -1;
     }
     plug->plug_inst->stop_processing(plug->plug_inst);
 
     plug->plug_inst_processing = 0;
-    sem_post(&plug_data->wait_for_rt);
     return 0;
 }
 int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data){
@@ -367,17 +360,20 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data){
     if(!plug_data)return -1;
     RING_BUFFER* ring_buffer = plug_data->ui_to_rt_msgs;
     if(!ring_buffer)return -1;
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    if(cur_items <= 0)return 0;
+    unsigned int cur_items = ring_buffer_return_items(ring_buffer); 0;
     for(unsigned int i = 0; i < cur_items; i++){
 	RING_SYS_MSG cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
 	if(read_buffer <= 0)continue;
 	if(cur_bit.msg_enum == MSG_PLUGIN_PROCESS){
 	    clap_plug_start_process(plug_data, cur_bit.scx_id);
+	    //this message will be sent from [main-thread] only with sam_wait, so error or no error release the semophore
+	    sem_post(&plug_data->wait_for_rt);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_STOP_PROCESS){
 	    clap_plug_stop_process(plug_data, cur_bit.scx_id);
+	    //this message will be sent from [main-thread] only with sam_wait, so error or no error release the semophore
+	    sem_post(&plug_data->wait_for_rt);
 	}
     }
     return 0;
@@ -387,7 +383,6 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data){
     RING_BUFFER* ring_buffer = plug_data->rt_to_ui_msgs;
     if(!ring_buffer)return -1;
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    if(cur_items <= 0)return 0;
     for(unsigned int i = 0; i < cur_items; i++){
 	RING_SYS_MSG cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));

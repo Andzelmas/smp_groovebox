@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <semaphore.h>
 //my libraries
 #include "app_data.h"
 //string functions
@@ -10,9 +11,7 @@
 //jack init functions
 #include "jack_funcs/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
-//mutext to pause or process the rt thread
-//will be locked only on init of the contextes and on clean memory
-pthread_mutex_t rt_processing;
+#include "util_funcs/ring_buffer.h"
 
 //the client name that will be shown in the audio client and added next to the port names
 const char* client_name = "smp_grvbox";
@@ -53,9 +52,14 @@ typedef struct _app_info{
     void* main_in_R;
     void* main_out_L;
     void* main_out_R;
+
+    //ring buffer for communication between [audio-thread]
+    RING_BUFFER* ui_to_rt_msgs;
+    sem_t wait_for_rt;
+    unsigned int is_processing; //is the main jack function processing, should be touched only on [audio-thread]
 }APP_INFO;
 
-//clean memory for internal purposes, for example when error occures and the rt_processing mutex is already locked
+//clean memory, without pausing the [audio-thread]
 static int clean_memory(APP_INFO* app_data){
     if(!app_data)return -1;
     //clean the clap plug_data memory
@@ -71,9 +75,34 @@ static int clean_memory(APP_INFO* app_data){
     if(app_data->trk_jack)jack_clean_memory(app_data->trk_jack);
 
     //clean the app_data
+    if(app_data->ui_to_rt_msgs)ring_buffer_clean(app_data->ui_to_rt_msgs);
+    sem_destroy(&app_data->wait_for_rt);
     if(app_data)free(app_data);
     
     return 0;
+}
+
+//functions that block main thread and waits for the [audio-thread] processing function to start or stop.
+static void app_wait_for_stop(APP_INFO* app_data){
+    if(!app_data)return;
+    RING_SYS_MSG send_bit;
+    
+    send_bit.msg_enum = MSG_STOP_ALL;
+    send_bit.scx_id = 0;
+    ring_buffer_write(app_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
+    //lock the main thread and wait for the audio thread to stop processing the main jack function
+    sem_wait(&app_data->wait_for_rt);
+}
+static void app_wait_for_start(APP_INFO* app_data){
+    if(!app_data)return; 
+   
+    RING_SYS_MSG send_bit;
+    send_bit.msg_enum = MSG_START_ALL;
+    send_bit.scx_id = 0;
+    ring_buffer_write(app_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
+    
+    //lock the main thread and wait for the audio thread to start processing the main jack function
+    sem_wait(&app_data->wait_for_rt);
 }
 
 APP_INFO* app_init(app_status_t *app_status){
@@ -88,22 +117,23 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->plug_data = NULL;
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
+    app_data->is_processing = 0;
 
-    //init and lock the processing mutex
-    if(pthread_mutex_init(&rt_processing, NULL) != 0){
-        clean_memory(app_data);
-	*app_status = app_failed_malloc;
+    app_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
+    if(!app_data->ui_to_rt_msgs){
+	clean_memory(app_data);
 	return NULL;
     }
-    pthread_mutex_lock(&rt_processing);
-    
+    if(sem_init(&app_data->wait_for_rt, 0, 0) != 0){
+	clean_memory(app_data);
+	return NULL;
+    }
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
     app_data->trk_jack = jack_initialize(app_data, client_name, 0, 0, 0, NULL, trk_audio_process_rt, 0);
     if(!app_data->trk_jack){
 	clean_memory(app_data);
 	*app_status = trk_jack_init_failed;
-	pthread_mutex_unlock(&rt_processing);
 	return NULL;
     }
 
@@ -118,9 +148,12 @@ APP_INFO* app_init(app_status_t *app_status){
     if(app_jack_activate(app_data->trk_jack)!=0){
 	clean_memory(app_data);
 	*app_status = trk_jack_init_failed;
-	pthread_mutex_unlock(&rt_processing);
 	return NULL;	
     }
+
+    //now the jack function was activated, pause it to initiate the other contexts
+    app_wait_for_stop(app_data);
+    
     /*initiate the sampler it will be empty initialy*/
     /*-----------------------------------------------*/
     smp_status_t smp_status_err = 0;
@@ -129,7 +162,6 @@ APP_INFO* app_init(app_status_t *app_status){
         //clean app_data
         clean_memory(app_data);
         *app_status = smp_data_init_failed;
-	pthread_mutex_unlock(&rt_processing);
         return NULL;
     } 
 
@@ -140,7 +172,6 @@ APP_INFO* app_init(app_status_t *app_status){
     if(!app_data->plug_data){
 	clean_memory(app_data);
 	*app_status = plug_data_init_failed;
-	pthread_mutex_unlock(&rt_processing);
 	return NULL;
     }
     
@@ -149,7 +180,6 @@ APP_INFO* app_init(app_status_t *app_status){
     if(!(app_data->clap_plug_data)){
 	clean_memory(app_data);
 	*app_status = clap_plug_data_init_failed;
-	pthread_mutex_unlock(&rt_processing);
 	return NULL;
     }
     
@@ -158,11 +188,10 @@ APP_INFO* app_init(app_status_t *app_status){
     if(!app_data->synth_data){
 	clean_memory(app_data);
 	*app_status = synth_data_init_failed;
-	pthread_mutex_unlock(&rt_processing);
 	return NULL;
     }
-
-    pthread_mutex_unlock(&rt_processing);
+    //now unpause the jack function again
+    app_wait_for_start(app_data);
     return app_data;
 }
 
@@ -546,29 +575,51 @@ const char** app_return_context_ports(APP_INFO* app_data, unsigned int* name_num
     return name_array;
 }
 //read ring buffers sent from ui to rt thread - this is not for parameter values, but for messages like start processing a plugin and similar
-static void app_read_rt_messages(APP_INFO* app_data){
-    if(!app_data)return;
+static int app_read_rt_messages(APP_INFO* app_data){
+    if(!app_data)return -1;
+    //first read the app_data messages
+    RING_BUFFER* ring_buffer = app_data->ui_to_rt_msgs;
+    if(!ring_buffer)return -1;
+    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
+    for(unsigned int i = 0; i < cur_items; i++){
+	RING_SYS_MSG cur_bit;
+	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
+	if(read_buffer <= 0)continue;
+	//stop the jack function
+	if(cur_bit.msg_enum == MSG_STOP_ALL){
+	    app_data->is_processing = 0;
+	    sem_post(&app_data->wait_for_rt);
+	}
+	if(cur_bit.msg_enum == MSG_START_ALL){
+	    app_data->is_processing = 1;
+	    sem_post(&app_data->wait_for_rt);
+	}
+    }
+    //if the process is stopped dont process the contexts
+    if(app_data->is_processing == 0)return 1;
+    
     //read the jack inner messages on the [audio-thread]
     app_jack_read_ui_to_rt_messages(app_data->trk_jack);
     //read the CLAP plugins inner messages on the [audio-thread]
-    clap_read_ui_to_rt_messages(app_data->clap_plug_data);
+    if(clap_read_ui_to_rt_messages(app_data->clap_plug_data) != 0)return -1;
     //read the lv2 plugin messages on the [audio-thread]
-    plug_read_ui_to_rt_messages(app_data->plug_data);
+    if(plug_read_ui_to_rt_messages(app_data->plug_data) != 0)return -1;
+
+    return 0;
 }
 
-int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
-    if(pthread_mutex_trylock(&rt_processing) != 0){
-	return 0;
-    }
-    
+int trk_audio_process_rt(NFRAMES_T nframes, void *arg){   
     //get the app data
     APP_INFO *app_data = (APP_INFO*)arg;
     if(app_data==NULL){
-	pthread_mutex_unlock(&rt_processing);
 	return -1;
     }
     //process messages from ui to rt thread, like start processing a plugin, stop_processing a plugin, update rt param values etc.
-    app_read_rt_messages(app_data);
+    //if returns a 1 value, this means that is_processing is 0 and the function should not process any contexts
+    //a value of -1 means that a fundamental error occured, this might lead to a semaphore deadlock!
+    int read_err = app_read_rt_messages(app_data);
+    if(read_err == 1)return 0;
+    if(read_err == -1)return -1;
     
     //process the SAMPLER DATA
     //smp_sample_process_rt(app_data->smp_data, nframes);    
@@ -589,13 +640,12 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     SAMPLE_T *trk_out_R = app_jack_get_buffer_rt(app_data->main_out_R, nframes);    
     //copy the Master track in  - to the Master track out
     if(!trk_in_L || !trk_in_R || !trk_out_L || !trk_out_R){
-	pthread_mutex_unlock(&rt_processing);
 	return -1;
     }
+    
     memcpy(trk_out_L, trk_in_L, sizeof(SAMPLE_T)*nframes);
     memcpy(trk_out_R, trk_in_R, sizeof(SAMPLE_T)*nframes);
 
-    pthread_mutex_unlock(&rt_processing);
     return 0;
 }
 
@@ -625,12 +675,9 @@ int app_plug_remove_plug(APP_INFO* app_data, const int id){
 }
 
 int app_stop_and_clean(APP_INFO *app_data){
-    pthread_mutex_lock(&rt_processing);
-
+    app_wait_for_stop(app_data);
+    
     clean_memory(app_data);
-
-    pthread_mutex_unlock(&rt_processing);
-    pthread_mutex_destroy(&rt_processing);
     
     return 0;
 }
