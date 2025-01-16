@@ -118,7 +118,7 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
     app_data->is_processing = 0;
-
+    
     app_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
     if(!app_data->ui_to_rt_msgs){
 	clean_memory(app_data);
