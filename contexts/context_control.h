@@ -7,6 +7,8 @@ So these functions are here for convenience. When developing and changing the wa
 for each context.
  */
 #pragma once
+
+typedef struct _cxcontrol_data CXCONTROL;
 //init the subcontext control struct, create the ui_to_rt and rt_to_ui sys message ring buffers, init the pause semaphore
 //also get the user functions for messages from [audio-thread] like Request_callback, Sent_string etc. (these are optional)
 //and for messages from [main-thread] - Plugin_process and Plugin_stop_process - these are required
@@ -22,10 +24,10 @@ int context_sub_process_ui();
 int context_sub_process_rt();
 //send a message to stop the subcontext and block the [main-thread], while it stops.
 //must be called only on [main-thread]
-int context_sub_wait_for_stop();
+int context_sub_wait_for_stop(CXCONTROL* cxcontrol_data, subcx_id);
 //send a message to start the subcontext and block the [main-thread], while it starts.
 //must be called only on [main-thread]. Needs to wait for start, so that [main-thread] always sends only one message to [audio-thread] that might sem_post
-int context_sub_wait_for_start();
+int context_sub_wait_for_start(CXCONTROL* cxcontrol_data, subcx_id);
 //clean the subcontext control struct, free ring buffers, destroy the pause semaphore
 //the user has to be sure, that the [audio-thread] will not call context_sub_process_rt function when context_sub_clean is called from the [main_thread] 
-int context_sub_clean();
+int context_sub_clean(CXCONTROL* cxcontrol_data);

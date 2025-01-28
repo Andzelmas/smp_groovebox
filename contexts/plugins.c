@@ -872,6 +872,7 @@ static int plug_plug_start_process(PLUG_INFO* plug_data, int plug_id){
     if(plug_id >= MAX_INSTANCES)return -1;
 
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+    if(!plug->plug_instance)return -1;
     
     plug->is_processing = 1;
     return 0;
