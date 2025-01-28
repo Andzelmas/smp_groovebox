@@ -876,7 +876,7 @@ static int plug_plug_start_process(PLUG_INFO* plug_data, int plug_id){
     plug->is_processing = 1;
     return 0;
 }
-static int plug_plug_stop_process(PLUG_INFO* plug_data, int plug_id, unsigned int stop_all){
+static int plug_plug_stop_process(PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return -1;
     if(plug_id < 0)return -1;
     if(plug_id >= MAX_INSTANCES)return -1;
@@ -907,7 +907,7 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
 	    sem_post(&plug_data->wait_for_rt);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_STOP_PROCESS){
-	    plug_plug_stop_process(plug_data, cur_bit.scx_id, 0);
+	    plug_plug_stop_process(plug_data, cur_bit.scx_id);
 	    //this messages will be sent from [main-thread] only with sam_wait, so error or no error, release the semaphore
 	    sem_post(&plug_data->wait_for_rt);
 	}
