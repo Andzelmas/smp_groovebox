@@ -1140,6 +1140,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 			ScalePoint* cur_pt = &(cur_ctrl->points[c_pt]);
 			if(!cur_pt)continue;
 			if(!cur_pt->label)continue;
+			//TODO bug with tuna lv2 plugin here
 			val_labels[c_pt] = strdup(cur_pt->label);
 		    }		    
 		    param_set_param_strings(plug_params, ct_iter, val_labels);
