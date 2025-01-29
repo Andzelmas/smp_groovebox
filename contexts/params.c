@@ -323,7 +323,6 @@ SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char
 	    ret_val = params_interp_val_get_value(cur_param->interp_val, ret_val);
 	}
     }
-    
     return ret_val;
 }
 

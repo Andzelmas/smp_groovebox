@@ -157,6 +157,7 @@ typedef struct _plug_port {
     void* widget;    ///< Control widget, if applicable
     size_t buf_size;  ///< Custom buffer size, or 0
     uint32_t index;     ///< Port index
+    int param_index; //index on the plug_plug->controls arrays if this is a CONTROL type port (will be the same index as on plug_params array)
     float control;   ///< For control ports, otherwise 0.0f
     //for convenience we can save the current port urid of its type
     LV2_URID port_type_urid;    
@@ -1091,7 +1092,10 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 	    if(!cur_ctrl)continue;
 
 	    param_names[ct_iter] = strdup(lilv_node_as_string(cur_ctrl->symbol));
-	    param_vals[ct_iter] = lilv_node_as_float(cur_ctrl->def);
+	    param_vals[ct_iter] = 0;
+	    if(lilv_node_is_float(cur_ctrl->def) == 1 || lilv_node_is_int(cur_ctrl->def) == 1){
+		param_vals[ct_iter] = lilv_node_as_float(cur_ctrl->def);
+	    }
 	    param_mins[ct_iter] = lilv_node_as_float(cur_ctrl->min);
 	    param_maxs[ct_iter] = lilv_node_as_float(cur_ctrl->max);
 
@@ -1108,10 +1112,8 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 	    //should have a property for this parameter to not send it to ui_to_rt ring buffer and only get its value from the plugin
 	    //TODO in case of writable and readable param should read and write the value (like trk params in trk context)
 	    if(cur_ctrl->is_writable != 1){
-		log_append_logfile("ONLY READABLE param name %s, default %g\n", param_names[ct_iter], lilv_node_as_float(cur_ctrl->def));
 		continue;
 	    }
-	    log_append_logfile("param name %s, default %g\n", param_names[ct_iter], lilv_node_as_float(cur_ctrl->def));
 	    //decide how big the increment of the parameter will be
 	    float total_range = abs(param_maxs[ct_iter] - param_mins[ct_iter]);
 	    float cur_inc = 1;
@@ -1479,6 +1481,7 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	cur_port->evbuf = NULL;
 	cur_port->buf_size = 0;
 	cur_port->index = i;
+	cur_port->param_index = -1;
 	cur_port->control = 0.0f;
 	cur_port->flow = FLOW_UNKNOWN;
 	cur_port->type = TYPE_UNKNOWN;
@@ -1537,6 +1540,7 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 		//add control to the controls array
 		plug->controls = (PLUG_CONTROL**)realloc(plug->controls, sizeof(PLUG_CONTROL*) * (plug->num_controls + 1));
 		plug->controls[plug->num_controls] = record;
+		cur_port->param_index = plug->num_controls;
 		plug->num_controls += 1;	    
 	    }
 	}
@@ -1854,9 +1858,17 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    if(cur_port->type == TYPE_CV){
    
 	    }
-	    //TODO send plugin values to ui, but dont do it in realtime speed, might need a frequency when to send
+	    //TODO dont send so frequently
 	    if(cur_port->type == TYPE_CONTROL){
-	    
+		//set the val direclty on the [audio-thread]
+	        param_set_value(plug->plug_params, cur_port->param_index, cur_port->control, Operation_SetValue, 1);
+		//send message to set the parameter on the ui [main-thread]
+		PARAM_RING_DATA_BIT send_bit;
+		send_bit.cx_id = plug->id;
+		send_bit.param_id = cur_port->param_index;
+		send_bit.param_op = Operation_SetValue;
+		send_bit.param_value = cur_port->control;
+		ring_buffer_write(plug_data->param_rt_to_ui, &send_bit, sizeof(send_bit));		
 	    }
 	    if(cur_port->type == TYPE_EVENT){
 		void* buf = NULL;
