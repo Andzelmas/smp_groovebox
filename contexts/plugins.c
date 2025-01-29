@@ -1101,13 +1101,17 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 	    }
 	    if(cur_ctrl->is_enumeration){
 		val_t = String_Return_Type;
+		
 	    }
 	    val_types[ct_iter] = val_t;
 	    //TODO now if the param is not writable it will simply have increment of 0 and the user wont be able to increase or decrease it
 	    //should have a property for this parameter to not send it to ui_to_rt ring buffer and only get its value from the plugin
 	    //TODO in case of writable and readable param should read and write the value (like trk params in trk context)
-	    if(cur_ctrl->is_writable != 1)continue;
-	    
+	    if(cur_ctrl->is_writable != 1){
+		log_append_logfile("ONLY READABLE param name %s, default %g\n", param_names[ct_iter], lilv_node_as_float(cur_ctrl->def));
+		continue;
+	    }
+	    log_append_logfile("param name %s, default %g\n", param_names[ct_iter], lilv_node_as_float(cur_ctrl->def));
 	    //decide how big the increment of the parameter will be
 	    float total_range = abs(param_maxs[ct_iter] - param_mins[ct_iter]);
 	    float cur_inc = 1;
@@ -1131,7 +1135,6 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 	    PLUG_CONTROL* cur_ctrl = plug->controls[ct_iter];
 	    if(!cur_ctrl)continue;
 	    if(!cur_ctrl->is_enumeration || !cur_ctrl->is_integer)continue;
-
 	    if(cur_ctrl->n_points > 0 && cur_ctrl->points){
 		char** val_labels = malloc(sizeof(char*) * cur_ctrl->n_points);
 		if(val_labels){
@@ -1140,10 +1143,9 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 			ScalePoint* cur_pt = &(cur_ctrl->points[c_pt]);
 			if(!cur_pt)continue;
 			if(!cur_pt->label)continue;
-			//TODO bug with tuna lv2 plugin here
 			val_labels[c_pt] = strdup(cur_pt->label);
 		    }		    
-		    param_set_param_strings(plug_params, ct_iter, val_labels);
+		    param_set_param_strings(plug_params, ct_iter, val_labels, cur_ctrl->n_points);
 		    for(unsigned int lbl_iter = 0; lbl_iter < cur_ctrl->n_points; lbl_iter++){
 			char* cur_lbl = val_labels[lbl_iter];
 			if(cur_lbl)free(cur_lbl);

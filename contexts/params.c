@@ -40,8 +40,8 @@ typedef struct _params_param{
     //with the param_add_curve_table
     MATH_RANGE_TABLE* curve_table;
     //for parameters that contain strings to display for user
-    //max_val - min_val should be a whole number because this will be how many strings are in the string array
-    char** param_strings;
+    unsigned int param_strings_num; // how many strings there are for this parameter
+    char** param_strings; //the string array
 }PRM_PARAM;
 
 typedef struct _params_container{
@@ -142,6 +142,9 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
 	}
 	param_container->rt_params[i]->param_strings = NULL;
 	param_container->ui_params[i]->param_strings = NULL;
+	param_container->rt_params[i]->param_strings_num = 0;
+	param_container->ui_params[i]->param_strings_num = 0;
+	/*
 	if((val_types[i] & 0xff) == String_Return_Type){
 	    unsigned int len = (param_maxs[i] - param_mins[i]) + 1;
 	    if(len > 0){
@@ -149,7 +152,7 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
 		param_container->ui_params[i]->param_strings = malloc(sizeof(char*) * len);
 	    }
 	}
-
+	*/
 	param_container->rt_params[i]->curve_table = NULL;
 	param_container->ui_params[i]->curve_table = NULL;
 	
@@ -324,9 +327,10 @@ SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char
     return ret_val;
 }
 
-int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings){
+int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings, unsigned int num_strings){
     if(!param_container)return -1;
     if(!strings)return -1;
+    if(num_strings <= 0)return -1;
     if(val_id >= param_container->num_of_params_ui)return -1;
     PRM_PARAM** param_array_rt = param_container->rt_params;
     PRM_PARAM** param_array_ui = param_container->ui_params;
@@ -336,11 +340,28 @@ int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** str
     unsigned char val_type = cur_param_ui->val_type;
     if((val_type & 0xff) != String_Return_Type)return -1;
     if(!cur_param_rt->param_strings || !cur_param_ui->param_strings)return -1;
-
-    unsigned int len = abs(cur_param_rt->max_val - cur_param_rt->min_val) + 1;
-    if(len <= 0)return -1;
+    //free the strings if there are labels already on this parameter
+    //though the labels should be set once, on the param init
+    if(cur_param_rt->param_strings != NULL){
+	free(cur_param_rt->param_strings);
+	cur_param_rt->param_strings_num = 0;
+    }
+    if(cur_param_ui->param_strings != NULL){
+	free(cur_param_ui->param_strings);
+	cur_param_ui->param_strings_num = 0;
+    }
     
-    for(int i = 0; i < len; i++){
+    cur_param_rt->param_strings = malloc(sizeof(char*)*num_strings);
+    if(cur_param_rt->param_strings == NULL)return -1;
+    cur_param_ui->param_strings = malloc(sizeof(char*)*num_strings);
+    if(cur_param_ui->param_strings == NULL){
+	free(cur_param_rt->param_strings);
+	cur_param_rt->param_strings = NULL;
+	return -1;
+    }
+    cur_param_rt->param_strings_num = num_strings;
+    cur_param_ui->param_strings_num = num_strings;
+    for(int i = 0; i < num_strings; i++){
 	cur_param_rt->param_strings[i] = NULL;
 	cur_param_ui->param_strings[i] = NULL;
 	const char* cur_string = strings[i];
@@ -377,8 +398,8 @@ const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, uns
 
     PRM_PARAM* cur_param = param_array[val_id];
     int cur_val = cur_param->val;
-    unsigned int len = abs(cur_param->max_val - cur_param->min_val) + 1;
-    if(len <= 0 || cur_val >= len || cur_val < 0)return NULL;
+    if(cur_val > cur_param->max_val || cur_val < cur_param->min_val)return NULL;
+    if(cur_param->param_strings_num <= 0 || cur_val >= cur_param->param_strings_num || cur_val < 0)return NULL;
         
     return cur_param->param_strings[cur_val];
 }
@@ -477,11 +498,8 @@ static void param_clean_param(PRM_PARAM* param){
     if(param->interp_val)free(param->interp_val);
     if(param->name)free(param->name);
     if(param->param_strings){
-	unsigned int len = (param->max_val - param->min_val) + 1;
-	if(len > 0){
-	    for(int j = 0; j < len; j++){
-		if(param->param_strings[j])free(param->param_strings[j]);
-	    }
+	for(int j = 0; j < param->param_strings_num; j++){
+	    if(param->param_strings[j])free(param->param_strings[j]);
 	}
 	free(param->param_strings);
     }

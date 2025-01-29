@@ -29,7 +29,7 @@ SAMPLE_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned 
 SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char* val_type,
 			 unsigned int curved, unsigned int interp, unsigned int rt_params);
 //set the strings for paramter, the type must be String_Return_type
-int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings);
+int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings, unsigned int num_strings);
 //get the parameter string, from the current parameter value, the values must go from >= 0 in positive direction
 const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
 //check if the parameter is just changed - returns 1 if this parameters value was not retrieved with param_get_value
