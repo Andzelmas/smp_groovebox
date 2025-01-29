@@ -1867,12 +1867,13 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    }
 	    //update the output parameters (these should be sent to ui for display)
 	    if(cur_port->type == TYPE_CONTROL){
-		//set the val directly on the [audio-thread]
-	        param_set_value(plug->plug_params, cur_port->param_index, cur_port->control, Operation_SetValue, 1);
-		//only send message to ui if the parameter changed
-		if(param_get_if_changed(plug->plug_params, cur_port->param_index, 1) == 1){
-		    //send message to set the parameter on the ui [main-thread], but dont send it too often
-		    if(plug_data->rt_tick == 0){
+		//set param but not too often to not swamp the rt_to_ui ring buffer.
+		//it does not matter that the [audio-thread] parameter will be set at the same speed, since it output parameter
+		if(plug_data->rt_tick == 0){
+		    //set the val directly on the [audio-thread]
+		    param_set_value(plug->plug_params, cur_port->param_index, cur_port->control, Operation_SetValue, 1);
+		    //only send message to ui if the parameter changed
+		    if(param_get_if_changed(plug->plug_params, cur_port->param_index, 1) == 1){
 			unsigned char val_type;
 			//get the value that was just set so just_changed parameter var will be 0 again
 			SAMPLE_T new_val = param_get_value(plug->plug_params, cur_port->param_index, &val_type, 0, 0, 1);
