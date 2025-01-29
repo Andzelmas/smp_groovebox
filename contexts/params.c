@@ -213,6 +213,7 @@ int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_T
 int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, unsigned char param_op,
 		    unsigned int rt_params){
     if(!param_container)return -1;
+    if(isnan(set_to))return -1;
     PRM_PARAM** param_array = NULL;
     int num_of_params = -1;
     if(rt_params == 0){
@@ -338,7 +339,6 @@ int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** str
     PRM_PARAM* cur_param_ui = param_array_ui[val_id];
     unsigned char val_type = cur_param_ui->val_type;
     if((val_type & 0xff) != String_Return_Type)return -1;
-    if(!cur_param_rt->param_strings || !cur_param_ui->param_strings)return -1;
     //free the strings if there are labels already on this parameter
     //though the labels should be set once, on the param init
     if(cur_param_rt->param_strings != NULL){
@@ -396,10 +396,10 @@ const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, uns
     if(val_id >= num_of_params)return NULL;
 
     PRM_PARAM* cur_param = param_array[val_id];
-    int cur_val = cur_param->val;
+    int cur_val = (int)cur_param->val;
     if(cur_val > cur_param->max_val || cur_val < cur_param->min_val)return NULL;
     if(cur_param->param_strings_num <= 0 || cur_val >= cur_param->param_strings_num || cur_val < 0)return NULL;
-        
+    
     return cur_param->param_strings[cur_val];
 }
 
