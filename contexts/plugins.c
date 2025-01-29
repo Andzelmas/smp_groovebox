@@ -1802,11 +1802,10 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    if(param_changed != 1) continue;
 	    PLUG_CONTROL* cur_control = plug->controls[ctrl_iter];
 	    if(!cur_control)continue;
+	    if(!(cur_control->is_writable))continue;
 	    unsigned char param_val_type = 0;
 	    SAMPLE_T param_value = param_get_value(plug->plug_params, ctrl_iter, &param_val_type, 0, 0, 1);
 	    if(param_val_type == 0)continue;
-
-	    if(!(cur_control->is_writable))continue;
 
 	    if(cur_control->type == PORT){
 		uint32_t port_index = cur_control->index;
@@ -1872,11 +1871,11 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	        param_set_value(plug->plug_params, cur_port->param_index, cur_port->control, Operation_SetValue, 1);
 		//only send message to ui if the parameter changed
 		if(param_get_if_changed(plug->plug_params, cur_port->param_index, 1) == 1){
-		    unsigned char val_type;
-		    //get the value that was just set so just_changed parameter var will be 0 again
-		    SAMPLE_T new_val = param_get_value(plug->plug_params, cur_port->param_index, &val_type, 0, 0, 1);
 		    //send message to set the parameter on the ui [main-thread], but dont send it too often
 		    if(plug_data->rt_tick == 0){
+			unsigned char val_type;
+			//get the value that was just set so just_changed parameter var will be 0 again
+			SAMPLE_T new_val = param_get_value(plug->plug_params, cur_port->param_index, &val_type, 0, 0, 1);
 			PARAM_RING_DATA_BIT send_bit;
 			send_bit.cx_id = plug->id;
 			send_bit.param_id = cur_port->param_index;
