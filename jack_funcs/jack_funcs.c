@@ -171,49 +171,58 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
     //in that case jack will create a new transport object and request a transport change
     app_jack_update_transport_from_params_rt(jack_data);
     //now update the bar, beat, tick and is playing parameters from the jack transport for [audio-thread] and [main-thread]
-    jack_position_t pos;
-    jack_transport_state_t state = jack_transport_query(jack_data->client, &pos);
-    unsigned int pos_ready = 1;
-    if(!pos.valid)pos_ready = 0;
-    if(pos.valid != JackPositionBBT)pos_ready = 0;
-    if(pos_ready == 1){
-	//if transport is rolling update the parameters on the [audio-thread], otherwise each time playhead stopps the params for ui resets to the
-	//values before the play was pressed
-	//also get the values right away so isChanged for the parameter becomes 0 and
-	//app_jack_update_transport_from_params_rt function does not create the transport object when its not needed
-	unsigned char val_type = 0;
-	if(state == JackTransportRolling){
-	    param_set_value(jack_data->trk_params, 1, (float)pos.bar, Operation_SetValue, 1);
-	    param_get_value(jack_data->trk_params, 1, &val_type, 0, 0, 1);
-	    param_set_value(jack_data->trk_params, 2, (float)pos.beat, Operation_SetValue, 1);
-	    param_get_value(jack_data->trk_params, 2, &val_type, 0, 0, 1);
-	    param_set_value(jack_data->trk_params, 3, (float)pos.tick, Operation_SetValue, 1);
-	    param_get_value(jack_data->trk_params, 3, &val_type, 0, 0, 1);
-	}
-	param_set_value(jack_data->trk_params, 4, (float)state, Operation_SetValue, 1);
-	param_get_value(jack_data->trk_params, 4, &val_type, 0, 0, 1);
-	//send transport info from  rt to ui thread but only when rt_tick is 0, to not overwhelm the ui thread with messages
-	if(jack_data->rt_tick ==0){
+    //update the params on [audio-thread] in rt_tick (as slow as ui [main-thread] params) since the params will only be used to set anything if the user changes some of them on the [main-thread]
+    //all other contexts gets the real time beats, ticks and other transport vars from the jack_transport_query function in the app_jack_return_transport_rt function
+    if(jack_data->rt_tick == 0){
+	jack_position_t pos;
+	jack_transport_state_t state = jack_transport_query(jack_data->client, &pos);
+	unsigned int pos_ready = 1;
+	if(!pos.valid)pos_ready = 0;
+	if(pos.valid != JackPositionBBT)pos_ready = 0;
+	if(pos_ready == 1){
+	    unsigned char val_type = 0;
 	    PARAM_RING_DATA_BIT send_bit;
 	    send_bit.cx_id = 0;
 	    send_bit.param_op = Operation_SetValue;
-	    //only send bar beat and tick info to ui if the transport is rolling
-	    if(state == JackTransportRolling){	    
-		send_bit.param_id = 1;
-		send_bit.param_value = (float)pos.bar;
-		ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
-
-		send_bit.param_id = 2;
-		send_bit.param_value = (float)pos.beat;
-		ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
-
-		send_bit.param_id = 3;
-		send_bit.param_value = (float)pos.tick;
-		ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
+	    if(state == JackTransportRolling){
+		//get the bars
+		param_set_value(jack_data->trk_params, 1, (float)pos.bar, Operation_SetValue, 1);
+		//only send to [main-thread] if the parameter has changed
+		if(param_get_if_changed(jack_data->trk_params, 1, 1) == 1){
+		    send_bit.param_id = 1;
+		    //by getting the value change the just_changed var of the parameter to 0, so the app_jack_update_transport_from_params_rt() does not create a new jack pos object
+		    send_bit.param_value = param_get_value(jack_data->trk_params, 1, &val_type, 0, 0, 1);
+		    if(val_type != 0)
+			ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
+		}
+		//get the beat
+		param_set_value(jack_data->trk_params, 2, (float)pos.beat, Operation_SetValue, 1);
+		//only send to [main-thread] if the parameter has changed
+		if(param_get_if_changed(jack_data->trk_params, 2, 1) == 1){
+		    send_bit.param_id = 2;
+		    send_bit.param_value = param_get_value(jack_data->trk_params, 2, &val_type, 0, 0, 1);
+		    if(val_type != 0)
+			ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
+		}
+		//get the tick
+		param_set_value(jack_data->trk_params, 3, (float)pos.tick, Operation_SetValue, 1);
+		//only send to [main-thread] if the parameter has changed
+		if(param_get_if_changed(jack_data->trk_params, 3, 1) == 1){
+		    send_bit.param_id = 3;
+		    send_bit.param_value = param_get_value(jack_data->trk_params, 3, &val_type, 0, 0, 1);
+		    if(val_type != 0)
+			ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
+		}
 	    }
-	    send_bit.param_id = 4;
-	    send_bit.param_value = (float)state;
-	    ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
+	    //get the isPlaying state even if the Jack transport head is not rolling
+	    param_set_value(jack_data->trk_params, 4, (float)state, Operation_SetValue, 1);
+	    //only send to [main-thread] if the parameter has changed
+	    if(param_get_if_changed(jack_data->trk_params, 4, 1) == 1){
+		send_bit.param_id = 4;
+		send_bit.param_value = param_get_value(jack_data->trk_params, 4, &val_type, 0, 0, 1);
+		if(val_type != 0)
+		    ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
+	    }
 	}
     }
     return 0;
