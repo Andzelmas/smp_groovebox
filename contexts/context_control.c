@@ -13,20 +13,14 @@ typedef struct _cxcontrol_data{
     //wait on [main-thread] post on [audio-thread], but only when [main-thread] requested - [audio-thread] can post the semaphore only in response to [main-thread] message    
     sem_t pause_for_rt;
     void* user_data;
-    //user functions for [audio-thread], these are required
-    int (*subcx_start_process)(void* user_data, int subcx_id); //called when received a sys message from [main-thread] to start the subcontext process 
-    int (*subcx_stop_process)(void* user_data, int subcx_id); //called when received a sys message from [main-thread] to stop the subcontext process 
-    //user functions for [main-thread], these are optional
-    int (*send_msg)(void* user_data, const char* msg); //called when received a sys message from [audio-thread] to write a string message for ui [main-thread]
-    int (*subcx_callback)(void* user_data, int subcx_id); //called when received a sys message from [audio-thread] to run a subcontext function on the [main-thread]
-    int (*subcx_activate_start_process)(void* user_data, int subcx_id); //called when received a sys message from [audio-thread] to activate the subcontext and then send a message back to [audio-thread] to start processing it
-    int (*subcx_restart)(void* user_data, int subcx_id); //called when received a sys message from [audio-thread] to restart the subcontext
+    CXCONTROL_RT_FUNCS rt_funcs_struct;
+    CXCONTROL_UI_FUNCS ui_funcs_struct;
 }CXCONTROL;
 
 //init the subcontext control struct, create the ui_to_rt and rt_to_ui sys message ring buffers, init the pause semaphore
 //also get the user functions for messages from [audio-thread] like Request_callback, Sent_string etc. (these are optional)
 //and for messages from [main-thread] - Plugin_process and Plugin_stop_process - these are required
-CXCONTROL* context_sub_init(void* user_data){
+CXCONTROL* context_sub_init(void* user_data, CXCONTROL_RT_FUNCS rt_funcs_struct, CXCONTROL_UI_FUNCS ui_funcs_struct){
     CXCONTROL* cxcontrol_data = (CXCONTROL*)malloc(sizeof(CXCONTROL));
     if(!cxcontrol_data)return NULL;
 
@@ -37,13 +31,10 @@ CXCONTROL* context_sub_init(void* user_data){
     //set the struct to zeroes
     cxcontrol_data->rt_to_ui_msgs = NULL;
     cxcontrol_data->ui_to_rt_msgs = NULL;
-    cxcontrol_data->send_msg = NULL;
-    cxcontrol_data->subcx_activate_start_process = NULL;
-    cxcontrol_data->subcx_callback = NULL;
-    cxcontrol_data->subcx_restart = NULL;
-    cxcontrol_data->subcx_start_process = NULL;
-    cxcontrol_data->subcx_stop_process = NULL;
     cxcontrol_data->user_data = NULL;
+    
+    cxcontrol_data->rt_funcs_struct = rt_funcs_struct;
+    cxcontrol_data->ui_funcs_struct = ui_funcs_struct;
     
     //init ring buffers
     cxcontrol_data->rt_to_ui_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
@@ -76,17 +67,17 @@ int context_sub_process_ui(CXCONTROL* cxcontrol_data){
 	if(read_buffer <= 0)continue;
 	
 	if(cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK){
-	    if(cxcontrol_data->subcx_callback)cxcontrol_data->subcx_callback(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->ui_funcs_struct.subcx_callback)cxcontrol_data->ui_funcs_struct.subcx_callback(cxcontrol_data->user_data, cur_bit.scx_id);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_ACTIVATE_PROCESS){
-	    if(cxcontrol_data->subcx_activate_start_process)cxcontrol_data->subcx_activate_start_process(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->ui_funcs_struct.subcx_activate_start_process)cxcontrol_data->ui_funcs_struct.subcx_activate_start_process(cxcontrol_data->user_data, cur_bit.scx_id);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_RESTART){
-	    if(cxcontrol_data->subcx_restart)cxcontrol_data->subcx_restart(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->ui_funcs_struct.subcx_restart)cxcontrol_data->ui_funcs_struct.subcx_restart(cxcontrol_data->user_data, cur_bit.scx_id);
 
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_SENT_STRING){
-	    if(cxcontrol_data->send_msg)cxcontrol_data->send_msg(cxcontrol_data->user_data, cur_bit.msg);
+	    if(cxcontrol_data->ui_funcs_struct.send_msg)cxcontrol_data->ui_funcs_struct.send_msg(cxcontrol_data->user_data, cur_bit.msg);
 	}
     }    
 }
@@ -106,12 +97,12 @@ int context_sub_process_rt(CXCONTROL* cxcontrol_data){
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
 	if(read_buffer <= 0)continue;
 	if(cur_bit.msg_enum == MSG_PLUGIN_PROCESS){
-	    if(cxcontrol_data->subcx_start_process)cxcontrol_data->subcx_start_process(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->rt_funcs_struct.subcx_start_process)cxcontrol_data->rt_funcs_struct.subcx_start_process(cxcontrol_data->user_data, cur_bit.scx_id);
 	    //this messages will be sent from [main-thread] only with sam_wait, so error or no error, release the semaphore
 	    sem_post(&cxcontrol_data->pause_for_rt);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_STOP_PROCESS){
-	    if(cxcontrol_data->subcx_stop_process)cxcontrol_data->subcx_stop_process(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->rt_funcs_struct.subcx_stop_process)cxcontrol_data->rt_funcs_struct.subcx_stop_process(cxcontrol_data->user_data, cur_bit.scx_id);
 	    //this messages will be sent from [main-thread] only with sam_wait, so error or no error, release the semaphore
 	    sem_post(&cxcontrol_data->pause_for_rt);
 	}
@@ -156,7 +147,7 @@ void context_sub_restart_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_au
 	return;
     }
 
-    if(cxcontrol_data->subcx_restart)cxcontrol_data->subcx_restart(cxcontrol_data->user_data, subcx_id);
+    if(cxcontrol_data->ui_funcs_struct.subcx_restart)cxcontrol_data->ui_funcs_struct.subcx_restart(cxcontrol_data->user_data, subcx_id);
 }
 void context_sub_send_msg(CXCONTROL* cxcontrol_data, const char* msg, bool is_audio_thread){
     if(!cxcontrol_data)return;
@@ -169,7 +160,7 @@ void context_sub_send_msg(CXCONTROL* cxcontrol_data, const char* msg, bool is_au
 	return;
     }
 
-    if(cxcontrol_data->send_msg)cxcontrol_data->send_msg(cxcontrol_data->user_data, msg);
+    if(cxcontrol_data->ui_funcs_struct.send_msg)cxcontrol_data->ui_funcs_struct.send_msg(cxcontrol_data->user_data, msg);
 }
 void context_sub_activate_start_process_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread){
     if(!cxcontrol_data) return;
@@ -182,7 +173,7 @@ void context_sub_activate_start_process_msg(CXCONTROL* cxcontrol_data, int subcx
 	return;
     }
 
-    if(cxcontrol_data->subcx_activate_start_process)cxcontrol_data->subcx_activate_start_process(cxcontrol_data->user_data, subcx_id);
+    if(cxcontrol_data->ui_funcs_struct.subcx_activate_start_process)cxcontrol_data->ui_funcs_struct.subcx_activate_start_process(cxcontrol_data->user_data, subcx_id);
 }
 void context_sub_callback_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread){
     if(!cxcontrol_data) return;
@@ -195,7 +186,7 @@ void context_sub_callback_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_a
 	return;
     }
 
-    if(cxcontrol_data->subcx_callback)cxcontrol_data->subcx_callback(cxcontrol_data->user_data, subcx_id);
+    if(cxcontrol_data->ui_funcs_struct.subcx_callback)cxcontrol_data->ui_funcs_struct.subcx_callback(cxcontrol_data->user_data, subcx_id);
 }
 
 //clean the subcontext control struct, free ring buffers, destroy the pause semaphore

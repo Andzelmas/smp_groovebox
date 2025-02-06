@@ -10,11 +10,22 @@ for each context.
 #include <stdbool.h>
 
 typedef struct _cxcontrol_data CXCONTROL;
+//user functions for [audio-thread], set NULL if func is not necessary
+typedef struct _cxcontrol_rt_funcs{
+    int (*subcx_start_process)(void* user_data, int subcx_id); //called when received a sys message from [main-thread] to start the subcontext process 
+    int (*subcx_stop_process)(void* user_data, int subcx_id); //called when received a sys message from [main-thread] to stop the subcontext process 
+}CXCONTROL_RT_FUNCS;
+//user functions for [main-thread], set NULL if func is not necessary
+typedef struct _cxcontrol_ui_funcs{
+    int (*send_msg)(void* user_data, const char* msg); //called when received a sys message from [audio-thread] to write a string message for ui [main-thread]
+    int (*subcx_callback)(void* user_data, int subcx_id); //called when received a sys message from [audio-thread] to run a subcontext function on the [main-thread]
+    int (*subcx_activate_start_process)(void* user_data, int subcx_id); //called when received a sys message from [audio-thread] to activate the subcontext and then send a message back to [audio-thread] to start processing it
+    int (*subcx_restart)(void* user_data, int subcx_id); //called when received a sys message from [audio-thread] to restart the subcontext
+}CXCONTROL_UI_FUNCS;
 
 //init the subcontext control struct, create the ui_to_rt and rt_to_ui sys message ring buffers, init the pause semaphore
-//also get the user functions for messages from [audio-thread] like Request_callback, Sent_string etc. (these are optional)
-//and for messages from [main-thread] - Plugin_process and Plugin_stop_process - these are required
-CXCONTROL* context_sub_init(void* user_data);
+//also get the user functions for messages from [audio-thread] like Request_callback, Sent_string etc from the rt_funcs_struct and ui_funcs_struct
+CXCONTROL* context_sub_init(void* user_data, CXCONTROL_RT_FUNCS rt_funcs_struct, CXCONTROL_UI_FUNCS ui_funcs_struct);
 
 //process the subcontext struct on the [main-thread]
 //read the rt_to_ui ring buffer sys messages and execute the user given functions for Request_callback, Sent_string and similar (if they are not null)
