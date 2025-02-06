@@ -23,7 +23,7 @@
 //my libraries
 #include "plugins.h"
 #include "../types.h"
-#include "threads.h"
+#include <threads.h>
 //my math funcs
 #include "../util_funcs/math_funcs.h"
 //symap for map to id and back
