@@ -10,6 +10,7 @@
 #include "../util_funcs/ring_buffer.h"
 #include "../types.h"
 #include "../util_funcs/log_funcs.h"
+#include "../contexts/context_control.h"
 //the maximum number of bars there can be
 #define MAX_BARS 1000
 
@@ -35,24 +36,21 @@ typedef struct _jack_info{
     //communication ring buffers for rt and main thread
     RING_BUFFER* param_rt_to_ui;
     RING_BUFFER* param_ui_to_rt;
-    RING_BUFFER* rt_to_ui_msgs;
-    RING_BUFFER* ui_to_rt_msgs;
+    //control_data for sys messages, for jack currently only uses the [thread-safe] messaging system, since this does not have any subcontexts
+    CXCONTROL* control_data;
 }JACK_INFO;
 //ticks per beat, since user should not set these anyway
 double time_ticks_per_beat = 1920.0;
-
+static int app_jack_sys_send_msg(void* user_data, const char* msg){
+    //TODO for future proof, now is not used
+    JACK_INFO* jack_data = (JACK_INFO*)user_data;
+    log_append_logfile("%s", msg);
+    return 0;
+}
 //[thread-safe] method to send log messages in the jack context
 static void app_jack_send_msg(JACK_INFO* jack_data, const char* msg){
     if(!jack_data)return;
-    if(is_audio_thread){
-	RING_SYS_MSG send_bit;
-	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
-	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
-	int ret = ring_buffer_write(jack_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
-	return;
-    }
-    
-    log_append_logfile("%s", msg);
+    context_sub_send_msg(jack_data->control_data, msg, is_audio_thread);
 }
 
 JACK_INFO* jack_initialize(void *arg, const char *client_name,
@@ -67,8 +65,7 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
     jack_data->rt_tick = 0;
     jack_data->param_rt_to_ui = NULL;
     jack_data->param_ui_to_rt = NULL;
-    jack_data->rt_to_ui_msgs = NULL;
-    jack_data->ui_to_rt_msgs = NULL;
+    jack_data->control_data = NULL;
     jack_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
     if(!jack_data->param_rt_to_ui){
         jack_clean_memory(jack_data);
@@ -79,13 +76,17 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
 	jack_clean_memory(jack_data);
 	return NULL;
     }
-    jack_data->rt_to_ui_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
-    if(!(jack_data->rt_to_ui_msgs)){
-	jack_clean_memory(jack_data);
-	return NULL;
-    }
-    jack_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
-    if(!(jack_data->ui_to_rt_msgs)){
+
+    CXCONTROL_RT_FUNCS rt_funcs_struct;
+    CXCONTROL_UI_FUNCS ui_funcs_struct;
+    rt_funcs_struct.subcx_start_process = NULL;
+    rt_funcs_struct.subcx_stop_process = NULL;
+    ui_funcs_struct.send_msg = app_jack_sys_send_msg;
+    ui_funcs_struct.subcx_activate_start_process = NULL;
+    ui_funcs_struct.subcx_callback = NULL;
+    ui_funcs_struct.subcx_restart = NULL;
+    jack_data->control_data = context_sub_init((void*)jack_data, rt_funcs_struct, ui_funcs_struct);
+    if(!jack_data->control_data){
 	jack_clean_memory(jack_data);
 	return NULL;
     }
@@ -146,20 +147,12 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
     jack_data->rt_tick +=1;
     if(jack_data->rt_tick > RT_CYCLES)jack_data->rt_tick = 0;
 
-    //read the sys messages
-    RING_BUFFER* ring_buffer = jack_data->ui_to_rt_msgs;
-    if(!ring_buffer)return -1;
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	RING_SYS_MSG cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-    }
+    context_sub_process_rt(jack_data->control_data);
     
     //read the param ui_to_rt messages and set the parameter values
-    ring_buffer = jack_data->param_ui_to_rt;
+    RING_BUFFER* ring_buffer = jack_data->param_ui_to_rt;
     if(!ring_buffer)return -1;
-    cur_items = ring_buffer_return_items(ring_buffer);
+    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
     for(unsigned int i = 0; i < cur_items; i++){
 	PARAM_RING_DATA_BIT cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
@@ -230,23 +223,13 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
 
 int app_jack_read_rt_to_ui_messages(JACK_INFO* jack_data){
     if(!jack_data)return -1;
-    //read the sys messages
-    RING_BUFFER* ring_buffer = jack_data->rt_to_ui_msgs;
-    if(!ring_buffer)return -1;
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	RING_SYS_MSG cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.msg_enum == MSG_PLUGIN_SENT_STRING){
-	    log_append_logfile("%s", cur_bit.msg);
-	}
-    }
+
+    context_sub_process_ui(jack_data->control_data);
     
     //read the param rt_to_ui messages and set the parameter values
-    ring_buffer = jack_data->param_rt_to_ui;
+    RING_BUFFER* ring_buffer = jack_data->param_rt_to_ui;
     if(!ring_buffer)return -1;
-    cur_items = ring_buffer_return_items(ring_buffer);
+    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
     for(unsigned int i = 0; i < cur_items; i++){
 	PARAM_RING_DATA_BIT cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
@@ -626,8 +609,7 @@ void jack_clean_memory(void* jack_data_in){
     //clean the ring buffers
     ring_buffer_clean(jack_data->param_rt_to_ui);
     ring_buffer_clean(jack_data->param_ui_to_rt);
-    ring_buffer_clean(jack_data->rt_to_ui_msgs);
-    ring_buffer_clean(jack_data->ui_to_rt_msgs);
+    context_sub_clean(jack_data->control_data);
     free(jack_data);
 }
 

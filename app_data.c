@@ -604,7 +604,8 @@ static int app_read_rt_messages(APP_INFO* app_data){
     if(clap_read_ui_to_rt_messages(app_data->clap_plug_data) != 0)return -1;
     //read the lv2 plugin messages on the [audio-thread]
     if(plug_read_ui_to_rt_messages(app_data->plug_data) != 0)return -1;
-
+    //read the sampler messages on the [audio-thread]
+    if(smp_read_ui_to_rt_messages(app_data->smp_data) != 0)return -1;
     return 0;
 }
 
@@ -616,13 +617,13 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     }
     //process messages from ui to rt thread, like start processing a plugin, stop_processing a plugin, update rt param values etc.
     //if returns a 1 value, this means that is_processing is 0 and the function should not process any contexts
-    //a value of -1 means that a fundamental error occured, this might lead to a semaphore deadlock!
+    //a value of -1 means that a fundamental error occured
     int read_err = app_read_rt_messages(app_data);
     if(read_err == 1)return 0;
     if(read_err == -1)return -1;
     
     //process the SAMPLER DATA
-    //smp_sample_process_rt(app_data->smp_data, nframes);    
+    smp_sample_process_rt(app_data->smp_data, nframes);    
 
     //process the PLUGIN DATA
     plug_process_data_rt(app_data->plug_data, nframes);
@@ -657,13 +658,15 @@ int app_update_ui_params(APP_INFO* app_data){
     clap_read_rt_to_ui_messages(app_data->clap_plug_data);
     //read messages from the rt thread on the [main-thread] for lv2 plugins
     plug_read_rt_to_ui_messages(app_data->plug_data);
+    //read messages from the rt thread on the [main-thread] for sampler
+    smp_read_rt_to_ui_messages(app_data->smp_data);
     return 0;
 }
 
 int app_smp_remove_sample(APP_INFO* app_data, unsigned int idx){
     int return_val = 0;
     if(!app_data)return -1;
-    return_val = smp_remove_sample(app_data->smp_data, idx);
+    return_val = smp_stop_and_remove_sample(app_data->smp_data, idx);
     return return_val;
 }
 

@@ -23,6 +23,7 @@
 //my libraries
 #include "plugins.h"
 #include "../types.h"
+#include "context_control.h"
 #include <threads.h>
 //my math funcs
 #include "../util_funcs/math_funcs.h"
@@ -280,64 +281,32 @@ typedef struct _plug_info{
     unsigned int isPlaying; // is the tranport playing
     uint32_t posFrame; //the position frame
     float bpm;
-    //ring buffers for audio-thread and main-thread communication
-    RING_BUFFER* rt_to_ui_msgs;
-    RING_BUFFER* ui_to_rt_msgs;
     //ring buffers for parameter manipulation communication
     RING_BUFFER* param_rt_to_ui;
     RING_BUFFER* param_ui_to_rt;
-    //semaphore when [main-thread] needs to wait for the [audio-thread] to change something (for example stop the plugin or start the plugin)
-    //wait on [main-thread] post on [audio-thread], but only when [main-thread] requested - [audio-thread] can post the semaphore only in response to [main-thread] message
-    sem_t wait_for_rt;
+    //this is control for [audio-thread] and [main-thread] sys communication (wait for a plugin pause etc.)
+    CXCONTROL* control_data;
     //rt tick var, that goes from 0 to RT_CYCLES, rt thread will send info to ui thread only when rt tick var is 0
     //should only be touched on [audio-thread]
     int rt_tick;
 }PLUG_INFO;
 
+static int plug_sys_send_msg(void* user_data, const char* msg){
+    PLUG_INFO* plug_data = (PLUG_INFO*)user_data;
+    if(!plug_data)return -1;
+    log_append_logfile("%s", msg);
+    return 0;
+}
 //send a [thread-safe] message - check if thread is audio or main
+//control_data calls the plug_sys_send_msg function on [main-thread] through a sys msg or right away if is_audio_thread is 0
 static void plug_send_msg(PLUG_INFO* plug_data, const char* msg){
     if(!plug_data){
 	return;
     }
-    if(is_audio_thread){
-	RING_SYS_MSG send_bit;
-	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
-	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
-	int ret = ring_buffer_write(plug_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
-	return;
-    }
-    
-    log_append_logfile("%s", msg);
+    context_sub_send_msg(plug_data->control_data, msg, is_audio_thread);
 }
 
-//functions that block main thread and waits for the plugin process to stop or start (waiting for start necessary to keep the order of the tasks)
-static void plug_plug_wait_for_stop(PLUG_INFO* plug_data, int plug_id){
-    if(!plug_data)return;
-    RING_SYS_MSG send_bit;
-    if(plug_id >= MAX_INSTANCES || plug_id < 0)return;
-    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    
-    send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
-    send_bit.scx_id = plug_id;
-    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-    //lock the main thread and wait for the audio thread to stop processing the plugin
-    sem_wait(&plug_data->wait_for_rt);
-}
-static void plug_plug_wait_for_start(PLUG_INFO* plug_data, int plug_id){
-    if(!plug_data)return; 
-    if(plug_id >= MAX_INSTANCES || plug_id < 0)return;
-    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    
-    RING_SYS_MSG send_bit;
-    send_bit.msg_enum = MSG_PLUGIN_PROCESS;
-    send_bit.scx_id = plug_id;
-    ring_buffer_write(plug_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-    
-    //lock the main thread and wait for the audio thread to start processing the plugin
-    sem_wait(&plug_data->wait_for_rt);
-}
-
-static int  plug_remove_plug(PLUG_INFO* plug_data, const int id){
+static int  plug_remove_plug(PLUG_INFO* plug_data, int id){
     if(!plug_data)return -1;
     if(id >= MAX_INSTANCES)return -1;
       
@@ -650,6 +619,31 @@ static int plug_printf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, ..
     return ret;
 }
 
+static int plug_plug_start_process(void* user_data, int plug_id){
+    PLUG_INFO* plug_data = (PLUG_INFO*)user_data;
+    if(!plug_data)return -1;
+
+    if(plug_id < 0)return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
+
+    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+    if(!plug->plug_instance)return -1;
+    
+    plug->is_processing = 1;
+    return 0;
+}
+static int plug_plug_stop_process(void* user_data, int plug_id){
+    PLUG_INFO* plug_data = (PLUG_INFO*)user_data;
+    if(!plug_data)return -1;
+    if(plug_id < 0)return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
+
+    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+    //TODO before stopping would be nice to clear midi events, and fadeout audio
+    plug->is_processing = 0;
+    return 0;
+}
+
 PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 		     plug_status_t* plug_errors,
 		     void* audio_backend){
@@ -659,10 +653,22 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 	return NULL;
     }
     memset(plug_data, '\0', sizeof(*plug_data));
-    if(sem_init(&plug_data->wait_for_rt, 0, 0) != 0){
+    //init the control_data struct for [audio-thread] to [main-thread] messaging
+    CXCONTROL_RT_FUNCS rt_funcs_struct;
+    CXCONTROL_UI_FUNCS ui_funcs_struct;
+    rt_funcs_struct.subcx_start_process = plug_plug_start_process;
+    rt_funcs_struct.subcx_stop_process = plug_plug_stop_process;
+    ui_funcs_struct.send_msg = plug_sys_send_msg;
+    ui_funcs_struct.subcx_activate_start_process = NULL;
+    ui_funcs_struct.subcx_callback = NULL;
+    ui_funcs_struct.subcx_restart = NULL;
+    plug_data->control_data = context_sub_init((void*)plug_data, rt_funcs_struct, ui_funcs_struct);
+    if(!plug_data->control_data){
 	free(plug_data);
+	*plug_errors = plug_failed_malloc;
 	return NULL;
     }
+    
     plug_data->rt_tick = 0;
     plug_data->lv_world = lilv_world_new();
     plug_data->sample_rate = (float)samplerate;
@@ -672,6 +678,8 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_data->posFrame = 0;
     plug_data->bpm = 120.0f;
     plug_data->isPlaying = 0;
+    plug_data->param_rt_to_ui = NULL;
+    plug_data->param_ui_to_rt = NULL;
     
     lilv_world_load_all(plug_data->lv_world);    
     plug_data->symap = symap_new();
@@ -755,19 +763,6 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 	lv2_atom_forge_init(&(plug->forge), &(plug->map));
     }
 
-    //init the messaging ring buffers for sys calls and parameters
-    plug_data->rt_to_ui_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
-    if(!(plug_data->rt_to_ui_msgs)){
-        plug_clean_memory(plug_data);
-	*plug_errors = plug_failed_malloc;
-	return NULL;
-    }
-    plug_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
-    if(!(plug_data->ui_to_rt_msgs)){
-	plug_clean_memory(plug_data);
-	*plug_errors = plug_failed_malloc;
-	return NULL;
-    }
     plug_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
     if(!(plug_data->param_rt_to_ui)){
 	plug_clean_memory(plug_data);
@@ -869,28 +864,7 @@ char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx,
     lilv_nodes_free(presets);
     return preset_name_array;
 }
-static int plug_plug_start_process(PLUG_INFO* plug_data, int plug_id){
-    if(!plug_data)return -1;
 
-    if(plug_id < 0)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-
-    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!plug->plug_instance)return -1;
-    
-    plug->is_processing = 1;
-    return 0;
-}
-static int plug_plug_stop_process(PLUG_INFO* plug_data, int plug_id){
-    if(!plug_data)return -1;
-    if(plug_id < 0)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-
-    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    //TODO before stopping would be nice to clear midi events, and fadeout audio
-    plug->is_processing = 0;
-    return 0;
-}
 int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
     //set the is_audio_thread to true so its false on [main-thread] and true on [audio-thread]
     is_audio_thread = true;
@@ -901,32 +875,15 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
     plug_data->rt_tick +=1;
     if(plug_data->rt_tick > RT_CYCLES)plug_data->rt_tick = 0;
     
-    RING_BUFFER* ring_buffer = plug_data->ui_to_rt_msgs;
+    //process the control_data sys messages for [audio_thread] (stop plugin and similar)
+    context_sub_process_rt(plug_data->control_data);
+    
+    //read the param ui_to_rt messages and set the parameter values
+    RING_BUFFER* ring_buffer = plug_data->param_ui_to_rt;
     if(!ring_buffer){
 	return -1;
     }
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	RING_SYS_MSG cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.msg_enum == MSG_PLUGIN_PROCESS){
-	    plug_plug_start_process(plug_data, cur_bit.scx_id);
-	    //this messages will be sent from [main-thread] only with sam_wait, so error or no error, release the semaphore
-	    sem_post(&plug_data->wait_for_rt);
-	}
-	if(cur_bit.msg_enum == MSG_PLUGIN_STOP_PROCESS){
-	    plug_plug_stop_process(plug_data, cur_bit.scx_id);
-	    //this messages will be sent from [main-thread] only with sam_wait, so error or no error, release the semaphore
-	    sem_post(&plug_data->wait_for_rt);
-	}
-    }
-    //read the param ui_to_rt messages and set the parameter values
-    ring_buffer = plug_data->param_ui_to_rt;
-    if(!ring_buffer){
-	return -1;
-    }
-    cur_items = ring_buffer_return_items(ring_buffer);
     for(unsigned int i = 0; i < cur_items; i++){
 	PARAM_RING_DATA_BIT cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
@@ -943,30 +900,13 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
 }
 int plug_read_rt_to_ui_messages(PLUG_INFO* plug_data){
     if(!plug_data)return -1;
-    RING_BUFFER* ring_buffer = plug_data->rt_to_ui_msgs;
-    if(!ring_buffer)return -1;
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	RING_SYS_MSG cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK){
-
-	}
-	if(cur_bit.msg_enum == MSG_PLUGIN_ACTIVATE_PROCESS){
-
-	}
-	if(cur_bit.msg_enum == MSG_PLUGIN_RESTART){
-
-	}
-	if(cur_bit.msg_enum == MSG_PLUGIN_SENT_STRING){
-	    log_append_logfile("%s", cur_bit.msg);
-	}
-    }
+    //process the control_data sys messages for [main_thread] (like send msg)
+    context_sub_process_ui(plug_data->control_data);
+    
     //read the param rt_to_ui messages and set the parameter values
-    ring_buffer = plug_data->param_rt_to_ui;
+    RING_BUFFER* ring_buffer = plug_data->param_rt_to_ui;
     if(!ring_buffer)return -1;
-    cur_items = ring_buffer_return_items(ring_buffer);
+    unsigned int  cur_items = ring_buffer_return_items(ring_buffer);
     for(unsigned int i = 0; i < cur_items; i++){
 	PARAM_RING_DATA_BIT cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
@@ -1188,7 +1128,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     //activate the plugin instance
     lilv_instance_activate(plug->plug_instance);
     //wait for the plugin to start processing
-    plug_plug_wait_for_start(plug_data, plug->id);
+    context_sub_wait_for_start(plug_data->control_data, plug->id);
     return return_val;
 }
 
@@ -1197,7 +1137,9 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
     if(!plug_data->plugins)return -1;
     if(!preset_name)return -1;
     int return_val = 0;
-    plug_plug_wait_for_stop(plug_data, plug_id);
+    
+    context_sub_wait_for_stop(plug_data->control_data, plug_id);
+    
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
     if(!plug->plug_instance)return -1;
     if(plug->preset){
@@ -1239,7 +1181,7 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
     if(new_preset)lilv_node_free(new_preset);
     plug->request_update = true;
     //launch the plugin again
-    plug_plug_wait_for_start(plug_data, plug_id);
+    context_sub_wait_for_start(plug_data->control_data, plug_id);
     return return_val;
 }
 
@@ -1931,9 +1873,9 @@ static void plug_run_rt(PLUG_PLUG* plug, unsigned int nframes){
     jalv_worker_end_run(plug->worker);
 }
 
-int plug_stop_and_remove_plug(PLUG_INFO* plug_data, const int id){
+int plug_stop_and_remove_plug(PLUG_INFO* plug_data, int id){
     //first stop the plugin process
-    plug_plug_wait_for_stop(plug_data, id);
+    context_sub_wait_for_stop(plug_data->control_data, id);
     return plug_remove_plug(plug_data, id);
 }
 
@@ -1949,12 +1891,10 @@ void plug_clean_memory(PLUG_INFO* plug_data){
 	lilv_node_free(*n);
     }    
     if(plug_data->lv_world)lilv_world_free(plug_data->lv_world);
-    ring_buffer_clean(plug_data->rt_to_ui_msgs);
-    ring_buffer_clean(plug_data->ui_to_rt_msgs);
     ring_buffer_clean(plug_data->param_rt_to_ui);
     ring_buffer_clean(plug_data->param_ui_to_rt);
 
-    sem_destroy(&plug_data->wait_for_rt);
+    context_sub_clean(plug_data->control_data);
     free(plug_data);
 }
 

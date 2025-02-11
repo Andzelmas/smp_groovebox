@@ -48,8 +48,6 @@ int context_sub_wait_for_stop(CXCONTROL* cxcontrol_data, int subcx_id);
 //if an error occures with the user function subcx_start_process the sem_post will still be called, its better to release the semaphore, then deadlock the system on an error
 int context_sub_wait_for_start(CXCONTROL* cxcontrol_data, int subcx_id);
 
-//TODO need functions to set the user functions on the CXCONTROL struct
-
 //these functions ask the subcx_id to do something - restart for example. If is_audio_thread == 0, the apropriate user function will be called right away (for example subcx_restart)
 //otherwise a message will be written to the rt_to_ui_msgs ring buffer to call that function on the [main-thread]
 void context_sub_restart_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread);
