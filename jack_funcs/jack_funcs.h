@@ -36,22 +36,13 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data);
 //read messages from rt on [main-thread]
 //update parameters, log messages from rt thread
 int app_jack_read_rt_to_ui_messages(JACK_INFO* jack_data);
+
+//parameter manipulation functions for ui
+PRM_CONTAIN* app_jack_param_return_param_container(JACK_INFO* jack_data);
 //set parameter value on [main-thread] and send a message to set the parameter on [audio-thread] too
-//only use on [main-thread]
+//because of this message this function has to be here
 int app_jack_param_set_value(JACK_INFO* jack_data, int param_id, float param_val, unsigned char param_op);
-//get how much the parameter changes, use only on [main-thread]
-SAMPLE_T app_jack_param_get_increment(JACK_INFO* jack_data, int param_id);
-//get the value of the parameter, use on [main-thread]
-//val_type will return what type of value the param holds, returns 0 if there was an error getting the value
-SAMPLE_T app_jack_param_get_value(JACK_INFO* jack_data, unsigned char* val_type, unsigned int curved, int param_id);
-//get the id of the parameter from its name, use on [main-thread]
-int app_jack_param_id_from_name(JACK_INFO* jack_data, const char* param_name);
-//get the string from parameter if the value is a list of strings, use on [main-thread]
-const char* app_jack_param_get_string(JACK_INFO* jack_data, int param_id);
-//how many parameters there are, use on [main-thread]
-int app_jack_param_get_num_of_params(JACK_INFO* jack_data);
-//get the name of the parameter, use on [main-thread]
-const char* app_jack_param_get_name(JACK_INFO* jack_data, int param_id);
+
 //clean the midi container
 void app_jack_clean_midi_cont(JACK_MIDI_CONT* midi_cont);
 //initate the midi container where velocities, note pitches etc will be stored

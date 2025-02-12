@@ -1570,6 +1570,13 @@ void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigne
     return ret_sys_ports;
 }
 
+PRM_CONTAIN* plug_param_return_param_container(PLUG_INFO* plug_data, int plug_id){
+    if(!plug_data)return NULL;
+    if(plug_id >= MAX_INSTANCES)return NULL;
+    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug_instance || !cur_plug->plug_params)return NULL;
+    return cur_plug->plug_params;
+}
 int plug_param_set_value(PLUG_INFO* plug_data, int plug_id, int param_id, float param_val, unsigned char param_op){
     if(!plug_data)return -1;
     if(plug_id >= MAX_INSTANCES)return -1;
@@ -1585,54 +1592,6 @@ int plug_param_set_value(PLUG_INFO* plug_data, int plug_id, int param_id, float 
     send_bit.param_value = param_val;
     ring_buffer_write(plug_data->param_ui_to_rt, &send_bit, sizeof(send_bit));
     return 0;
-}
-
-SAMPLE_T plug_param_get_increment(PLUG_INFO* plug_data, int plug_id, int param_id){
-    if(!plug_data)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
-    return param_get_increment(cur_plug->plug_params, param_id, 0);
-}
-
-SAMPLE_T plug_param_get_value(PLUG_INFO* plug_data, unsigned char* val_type, unsigned int curved, int plug_id, int param_id){
-    if(!plug_data)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
-    return param_get_value(cur_plug->plug_params, param_id, val_type, curved, 0, 0);
-}
-
-int plug_param_id_from_name(PLUG_INFO* plug_data, int plug_id, const char* param_name){
-    if(!plug_data)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
-    return param_find_name(cur_plug->plug_params, param_name, 0);
-}
-
-const char* plug_param_get_string(PLUG_INFO* plug_data, int plug_id, int param_id){
-    if(!plug_data)return NULL;
-    if(plug_id >= MAX_INSTANCES)return NULL;
-    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_instance || !cur_plug->plug_params)return NULL;
-    return param_get_param_string(cur_plug->plug_params, param_id, 0);
-}
-
-int plug_param_get_num_of_params(PLUG_INFO* plug_data, int plug_id){
-    if(!plug_data)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
-    return param_return_num_params(cur_plug->plug_params, 0);
-}
-
-const char* plug_param_get_name(PLUG_INFO* plug_data, int plug_id, int param_id){
-    if(!plug_data)return NULL;
-    if(plug_id >= MAX_INSTANCES)return NULL;
-    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_instance || !cur_plug->plug_params)return NULL;
-    return param_get_name(cur_plug->plug_params, param_id, 0);
 }
 
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){ 

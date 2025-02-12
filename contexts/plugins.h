@@ -56,21 +56,14 @@ void plug_set_block_length(PLUG_INFO* plug_data, uint32_t block_length);
 int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug);
 //return the system ports of the plugin - plug_id is the number of the plugin in the plugins array.
 void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigned int* number_ports);
+
+//param manipulation functions, should be called only on [main-thread]
+PRM_CONTAIN* plug_param_return_param_container(PLUG_INFO* plug_data, int plug_id);
 //set param value on the param container, also send a message to the [audio-thread] to set the value on the same rt param
+//because of the message has to be done here
 int plug_param_set_value(PLUG_INFO* plug_data, int plug_id, int param_id, float param_val, unsigned char param_op);
-//get in what increments the parameter changes, should be used only on [main-thread]
-SAMPLE_T plug_param_get_increment(PLUG_INFO* plug_data, int plug_id, int param_id);
-//get the value and type of the parameter on the [main-thread]
-SAMPLE_T plug_param_get_value(PLUG_INFO* plug_data, unsigned char* val_type, unsigned int curved, int plug_id, int param_id);
-//find parameter id number from the name on [main-thread]
-int plug_param_id_from_name(PLUG_INFO* plug_data, int plug_id, const char* param_name);
-//get the paramater value string on [main-thread]
-const char* plug_param_get_string(PLUG_INFO* plug_data, int plug_id, int param_id);
-//get how many parameters there are on the plugin, use on [main-thread]
-int plug_param_get_num_of_params(PLUG_INFO* plug_data, int plug_id);
+
 //connect the ports, run the plugins instances for nframes, and update the output ports, use on [audio-thread]
-//get the name of the parameter, use on [main-thread]
-const char* plug_param_get_name(PLUG_INFO* plug_data, int plug_id, int param_id);
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes);
 //run the plugin for nframes
 static void plug_run_rt(PLUG_PLUG* plug, unsigned int nframes);

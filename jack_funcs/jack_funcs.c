@@ -239,8 +239,14 @@ int app_jack_read_rt_to_ui_messages(JACK_INFO* jack_data){
     return 0;    
 }
 
+PRM_CONTAIN* app_jack_param_return_param_container(JACK_INFO* jack_data){
+    if(!jack_data)return NULL;
+    if(!jack_data->trk_params)return NULL;
+    return jack_data->trk_params;
+}
 int app_jack_param_set_value(JACK_INFO* jack_data, int param_id, float param_val, unsigned char param_op){
     if(!jack_data)return -1;
+    if(!jack_data->trk_params)return -1;
     //set the parameter directly on the ui thread
     param_set_value(jack_data->trk_params, param_id, param_val, param_op, 0);
     //send message to set the parameter on the [audio-thread] too
@@ -251,36 +257,6 @@ int app_jack_param_set_value(JACK_INFO* jack_data, int param_id, float param_val
     send_bit.param_value = param_val;
     ring_buffer_write(jack_data->param_ui_to_rt, &send_bit, sizeof(send_bit));
     return 0;
-}
-
-SAMPLE_T app_jack_param_get_increment(JACK_INFO* jack_data, int param_id){
-    if(!jack_data)return -1;
-    return param_get_increment(jack_data->trk_params, param_id, 0);
-}
-
-SAMPLE_T app_jack_param_get_value(JACK_INFO* jack_data, unsigned char* val_type, unsigned int curved, int param_id){
-    if(!jack_data)return -1;
-    return param_get_value(jack_data->trk_params, param_id, val_type, curved, 0, 0);
-}
-
-int app_jack_param_id_from_name(JACK_INFO* jack_data, const char* param_name){
-    if(!jack_data)return -1;
-    return param_find_name(jack_data->trk_params, param_name, 0);
-}
-
-const char* app_jack_param_get_string(JACK_INFO* jack_data, int param_id){
-    if(!jack_data)return NULL;
-    return param_get_param_string(jack_data->trk_params, param_id, 0);
-}
-
-int app_jack_param_get_num_of_params(JACK_INFO* jack_data){
-    if(!jack_data)return -1;
-    return param_return_num_params(jack_data->trk_params, 0);
-}
-
-const char* app_jack_param_get_name(JACK_INFO* jack_data, int param_id){
-    if(!jack_data)return NULL;
-    return param_get_name(jack_data->trk_params, param_id, 0);
 }
 
 void app_jack_clean_midi_cont(JACK_MIDI_CONT* midi_cont){

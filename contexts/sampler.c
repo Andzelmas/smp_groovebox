@@ -465,6 +465,13 @@ void** smp_return_sys_ports(SMP_INFO* smp_data, unsigned int* number_ports){
     return ret_sys_ports;
 }
 
+PRM_CONTAIN* smp_param_return_param_container(SMP_INFO* smp_data, int smp_id){
+    if(!smp_data)return NULL;
+    if(smp_id >= MAX_SAMPLES || smp_id < 0)return NULL;
+    SMP_SMP* smp = &(smp_data->samples[smp_id]);
+    if(!smp->buffer || !smp->params)return NULL;
+    return smp->params;
+}
 int smp_param_set_value(SMP_INFO* smp_data, int smp_id, int param_id, float param_val, unsigned char param_op){
     if(!smp_data)return -1;
     if(smp_id >= MAX_SAMPLES || smp_id < 0)return -1;
@@ -480,48 +487,6 @@ int smp_param_set_value(SMP_INFO* smp_data, int smp_id, int param_id, float para
     send_bit.param_value = param_val;
     ring_buffer_write(smp_data->param_ui_to_rt, &send_bit, sizeof(send_bit));
     return 0;
-}
-SAMPLE_T smp_param_get_increment(SMP_INFO* smp_data, int smp_id, int param_id){
-    if(!smp_data)return -1;
-    if(smp_id >= MAX_SAMPLES || smp_id < 0)return -1;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
-    if(!smp->buffer || smp->params)return -1;
-    return param_get_increment(smp->params, param_id, 0);
-}
-SAMPLE_T smp_param_get_value(SMP_INFO* smp_data, unsigned char* val_type, unsigned int curved, int smp_id, int param_id){
-    if(!smp_data)return -1;
-    if(smp_id >= MAX_SAMPLES || smp_id < 0)return -1;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
-    if(!smp->buffer || smp->params)return -1;
-    return param_get_value(smp->params, param_id, val_type, curved, 0, 0);
-}
-int smp_param_id_from_name(SMP_INFO* smp_data, int smp_id, const char* param_name){
-    if(!smp_data)return -1;
-    if(smp_id >= MAX_SAMPLES || smp_id < 0)return -1;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
-    if(!smp->buffer || smp->params)return -1;
-    return param_find_name(smp->params, param_name, 0);
-}
-const char* smp_param_get_string(SMP_INFO* smp_data, int smp_id, int param_id){
-    if(!smp_data)return NULL;
-    if(smp_id >= MAX_SAMPLES || smp_id < 0)return NULL;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
-    if(!smp->buffer || smp->params)return NULL;
-    return param_get_param_string(smp->params, param_id, 0);
-}
-int smp_param_get_num_of_params(SMP_INFO* smp_data, int smp_id){
-    if(!smp_data)return -1;
-    if(smp_id >= MAX_SAMPLES || smp_id < 0)return -1;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
-    if(!smp->buffer || smp->params)return -1;
-    return param_return_num_params(smp->params, 0);
-}
-const char* smp_param_get_name(SMP_INFO* smp_data, int smp_id, int param_id){
-    if(!smp_data)return NULL;
-    if(smp_id >= MAX_SAMPLES || smp_id < 0)return NULL;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
-    if(!smp->buffer || smp->params)return NULL;
-    return param_get_name(smp->params, param_id, 0);
 }
 
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){

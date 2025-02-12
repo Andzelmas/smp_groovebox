@@ -7,6 +7,11 @@
 #include "../util_funcs/osc_wavelookup.h"
 #include "../jack_funcs/jack_funcs.h"
 #include "../util_funcs/math_funcs.h"
+#include "../util_funcs/ring_buffer.h"
+#include "context_control.h"
+#include <threads.h>
+
+static thread_local bool is_audio_thread = false;
 
 //max voices that can play simultaniously
 #define MAX_SYNTH_VOICES 8
@@ -116,8 +121,6 @@ typedef struct _synth_port{
 typedef struct _synth_data{
     //size of the single buffer (nframes in jack) for the rt thread process function cycle
     unsigned int buffer_size;
-    //sample rate for the current audio system (48000, 44100 etc.)
-
     //oscillator object with the triangle table
     OSC_OBJ* triang_osc;
     //oscillator object with the square table
@@ -134,7 +137,7 @@ typedef struct _synth_data{
     MATH_RANGE_TABLE* log_curve;
     //table that has the exponential conversion for amplitude (so 0.5 amp is half the percieved loudness or 0.0313 or so)
     MATH_RANGE_TABLE* amp_to_exp;
-    
+    //sample rate for the current audio system (48000, 44100 etc.)
     SAMPLE_T samplerate;
     //should the metronome be initialized and processed
     unsigned int with_metronome;
@@ -143,14 +146,74 @@ typedef struct _synth_data{
     SYNTH_OSC* osc_array;
     //how many oscilators we have
     unsigned int num_osc;
-
     //midi container that holds the notes, velocities etc.
     JACK_MIDI_CONT* midi_cont;
-    
     //this is the audio backend object to send to the audio functions
-    void* audio_backend; 
+    void* audio_backend;
+    //ring buffers for parameter manipulation communication
+    RING_BUFFER* param_rt_to_ui;
+    RING_BUFFER* param_ui_to_rt;
+    //this is control for [audio-thread] and [main-thread] sys communication
+    //(since there is no need to remove and add the oscillators this is used right now only for thread safe message sending)
+    CXCONTROL* control_data;
 }SYNTH_DATA;
 
+static int synth_sys_msg(void* user_data, const char* msg){
+    SYNTH_DATA* synth_data = (SYNTH_DATA*)user_data;
+    log_append_logfile("%s", msg);
+    return 0;
+}
+//control_data, depending on is_audio_thread calls the synth_sys_msg right away or sends a msg to [main-thread] to do that
+static void synth_send_msg(SYNTH_DATA* synth_data, const char* msg){
+    if(!synth_data)return;
+    context_sub_send_msg(synth_data->control_data, msg, is_audio_thread);
+}
+
+int synth_read_ui_to_rt_messages(SYNTH_DATA* synth_data){
+    //this is a local thread var its false on [main-thread] and true on [audio-thread]
+    is_audio_thread = true;
+
+    if(!synth_data)return -1;
+    //process the sys messages, right now only need for send messages, so on [audio-thread] does not do anything
+    context_sub_process_rt(synth_data->control_data);
+    
+    //read the param ui_to_rt messages and set the parameter values
+    RING_BUFFER* ring_buffer = synth_data->param_ui_to_rt;
+    if(!ring_buffer){
+	return -1;
+    }
+    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
+    for(unsigned int i = 0; i < cur_items; i++){
+	PARAM_RING_DATA_BIT cur_bit;
+	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
+	if(read_buffer <= 0)continue;
+	if(cur_bit.cx_id >= MAX_OSCS)continue;
+	SYNTH_OSC* osc = &(synth_data->osc_array[cur_bit.cx_id]);
+	if(!osc->params)continue;
+	param_set_value(osc->params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 1);
+    }
+    return 0;
+}
+int synth_read_rt_to_ui_messages(SYNTH_DATA* synth_data){
+    if(!synth_data)return -1;
+    //process the sys messages on [main-thread] - right now only logs messages from [audio-thread]
+    context_sub_process_ui(synth_data->control_data);
+    
+    //read the param rt_to_ui messages and set the parameter values
+    RING_BUFFER* ring_buffer = synth_data->param_rt_to_ui;
+    if(!ring_buffer)return -1;
+    unsigned int  cur_items = ring_buffer_return_items(ring_buffer);
+    for(unsigned int i = 0; i < cur_items; i++){
+	PARAM_RING_DATA_BIT cur_bit;
+	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
+	if(read_buffer <= 0)continue;
+	if(cur_bit.cx_id >= MAX_OSCS)continue;
+	SYNTH_OSC* osc = &(synth_data->osc_array[cur_bit.cx_id]);
+	if(!osc->params)continue;
+	param_set_value(osc->params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 0);
+    }    
+    return 0;
+}
 
 //init the adsr
 static SYNTH_ADSR* synth_init_adsr(SAMPLE_T samplerate){
@@ -174,7 +237,21 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 
     SYNTH_DATA* synth_data = (SYNTH_DATA*)malloc(sizeof(SYNTH_DATA));
     if(!synth_data)return NULL;
-   
+    CXCONTROL_RT_FUNCS rt_funcs_struct;
+    CXCONTROL_UI_FUNCS ui_funcs_struct;
+    rt_funcs_struct.subcx_start_process = NULL;
+    rt_funcs_struct.subcx_stop_process = NULL;
+    ui_funcs_struct.send_msg = synth_sys_msg;
+    ui_funcs_struct.subcx_activate_start_process = NULL;
+    ui_funcs_struct.subcx_callback = NULL;
+    ui_funcs_struct.subcx_restart = NULL;
+    synth_data->control_data = context_sub_init((void*)synth_data, rt_funcs_struct, ui_funcs_struct);
+    if(!synth_data->control_data){
+	free(synth_data);
+	return NULL;
+    }    
+    synth_data->param_rt_to_ui = NULL;
+    synth_data->param_ui_to_rt = NULL;
     synth_data->buffer_size = buffer_size;
     synth_data->samplerate = sample_rate;
     synth_data->with_metronome = with_metronome;
@@ -186,7 +263,12 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
     synth_data->sin_osc = NULL;
     synth_data->midi_cont = NULL;
     synth_data->audio_backend = audio_backend;
+    synth_data->semi_to_freq_table = NULL;
+    synth_data->log_curve = NULL;
+    synth_data->amp_to_exp = NULL;
+    
     synth_data->semi_to_freq_table = math_init_range_table(MAX_SEMITONES * -1, MAX_SEMITONES, SEMITONES_INC);
+    
     if(!synth_data->semi_to_freq_table){
 	synth_clean_memory(synth_data);
 	return NULL;
@@ -274,19 +356,26 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	cur_osc->trig = -1;    
 	cur_osc->last_voice = 0;
 	cur_osc->num_ports = 0;
+	cur_osc->params = NULL;
+	cur_osc->osc_voices = NULL;
 	cur_osc->ports = NULL;
+	cur_osc->buffer_L = NULL;
+	cur_osc->buffer_R = NULL;
+	cur_osc->name = NULL;
+	cur_osc->num_ports = 0;
+	cur_osc->ports = NULL;
+	cur_osc->num_voices = MAX_SYNTH_VOICES;	
 	//initiate the buffer
 	cur_osc->buffer_L = calloc(synth_data->buffer_size, sizeof(SAMPLE_T));
 	cur_osc->buffer_R = calloc(synth_data->buffer_size, sizeof(SAMPLE_T));
 	if(!cur_osc->buffer_L || !cur_osc->buffer_R){
-	    synth_clean_osc(synth_data, cur_osc);
-	    continue;
+	    synth_clean_memory(synth_data);
+	    return NULL;
 	}
-	cur_osc->num_voices = MAX_SYNTH_VOICES;	
 	cur_osc->name = malloc(sizeof(char) * 6);
 	if(!cur_osc->name){
-	    synth_clean_osc(synth_data, cur_osc);
-	    continue;
+	    synth_clean_memory(synth_data);
+	    return NULL;
 	}
 	sprintf(cur_osc->name, "Osc_%u", i);
 	
@@ -294,7 +383,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	cur_osc->num_ports = SYNTH_OUTS + SYNTH_IN_MIDI;
 	cur_osc->ports = (SYNTH_PORT*)calloc(cur_osc->num_ports, sizeof(SYNTH_PORT));
 	if(!cur_osc->ports){
-	    synth_clean_osc(synth_data, cur_osc);
+	    synth_clean_memory(synth_data);
 	    return NULL;
 	}
 
@@ -391,8 +480,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	
 	cur_osc->osc_voices = (SYNTH_VOICE*)calloc(cur_osc->num_voices, sizeof(SYNTH_VOICE));
 	if(!cur_osc->osc_voices){
-	    synth_clean_osc(synth_data, cur_osc);
-	    continue;
+	    synth_clean_memory(synth_data);
+	    return NULL;
 	}
 	for(int j = 0; j < cur_osc->num_voices; j++){
 	    SYNTH_VOICE* cur_voice = &(cur_osc->osc_voices[j]);
@@ -426,8 +515,44 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 
 	synth_activate_backend_ports(synth_data, cur_osc);
     }
-  
+
+    synth_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
+    if(!(synth_data->param_rt_to_ui)){
+	synth_clean_memory(synth_data);
+	return NULL;
+    }
+    synth_data->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
+    if(!(synth_data->param_ui_to_rt)){
+	synth_clean_memory(synth_data);
+	return NULL;
+    }
+    
     return synth_data;   
+}
+
+PRM_CONTAIN* synth_param_return_param_container(SYNTH_DATA* synth_data, int osc_id){
+    if(!synth_data)return NULL;
+    if(osc_id >= MAX_OSCS)return NULL;
+    SYNTH_OSC* cur_osc = &(synth_data->osc_array[osc_id]);
+    if(!cur_osc->params)return NULL;
+    return cur_osc->params;
+}
+
+int synth_param_set_value(SYNTH_DATA* synth_data, int osc_id, int param_id, float param_val, unsigned char param_op){
+    if(!synth_data)return -1;
+    if(osc_id >= MAX_OSCS)return -1;
+    SYNTH_OSC* cur_osc = &(synth_data->osc_array[osc_id]);
+    if(!cur_osc->params)return -1;
+    //set the parameter directly on the ui thread
+    param_set_value(cur_osc->params, param_id, param_val, param_op, 0);
+    //now send the message to set the parameter on the rt [audio-thread] too
+    PARAM_RING_DATA_BIT send_bit;
+    send_bit.cx_id = osc_id;
+    send_bit.param_id = param_id;
+    send_bit.param_op = param_op;
+    send_bit.param_value = param_val;
+    ring_buffer_write(synth_data->param_ui_to_rt, &send_bit, sizeof(send_bit));
+    return 0;
 }
 
 int synth_activate_backend_ports(SYNTH_DATA* synth_data, SYNTH_OSC* osc){
@@ -885,6 +1010,7 @@ static int synth_clean_ports(SYNTH_DATA* synth_data, SYNTH_PORT** osc_ports, uns
 static int synth_clean_osc(SYNTH_DATA* synth_data, SYNTH_OSC* synth_osc){
     if(!synth_osc)return -1;
     if(synth_osc->params)param_clean_param_container(synth_osc->params);
+    synth_osc->params = NULL;
     if(synth_osc->osc_voices){
 	for(int i = 0; i < synth_osc->num_voices; i++){
 	    SYNTH_VOICE* cur_voice = &(synth_osc->osc_voices[i]);
@@ -895,11 +1021,16 @@ static int synth_clean_osc(SYNTH_DATA* synth_data, SYNTH_OSC* synth_osc){
 	    }
 	}
 	free(synth_osc->osc_voices);
+	synth_osc->osc_voices = NULL;
     }
     if(synth_osc->buffer_L)free(synth_osc->buffer_L);
-    if(synth_osc->buffer_R)free(synth_osc->buffer_R);    
+    synth_osc->buffer_L = NULL;
+    if(synth_osc->buffer_R)free(synth_osc->buffer_R);
+    synth_osc->buffer_R = NULL;
     if(synth_osc->ports)synth_clean_ports(synth_data, &(synth_osc->ports), synth_osc->num_ports);
+    synth_osc->ports = NULL;
     if(synth_osc->name)free(synth_osc->name);
+    synth_osc->name = NULL;
 }
 
 int synth_clean_memory(SYNTH_DATA* synth_data){
@@ -921,6 +1052,11 @@ int synth_clean_memory(SYNTH_DATA* synth_data){
     if(synth_data->semi_to_freq_table)math_range_table_clean(synth_data->semi_to_freq_table);
     if(synth_data->log_curve)math_range_table_clean(synth_data->log_curve);
     if(synth_data->amp_to_exp)math_range_table_clean(synth_data->amp_to_exp);
+
+    ring_buffer_clean(synth_data->param_rt_to_ui);
+    ring_buffer_clean(synth_data->param_ui_to_rt);
+    context_sub_clean(synth_data->control_data);
+    
     free(synth_data);
 
     return 0;

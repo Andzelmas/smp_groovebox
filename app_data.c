@@ -8,10 +8,11 @@
 #include "util_funcs/string_funcs.h"
 //math helper functions
 #include "util_funcs/math_funcs.h"
-//jack init functions
+
 #include "jack_funcs/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
 #include "util_funcs/ring_buffer.h"
+#include "contexts/params.h"
 
 //the client name that will be shown in the audio client and added next to the port names
 const char* client_name = "smp_grvbox";
@@ -298,16 +299,33 @@ int app_smp_sample_init(APP_INFO* app_data, const char* samp_path, int in_id){
     return return_id;
 }
 
+static PRM_CONTAIN* app_get_context_param_container(APP_INFO* app_data, unsigned char cx_type, int cx_id){
+    if(!app_data)return NULL;
+    if(cx_type == Context_type_Trk){
+	return app_jack_param_return_param_container(app_data->trk_jack);
+    }    
+    if(cx_type == Context_type_Sampler){
+	return smp_param_return_param_container(app_data->smp_data, cx_id);
+    }
+    if(cx_type == Context_type_Synth){
+	return synth_param_return_param_container(app_data->synth_data, cx_id);
+    }
+    if(cx_type == Context_type_Plugins){
+	return plug_param_return_param_container(app_data->plug_data, cx_id);
+    }
+    return NULL;
+}
+
 int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, float param_value, unsigned char param_op){
     if(!app_data)return -1;
     if(cx_type == Context_type_Trk){
 	return app_jack_param_set_value(app_data->trk_jack, param_id, param_value, param_op);
     }    
     if(cx_type == Context_type_Sampler){
-	//TODO set sampler params
+	return smp_param_set_value(app_data->smp_data, cx_id, param_id, param_value, param_op);
     }
     if(cx_type == Context_type_Synth){
-	//TODO set Synth params
+	return synth_param_set_value(app_data->synth_data, cx_id, param_id, param_value, param_op);
     }
     if(cx_type == Context_type_Plugins){
 	return plug_param_set_value(app_data->plug_data, cx_id, param_id, param_value, param_op);
@@ -317,89 +335,40 @@ int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, in
 
 SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
     if(!app_data)return -1;
-    if(cx_type == Context_type_Trk){
-	return app_jack_param_get_increment(app_data->trk_jack, param_id);
-    }    
-    if(cx_type == Context_type_Sampler){
-	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Synth){
-	//TODO set Synth params
-    }
-    if(cx_type == Context_type_Plugins){
-	return plug_param_get_increment(app_data->plug_data, cx_id, param_id);
-    }
-    return -1;
+    PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
+    if(!param_cont)return -1;
+    return param_get_increment(param_cont, param_id, 0);
 }
 
 SAMPLE_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
 			     unsigned char* val_type, unsigned int curved){
     if(!app_data)return -1;
-    if(cx_type == Context_type_Trk){
-	return app_jack_param_get_value(app_data->trk_jack, val_type, curved, param_id);
-    }    
-    if(cx_type == Context_type_Sampler){
-	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Synth){
-	//TODO set Synth params
-    }
-    if(cx_type == Context_type_Plugins){
-	return plug_param_get_value(app_data->plug_data, val_type, curved, cx_id, param_id);
-    }
-    return -1;
+    PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
+    if(!param_cont)return -1;
+    return param_get_value(param_cont, param_id, val_type, curved, 0, 0);
 }
 
 int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name){
     if(!app_data)return -1;
-   if(cx_type == Context_type_Trk){
-       return app_jack_param_id_from_name(app_data->trk_jack, param_name);
-    }    
-    if(cx_type == Context_type_Sampler){
-	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Synth){
-	//TODO set Synth params
-    }
-    if(cx_type == Context_type_Plugins){
-	return plug_param_id_from_name(app_data->plug_data, cx_id, param_name);
-    }
-    return -1;
+    PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
+    if(!param_cont)return -1;
+    return param_find_name(param_cont, param_name, 0);
 }
 
 const char* app_param_get_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
     if(!app_data)return NULL;
-    if(cx_type == Context_type_Trk){
-	return app_jack_param_get_string(app_data->trk_jack, param_id);
-    }    
-    if(cx_type == Context_type_Sampler){
-	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Synth){
-	//TODO set Synth params
-    }
-    if(cx_type == Context_type_Plugins){
-	return plug_param_get_string(app_data->plug_data, cx_id, param_id);
-    }
-    return NULL;
+    PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
+    if(!param_cont)return NULL;
+    return param_get_param_string(param_cont, param_id, 0);
 }
 
 int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, char*** param_names, char*** param_vals,
 			 char*** param_types, unsigned int* param_num){
     if(!app_data)return -1;
     *param_num = 0;
-    if(cx_type == Context_type_Trk){
-	*param_num = app_jack_param_get_num_of_params(app_data->trk_jack);
-    }
-    if(cx_type == Context_type_Sampler){
-	//TODO set sampler params
-    }
-    if(cx_type == Context_type_Synth){
-	//TODO set Synth params
-    }
-    if(cx_type == Context_type_Plugins){
-	*param_num = plug_param_get_num_of_params(app_data->plug_data, cx_id);
-    }
+    PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
+    if(!param_cont)return -1;
+    *param_num = param_return_num_params(param_cont, 0);
     
     if(*param_num<=0)return -1;
     char** this_names = (char**)malloc(sizeof(char*) * (*param_num));
@@ -412,21 +381,11 @@ int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, in
 	this_names[i] = NULL;
 	this_vals[i] = NULL;
 	this_types[i] = NULL;
-	const char* cur_name = NULL;
-	if(cx_type == Context_type_Trk){
-	    cur_name = app_jack_param_get_name(app_data->trk_jack, i);
-	}
-	if(cx_type == Context_type_Sampler){
-	    //TODO set sampler params
-	}
-	if(cx_type == Context_type_Synth){
-	    //TODO set Synth params
-	}
-	if(cx_type == Context_type_Plugins){
-	    cur_name = plug_param_get_name(app_data->plug_data, cx_id, i);
-	}
 	
+	const char* cur_name = NULL;
+	cur_name = param_get_name(param_cont, i, 0);
 	if(!cur_name)continue;
+	
 	char* param_name = (char*)malloc(sizeof(char) * (strlen(cur_name)+1));
 	if(!param_name)continue;
 	strcpy(param_name, cur_name);
@@ -606,6 +565,8 @@ static int app_read_rt_messages(APP_INFO* app_data){
     if(plug_read_ui_to_rt_messages(app_data->plug_data) != 0)return -1;
     //read the sampler messages on the [audio-thread]
     if(smp_read_ui_to_rt_messages(app_data->smp_data) != 0)return -1;
+    //read the synth messages on the [audio-thread]
+    if(synth_read_ui_to_rt_messages(app_data->synth_data) != 0)return -1;
     return 0;
 }
 
@@ -660,6 +621,8 @@ int app_update_ui_params(APP_INFO* app_data){
     plug_read_rt_to_ui_messages(app_data->plug_data);
     //read messages from the rt thread on the [main-thread] for sampler
     smp_read_rt_to_ui_messages(app_data->smp_data);
+    //read messages from the rt thread on the [main-thread] for the synth context
+    synth_read_rt_to_ui_messages(app_data->synth_data);
     return 0;
 }
 
