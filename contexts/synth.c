@@ -237,14 +237,9 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 
     SYNTH_DATA* synth_data = (SYNTH_DATA*)malloc(sizeof(SYNTH_DATA));
     if(!synth_data)return NULL;
-    CXCONTROL_RT_FUNCS rt_funcs_struct;
-    CXCONTROL_UI_FUNCS ui_funcs_struct;
-    rt_funcs_struct.subcx_start_process = NULL;
-    rt_funcs_struct.subcx_stop_process = NULL;
+    CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
+    CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
     ui_funcs_struct.send_msg = synth_sys_msg;
-    ui_funcs_struct.subcx_activate_start_process = NULL;
-    ui_funcs_struct.subcx_callback = NULL;
-    ui_funcs_struct.subcx_restart = NULL;
     synth_data->control_data = context_sub_init((void*)synth_data, rt_funcs_struct, ui_funcs_struct);
     if(!synth_data->control_data){
 	free(synth_data);

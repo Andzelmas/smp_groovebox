@@ -654,14 +654,11 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
     }
     memset(plug_data, '\0', sizeof(*plug_data));
     //init the control_data struct for [audio-thread] to [main-thread] messaging
-    CXCONTROL_RT_FUNCS rt_funcs_struct;
-    CXCONTROL_UI_FUNCS ui_funcs_struct;
+    CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
+    CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
     rt_funcs_struct.subcx_start_process = plug_plug_start_process;
     rt_funcs_struct.subcx_stop_process = plug_plug_stop_process;
     ui_funcs_struct.send_msg = plug_sys_send_msg;
-    ui_funcs_struct.subcx_activate_start_process = NULL;
-    ui_funcs_struct.subcx_callback = NULL;
-    ui_funcs_struct.subcx_restart = NULL;
     plug_data->control_data = context_sub_init((void*)plug_data, rt_funcs_struct, ui_funcs_struct);
     if(!plug_data->control_data){
 	free(plug_data);

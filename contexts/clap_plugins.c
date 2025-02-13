@@ -465,8 +465,8 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 	return NULL;
     }    
     memset(plug_data, '\0', sizeof(*plug_data));
-    CXCONTROL_RT_FUNCS rt_funcs_struct;
-    CXCONTROL_UI_FUNCS ui_funcs_struct;
+    CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
+    CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
     rt_funcs_struct.subcx_start_process = clap_plug_start_process;
     rt_funcs_struct.subcx_stop_process = clap_plug_stop_process;
     ui_funcs_struct.send_msg = clap_sys_msg;
