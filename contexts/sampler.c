@@ -96,11 +96,6 @@ static int smp_sys_msg(void* user_data, const char* msg){
     log_append_logfile("%s", msg);
     return 0;
 }
-//this can be called from any thread to send a string message to the user
-static void smp_send_msg(SMP_INFO* smp_data, const char* msg){
-    if(!smp_data)return;
-    context_sub_send_msg(smp_data->control_data, msg, is_audio_thread);
-}
 
 static int smp_start_process(void* user_data, int smp_id){
     SMP_INFO* smp_data = (SMP_INFO*)user_data;

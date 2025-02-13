@@ -47,11 +47,6 @@ static int app_jack_sys_send_msg(void* user_data, const char* msg){
     log_append_logfile("%s", msg);
     return 0;
 }
-//[thread-safe] method to send log messages in the jack context
-static void app_jack_send_msg(JACK_INFO* jack_data, const char* msg){
-    if(!jack_data)return;
-    context_sub_send_msg(jack_data->control_data, msg, is_audio_thread);
-}
 
 JACK_INFO* jack_initialize(void *arg, const char *client_name,
 			   int ports_num, unsigned int* ports_types, unsigned int *io_types,

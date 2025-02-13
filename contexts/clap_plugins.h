@@ -13,7 +13,7 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data);
 //some of these called functions will block main-thread, to wait for the plugin or the whole process to stop.
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data);
 //return the names of the plugins in the plugin directory
-char** clap_plug_return_plugin_names(unsigned int* size);
+char** clap_plug_return_plugin_names(CLAP_PLUG_INFO* plug_data, unsigned int* size);
 //initiate the main plugin data struct. 
 CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_size, SAMPLE_T samplerate, clap_plug_status_t* plug_error, void* audio_backend);
 //initiate and load plugin from its name

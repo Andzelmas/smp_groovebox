@@ -131,11 +131,7 @@ static int clap_sys_msg(void* user_data, const char* msg){
     log_append_logfile("%s", msg);
     return 0;
 }
-//control_data, depending on is_audio_thread calls the clap_sys_msg right away or sends a msg to [main-thread] to do that
-static void clap_plug_send_msg(CLAP_PLUG_INFO* plug_data, const char* msg){
-    if(!plug_data)return;
-    context_sub_send_msg(plug_data->control_data, msg, clap_plug_return_is_audio_thread());
-}
+
 //extension function for log.h to send messages in [thread-safe] manner
 static void clap_plug_ext_log(const clap_host_t* host, clap_log_severity severity, const char* msg){
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
@@ -143,7 +139,7 @@ static void clap_plug_ext_log(const clap_host_t* host, clap_log_severity severit
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
     if(!plug_data)return;
     //severity is not sent, right now dont see the need to send severity - this should be obvious from the message
-    clap_plug_send_msg(plug_data, msg);
+    context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), msg);
 }
 
 const void* get_extension(const clap_host_t* host, const char* ex_id){    
@@ -159,9 +155,7 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
     }
  
     //if there is no extension implemented that the plugin needs send the name of the extension to the ui
-    char msg[MAX_STRING_MSG_LENGTH];
-    snprintf(msg, MAX_STRING_MSG_LENGTH, "%s asked for ext %s\n", plug->plug_path, ex_id);
-    clap_plug_send_msg(plug_data, msg);
+    context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "%s asked for ext %s\n", plug->plug_path, ex_id);
 
     return NULL;
 }
@@ -306,14 +300,12 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data){
     return 0;
 }
 
-static char** clap_plug_get_plugin_names_from_file(const char* plug_path, unsigned int* num_of_plugins){
+static char** clap_plug_get_plugin_names_from_file(CLAP_PLUG_INFO* plug_data, const char* plug_path, unsigned int* num_of_plugins){
     void* handle;
     int* iptr;
     handle = dlopen(plug_path, RTLD_LOCAL | RTLD_LAZY);
     if(!handle){
-	char msg[MAX_STRING_MSG_LENGTH];
-	snprintf(msg, MAX_STRING_MSG_LENGTH, "failed to load %s dso \n", plug_path);
-	clap_sys_msg(NULL, msg);
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "failed to load %s dso \n", plug_path);
 	return NULL;
     }
     
@@ -322,18 +314,14 @@ static char** clap_plug_get_plugin_names_from_file(const char* plug_path, unsign
     if(!plug_entry)return NULL;
     unsigned int init_err = plug_entry->init(plug_path);
     if(!init_err){
-	char msg[MAX_STRING_MSG_LENGTH];
-	snprintf(msg, MAX_STRING_MSG_LENGTH, "failed to init the %s plugin entry\n", plug_path);
-	clap_sys_msg(NULL, msg);
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "failed to init %s plugin entry\n", plug_path);
 	return NULL;
     }
     
     const clap_plugin_factory_t* plug_fac = plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
     uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
     if(plug_count <= 0){
-	char msg[MAX_STRING_MSG_LENGTH];
-	snprintf(msg, MAX_STRING_MSG_LENGTH, "no plugins in %s dso \n", plug_path);
-	clap_sys_msg(NULL, msg);	
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "no plugins in %s dso \n", plug_path);
 	return NULL;
     }
     char** plug_names = malloc(sizeof(char*));
@@ -411,7 +399,7 @@ static char** clap_plug_get_clap_files(const char* file_path, unsigned int* size
 
 //goes through the clap files stored on the clap_data struct and returns the names of these plugins
 //each clap file can have several different plugins inside of it
-char** clap_plug_return_plugin_names(unsigned int* size){
+char** clap_plug_return_plugin_names(CLAP_PLUG_INFO* plug_data, unsigned int* size){
     unsigned int total_files = 0;
     char** clap_files = clap_plug_get_clap_files(CLAP_PATH, &total_files);
     if(!clap_files)return NULL;
@@ -429,7 +417,7 @@ char** clap_plug_return_plugin_names(unsigned int* size){
 	snprintf(total_file_path, total_file_name_size, "%s%s", CLAP_PATH, cur_file);
 
 	unsigned int plug_name_count = 0;
-	char** plug_names = clap_plug_get_plugin_names_from_file(total_file_path, &plug_name_count);
+	char** plug_names = clap_plug_get_plugin_names_from_file(plug_data, total_file_path, &plug_name_count);
 	if(plug_names){
 	    for(int j = 0; j < plug_name_count; j++){
 		char* cur_plug_name = plug_names[j];
@@ -721,9 +709,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     clap_plug_plug_stop_and_clean(plug_data, id);
     
     if(clap_plug_create_plug_from_name(plug_data, plugin_name, id) < 0){
-	char msg[MAX_STRING_MSG_LENGTH];
-	snprintf(msg, MAX_STRING_MSG_LENGTH, "could not load plugin from name %s\n", plugin_name);
-	clap_sys_msg(NULL, msg);	
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "could not laod plugin from name %s\n", plugin_name);
 	return -1;
     }
     //this plug will only have the entry, plug_path and which plug_inst_id this plugin_name is in the plugin factory array at this point
@@ -731,21 +717,15 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     const clap_plugin_factory_t* plug_fac = plug->plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
     const clap_plugin_descriptor_t* plug_desc = plug_fac->get_plugin_descriptor(plug_fac, plug->plug_inst_id);
     if(!plug_desc){
-	char msg[MAX_STRING_MSG_LENGTH];
-	snprintf(msg, MAX_STRING_MSG_LENGTH, "Could not get plugin %s descriptor \n", plug->plug_path);
-	clap_sys_msg(NULL, msg);
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Could not get plugin %s descriptor\n", plug->plug_path);
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
     if(plug_desc->name){
-	char msg[MAX_STRING_MSG_LENGTH];
-	snprintf(msg, MAX_STRING_MSG_LENGTH, "Got clap_plugin %s descriptor\n", plug_desc->name);
-	clap_sys_msg(NULL, msg);	
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Got clap_plugin %s descriptor\n", plug_desc->name);
     }
     if(plug_desc->description){
-	char msg[MAX_STRING_MSG_LENGTH];
-	snprintf(msg, MAX_STRING_MSG_LENGTH, "%s info: %s\n", plug_desc->name, plug_desc->description);
-	clap_sys_msg(NULL, msg);
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "%s info: %s\n", plug_desc->name, plug_desc->description);
     }
     //add the clap_host_t struct to the plug
     clap_host_t clap_info_host;
@@ -763,9 +743,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     //create plugin instance
     const clap_plugin_t* plug_inst = plug_fac->create_plugin(plug_fac, &(plug->clap_host_info) , plug_desc->id);
     if(!plug_inst){
-	char msg[MAX_STRING_MSG_LENGTH];
-	snprintf(msg, MAX_STRING_MSG_LENGTH, "Failed to create %s plugin\n", plugin_name);
-	clap_sys_msg(NULL, msg);	
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Faialed to create %s plugin\n", plugin_name);
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
@@ -774,9 +752,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     
     bool inst_err = plug_inst->init(plug_inst);
     if(!inst_err){
-	char msg[MAX_STRING_MSG_LENGTH];
-	snprintf(msg, MAX_STRING_MSG_LENGTH, "Failed to init %s plugin\n", plugin_name);
-	clap_sys_msg(NULL, msg);	
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Failed to init %s plugin\n", plugin_name);
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }

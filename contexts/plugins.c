@@ -297,14 +297,6 @@ static int plug_sys_send_msg(void* user_data, const char* msg){
     log_append_logfile("%s", msg);
     return 0;
 }
-//send a [thread-safe] message - check if thread is audio or main
-//control_data calls the plug_sys_send_msg function on [main-thread] through a sys msg or right away if is_audio_thread is 0
-static void plug_send_msg(PLUG_INFO* plug_data, const char* msg){
-    if(!plug_data){
-	return;
-    }
-    context_sub_send_msg(plug_data->control_data, msg, is_audio_thread);
-}
 
 static int  plug_remove_plug(PLUG_INFO* plug_data, int id){
     if(!plug_data)return -1;
@@ -607,7 +599,7 @@ static int plug_vprintf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, v
     int ret = -1;
     char send_msg[MAX_STRING_MSG_LENGTH];
     ret = vsnprintf(send_msg, MAX_STRING_MSG_LENGTH, fmt, ap);
-    plug_send_msg(plug_data, send_msg);    
+    context_sub_send_msg(plug_data->control_data, is_audio_thread, send_msg);
     return ret;
 }
 static int plug_printf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, ...){
@@ -899,7 +891,6 @@ int plug_read_rt_to_ui_messages(PLUG_INFO* plug_data){
     if(!plug_data)return -1;
     //process the control_data sys messages for [main_thread] (like send msg)
     context_sub_process_ui(plug_data->control_data);
-    
     //read the param rt_to_ui messages and set the parameter values
     RING_BUFFER* ring_buffer = plug_data->param_rt_to_ui;
     if(!ring_buffer)return -1;

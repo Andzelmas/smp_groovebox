@@ -2,6 +2,7 @@
 #include <semaphore.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include "../util_funcs/ring_buffer.h"
 #include "../types.h"
 
@@ -128,18 +129,22 @@ void context_sub_restart_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_au
 
     if(cxcontrol_data->ui_funcs_struct.subcx_restart)cxcontrol_data->ui_funcs_struct.subcx_restart(cxcontrol_data->user_data, subcx_id);
 }
-void context_sub_send_msg(CXCONTROL* cxcontrol_data, const char* msg, bool is_audio_thread){
+void context_sub_send_msg(CXCONTROL* cxcontrol_data, bool is_audio_thread, const char* msg, ...){
     if(!cxcontrol_data)return;
-
+    char send_msg[MAX_STRING_MSG_LENGTH];
+    va_list args;
+    va_start (args, msg);
+    vsnprintf(send_msg, MAX_STRING_MSG_LENGTH, msg, args);
+    va_end(args);
     if(is_audio_thread){
 	RING_SYS_MSG send_bit;
-	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", msg);
+	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", send_msg);
 	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
 	ring_buffer_write(cxcontrol_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
 	return;
     }
 
-    if(cxcontrol_data->ui_funcs_struct.send_msg)cxcontrol_data->ui_funcs_struct.send_msg(cxcontrol_data->user_data, msg);
+    if(cxcontrol_data->ui_funcs_struct.send_msg)cxcontrol_data->ui_funcs_struct.send_msg(cxcontrol_data->user_data, send_msg);
 }
 void context_sub_activate_start_process_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread){
     if(!cxcontrol_data) return;

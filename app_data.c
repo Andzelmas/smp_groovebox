@@ -8,11 +8,13 @@
 #include "util_funcs/string_funcs.h"
 //math helper functions
 #include "util_funcs/math_funcs.h"
-
+#include "contexts/context_control.h"
 #include "jack_funcs/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
 #include "util_funcs/ring_buffer.h"
 #include "contexts/params.h"
+#include <threads.h>
+static thread_local bool is_audio_thread = false;
 
 //the client name that will be shown in the audio client and added next to the port names
 const char* client_name = "smp_grvbox";
@@ -54,9 +56,8 @@ typedef struct _app_info{
     void* main_out_L;
     void* main_out_R;
 
-    //ring buffer for communication between [audio-thread]
-    RING_BUFFER* ui_to_rt_msgs;
-    sem_t wait_for_rt;
+    //control struct for sys messages between [audio-thread] and [main-thread] (stop all processes and send messages for this context)
+    CXCONTROL* control_data;
     unsigned int is_processing; //is the main jack function processing, should be touched only on [audio-thread]
 }APP_INFO;
 
@@ -76,41 +77,44 @@ static int clean_memory(APP_INFO* app_data){
     if(app_data->trk_jack)jack_clean_memory(app_data->trk_jack);
 
     //clean the app_data
-    if(app_data->ui_to_rt_msgs)ring_buffer_clean(app_data->ui_to_rt_msgs);
-    sem_destroy(&app_data->wait_for_rt);
+    context_sub_clean(app_data->control_data);
     if(app_data)free(app_data);
     
     return 0;
 }
-
-//functions that block main thread and waits for the [audio-thread] processing function to start or stop.
-static void app_wait_for_stop(APP_INFO* app_data){
-    if(!app_data)return;
-    RING_SYS_MSG send_bit;
-    
-    send_bit.msg_enum = MSG_STOP_ALL;
-    send_bit.scx_id = 0;
-    ring_buffer_write(app_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-    //lock the main thread and wait for the audio thread to stop processing the main jack function
-    sem_wait(&app_data->wait_for_rt);
+static int app_stop_process(void* user_data, int sub_id){
+    APP_INFO* app_data = (APP_INFO*)user_data;
+    if(!app_data)return -1;
+    app_data->is_processing = 0;
+    return 0;
 }
-static void app_wait_for_start(APP_INFO* app_data){
-    if(!app_data)return; 
-   
-    RING_SYS_MSG send_bit;
-    send_bit.msg_enum = MSG_START_ALL;
-    send_bit.scx_id = 0;
-    ring_buffer_write(app_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
-    
-    //lock the main thread and wait for the audio thread to start processing the main jack function
-    sem_wait(&app_data->wait_for_rt);
+static int app_start_process(void* user_data, int sub_id){
+    APP_INFO* app_data = (APP_INFO*)user_data;
+    if(!app_data)return -1;
+    app_data->is_processing = 1;
+    return 0;
 }
-
+static int app_sys_msg(void* user_data, const char* msg){
+    APP_INFO* app_data = (APP_INFO*)user_data;
+    if(!app_data)return -1;
+    log_append_logfile("%s", msg);
+    return 0;
+}
 APP_INFO* app_init(app_status_t *app_status){
     APP_INFO *app_data = (APP_INFO*) malloc(sizeof(APP_INFO));
     if(!app_data){
         *app_status = app_failed_malloc;
         return NULL;
+    }
+    CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
+    CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
+    rt_funcs_struct.subcx_start_process = app_start_process;
+    rt_funcs_struct.subcx_stop_process = app_stop_process;
+    ui_funcs_struct.send_msg = app_sys_msg;
+    app_data->control_data = context_sub_init((void*)app_data, rt_funcs_struct, ui_funcs_struct);
+    if(!app_data->control_data){
+	free(app_data);
+	return NULL;
     }
     //init the members to NULLS
     app_data->smp_data = NULL;
@@ -120,15 +124,6 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->synth_data = NULL;
     app_data->is_processing = 0;
     
-    app_data->ui_to_rt_msgs = ring_buffer_init(sizeof(RING_SYS_MSG), MAX_SYS_BUFFER_ARRAY_SIZE);
-    if(!app_data->ui_to_rt_msgs){
-	clean_memory(app_data);
-	return NULL;
-    }
-    if(sem_init(&app_data->wait_for_rt, 0, 0) != 0){
-	clean_memory(app_data);
-	return NULL;
-    }
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
     app_data->trk_jack = jack_initialize(app_data, client_name, 0, 0, 0, NULL, trk_audio_process_rt, 0);
@@ -153,7 +148,7 @@ APP_INFO* app_init(app_status_t *app_status){
     }
 
     //now the jack function was activated, pause it to initiate the other contexts
-    app_wait_for_stop(app_data);
+    context_sub_wait_for_stop(app_data->control_data, 0);
     
     /*initiate the sampler it will be empty initialy*/
     /*-----------------------------------------------*/
@@ -192,7 +187,7 @@ APP_INFO* app_init(app_status_t *app_status){
 	return NULL;
     }
     //now unpause the jack function again
-    app_wait_for_start(app_data);
+    context_sub_wait_for_start(app_data->control_data, 0);
     return app_data;
 }
 
@@ -201,7 +196,7 @@ char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, u
     unsigned int lv2_size = 0;
     char** lv2_names = plug_return_plugin_names(app_data->plug_data, &lv2_size);
     unsigned int clap_size = 0;
-    char** clap_names = clap_plug_return_plugin_names(&clap_size);
+    char** clap_names = clap_plug_return_plugin_names(app_data->clap_plug_data, &clap_size);
     unsigned char* plugin_types = malloc(sizeof(unsigned char) * (lv2_size + clap_size));
     memset(plugin_types, '\0', sizeof(unsigned char) * (lv2_size + clap_size));
     
@@ -533,27 +528,13 @@ const char** app_return_context_ports(APP_INFO* app_data, unsigned int* name_num
     if(sys_ports)free(sys_ports);
     return name_array;
 }
+
 //read ring buffers sent from ui to rt thread - this is not for parameter values, but for messages like start processing a plugin and similar
 static int app_read_rt_messages(APP_INFO* app_data){
+    is_audio_thread = true;
     if(!app_data)return -1;
     //first read the app_data messages
-    RING_BUFFER* ring_buffer = app_data->ui_to_rt_msgs;
-    if(!ring_buffer)return -1;
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	RING_SYS_MSG cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	//stop the jack function
-	if(cur_bit.msg_enum == MSG_STOP_ALL){
-	    app_data->is_processing = 0;
-	    sem_post(&app_data->wait_for_rt);
-	}
-	if(cur_bit.msg_enum == MSG_START_ALL){
-	    app_data->is_processing = 1;
-	    sem_post(&app_data->wait_for_rt);
-	}
-    }
+    context_sub_process_rt(app_data->control_data);
     //if the process is stopped dont process the contexts
     if(app_data->is_processing == 0)return 1;
     
@@ -613,6 +594,8 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
 
 int app_update_ui_params(APP_INFO* app_data){
     if(!app_data)return -1;
+    //read app_data messages from [audio-thread] on the [main-thread]
+    context_sub_process_ui(app_data->control_data);
     //read messages for jack from rt thread on [main-thread]
     app_jack_read_rt_to_ui_messages(app_data->trk_jack);
     //read messages from rt thread on [main-thread] for CLAP plugins
@@ -641,7 +624,7 @@ int app_plug_remove_plug(APP_INFO* app_data, const int id){
 }
 
 int app_stop_and_clean(APP_INFO *app_data){
-    app_wait_for_stop(app_data);
+    context_sub_wait_for_stop(app_data->control_data, 0);
     
     clean_memory(app_data);
     

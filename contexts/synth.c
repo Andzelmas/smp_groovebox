@@ -163,11 +163,6 @@ static int synth_sys_msg(void* user_data, const char* msg){
     log_append_logfile("%s", msg);
     return 0;
 }
-//control_data, depending on is_audio_thread calls the synth_sys_msg right away or sends a msg to [main-thread] to do that
-static void synth_send_msg(SYNTH_DATA* synth_data, const char* msg){
-    if(!synth_data)return;
-    context_sub_send_msg(synth_data->control_data, msg, is_audio_thread);
-}
 
 int synth_read_ui_to_rt_messages(SYNTH_DATA* synth_data){
     //this is a local thread var its false on [main-thread] and true on [audio-thread]

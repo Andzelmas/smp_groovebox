@@ -17,7 +17,7 @@ typedef struct _cxcontrol_rt_funcs{
 }CXCONTROL_RT_FUNCS;
 //user functions for [main-thread], set NULL if func is not necessary
 typedef struct _cxcontrol_ui_funcs{
-    int (*send_msg)(void* user_data, const char* msg); //called when received a sys message from [audio-thread] to write a string message for ui [main-thread]
+    int (*send_msg)(void* user_data, const char* msg); //writes a message for the user on the [main-thread]
     int (*subcx_callback)(void* user_data, int subcx_id); //called when received a sys message from [audio-thread] to run a subcontext function on the [main-thread]
     int (*subcx_activate_start_process)(void* user_data, int subcx_id); //called when received a sys message from [audio-thread] to activate the subcontext and then send a message back to [audio-thread] to start processing it
     int (*subcx_restart)(void* user_data, int subcx_id); //called when received a sys message from [audio-thread] to restart the subcontext
@@ -51,7 +51,7 @@ int context_sub_wait_for_start(CXCONTROL* cxcontrol_data, int subcx_id);
 //these functions ask the subcx_id to do something - restart for example. If is_audio_thread == 0, the apropriate user function will be called right away (for example subcx_restart)
 //otherwise a message will be written to the rt_to_ui_msgs ring buffer to call that function on the [main-thread]
 void context_sub_restart_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread);
-void context_sub_send_msg(CXCONTROL* cxcontrol_data, const char* msg, bool is_audio_thread);
+void context_sub_send_msg(CXCONTROL* cxcontrol_data, bool is_audio_thread, const char* msg, ...);
 void context_sub_activate_start_process_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread);
 void context_sub_callback_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread);
 
