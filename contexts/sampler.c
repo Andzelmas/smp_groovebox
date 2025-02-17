@@ -117,7 +117,7 @@ static int smp_stop_process(void* user_data, int smp_id){
     SMP_SMP* smp = &(smp_data->samples[smp_id]);
     if(smp->processing == 0)return 0;
     //TODO could silence the sample before stopping it here
-    smp->processing = 1;
+    smp->processing = 0;
     return 0;
 }
 

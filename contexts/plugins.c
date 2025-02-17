@@ -303,7 +303,6 @@ static int  plug_remove_plug(PLUG_INFO* plug_data, int id){
     if(id >= MAX_INSTANCES)return -1;
       
     PLUG_PLUG* cur_plug = &(plug_data->plugins[id]);
-    
     //remove preset
     if(cur_plug->preset){
 	const LilvNode* old_preset = lilv_state_get_uri(cur_plug->preset);
@@ -318,8 +317,8 @@ static int  plug_remove_plug(PLUG_INFO* plug_data, int id){
 	LilvInstance* cur_instance = cur_plug->plug_instance;
 	lilv_instance_deactivate(cur_instance);
 	lilv_instance_free(cur_instance);	
-	cur_plug->plug_instance = NULL;		
-    }    
+	cur_plug->plug_instance = NULL;
+    }
     //Terminate the worker
     if(cur_plug->worker){
 	jalv_worker_exit(cur_plug->worker);
@@ -331,6 +330,7 @@ static int  plug_remove_plug(PLUG_INFO* plug_data, int id){
 	jalv_worker_free(cur_plug->state_worker);
 	cur_plug->state_worker = NULL;
     }
+
     //clean the ports
     if(plug_data->audio_backend && cur_plug->ports){
 	for(uint32_t i = 0; i< cur_plug->num_ports; i++){
@@ -389,7 +389,7 @@ static int  plug_remove_plug(PLUG_INFO* plug_data, int id){
     cur_plug->request_update = false;
     cur_plug->safe_restore = false;
     cur_plug->plug = NULL;
-       
+    
     return 0;
 }
 
@@ -866,7 +866,6 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
     
     //process the control_data sys messages for [audio_thread] (stop plugin and similar)
     context_sub_process_rt(plug_data->control_data);
-    
     //read the param ui_to_rt messages and set the parameter values
     RING_BUFFER* ring_buffer = plug_data->param_ui_to_rt;
     if(!ring_buffer){

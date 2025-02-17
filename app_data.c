@@ -55,7 +55,6 @@ typedef struct _app_info{
     void* main_in_R;
     void* main_out_L;
     void* main_out_R;
-
     //control struct for sys messages between [audio-thread] and [main-thread] (stop all processes and send messages for this context)
     CXCONTROL* control_data;
     unsigned int is_processing; //is the main jack function processing, should be touched only on [audio-thread]
@@ -141,15 +140,12 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->main_out_L = app_jack_create_port_on_client(app_data->trk_jack, 0, 2, "master_out_L");
     app_data->main_out_R = app_jack_create_port_on_client(app_data->trk_jack, 0, 2, "master_out_R");
     //now activate the jack client, it will launch the rt thread (trk_audio_process_rt function)
-    if(app_jack_activate(app_data->trk_jack)!=0){
+    //but app_data->is_processing == 0, so the contexts will not be processed, only app_data sys messages (to start the processes for example)
+    if(app_jack_activate(app_data->trk_jack) != 0){
 	clean_memory(app_data);
 	*app_status = trk_jack_init_failed;
 	return NULL;	
     }
-
-    //now the jack function was activated, pause it to initiate the other contexts
-    context_sub_wait_for_stop(app_data->control_data, 0);
-    
     /*initiate the sampler it will be empty initialy*/
     /*-----------------------------------------------*/
     smp_status_t smp_status_err = 0;
@@ -160,7 +156,6 @@ APP_INFO* app_init(app_status_t *app_status){
         *app_status = smp_data_init_failed;
         return NULL;
     } 
-
     /*--------------------------------------------------*/
     //Init the plugin data object, it will not run any plugins yet
     plug_status_t plug_errors = 0;
@@ -624,6 +619,7 @@ int app_plug_remove_plug(APP_INFO* app_data, const int id){
 }
 
 int app_stop_and_clean(APP_INFO *app_data){
+    if(!app_data)return -1;
     context_sub_wait_for_stop(app_data->control_data, 0);
     
     clean_memory(app_data);

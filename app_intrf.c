@@ -1,3 +1,4 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -149,7 +150,6 @@ APP_INTRF *app_intrf_init(intrf_status_t *err_status, const char* song_path){
 	*err_status = AppFailedMalloc;
 	return NULL;
     }
-    
     //read the conf file if its not in this dir create it and the dir structure and the Song_01
     if(app_json_read_conf(&app_intrf->shared_dir, song_path, NULL, &app_intrf->load_from_conf, app_intrf, cx_process_from_file)!=0){
         app_intrf_close(app_intrf);

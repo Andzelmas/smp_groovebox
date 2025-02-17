@@ -26,6 +26,8 @@ static thread_local bool is_audio_thread = false;
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
     int id; //plugin id on the clap_plug_info plugin array
+    //handle from the dlopen call
+    void* dlhandle;
     clap_plugin_entry_t* plug_entry; //the clap library file for this plugin
     const clap_plugin_t* plug_inst; //the plugin instance
     unsigned int plug_inst_created; //was a init function called in the descriptor for this plugin
@@ -92,7 +94,9 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
 	plug->plug_inst = NULL;	
     }
     if(plug->plug_entry){
-	if(clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug->plug_entry) == -1)plug->plug_entry->deinit();
+	if(clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug->plug_entry) == -1){
+	    plug->plug_entry->deinit();
+	}
 	plug->plug_entry = NULL;
     }
     if(plug->plug_path){
@@ -467,7 +471,6 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 	*plug_error = clap_plug_failed_malloc;
 	return NULL;
     }
-    
     plug_data->min_buffer_size = min_buffer_size;
     plug_data->max_buffer_size = max_buffer_size;
     plug_data->sample_rate = samplerate;
@@ -503,6 +506,7 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 	plug->clap_host_info = clap_info_host;
 	plug->id = i;
 	plug->plug_data = plug_data;
+	plug->dlhandle = NULL;
 	plug->plug_entry = NULL;
 	plug->plug_inst = NULL;
 	plug->plug_inst_activated = 0;
@@ -621,6 +625,7 @@ static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char
 	    char* plug_path = malloc(sizeof(char) * (strlen(cur_clap_file)+1));
 	    if(!plug_path)continue;
 	    snprintf(plug_path, (strlen(cur_clap_file)+1), "%s", cur_clap_file);
+	    return_plug->dlhandle = cur_plug.dlhandle;
 	    return_plug->plug_entry = cur_plug.plug_entry;
 	    return_plug->plug_path = plug_path;
 	}
@@ -650,6 +655,7 @@ static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char
 	    }
 	    snprintf(plug_path, (strlen(cur_clap_file)+1), "%s", cur_clap_file);
 	    return_plug->plug_path = plug_path;
+	    return_plug->dlhandle = handle;
 	    return_plug->plug_entry = plug_entry;
 	}
 	if(!(return_plug->plug_path))continue;
@@ -666,8 +672,9 @@ static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char
 	    break;
 	}
 	if(return_plug->plug_inst_id == -1){
-	    if(clap_plug_return_plug_id_with_same_plug_entry(plug_data, return_plug->plug_entry) == -1)
+	    if(clap_plug_return_plug_id_with_same_plug_entry(plug_data, return_plug->plug_entry) == -1){
 		return_plug->plug_entry->deinit();
+	    }
 	    return_plug->plug_entry = NULL;
 	    free(return_plug->plug_path);
 	    return_plug->plug_path = NULL;
@@ -743,7 +750,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     //create plugin instance
     const clap_plugin_t* plug_inst = plug_fac->create_plugin(plug_fac, &(plug->clap_host_info) , plug_desc->id);
     if(!plug_inst){
-	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Faialed to create %s plugin\n", plugin_name);
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Failed to create %s plugin\n", plugin_name);
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }

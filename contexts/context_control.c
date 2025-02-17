@@ -45,19 +45,19 @@ CXCONTROL* context_sub_init(void* user_data, CXCONTROL_RT_FUNCS rt_funcs_struct,
 	context_sub_clean(cxcontrol_data);
 	return NULL;
     }
-
     cxcontrol_data->user_data = user_data;
+    return cxcontrol_data;
 }
 int context_sub_process_ui(CXCONTROL* cxcontrol_data){
     if(!cxcontrol_data)return -1;
 
     RING_BUFFER* ring_buffer = cxcontrol_data->rt_to_ui_msgs;
     if(!ring_buffer)return -1;
-    
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
     for(unsigned int i = 0; i < cur_items; i++){
 	RING_SYS_MSG cur_bit;
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
+
 	if(read_buffer <= 0)continue;
 	
 	if(cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK){
@@ -73,7 +73,8 @@ int context_sub_process_ui(CXCONTROL* cxcontrol_data){
 	if(cur_bit.msg_enum == MSG_PLUGIN_SENT_STRING){
 	    if(cxcontrol_data->ui_funcs_struct.send_msg)cxcontrol_data->ui_funcs_struct.send_msg(cxcontrol_data->user_data, cur_bit.msg);
 	}
-    }    
+    }
+    return 0;
 }
 int context_sub_process_rt(CXCONTROL* cxcontrol_data){
     if(!cxcontrol_data)return -1;
@@ -97,6 +98,7 @@ int context_sub_process_rt(CXCONTROL* cxcontrol_data){
 	    sem_post(&cxcontrol_data->pause_for_rt);
 	}
     }
+    return 0;
 }
 int context_sub_wait_for_stop(CXCONTROL* cxcontrol_data, int subcx_id){
     if(!cxcontrol_data)return -1;
@@ -106,6 +108,7 @@ int context_sub_wait_for_stop(CXCONTROL* cxcontrol_data, int subcx_id){
     ring_buffer_write(cxcontrol_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
     //lock the [main-thread]
     sem_wait(&cxcontrol_data->pause_for_rt);
+    return 0;
 }
 int context_sub_wait_for_start(CXCONTROL* cxcontrol_data, int subcx_id){
     if(!cxcontrol_data)return -1;
@@ -115,6 +118,7 @@ int context_sub_wait_for_start(CXCONTROL* cxcontrol_data, int subcx_id){
     ring_buffer_write(cxcontrol_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
     //lock the [main-thread]
     sem_wait(&cxcontrol_data->pause_for_rt);
+    return 0;
 }
 void context_sub_restart_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread){
     if(!cxcontrol_data) return;
@@ -182,4 +186,5 @@ int context_sub_clean(CXCONTROL* cxcontrol_data){
     sem_destroy(&cxcontrol_data->pause_for_rt);
 
     free(cxcontrol_data);
+    return 0;
 }
