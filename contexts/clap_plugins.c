@@ -26,8 +26,6 @@ static thread_local bool is_audio_thread = false;
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
     int id; //plugin id on the clap_plug_info plugin array
-    //handle from the dlopen call
-    void* dlhandle;
     clap_plugin_entry_t* plug_entry; //the clap library file for this plugin
     const clap_plugin_t* plug_inst; //the plugin instance
     unsigned int plug_inst_created; //was a init function called in the descriptor for this plugin
@@ -506,7 +504,6 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 	plug->clap_host_info = clap_info_host;
 	plug->id = i;
 	plug->plug_data = plug_data;
-	plug->dlhandle = NULL;
 	plug->plug_entry = NULL;
 	plug->plug_inst = NULL;
 	plug->plug_inst_activated = 0;
@@ -625,7 +622,6 @@ static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char
 	    char* plug_path = malloc(sizeof(char) * (strlen(cur_clap_file)+1));
 	    if(!plug_path)continue;
 	    snprintf(plug_path, (strlen(cur_clap_file)+1), "%s", cur_clap_file);
-	    return_plug->dlhandle = cur_plug.dlhandle;
 	    return_plug->plug_entry = cur_plug.plug_entry;
 	    return_plug->plug_path = plug_path;
 	}
@@ -655,7 +651,6 @@ static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char
 	    }
 	    snprintf(plug_path, (strlen(cur_clap_file)+1), "%s", cur_clap_file);
 	    return_plug->plug_path = plug_path;
-	    return_plug->dlhandle = handle;
 	    return_plug->plug_entry = plug_entry;
 	}
 	if(!(return_plug->plug_path))continue;
@@ -763,7 +758,6 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
-    
 
     //TODO the order of the further todo list should be considered, at this point the plugin is created but in its deactivated state, but the plugin can access all the host extension functions at this point
     //TODO need to activate the plugin, create parameters, get ports, create ports on the audio_client and etc.

@@ -218,6 +218,8 @@ typedef struct _plug_plug{
     const LilvPlugin* plug;
     //the activated plugin instance
     LilvInstance* plug_instance;
+    //if the plugin instance is activated (if it is when cleaning needs to be deactivated
+    unsigned int plug_instance_activated;
     //the instance id to link it to cx
     int id;
     //audio backend midi container
@@ -315,7 +317,10 @@ static int  plug_remove_plug(PLUG_INFO* plug_data, int id){
     //free instance
     if(cur_plug->plug_instance){
 	LilvInstance* cur_instance = cur_plug->plug_instance;
-	lilv_instance_deactivate(cur_instance);
+	if(cur_plug->plug_instance_activated == 1){
+	    lilv_instance_deactivate(cur_instance);
+	    cur_plug->plug_instance_activated = 0;
+	}
 	lilv_instance_free(cur_instance);	
 	cur_plug->plug_instance = NULL;
     }
@@ -685,6 +690,7 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 	plug->midi_cont = NULL;
 	plug->plug = NULL;
 	plug->plug_instance = NULL;
+	plug->plug_instance_activated = 0;
 	plug->num_ports = 0;
 	plug->feature_list = NULL;
 	plug->worker = NULL;
@@ -1044,7 +1050,6 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 	    val_types[ct_iter] = val_t;
 	    //TODO now if the param is not writable it will simply have increment of 0 and the user wont be able to increase or decrease it
 	    //should have a property for this parameter to not send it to ui_to_rt ring buffer and only get its value from the plugin
-	    //TODO in case of writable and readable param should read and write the value (like trk params in trk context)
 	    if(cur_ctrl->is_writable != 1){
 		continue;
 	    }
@@ -1105,7 +1110,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 
 	plug->plug_params = plug_params;
     }
-
+    
     plug->midi_cont = app_jack_init_midi_cont(MIDI_CONT_SIZE);
     if(!plug->midi_cont){
 	plug_stop_and_remove_plug(plug_data, plug->id);
@@ -1114,6 +1119,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     
     //activate the plugin instance
     lilv_instance_activate(plug->plug_instance);
+    plug->plug_instance_activated = 1;
     //wait for the plugin to start processing
     context_sub_wait_for_start(plug_data->control_data, plug->id);
     return return_val;
