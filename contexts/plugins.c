@@ -1434,27 +1434,11 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	//build full port name if this is not a control port, so that the port name is unique on
 	//the audio backend
 	//--------------------------------------------------
-	const LilvNode* plug_name_node = lilv_plugin_get_uri(plug->plug);
-	const char* plug_uri_name = lilv_node_as_string(plug_name_node);
-	char* plug_name = str_return_file_from_path(plug_uri_name);
-	if(!plug_name){
-	    plug_name = (char*)malloc(sizeof(char)*(strlen(plug_uri_name)+1));
-	    strcpy(plug_name, plug_uri_name);
-	}
-	char* full_port_name = (char*)malloc(sizeof(char)*(strlen(plug_name)+4));
-	if(full_port_name){
-	    sprintf(full_port_name,"%.2d-", plug->id);
-	    strcat(full_port_name, plug_name);
-	    strtok(full_port_name, " ");
-	    char* temp_string = realloc(full_port_name, sizeof(char)*(strlen(full_port_name)+
-								      strlen(lilv_node_as_string(sym))+2));
-	    if(temp_string){
-		full_port_name = temp_string;
-		strcat(full_port_name, "|");
-		strcat(full_port_name, lilv_node_as_string(sym));
-	    }
-	}
-	if(plug_name)free(plug_name);
+	LilvNode* plug_name_node = lilv_plugin_get_name(plug->plug);
+	int port_name_size = app_jack_port_name_size();
+	char full_port_name[port_name_size];
+	snprintf(full_port_name, port_name_size, "%.2d_%s_|%s", plug->id, lilv_node_as_string(plug_name_node), lilv_node_as_string(sym));
+	lilv_node_free(plug_name_node);
 	//--------------------------------------------------
 	unsigned int port_io = 0x2;	
 	//set if the port is input or output
@@ -1526,7 +1510,6 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	    plug_data->buffer_size = MAX(plug_data->buffer_size, cur_port->buf_size * N_BUFFER_CYCLES);
 	}
 	lilv_node_free(min_size);
-	if(full_port_name)free(full_port_name);
     }	
     //find the controling port index
     const LilvPort* control_input = lilv_plugin_get_port_by_designation(plug->plug, plug_data->nodes.lv2_InputPort,

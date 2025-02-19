@@ -414,6 +414,10 @@ finish:
     return out;
 }
 
+int app_jack_port_name_size(){
+    return jack_port_name_size();
+}
+
 const char* app_jack_return_port_name(void* port){
     if(!port)return NULL;
     const jack_port_t* cur_port = (jack_port_t*)port;

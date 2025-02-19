@@ -759,7 +759,12 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	return -1;
     }
 
-    //TODO the order of the further todo list should be considered, at this point the plugin is created but in its deactivated state, but the plugin can access all the host extension functions at this point
+    //Create the ports
+    const clap_plugin_audio_ports_t* clap_plug_ports = plug_inst->get_extension(plug_inst, CLAP_EXT_AUDIO_PORTS);
+    uint32_t clap_ports_count = clap_plug_ports->count(plug_inst, 0);
+    context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(),"Output ports count %d\n", clap_ports_count);
+    clap_ports_count = clap_plug_ports->count(plug_inst, 1);
+    context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Input ports count %d\n", clap_ports_count);
     //TODO need to activate the plugin, create parameters, get ports, create ports on the audio_client and etc.
     //TODO now cleaning for testing
     clap_plug_plug_stop_and_clean(plug_data, plug->id);

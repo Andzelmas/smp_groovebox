@@ -18,7 +18,7 @@ SRC = util_funcs/wav_funcs.c contexts/sampler.c contexts/plugins.c contexts/clap
 #Remote dir for the source code
 PI_DIR = ~/Audio/Source/smp_groovebox/
 
-MAIN_SRC = smp_sampler_ncurses.c
+MAIN_SRC = smp_sampler.c
 
 create_smp_sampler:
 	$(CC) -g -x c -o $(FILE) $(MAIN_SRC) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
