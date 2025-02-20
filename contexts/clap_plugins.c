@@ -689,7 +689,35 @@ static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char
     }
     return 0;
 }
-
+static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id){
+    if(!plug_data)return -1;
+    if(id >= MAX_INSTANCES || id < 0)return -1;
+    CLAP_PLUG_PLUG* plug = &(plug_data->plugins[id]);
+    if(plug->plug_inst_created != 1)return -1;
+    if(!plug->plug_inst)return -1;
+    
+    const clap_plugin_audio_ports_t* clap_plug_ports = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_AUDIO_PORTS);
+    if(!clap_plug_ports)return -1;
+    //output ports
+    uint32_t clap_ports_count = clap_plug_ports->count(plug->plug_inst, 0);
+    context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(),"Output ports count %d\n", clap_ports_count);
+    for(uint32_t i = 0; i < clap_ports_count; i++){
+	clap_audio_port_info_t port_info;
+	if(!clap_plug_ports->get(plug->plug_inst, i, 0, &port_info))continue;
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "port %d name %s, channels %d, type %s, flags %d\n",
+			     i, port_info.name, port_info.channel_count, port_info.port_type, port_info.flags);
+    }
+    //input ports
+    clap_ports_count = clap_plug_ports->count(plug->plug_inst, 1);
+    context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(),"Input ports count %d\n", clap_ports_count);
+    for(uint32_t i = 0; i < clap_ports_count; i++){
+	clap_audio_port_info_t port_info;
+	if(!clap_plug_ports->get(plug->plug_inst, i, 1, &port_info))continue;
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "port %d name %s, channels %d, type %s, flags %d\n",
+			     i, port_info.name, port_info.channel_count, port_info.port_type, port_info.flags);
+    }
+    return 0;
+}
 int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_name, int id){
     int return_id = -1;
     if(!plug_data)return -1;
@@ -760,11 +788,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     }
 
     //Create the ports
-    const clap_plugin_audio_ports_t* clap_plug_ports = plug_inst->get_extension(plug_inst, CLAP_EXT_AUDIO_PORTS);
-    uint32_t clap_ports_count = clap_plug_ports->count(plug_inst, 0);
-    context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(),"Output ports count %d\n", clap_ports_count);
-    clap_ports_count = clap_plug_ports->count(plug_inst, 1);
-    context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Input ports count %d\n", clap_ports_count);
+    clap_plug_create_ports(plug_data, plug->id);
     //TODO need to activate the plugin, create parameters, get ports, create ports on the audio_client and etc.
     //TODO now cleaning for testing
     clap_plug_plug_stop_and_clean(plug_data, plug->id);
