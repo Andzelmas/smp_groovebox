@@ -259,6 +259,7 @@ void app_jack_clean_midi_cont(JACK_MIDI_CONT* midi_cont){
 
 JACK_MIDI_CONT* app_jack_init_midi_cont(unsigned int array_size){
     JACK_MIDI_CONT* ret_midi_cont = NULL;
+    //TODO why *array_size? Test if necessary
     ret_midi_cont = malloc(sizeof(JACK_MIDI_CONT) * array_size);
     if(!ret_midi_cont)return NULL;
     ret_midi_cont->array_size = array_size;

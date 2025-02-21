@@ -451,8 +451,10 @@ char* app_return_cx_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, u
 	ret_name = plug_return_plugin_name(app_data->plug_data, cx_id);
 	app_make_name_from_file_cx_id(app_data, &ret_name, cx_id, add_id);
     }
-    //TODO return the name of the CLAP plugin
+    //return the name of the clap plugin
     if(cx_type == Context_type_Clap_Plugins){
+	ret_name = clap_plug_return_plugin_name(app_data->clap_plug_data, cx_id);
+	app_make_name_from_file_cx_id(app_data, &ret_name, cx_id, add_id);
     }
     return ret_name;
 }
