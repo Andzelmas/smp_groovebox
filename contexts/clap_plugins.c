@@ -149,6 +149,32 @@ static CLAP_PLUG_PORT* clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id,
     }
     return ports;
 }
+//host extension function for audio_ports - return true if a rescan with the flag is supported by this host
+static bool clap_plug_ext_audio_ports_is_rescan_flag_supported(const clap_host_t* host, uint32_t flag){
+    //this function is only usable on the [main-thread]
+    if(is_audio_thread)return;
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    //TODO return true for the flags
+
+    return false;
+}
+//host extension function for audio_ports - rescan ports and get what is changed (in essence create the ports again)
+static void clap_plug_ext_audio_ports_rescan(const clap_host_t* host, uint32_t flags){
+    //this function is only usable on the [main-thread]
+    if(is_audio_thread)return;
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    //TODO if the flag is CLAP_AUDIO_PORTS_RESCAN_NAMES get the new names even if the plugin is active
+    //other flags only usable on an !active plugin instance
+    if(plug->plug_inst_activated)return;
+    //TODO remove and remake the ports
+}
+
 //clean the single plugin struct
 //before calling this the plug_inst_processing should be == 0
 static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
