@@ -37,6 +37,7 @@ typedef struct _clap_plug_plug{
     const clap_plugin_t* plug_inst; //the plugin instance
     unsigned int plug_inst_created; //was a init function called in the descriptor for this plugin
     unsigned int plug_inst_activated; //was the activate function called on this plugin
+    //0 - not processing, 1 - processing, 2 - not processing, but should start processing if there are events or input audio changed.
     unsigned int plug_inst_processing; //is the plugin instance processing, touch only on [audio_thread]
     int plug_inst_id; //the plugin instance index in the array of the plugin factory
     char* plug_path; //the path for the clap file
@@ -157,21 +158,32 @@ static bool clap_plug_ext_audio_ports_is_rescan_flag_supported(const clap_host_t
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
     if(!plug_data)return;
-    //TODO return true for the flags
-
+    if(flag & CLAP_AUDIO_PORTS_RESCAN_NAMES != 0)return true;
+    if(flag & CLAP_AUDIO_PORTS_RESCAN_FLAGS != 0)return true;
+    if(flag & CLAP_AUDIO_PORTS_RESCAN_CHANNEL_COUNT != 0)return true;
+    if(flag & CLAP_AUDIO_PORTS_RESCAN_PORT_TYPE != 0)return true;
+    if(flag & CLAP_AUDIO_PORTS_RESCAN_IN_PLACE_PAIR != 0)return true;
+    if(flag & CLAP_AUDIO_PORTS_RESCAN_LIST != 0)return true;
     return false;
 }
 //host extension function for audio_ports - rescan ports and get what is changed (in essence create the ports again)
 static void clap_plug_ext_audio_ports_rescan(const clap_host_t* host, uint32_t flags){
     //this function is only usable on the [main-thread]
     if(is_audio_thread)return;
+    if(flags == 0)return;
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
     if(!plug_data)return;
-    //TODO if the flag is CLAP_AUDIO_PORTS_RESCAN_NAMES get the new names even if the plugin is active
+    //If the names of the ports changed, but nothing else did, rename the ports, this can be done with an activated plugin
+    if(flags ^ CLAP_AUDIO_PORTS_RESCAN_NAMES == 0){
+	//TODO rename the ports
+
+	return;
+    }
     //other flags only usable on an !active plugin instance
     if(plug->plug_inst_activated)return;
+    //for other flags destroy and create the ports again
     //TODO remove and remake the ports
 }
 
@@ -381,7 +393,7 @@ static int clap_plug_stop_process(void* user_data, int plug_id){
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
 
     //if plugin is already stopped and not processing do nothing
-    if(plug->plug_inst_processing == 0){
+    if(plug->plug_inst_processing != 1){
 	return 0;
     }
     if(!plug->plug_inst){
