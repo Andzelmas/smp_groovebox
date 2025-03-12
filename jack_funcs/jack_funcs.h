@@ -53,6 +53,8 @@ void app_jack_midi_cont_reset(JACK_MIDI_CONT* midi_cont);
 static int init_jack_ports(JACK_INFO *jack_data, int ports_num, unsigned int* ports_types,
 		    unsigned int *io_types,
 		    const char** ports_names);
+//rename the port on client
+int app_jack_port_rename(void* client_in, void* port, const char* new_port_name);
 //register ports on a jack client if its known to the data
 void* app_jack_create_port_on_client(void* client_in, unsigned int port_type, unsigned int io_type,
 					    const char* port_name);

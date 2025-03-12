@@ -349,6 +349,15 @@ static int init_jack_ports(JACK_INFO *jack_data, int ports_num, unsigned int *po
     return 0;
 }
 
+int app_jack_port_rename(void* client_in, void* port, const char* new_port_name){
+    if(!new_port_name)return -1;
+    JACK_INFO* jack_data = (JACK_INFO*)client_in;
+    if(!jack_data)return -1;
+    jack_port_t* jack_port = (jack_port_t*)port;
+    if(!jack_port)return -1;
+    return jack_port_rename(jack_data->client, jack_port, new_port_name);
+}
+
 void* app_jack_create_port_on_client(void* client_in, unsigned int port_type, unsigned int io_type,
 					    const char* port_name){
     JACK_INFO* jack_data = (JACK_INFO*)client_in;
