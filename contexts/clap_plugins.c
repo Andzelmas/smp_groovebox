@@ -992,6 +992,24 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	CLAP_PLUG_PLUG* plug = &(plug_data->plugins[id]);
 	if(plug->plug_inst_processing == 0)continue;
 	if(!plug->plug_inst)continue;
+	//TODO if stopped but only sleeping, check input events or audio inputs if needs to start processing again
+	if(plug->plug_inst_processing == 2){
+
+	    continue;
+	}
+
+	clap_process_t _process = {0};
+	_process.steady_time = -1;
+	_process.frames_count = nframes;
+	_process.transport = NULL;
+	_process.audio_inputs = NULL;
+	_process.audio_outputs = NULL;
+	_process.audio_inputs_count = plug->input_ports_count;
+	_process.audio_outputs_count = plug->output_ports_count;
+	_process.in_events = NULL;
+	_process.out_events = NULL;
+
+	clap_process_status clap_status = plug->plug_inst->process(plug->plug_inst, &_process);
     }
 }
 
