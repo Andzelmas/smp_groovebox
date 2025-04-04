@@ -23,11 +23,16 @@
 #define MAX_INSTANCES 5
 
 static thread_local bool is_audio_thread = false;
-
-//port struct, that holds info about the port and a backend audio client port equivalent
-typedef struct _clap_plug_port{
+//sys port struct, that holds info about the port and a backend audio client port equivalent
+typedef struct _clap_plug_port_sys{
     uint32_t channel_count; //how many channels on one clap plugin port (the sys_ports array will be the same size)
     void** sys_ports; //sys_port array per port channel - this will be exposed to the system, where user can connect other ports
+}CLAP_PLUG_PORT_SYS;
+//port struct that holds the sys port array and clap_audio_buffer_t array
+typedef struct _clap_plug_port{
+    uint32_t ports_count;
+    CLAP_PLUG_PORT_SYS* sys_port_array;
+    clap_audio_buffer_t* audio_ports;
 }CLAP_PLUG_PORT;
 
 //the single clap plugin struct
@@ -44,10 +49,9 @@ typedef struct _clap_plug_plug{
     PRM_CONTAIN* plug_params; //plugin parameter container for params.c
     clap_host_t clap_host_info; //need when creating the plugin instance, this struct has this CLAP_PLUG_PLUG in the host var as (void*)
     CLAP_PLUG_INFO* plug_data; //CLAP_PLUG_INFO struct address for convenience
-    uint32_t input_ports_count;
-    CLAP_PLUG_PORT* input_ports;
-    uint32_t output_ports_count;
-    CLAP_PLUG_PORT* output_ports;
+    //CLAP_PLUG_PORT holds an array of sys backend audio ports (to connect to jack for example) and the clap_audio_buffer_t arrays, to send to plugin process function
+    CLAP_PLUG_PORT input_ports;
+    CLAP_PLUG_PORT output_ports;
 }CLAP_PLUG_PLUG;
 
 //the main clap struct
@@ -86,22 +90,47 @@ static int clap_plug_return_plug_id_with_same_plug_entry(CLAP_PLUG_INFO* plug_da
     
     return return_id;
 }
-static int clap_plug_destroy_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT* ports, uint32_t port_count){
+static int clap_plug_destroy_sys_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT_SYS* ports_sys, uint32_t port_count){
     if(!plug_data)return -1;
-    if(!ports)return -1;
-    if(port_count <= 0)return -1;
+    if(!ports_sys)return -1;
     for(uint32_t i = 0; i < port_count; i++){
-	CLAP_PLUG_PORT* cur_port = &(ports[i]);
-	uint32_t channels = cur_port->channel_count;
-	cur_port->channel_count = 0;
-	if(!cur_port->sys_ports)continue;
+	CLAP_PLUG_PORT_SYS* cur_sys_port = &(ports_sys[i]);
+	uint32_t channels = cur_sys_port->channel_count;
+	cur_sys_port->channel_count = 0;
+	if(!cur_sys_port->sys_ports)continue;
 	for(uint32_t chan = 0; chan < channels; chan ++){
-	    if(!cur_port->sys_ports[chan])continue;
-	    app_jack_unregister_port(plug_data->audio_backend, cur_port->sys_ports[chan]);
+	    if(!cur_sys_port->sys_ports[chan])continue;
+	    app_jack_unregister_port(plug_data->audio_backend, cur_sys_port->sys_ports[chan]);
 	}
-	free(cur_port->sys_ports);
+	free(cur_sys_port->sys_ports);
     }
-    free(ports);
+    free(ports_sys);
+    return 0;
+}
+static int clap_plug_destroy_audio_ports(clap_audio_buffer_t* ports_audio, uint32_t port_count){
+    if(!ports_audio)return -1;
+    for(uint32_t i = 0; i < port_count; i++){
+	clap_audio_buffer_t* cur_audio_port = &(ports_audio[i]);
+	uint32_t channels = cur_audio_port->channel_count;
+	cur_audio_port->channel_count = 0;
+	if(cur_audio_port->data32)free(cur_audio_port->data32);
+	cur_audio_port->data32 = NULL;
+	if(cur_audio_port->data64)free(cur_audio_port->data64);
+	cur_audio_port->data64 = NULL;
+	cur_audio_port->constant_mask = 0;
+	cur_audio_port->latency = 0;
+    }
+    free(ports_audio);
+    return 0;
+}
+static int clap_plug_destroy_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT* port){
+    if(!plug_data)return -1;
+    if(!port)return -1;
+    clap_plug_destroy_sys_ports(plug_data, port->sys_port_array, port->ports_count);
+    port->sys_port_array = NULL;
+    clap_plug_destroy_audio_ports(port->audio_ports, port->ports_count);
+    port->audio_ports = NULL;
+    port->ports_count = 0;
     return 0;
 }
 
@@ -113,78 +142,99 @@ static int clap_plug_port_name_create(int name_size, char* full_name, int plug_i
     snprintf(full_name, name_size, "%.2d_%s_|%s_%d", plug_id, plug_inst_name, port_name, chan_num);
     return 0;
 }
-static int clap_plug_ports_rename(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug, unsigned int input_ports){
+static int clap_plug_ports_rename(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug, CLAP_PLUG_PORT* ports, int input_ports){
     if(!plug_data)return -1;
     if(!plug)return -1;
+    if(!ports)return -1;
     if(!plug->plug_inst)return -1;
     int port_name_size = app_jack_port_name_size();
     if(port_name_size <= 0)return -1;
+    
     const clap_plugin_audio_ports_t* clap_plug_ports = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_AUDIO_PORTS);
     if(!clap_plug_ports)return -1;
-    uint32_t port_count = plug->output_ports_count;
-    if(input_ports == 1)port_count = plug->input_ports_count;
-    CLAP_PLUG_PORT* ports = plug->output_ports;
-    if(input_ports == 1)ports = plug->input_ports;
-    if(!ports)return -1;
+    
+    uint32_t port_count = ports->ports_count;
     if(port_count != clap_plug_ports->count(plug->plug_inst, input_ports))return -1;
+    
     for(uint32_t i = 0; i < port_count; i++){
-	CLAP_PLUG_PORT cur_port = ports[i];
-	if(!cur_port.sys_ports)continue;
+	CLAP_PLUG_PORT_SYS cur_sys_port = ports->sys_port_array[i];
+	if(!cur_sys_port.sys_ports)continue;
 	clap_audio_port_info_t port_info;
 	if(!clap_plug_ports->get(plug->plug_inst, i, 0, &port_info))continue;
-	for(uint32_t chan = 0; chan < cur_port.channel_count; chan++){
+	for(uint32_t chan = 0; chan < cur_sys_port.channel_count; chan++){
 	    char full_port_name[port_name_size];
 	    if(clap_plug_port_name_create(port_name_size, full_port_name, plug->id, plug->plug_inst->desc->name, port_info.name, chan) != 0)continue;
-	    if(app_jack_port_rename(plug_data->audio_backend, cur_port.sys_ports[chan], full_port_name) != 0)continue;
+	    if(app_jack_port_rename(plug_data->audio_backend, cur_sys_port.sys_ports[chan], full_port_name) != 0)continue;
 	}
     }
     return 0;
 }
-static CLAP_PLUG_PORT* clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, unsigned int input_ports, unsigned int* ports_count){
-    if(!plug_data)return NULL;
-    if(id >= MAX_INSTANCES || id < 0)return NULL;
+static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_PORT* port, int input_ports){
+    if(!plug_data)return -1;
+    if(!port)return -1;
+    if(id >= MAX_INSTANCES || id < 0)return -1;
     CLAP_PLUG_PLUG* plug = &(plug_data->plugins[id]);
-    if(plug->plug_inst_created != 1)return NULL;
-    if(!plug->plug_inst)return NULL;
+    if(plug->plug_inst_created != 1)return -1;
+    if(!plug->plug_inst)return -1;
     int port_name_size = app_jack_port_name_size();
-    if(port_name_size <= 0)return NULL;
+    if(port_name_size <= 0)return -1;
+    
     const clap_plugin_audio_ports_t* clap_plug_ports = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_AUDIO_PORTS);
-    if(!clap_plug_ports)return NULL;
-    //output ports
+    if(!clap_plug_ports)return -1;
+    
     uint32_t clap_ports_count = clap_plug_ports->count(plug->plug_inst, input_ports);
-    if(clap_ports_count <= 0)return NULL;
-    CLAP_PLUG_PORT* ports = NULL;
-    *ports_count = clap_ports_count;
-    ports = malloc(sizeof(CLAP_PLUG_PORT) * clap_ports_count);
-    if(!ports)return NULL;
+    if(clap_ports_count <= 0)return -1;
+    //create the sys port and clap audio buffer port arrays
+    port->sys_port_array = malloc(sizeof(CLAP_PLUG_PORT_SYS) * clap_ports_count);
+    if(!port->sys_port_array)return -1;
+    port->audio_ports = malloc(sizeof(clap_audio_buffer_t) * clap_ports_count);
+    if(!port->audio_ports){
+	clap_plug_destroy_sys_ports(plug_data, port->sys_port_array, 0);
+	return -1;
+    }
+    
     for(uint32_t i = 0; i < clap_ports_count; i++){
-	CLAP_PLUG_PORT* cur_port = &(ports[i]);
-	cur_port->channel_count = 0;
-	cur_port->sys_ports = NULL;
+	CLAP_PLUG_PORT_SYS* cur_sys_port = &(port->sys_port_array[i]);
+	cur_sys_port->channel_count = 0;
+	cur_sys_port->sys_ports = NULL;
+	clap_audio_buffer_t* cur_clap_port = &(port->audio_ports[i]);
+	cur_clap_port->channel_count = 0;
+	cur_clap_port->constant_mask = 0;
+	cur_clap_port->data32 = NULL;
+	cur_clap_port->data64 = NULL;
+	cur_clap_port->latency = 0;
+	
 	clap_audio_port_info_t port_info;
 	if(!clap_plug_ports->get(plug->plug_inst, i, input_ports, &port_info))continue;
 	uint32_t channels = port_info.channel_count;
-	cur_port->channel_count = channels;
-	cur_port->sys_ports = malloc(sizeof(void*) * channels);
-	if(!cur_port->sys_ports){
-	    cur_port->channel_count = 0;
-	    continue;
-	}
+	//TODO free does not clear memory
+	cur_sys_port->sys_ports = malloc(sizeof(void*) * channels);
+	
 	for(uint32_t chan = 0; chan < channels; chan++){
-	    cur_port->sys_ports[chan] = NULL;
+	    cur_sys_port->sys_ports[chan] = NULL;
 	    char full_port_name[port_name_size];
 	    if(clap_plug_port_name_create(port_name_size, full_port_name, id, plug->plug_inst->desc->name, port_info.name, chan) != 0)continue;
 	    unsigned int io_flow = 0x2;
 	    if(input_ports == 1)io_flow = 0x1;
-	    cur_port->sys_ports[chan] = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_AUDIO, io_flow, full_port_name);
-	    if(!cur_port->sys_ports[chan]){
+	    cur_sys_port->sys_ports[chan] = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_AUDIO, io_flow, full_port_name);
+	    if(!cur_sys_port->sys_ports[chan]){
 		context_sub_send_msg(plug_data->control_data, is_audio_thread, "failed to create port %s on audio client\n", full_port_name);
 		continue;
 	    }
 	    context_sub_send_msg(plug_data->control_data, is_audio_thread, "port name %s\n", full_port_name);
 	}
+	cur_sys_port->channel_count = channels;
+	//create data for the clap_audio_buffer
+	//TODO free does not clear memory
+	cur_clap_port->data32 = malloc(sizeof(float*) * channels);
+	if((port_info.flags & CLAP_AUDIO_PORT_SUPPORTS_64BITS) == 1){
+	    cur_clap_port->data64 = malloc(sizeof(double*) * channels);
+	}
+	cur_clap_port->constant_mask = 0;
+	cur_clap_port->latency = 0;
+	cur_clap_port->channel_count = channels;	
     }
-    return ports;
+    return 0;
 }
 //host extension function for audio_ports - return true if a rescan with the flag is supported by this host
 static bool clap_plug_ext_audio_ports_is_rescan_flag_supported(const clap_host_t* host, uint32_t flag){
@@ -215,22 +265,18 @@ static void clap_plug_ext_audio_ports_rescan(const clap_host_t* host, uint32_t f
     if(!plug->plug_inst)return;
     //If the names of the ports changed, but nothing else did, rename the ports, this can be done with an activated plugin
     if(flags ^ CLAP_AUDIO_PORTS_RESCAN_NAMES == 0){
-	clap_plug_ports_rename(plug_data, plug, 0);
-	clap_plug_ports_rename(plug_data, plug, 1);
+	clap_plug_ports_rename(plug_data, plug, &(plug->input_ports), 1);
+	clap_plug_ports_rename(plug_data, plug, &(plug->output_ports), 0);
 	return;
     }
     //other flags only usable on an !active plugin instance
     if(plug->plug_inst_activated)return;
     //for other flags destroy and create the ports again
-    clap_plug_destroy_ports(plug_data, plug->output_ports, plug->output_ports_count);
-    plug->output_ports = NULL;
-    plug->output_ports_count = 0;
-    clap_plug_destroy_ports(plug_data, plug->input_ports, plug->input_ports_count);
-    plug->input_ports = NULL;
-    plug->input_ports_count = 0;
+    clap_plug_destroy_ports(plug_data, &(plug->output_ports));
+    clap_plug_destroy_ports(plug_data, &(plug->input_ports));
     
-    plug->output_ports = clap_plug_create_ports(plug_data, plug->id, 0, &(plug->output_ports_count));
-    plug->input_ports = clap_plug_create_ports(plug_data, plug->id, 1, &(plug->input_ports_count));
+    clap_plug_create_ports(plug_data, plug->id, &(plug->output_ports), 0);
+    clap_plug_create_ports(plug_data, plug->id, &(plug->input_ports), 1);
 }
 
 //clean the single plugin struct
@@ -263,12 +309,8 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
 	plug->plug_path = NULL;
     }
     
-    clap_plug_destroy_ports(plug_data, plug->output_ports, plug->output_ports_count);
-    plug->output_ports = NULL;
-    plug->output_ports_count = 0;
-    clap_plug_destroy_ports(plug_data, plug->input_ports, plug->input_ports_count);
-    plug->input_ports = NULL;
-    plug->input_ports_count = 0;
+    clap_plug_destroy_ports(plug_data, &(plug->output_ports));
+    clap_plug_destroy_ports(plug_data, &(plug->input_ports));
     
     if(plug->plug_params){
 	param_clean_param_container(plug->plug_params);
@@ -677,10 +719,12 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     //the array holds one more plugin, it will be an empty shell to check if the total number of plugins arent too many
     for(int i = 0; i < (MAX_INSTANCES+1); i++){
         CLAP_PLUG_PLUG* plug = &(plug_data->plugins[i]);
-	plug->input_ports_count = 0;
-	plug->input_ports = NULL;
-	plug->output_ports_count = 0;
-	plug->output_ports = NULL;
+	plug->output_ports.audio_ports = NULL;
+	plug->output_ports.sys_port_array = NULL;
+	plug->output_ports.ports_count = 0;
+	plug->input_ports.audio_ports = NULL;
+	plug->input_ports.sys_port_array = NULL;
+	plug->input_ports.ports_count = 0;
 	plug->clap_host_info = clap_info_host;
 	plug->id = i;
 	plug->plug_data = plug_data;
@@ -966,8 +1010,8 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     }
 
     //Create the ports
-    plug->output_ports = clap_plug_create_ports(plug_data, plug->id, 0, &(plug->output_ports_count));
-    plug->input_ports = clap_plug_create_ports(plug_data, plug->id, 1, &(plug->input_ports_count));
+    clap_plug_create_ports(plug_data, plug->id, &(plug->output_ports), 0);
+    clap_plug_create_ports(plug_data, plug->id, &(plug->input_ports), 1);
     //TODO need to activate the plugin, create parameters
     return_id = plug->id;
     return return_id;
@@ -1002,10 +1046,10 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	_process.steady_time = -1;
 	_process.frames_count = nframes;
 	_process.transport = NULL;
-	_process.audio_inputs = NULL;
-	_process.audio_outputs = NULL;
-	_process.audio_inputs_count = plug->input_ports_count;
-	_process.audio_outputs_count = plug->output_ports_count;
+	_process.audio_inputs = plug->input_ports.audio_ports;
+	_process.audio_outputs = plug->output_ports.audio_ports;
+	_process.audio_inputs_count = plug->input_ports.ports_count;
+	_process.audio_outputs_count = plug->output_ports.ports_count;
 	_process.in_events = NULL;
 	_process.out_events = NULL;
 
