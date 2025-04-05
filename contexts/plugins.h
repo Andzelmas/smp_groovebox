@@ -54,8 +54,6 @@ void plug_set_block_length(PLUG_INFO* plug_data, uint32_t block_length);
 //activate the ports, that the backend needs to activate, uses the callback function sent here
 //returns 0 on success
 int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug);
-//return the system ports of the plugin - plug_id is the number of the plugin in the plugins array.
-void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigned int* number_ports);
 
 //param manipulation functions, should be called only on [main-thread]
 PRM_CONTAIN* plug_param_return_param_container(PLUG_INFO* plug_data, int plug_id);

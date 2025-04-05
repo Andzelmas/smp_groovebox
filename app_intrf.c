@@ -59,7 +59,7 @@ typedef struct intrf_cx_main{
     //the name of the file, for contexts this usually means preset file
     char *path;
 }CX_MAIN;
-
+//TODO instead of separate CX_SAMPLE CX_PLUGIN etc. should be one CX_SUBCONTEXT with different types (Context_type_Sampler etc.)
 typedef struct intrf_cx_sample{
     struct intrf_cx list_cx;
     //the name of the sample file
@@ -2006,11 +2006,15 @@ static int helper_cx_remove_cx_and_data(APP_INTRF* app_intrf, CX* rem_cx){
     //if this is a sample remove it in smp_data
     if((rem_cx->type & 0xff00) == Sample_cx_e){
 	CX_SAMPLE* cx_smp = (CX_SAMPLE*)rem_cx;
-	app_smp_remove_sample(app_intrf->app_data, cx_smp->id);
+	app_subcontext_remove(app_intrf->app_data, Context_type_Sampler, cx_smp->id);
     }
     if((rem_cx->type & 0xff00) == Plugin_cx_e){
 	CX_PLUGIN* cx_plug = (CX_PLUGIN*)rem_cx;
-	app_plug_remove_plug(app_intrf->app_data, cx_plug->id);
+	app_subcontext_remove(app_intrf->app_data, Context_type_Plugins, cx_plug->id);
+    }
+    if(rem_cx->type == (Plugin_cx_e | Plugin_Clap_cx_st)){
+	CX_PLUGIN* cx_plug = (CX_PLUGIN*)rem_cx;
+	app_subcontext_remove(app_intrf->app_data, Context_type_Clap_Plugins, cx_plug->id);
     }
     cx_remove_this_and_children(rem_cx);
     

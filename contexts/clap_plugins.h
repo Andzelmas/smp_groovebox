@@ -22,5 +22,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 char* clap_plug_return_plugin_name(CLAP_PLUG_INFO* plug_data, int plug_id);
 //process the clap plugins, must be called on the [audio-thread]
 void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes);
+//remove the clap plugin
+int clap_plug_plug_stop_and_clean(CLAP_PLUG_INFO* plug_data, int plug_id);
 //clean the plugin struct and free memory
 void clap_plug_clean_memory(CLAP_PLUG_INFO* plug_data);

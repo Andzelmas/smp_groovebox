@@ -440,23 +440,6 @@ static void smp_sum_channel_buffers_rt(SMP_SMP* cur_smp, SAMPLE_T* out_L, SAMPLE
     }    
 }
 
-void** smp_return_sys_ports(SMP_INFO* smp_data, unsigned int* number_ports){
-    if(!smp_data)return NULL;
-    int port_num = smp_data->num_ports;
-    if(port_num<=0)return NULL;
-    if(number_ports)*number_ports = port_num;
-    void** ret_sys_ports = (void**)malloc(sizeof(void*) * port_num);
-    for(int i = 0; i<port_num; i++){
-	ret_sys_ports[i] = NULL;
-	SMP_PORT cur_port = smp_data->ports[i];
-	void* cur_sys_port = cur_port.sys_port;
-	if(cur_sys_port){
-	    ret_sys_ports[i] = cur_sys_port;
-	}
-    }
-    return ret_sys_ports;
-}
-
 PRM_CONTAIN* smp_param_return_param_container(SMP_INFO* smp_data, int smp_id){
     if(!smp_data)return NULL;
     if(smp_id >= MAX_SAMPLES || smp_id < 0)return NULL;

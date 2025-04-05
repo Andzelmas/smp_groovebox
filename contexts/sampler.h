@@ -32,10 +32,6 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes);
 //some the cur_smp buffer to out_L and out_R according to the number of channels of cur_smp
 static void smp_sum_channel_buffers_rt(SMP_SMP* cur_smp, SAMPLE_T* out_L, SAMPLE_T* out_R,
 				       SAMPLE_T mult, int chans);
-//return an array of sys_ports for the sampler
-//need to free the sys_port array. So not suitable for real time application
-void** smp_return_sys_ports(SMP_INFO* smp_data, unsigned int* number_ports);
-
 //param manipulation functions
 PRM_CONTAIN* smp_param_return_param_container(SMP_INFO* smp_data, int smp_id);
 //set value is a separate function because it needs to send info to param_ui_to_rt ring_buffer

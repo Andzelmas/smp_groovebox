@@ -960,29 +960,6 @@ int synth_return_osc_num(SYNTH_DATA* synth_data){
     return synth_data->num_osc;
 }
 
-void** synth_return_sys_ports(SYNTH_DATA* synth_data, unsigned int osc_id, unsigned int* num_ports){
-    if(!synth_data)return NULL;
-    if(osc_id >= synth_data->num_osc)return NULL;
-    SYNTH_OSC* osc = &(synth_data->osc_array[osc_id]);
-    if(!osc)return NULL;
-    unsigned int port_num = osc->num_ports;
-    if(port_num <= 0) return NULL;
-    if(num_ports)*num_ports = port_num;
-    void** ret_sys_ports = (void**)malloc(sizeof(void*) * port_num);
-    if(!ret_sys_ports)return NULL;
-    for(int i = 0; i < port_num; i++){
-	ret_sys_ports[i] = NULL;
-	SYNTH_PORT* cur_port = &(osc->ports[i]);
-	if(!cur_port)continue;
-	void* cur_sys_port = cur_port->sys_port;
-	if(cur_sys_port){
-	    ret_sys_ports[i] = cur_sys_port;
-	}
-    }
-
-    return ret_sys_ports;
-}
-
 static int synth_clean_ports(SYNTH_DATA* synth_data, SYNTH_PORT** osc_ports, unsigned int num_ports){
     if(!synth_data)return -1;
     if(!osc_ports)return -1;

@@ -75,17 +75,13 @@ const char** app_return_ports(APP_INFO* app_data, const char* name_pattern, unsi
 			      unsigned long flags);
 //remove the clien name from the full port name
 char* app_return_short_port(APP_INFO* app_data, const char* full_port_name);
-//return port name array for the context, like sampler or plugin in plugins
-const char** app_return_context_ports(APP_INFO* app_data, unsigned int* name_num, unsigned int cx_type, unsigned int cx_id);
 //realtime callback for the track context, as usual has to use only _rt functions
 int trk_audio_process_rt(jack_nframes_t nframes, void *arg);
 //Reads the rt_to_ui buffer and saves any context param values to their ui_params arrays.
 int app_update_ui_params(APP_INFO* app_data);
 //realtime callback for the plugin host data, as always only _rt functions inside
 int plug_audio_process_rt(NFRAMES_T nframes, void *arg);
-//remove a sample, before that ask the smp_data process to pause
-int app_smp_remove_sample(APP_INFO* app_data, unsigned int idx);
-//remove a plugin, before that ask the rt process to pause
-int app_plug_remove_plug(APP_INFO* app_data, const int id);
+//remove subcontext, plugin, clap plugin or sample
+int app_subcontext_remove(APP_INFO* app_data, unsigned char cx_type, int id);
 //pause the [audio-thread] processing with a mutex and clean memory of the app_data
 int app_stop_and_clean(APP_INFO *app_data);

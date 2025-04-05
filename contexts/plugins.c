@@ -1525,27 +1525,6 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
     return 0;
 }
 
-void** plug_return_sys_ports(PLUG_INFO* plug_data, unsigned int plug_id, unsigned int* number_ports){
-    if(!plug_data)return NULL;
-    if(plug_id >= MAX_INSTANCES)return NULL;
-    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug)return NULL;
-    int port_num = cur_plug->num_ports;
-    if(port_num<=0)return NULL;
-    if(number_ports)*number_ports = port_num;
-    void** ret_sys_ports = (void**)malloc(sizeof(void*) * port_num);
-    if(!ret_sys_ports)return NULL;
-    for(int i = 0; i<port_num; i++){
-	ret_sys_ports[i] = NULL;
-	PLUG_PORT cur_port = cur_plug->ports[i];
-	void* cur_sys_port = cur_port.sys_port;
-	if(cur_sys_port){
-	    ret_sys_ports[i] = cur_sys_port;
-	}
-    }
-    return ret_sys_ports;
-}
-
 PRM_CONTAIN* plug_param_return_param_container(PLUG_INFO* plug_data, int plug_id){
     if(!plug_data)return NULL;
     if(plug_id >= MAX_INSTANCES)return NULL;

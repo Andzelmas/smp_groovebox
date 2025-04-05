@@ -492,40 +492,6 @@ char* app_return_short_port(APP_INFO* app_data, const char* full_port_name){
     return ret_name;
 }
 
-static const char** app_return_sys_port_names(void** sys_ports, unsigned int port_num){
-    if(port_num<=0)return NULL;
-    if(!sys_ports)return NULL;
-    const char** name_array  = (const char**)malloc(sizeof(char*)*port_num);
-    if(!name_array)return NULL;
-    for(int i = 0; i<port_num; i++){
-	name_array[i] = NULL;
-	void* cur_port = sys_ports[i];
-	if(cur_port){
-	    name_array[i] = app_jack_return_port_name(cur_port);
-	}
-    }
-    return name_array;
-}
-
-const char** app_return_context_ports(APP_INFO* app_data, unsigned int* name_num, unsigned int cx_type, unsigned int cx_id){
-    unsigned int port_num = 0;
-    void** sys_ports = NULL;
-    if(cx_type == Context_type_Sampler){
-	sys_ports = smp_return_sys_ports(app_data->smp_data, &port_num);
-    }
-    if(cx_type == Context_type_Plugins){
-	sys_ports = plug_return_sys_ports(app_data->plug_data, cx_id, &port_num);
-    }
-    if(cx_type == Context_type_Synth){
-	sys_ports = synth_return_sys_ports(app_data->synth_data, cx_id, &port_num);
-    }
-    if(port_num <= 0) return NULL;
-    if(name_num) *name_num = port_num;
-    const char** name_array = app_return_sys_port_names(sys_ports, port_num);
-    if(sys_ports)free(sys_ports);
-    return name_array;
-}
-
 //read ring buffers sent from ui to rt thread - this is not for parameter values, but for messages like start processing a plugin and similar
 static int app_read_rt_messages(APP_INFO* app_data){
     is_audio_thread = true;
@@ -606,18 +572,18 @@ int app_update_ui_params(APP_INFO* app_data){
     return 0;
 }
 
-int app_smp_remove_sample(APP_INFO* app_data, unsigned int idx){
-    int return_val = 0;
+int app_subcontext_remove(APP_INFO* app_data, unsigned char cx_type, int id){
     if(!app_data)return -1;
-    return_val = smp_stop_and_remove_sample(app_data->smp_data, idx);
-    return return_val;
-}
-
-int app_plug_remove_plug(APP_INFO* app_data, const int id){
-    int return_val = 0;
-    if(!app_data)return -1;  
-    return_val = plug_stop_and_remove_plug(app_data->plug_data, id);
-    return return_val;
+    if(cx_type == Context_type_Clap_Plugins){
+	clap_plug_plug_stop_and_clean(app_data->clap_plug_data, id);
+    }
+    if(cx_type == Context_type_Plugins){
+	smp_stop_and_remove_sample(app_data->smp_data, id);
+    }
+    if(cx_type == Context_type_Sampler){
+	plug_stop_and_remove_plug(app_data->plug_data, id);
+    }
+    return 0;
 }
 
 int app_stop_and_clean(APP_INFO *app_data){

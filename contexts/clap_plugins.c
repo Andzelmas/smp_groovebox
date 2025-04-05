@@ -114,11 +114,7 @@ static int clap_plug_destroy_audio_ports(clap_audio_buffer_t* ports_audio, uint3
 	uint32_t channels = cur_audio_port->channel_count;
 	cur_audio_port->channel_count = 0;
 	if(cur_audio_port->data32)free(cur_audio_port->data32);
-	cur_audio_port->data32 = NULL;
 	if(cur_audio_port->data64)free(cur_audio_port->data64);
-	cur_audio_port->data64 = NULL;
-	cur_audio_port->constant_mask = 0;
-	cur_audio_port->latency = 0;
     }
     free(ports_audio);
     return 0;
@@ -190,6 +186,7 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_P
     port->audio_ports = malloc(sizeof(clap_audio_buffer_t) * clap_ports_count);
     if(!port->audio_ports){
 	clap_plug_destroy_sys_ports(plug_data, port->sys_port_array, 0);
+	port->sys_port_array = NULL;
 	return -1;
     }
     
@@ -207,33 +204,32 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_P
 	clap_audio_port_info_t port_info;
 	if(!clap_plug_ports->get(plug->plug_inst, i, input_ports, &port_info))continue;
 	uint32_t channels = port_info.channel_count;
-	//TODO free does not clear memory
+	//create data for the backend audio client ports
 	cur_sys_port->sys_ports = malloc(sizeof(void*) * channels);
-	
-	for(uint32_t chan = 0; chan < channels; chan++){
-	    cur_sys_port->sys_ports[chan] = NULL;
-	    char full_port_name[port_name_size];
-	    if(clap_plug_port_name_create(port_name_size, full_port_name, id, plug->plug_inst->desc->name, port_info.name, chan) != 0)continue;
-	    unsigned int io_flow = 0x2;
-	    if(input_ports == 1)io_flow = 0x1;
-	    cur_sys_port->sys_ports[chan] = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_AUDIO, io_flow, full_port_name);
-	    if(!cur_sys_port->sys_ports[chan]){
-		context_sub_send_msg(plug_data->control_data, is_audio_thread, "failed to create port %s on audio client\n", full_port_name);
-		continue;
+	if(cur_sys_port->sys_ports){
+	    for(uint32_t chan = 0; chan < channels; chan++){
+		cur_sys_port->sys_ports[chan] = NULL;
+		char full_port_name[port_name_size];
+		if(clap_plug_port_name_create(port_name_size, full_port_name, id, plug->plug_inst->desc->name, port_info.name, chan) != 0)continue;
+		unsigned int io_flow = 0x2;
+		if(input_ports == 1)io_flow = 0x1;
+		cur_sys_port->sys_ports[chan] = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_AUDIO, io_flow, full_port_name);
+		if(!cur_sys_port->sys_ports[chan])continue;
 	    }
-	    context_sub_send_msg(plug_data->control_data, is_audio_thread, "port name %s\n", full_port_name);
+	    cur_sys_port->channel_count = channels;
 	}
-	cur_sys_port->channel_count = channels;
 	//create data for the clap_audio_buffer
-	//TODO free does not clear memory
 	cur_clap_port->data32 = malloc(sizeof(float*) * channels);
-	if((port_info.flags & CLAP_AUDIO_PORT_SUPPORTS_64BITS) == 1){
-	    cur_clap_port->data64 = malloc(sizeof(double*) * channels);
+	if(cur_clap_port->data32){
+	    if((port_info.flags & CLAP_AUDIO_PORT_SUPPORTS_64BITS) == 1){
+		cur_clap_port->data64 = malloc(sizeof(double*) * channels);
+	    }
+	    cur_clap_port->constant_mask = 0;
+	    cur_clap_port->latency = 0;
+	    cur_clap_port->channel_count = channels;
 	}
-	cur_clap_port->constant_mask = 0;
-	cur_clap_port->latency = 0;
-	cur_clap_port->channel_count = channels;	
     }
+    port->ports_count = clap_ports_count;
     return 0;
 }
 //host extension function for audio_ports - return true if a rescan with the flag is supported by this host
@@ -321,7 +317,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
     return 0;
 }
 
-static int clap_plug_plug_stop_and_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
+int clap_plug_plug_stop_and_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
     //stop this plugin process if its processing before cleaning.
     context_sub_wait_for_stop(plug_data->control_data, plug_id);
     return clap_plug_plug_clean(plug_data, plug_id);
@@ -1010,8 +1006,13 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     }
 
     //Create the ports
-    clap_plug_create_ports(plug_data, plug->id, &(plug->output_ports), 0);
-    clap_plug_create_ports(plug_data, plug->id, &(plug->input_ports), 1);
+    int port_out_err = clap_plug_create_ports(plug_data, plug->id, &(plug->output_ports), 0);
+    int port_in_err = clap_plug_create_ports(plug_data, plug->id, &(plug->input_ports), 1);
+    if(port_out_err == -1 || port_in_err == -1){
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Failed to create %s plugin audio ports\n", plugin_name);
+	clap_plug_plug_stop_and_clean(plug_data, plug->id);
+	return -1;
+    }
     //TODO need to activate the plugin, create parameters
     return_id = plug->id;
     return return_id;

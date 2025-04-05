@@ -29,8 +29,6 @@ PRM_CONTAIN* synth_return_param_container(SYNTH_DATA* synth_data, unsigned int o
 const char* synth_return_osc_name(SYNTH_DATA* synth_data, unsigned int osc_num);
 //return how many oscillators there are
 int synth_return_osc_num(SYNTH_DATA* synth_data);
-//return the audio backend system ports
-void** synth_return_sys_ports(SYNTH_DATA* synth_data, unsigned int osc_id, unsigned int* num_ports);
 //clean the ports
 static int synth_clean_ports(SYNTH_DATA* synth_data, SYNTH_PORT** osc_ports, unsigned int num_ports);
 //clean one oscillator
