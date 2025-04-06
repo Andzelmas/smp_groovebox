@@ -113,8 +113,18 @@ static int clap_plug_destroy_audio_ports(clap_audio_buffer_t* ports_audio, uint3
 	clap_audio_buffer_t* cur_audio_port = &(ports_audio[i]);
 	uint32_t channels = cur_audio_port->channel_count;
 	cur_audio_port->channel_count = 0;
-	if(cur_audio_port->data32)free(cur_audio_port->data32);
-	if(cur_audio_port->data64)free(cur_audio_port->data64);
+	if(cur_audio_port->data32){
+	    for(uint32_t chan = 0; chan < channels; chan++){
+		if(cur_audio_port->data32[chan])free(cur_audio_port->data32[chan]);
+	    }
+	    free(cur_audio_port->data32);
+	}
+	if(cur_audio_port->data64){
+	    for(uint32_t chan = 0; chan < channels; chan++){
+		if(cur_audio_port->data64[chan])free(cur_audio_port->data64[chan]);
+	    }
+	    free(cur_audio_port->data64);
+	}
     }
     free(ports_audio);
     return 0;
@@ -179,7 +189,7 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_P
     if(!clap_plug_ports)return -1;
     
     uint32_t clap_ports_count = clap_plug_ports->count(plug->plug_inst, input_ports);
-    if(clap_ports_count <= 0)return -1;
+    if(clap_ports_count <= 0)return 0;
     //create the sys port and clap audio buffer port arrays
     port->sys_port_array = malloc(sizeof(CLAP_PLUG_PORT_SYS) * clap_ports_count);
     if(!port->sys_port_array)return -1;
@@ -204,6 +214,7 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_P
 	clap_audio_port_info_t port_info;
 	if(!clap_plug_ports->get(plug->plug_inst, i, input_ports, &port_info))continue;
 	uint32_t channels = port_info.channel_count;
+	
 	//create data for the backend audio client ports
 	cur_sys_port->sys_ports = malloc(sizeof(void*) * channels);
 	if(cur_sys_port->sys_ports){
@@ -218,11 +229,20 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_P
 	    }
 	    cur_sys_port->channel_count = channels;
 	}
+
 	//create data for the clap_audio_buffer
+	cur_clap_port->data64 = NULL;
 	cur_clap_port->data32 = malloc(sizeof(float*) * channels);
 	if(cur_clap_port->data32){
+	    for(uint32_t chan = 0; chan < channels; chan++){
+		//create buffer for float32
+		cur_clap_port->data32[chan] = calloc(plug_data->max_buffer_size, sizeof(float));
+	    }
 	    if((port_info.flags & CLAP_AUDIO_PORT_SUPPORTS_64BITS) == 1){
 		cur_clap_port->data64 = malloc(sizeof(double*) * channels);
+		for(uint32_t chan = 0; chan < channels; chan++){
+		    cur_clap_port->data64[chan] = calloc(plug_data->max_buffer_size, sizeof(double));
+		}
 	    }
 	    cur_clap_port->constant_mask = 0;
 	    cur_clap_port->latency = 0;
@@ -1013,6 +1033,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
+    context_sub_activate_start_process_msg(plug_data->control_data, plug->id, is_audio_thread);
     //TODO need to activate the plugin, create parameters
     return_id = plug->id;
     return return_id;
@@ -1029,7 +1050,14 @@ char* clap_plug_return_plugin_name(CLAP_PLUG_INFO* plug_data, int plug_id){
     strcpy(ret_string, name_string);
     return ret_string;
 }
-
+//TODO some plugin try to get event size, while events are not implemented this will save the app from crashing
+uint32_t test_event_function(const struct clap_input_events *list){
+    return 0;
+}
+//TODO while events are not implemented push function placeholder so plugins do not crash that get this function
+bool test_output_event_function(const struct clap_output_events *list, const clap_event_header_t *event){
+    return false;
+}
 void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
     if(!plug_data)return;
     if(!plug_data->plugins)return;
@@ -1047,14 +1075,49 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	_process.steady_time = -1;
 	_process.frames_count = nframes;
 	_process.transport = NULL;
+	//copy sys input audio buffers to clap input audio buffers
+	for(uint32_t port = 0; port < plug->input_ports.ports_count; port++){
+	    CLAP_PLUG_PORT_SYS cur_port_sys = plug->input_ports.sys_port_array[port];
+	    uint32_t channels = cur_port_sys.channel_count;
+	    //get the sys port
+	    for(uint32_t chan = 0; chan < channels; chan++){
+		SAMPLE_T* sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
+		for(unsigned int frame = 0; frame < nframes; frame++){
+		    plug->input_ports.audio_ports[port].data32[chan][frame] = sys_buffer[frame];
+		}
+	    }
+	}
 	_process.audio_inputs = plug->input_ports.audio_ports;
 	_process.audio_outputs = plug->output_ports.audio_ports;
 	_process.audio_inputs_count = plug->input_ports.ports_count;
 	_process.audio_outputs_count = plug->output_ports.ports_count;
-	_process.in_events = NULL;
-	_process.out_events = NULL;
+	//TODO while events are not implemented
+	clap_input_events_t in_event;
+	in_event.size = test_event_function;
+	_process.in_events = &(in_event);
+	//TODO while events are not implemented
+	clap_output_events_t out_event;
+	out_event.try_push = test_output_event_function;
+	_process.out_events = &(out_event);
 
 	clap_process_status clap_status = plug->plug_inst->process(plug->plug_inst, &_process);
+
+	//copy clap output audio buffers to sys audio buffers
+	for(uint32_t port = 0; port < plug->output_ports.ports_count; port++){
+	    CLAP_PLUG_PORT_SYS cur_port_sys = plug->output_ports.sys_port_array[port];
+	    clap_audio_buffer_t clap_port = plug->output_ports.audio_ports[port];
+	    uint32_t channels = cur_port_sys.channel_count;
+	    //get the sys port
+	    for(uint32_t chan = 0; chan < channels; chan++){
+		//TODO now ignores data64
+		float* clap_buffer = clap_port.data32[chan];
+		SAMPLE_T* sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
+		memset(sys_buffer, '\0', sizeof(SAMPLE_T)*nframes);
+		for(unsigned int frame = 0; frame < nframes; frame++){
+		    sys_buffer[frame] = clap_buffer[frame];
+		}
+	    }
+	}
     }
 }
 
