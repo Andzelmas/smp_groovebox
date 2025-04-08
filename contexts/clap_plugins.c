@@ -1075,15 +1075,25 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	_process.steady_time = -1;
 	_process.frames_count = nframes;
 	_process.transport = NULL;
+	//TODO getting and setting of buffers should be more elegant and protected for NULL arrays etc.
 	//copy sys input audio buffers to clap input audio buffers
-	for(uint32_t port = 0; port < plug->input_ports.ports_count; port++){
-	    CLAP_PLUG_PORT_SYS cur_port_sys = plug->input_ports.sys_port_array[port];
-	    uint32_t channels = cur_port_sys.channel_count;
-	    //get the sys port
-	    for(uint32_t chan = 0; chan < channels; chan++){
-		SAMPLE_T* sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
-		for(unsigned int frame = 0; frame < nframes; frame++){
-		    plug->input_ports.audio_ports[port].data32[chan][frame] = sys_buffer[frame];
+	if(plug->input_ports.sys_port_array){
+	    for(uint32_t port = 0; port < plug->input_ports.ports_count; port++){
+		CLAP_PLUG_PORT_SYS cur_port_sys = plug->input_ports.sys_port_array[port];
+		if(!cur_port_sys.sys_ports)continue;
+		uint32_t channels = cur_port_sys.channel_count;
+		//get the sys port
+		for(uint32_t chan = 0; chan < channels; chan++){
+		    if(!cur_port_sys.sys_ports[chan])continue;
+		    SAMPLE_T* sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
+		    if(!sys_buffer)continue;
+		    for(unsigned int frame = 0; frame < nframes; frame++){
+#ifdef SAMPLE_T_AS_DOUBLE
+			plug->intput_ports.audio_ports[port].data64[chan][frame] = sys_buffer[frame];
+#else
+			plug->input_ports.audio_ports[port].data32[chan][frame] = sys_buffer[frame];
+#endif
+		    }
 		}
 	    }
 	}
@@ -1109,8 +1119,11 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	    uint32_t channels = cur_port_sys.channel_count;
 	    //get the sys port
 	    for(uint32_t chan = 0; chan < channels; chan++){
-		//TODO now ignores data64
-		float* clap_buffer = clap_port.data32[chan];
+#ifdef SAMPLE_T_AS_DOUBLE
+		SAMPLE_T* clap_buffer = clap_port.data64[chan];
+#else
+		SAMPLE_T* clap_buffer = clap_port.data32[chan];
+#endif
 		SAMPLE_T* sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
 		memset(sys_buffer, '\0', sizeof(SAMPLE_T)*nframes);
 		for(unsigned int frame = 0; frame < nframes; frame++){
