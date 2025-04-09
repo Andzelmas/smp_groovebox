@@ -1088,10 +1088,10 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 		    SAMPLE_T* sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
 		    if(!sys_buffer)continue;
 		    for(unsigned int frame = 0; frame < nframes; frame++){
-#ifdef SAMPLE_T_AS_DOUBLE
-			plug->intput_ports.audio_ports[port].data64[chan][frame] = sys_buffer[frame];
+#if SAMPLE_T_AS_DOUBLE == 1
+			    plug->input_ports.audio_ports[port].data64[chan][frame] = sys_buffer[frame];
 #else
-			plug->input_ports.audio_ports[port].data32[chan][frame] = sys_buffer[frame];
+			    plug->input_ports.audio_ports[port].data32[chan][frame] = sys_buffer[frame];
 #endif
 		    }
 		}
@@ -1119,10 +1119,10 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	    uint32_t channels = cur_port_sys.channel_count;
 	    //get the sys port
 	    for(uint32_t chan = 0; chan < channels; chan++){
-#ifdef SAMPLE_T_AS_DOUBLE
-		SAMPLE_T* clap_buffer = clap_port.data64[chan];
+#if SAMPLE_T_AS_DOUBLE == 1
+		    SAMPLE_T* clap_buffer = clap_port.data64[chan];
 #else
-		SAMPLE_T* clap_buffer = clap_port.data32[chan];
+		    SAMPLE_T* clap_buffer = clap_port.data32[chan];
 #endif
 		SAMPLE_T* sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
 		memset(sys_buffer, '\0', sizeof(SAMPLE_T)*nframes);

@@ -3,10 +3,9 @@
 #define MAX_SYS_BUFFER_ARRAY_SIZE 256 //max size for ring buffer arrays in sys messages between threads
 #define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 2048 //max size for the parameter ring buffer messaging arrays
 #define RT_CYCLES 25 //in what interval the rt thread should give info to the ui thread to not overwhelm it.
-/*
+
 //TODO not tested and not implemented, here for future development
-#define SAMPLE_T_AS_DOUBLE //by default SAMPLE_T is float (in structs.h), if this is defined SAMPLE_T will be double and audio buffers will use 64bits
-*/
+#define SAMPLE_T_AS_DOUBLE 0//by default SAMPLE_T is float (in structs.h), if this is 1 SAMPLE_T will be double and audio buffers will use 64bits
 
 //enum for context types
 enum appContextTypes{

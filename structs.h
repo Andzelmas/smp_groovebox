@@ -2,7 +2,7 @@
 #include <jack/jack.h>
 #include <jack/types.h>
 
-#ifdef SAMPLE_T_AS_DOUBLE
+#if SAMPLE_T_AS_DOUBLE == 1
 typedef double SAMPLE_T;
 #else
 //what kind of samples do we use for audio buffers, we can change float or double here
