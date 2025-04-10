@@ -240,8 +240,10 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_P
 	    }
 	    if((port_info.flags & CLAP_AUDIO_PORT_SUPPORTS_64BITS) == 1){
 		cur_clap_port->data64 = malloc(sizeof(double*) * channels);
-		for(uint32_t chan = 0; chan < channels; chan++){
-		    cur_clap_port->data64[chan] = calloc(plug_data->max_buffer_size, sizeof(double));
+		if(cur_clap_port->data64){
+		    for(uint32_t chan = 0; chan < channels; chan++){
+			cur_clap_port->data64[chan] = calloc(plug_data->max_buffer_size, sizeof(double));
+		    }
 		}
 	    }
 	    cur_clap_port->constant_mask = 0;
@@ -1058,6 +1060,73 @@ uint32_t test_event_function(const struct clap_input_events *list){
 bool test_output_event_function(const struct clap_output_events *list, const clap_event_header_t *event){
     return false;
 }
+
+static int clap_prepare_input_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT* input_ports, unsigned int nframes){
+    if(!plug_data)return -1;
+    if(!input_ports)return -1;
+    if(!input_ports->sys_port_array)return -1;
+    if(!input_ports->audio_ports)return -1;
+    if(input_ports->ports_count <= 0)return 0;
+
+    for(uint32_t port = 0; port < input_ports->ports_count; port++){
+	CLAP_PLUG_PORT_SYS cur_port_sys = input_ports->sys_port_array[port];
+	clap_audio_buffer_t cur_clap_port = input_ports->audio_ports[port];
+        uint32_t channels = cur_port_sys.channel_count;
+	for(uint32_t chan = 0; chan < channels; chan++){
+	    SAMPLE_T* sys_buffer = NULL;
+	    if(cur_port_sys.sys_ports)
+		sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
+	    for(unsigned int frame = 0; frame < nframes; frame++){
+		SAMPLE_T cur_frame = 0.0;
+		if(sys_buffer)
+		    cur_frame = sys_buffer[frame];
+#if SAMPLE_T_AS_DOUBLE == 1
+		if(cur_clap_port.data64)
+		    cur_clap_port.data64[chan][frame] = cur_frame;
+#else
+		if(cur_clap_port.data32)
+		    cur_clap_port.data32[chan][frame] = cur_frame;
+#endif
+	    }
+	}
+    }
+    
+    return 0;
+}
+
+static void clap_prepare_output_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT* output_ports, unsigned int nframes){
+    if(!plug_data)return;
+    if(!output_ports)return;
+    if(!output_ports->sys_port_array)return;
+    if(!output_ports->audio_ports)return;
+    if(output_ports->ports_count <= 0)return;
+
+    for(uint32_t port = 0; port < output_ports->ports_count; port++){
+	CLAP_PLUG_PORT_SYS cur_port_sys = output_ports->sys_port_array[port];
+	clap_audio_buffer_t clap_port = output_ports->audio_ports[port];
+	uint32_t channels = cur_port_sys.channel_count;
+	for(uint32_t chan = 0; chan < channels; chan++){
+	    SAMPLE_T* clap_buffer = NULL;
+#if SAMPLE_T_AS_DOUBLE == 1
+	    if(clap_port.data64)
+		clap_buffer = clap_port.data64[chan];
+#else
+	    if(clap_port.data32)
+		clap_buffer = clap_port.data32[chan];
+#endif
+	    SAMPLE_T* sys_buffer = NULL;
+	    if(cur_port_sys.sys_ports)
+		sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
+	    if(!sys_buffer)continue;
+	    memset(sys_buffer, '\0', sizeof(SAMPLE_T)*nframes);
+	    if(!clap_buffer)continue;
+	    for(unsigned int frame = 0; frame < nframes; frame++){
+		sys_buffer[frame] = clap_buffer[frame];
+	    }
+	}
+    }
+}
+
 void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
     if(!plug_data)return;
     if(!plug_data->plugins)return;
@@ -1075,32 +1144,19 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	_process.steady_time = -1;
 	_process.frames_count = nframes;
 	_process.transport = NULL;
-	//TODO getting and setting of buffers should be more elegant and protected for NULL arrays etc.
+
 	//copy sys input audio buffers to clap input audio buffers
-	if(plug->input_ports.sys_port_array){
-	    for(uint32_t port = 0; port < plug->input_ports.ports_count; port++){
-		CLAP_PLUG_PORT_SYS cur_port_sys = plug->input_ports.sys_port_array[port];
-		if(!cur_port_sys.sys_ports)continue;
-		uint32_t channels = cur_port_sys.channel_count;
-		//get the sys port
-		for(uint32_t chan = 0; chan < channels; chan++){
-		    if(!cur_port_sys.sys_ports[chan])continue;
-		    SAMPLE_T* sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
-		    if(!sys_buffer)continue;
-		    for(unsigned int frame = 0; frame < nframes; frame++){
-#if SAMPLE_T_AS_DOUBLE == 1
-			    plug->input_ports.audio_ports[port].data64[chan][frame] = sys_buffer[frame];
-#else
-			    plug->input_ports.audio_ports[port].data32[chan][frame] = sys_buffer[frame];
-#endif
-		    }
-		}
-	    }
+	int prep_in_err = clap_prepare_input_ports(plug_data, &(plug->input_ports), nframes);
+	_process.audio_inputs = NULL;
+	_process.audio_inputs_count = 0;
+	if(prep_in_err == 0){
+	    _process.audio_inputs_count = plug->input_ports.ports_count;	
+	    _process.audio_inputs = plug->input_ports.audio_ports;
 	}
-	_process.audio_inputs = plug->input_ports.audio_ports;
+	
 	_process.audio_outputs = plug->output_ports.audio_ports;
-	_process.audio_inputs_count = plug->input_ports.ports_count;
 	_process.audio_outputs_count = plug->output_ports.ports_count;
+	
 	//TODO while events are not implemented
 	clap_input_events_t in_event;
 	in_event.size = test_event_function;
@@ -1112,25 +1168,7 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 
 	clap_process_status clap_status = plug->plug_inst->process(plug->plug_inst, &_process);
 
-	//copy clap output audio buffers to sys audio buffers
-	for(uint32_t port = 0; port < plug->output_ports.ports_count; port++){
-	    CLAP_PLUG_PORT_SYS cur_port_sys = plug->output_ports.sys_port_array[port];
-	    clap_audio_buffer_t clap_port = plug->output_ports.audio_ports[port];
-	    uint32_t channels = cur_port_sys.channel_count;
-	    //get the sys port
-	    for(uint32_t chan = 0; chan < channels; chan++){
-#if SAMPLE_T_AS_DOUBLE == 1
-		    SAMPLE_T* clap_buffer = clap_port.data64[chan];
-#else
-		    SAMPLE_T* clap_buffer = clap_port.data32[chan];
-#endif
-		SAMPLE_T* sys_buffer = app_jack_get_buffer_rt(cur_port_sys.sys_ports[chan], nframes);
-		memset(sys_buffer, '\0', sizeof(SAMPLE_T)*nframes);
-		for(unsigned int frame = 0; frame < nframes; frame++){
-		    sys_buffer[frame] = clap_buffer[frame];
-		}
-	    }
-	}
+	clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes);
     }
 }
 
