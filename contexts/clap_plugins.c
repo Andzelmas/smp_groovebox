@@ -1120,6 +1120,8 @@ static void clap_prepare_output_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT*
 	    if(!sys_buffer)continue;
 	    memset(sys_buffer, '\0', sizeof(SAMPLE_T)*nframes);
 	    if(!clap_buffer)continue;
+	    //if the buffer is constant leave the sys port buffer filled with zeroes
+	    if((clap_port.constant_mask & (1 << chan)) != 0)continue;
 	    for(unsigned int frame = 0; frame < nframes; frame++){
 		sys_buffer[frame] = clap_buffer[frame];
 	    }
