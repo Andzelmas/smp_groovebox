@@ -1167,7 +1167,7 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	_process.out_events = &(out_event);
 
 	clap_process_status clap_status = plug->plug_inst->process(plug->plug_inst, &_process);
-
+	//copy clap audio output buffers to the audio backend audio buffers
 	clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes);
     }
 }
