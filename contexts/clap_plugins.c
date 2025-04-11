@@ -1071,6 +1071,7 @@ static int clap_prepare_input_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT* i
     for(uint32_t port = 0; port < input_ports->ports_count; port++){
 	CLAP_PLUG_PORT_SYS cur_port_sys = input_ports->sys_port_array[port];
 	clap_audio_buffer_t cur_clap_port = input_ports->audio_ports[port];
+	//TODO nothing is done with the latency property
         uint32_t channels = cur_port_sys.channel_count;
 	for(uint32_t chan = 0; chan < channels; chan++){
 	    SAMPLE_T* sys_buffer = NULL;
@@ -1105,6 +1106,7 @@ static void clap_prepare_output_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT*
 	CLAP_PLUG_PORT_SYS cur_port_sys = output_ports->sys_port_array[port];
 	clap_audio_buffer_t clap_port = output_ports->audio_ports[port];
 	uint32_t channels = cur_port_sys.channel_count;
+	//TODO nothing is done with the latency property
 	for(uint32_t chan = 0; chan < channels; chan++){
 	    SAMPLE_T* clap_buffer = NULL;
 #if SAMPLE_T_AS_DOUBLE == 1

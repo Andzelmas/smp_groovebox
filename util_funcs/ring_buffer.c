@@ -51,7 +51,7 @@ int ring_buffer_read(RING_BUFFER* ring_buf, void* const dest, unsigned int dest_
     //overflow, how the hell this happened?
     if(ring_buf->r_pos >= data_array_size)return -2;
     
-    memcpy(dest, ring_buf->data + (ring_buf->r_pos * single_data_size * sizeof(char)), single_data_size);
+    memcpy(dest, ring_buf->data + (ring_buf->r_pos * single_data_size), single_data_size);
     ring_buf->r_pos += 1;
     if(ring_buf->r_pos == data_array_size){
 	ring_buf->r_pos = 0;
@@ -69,7 +69,7 @@ int ring_buffer_write(RING_BUFFER* ring_buf, const void* const source, unsigned 
     if(single_data_size<=0 || data_array_size<=0)return -1;
     //full data array, return with exit code 0
     if(atomic_load(&ring_buf->items) >= data_array_size)return 0;
-    memcpy(ring_buf->data + (ring_buf->w_pos * single_data_size * sizeof(char)), source, single_data_size);
+    memcpy(ring_buf->data + (ring_buf->w_pos * single_data_size), source, single_data_size);
     ring_buf->w_pos += 1;
     if(ring_buf->w_pos == data_array_size){
 	ring_buf->w_pos = 0;
