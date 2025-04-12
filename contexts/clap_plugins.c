@@ -22,7 +22,20 @@
 //how many clap plugins can there be in the plugin array
 #define MAX_INSTANCES 5
 
+//size for the event lists in the CLAP_PLUG_EVENT
+#define EVENT_LIST_SIZE 2048
+
 static thread_local bool is_audio_thread = false;
+
+//event struct that has the clap_event_header event list and information about that list
+//this struct is in clap_input_events and clap_output_events void* ctx variable
+typedef struct _clap_plug_event{
+    clap_event_header_t* event_list; //address to the start of the reserved memory for the events, each item can be different size
+    uint32_t total_size; //the size of the event_list in bytes
+    uint32_t curr_size; //size in bytes that is currently occupied in the event_list
+    uint32_t items; //items in the event_list, remember - each item can be of different size, event_list[n].size tells how big the current item is
+}CLAP_PLUG_EVENT;
+
 //sys port struct, that holds info about the port and a backend audio client port equivalent
 typedef struct _clap_plug_port_sys{
     uint32_t channel_count; //how many channels on one clap plugin port (the sys_ports array will be the same size)
@@ -52,6 +65,9 @@ typedef struct _clap_plug_plug{
     //CLAP_PLUG_PORT holds an array of sys backend audio ports (to connect to jack for example) and the clap_audio_buffer_t arrays, to send to plugin process function
     CLAP_PLUG_PORT input_ports;
     CLAP_PLUG_PORT output_ports;
+    //event structs that hold memory for clap events
+    CLAP_PLUG_EVENT input_events;
+    CLAP_PLUG_EVENT output_events;
 }CLAP_PLUG_PLUG;
 
 //the main clap struct
@@ -326,10 +342,21 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
 	free(plug->plug_path);
 	plug->plug_path = NULL;
     }
-    
+    //clean the audio ports
     clap_plug_destroy_ports(plug_data, &(plug->output_ports));
     clap_plug_destroy_ports(plug_data, &(plug->input_ports));
-    
+    //clean the event structs
+    if(plug->input_events.event_list)free(plug->input_events.event_list);
+    plug->input_events.curr_size = 0;
+    plug->input_events.event_list = NULL;
+    plug->input_events.items = 0;
+    plug->input_events.total_size = 0;
+    if(plug->output_events.event_list)free(plug->output_events.event_list);
+    plug->output_events.curr_size = 0;
+    plug->output_events.event_list = NULL;
+    plug->output_events.items = 0;
+    plug->output_events.total_size = 0;
+    //clean the parameters
     if(plug->plug_params){
 	param_clean_param_container(plug->plug_params);
 	plug->plug_params = NULL;
@@ -737,12 +764,23 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     //the array holds one more plugin, it will be an empty shell to check if the total number of plugins arent too many
     for(int i = 0; i < (MAX_INSTANCES+1); i++){
         CLAP_PLUG_PLUG* plug = &(plug_data->plugins[i]);
+	//zeroe audio structs
 	plug->output_ports.audio_ports = NULL;
 	plug->output_ports.sys_port_array = NULL;
 	plug->output_ports.ports_count = 0;
 	plug->input_ports.audio_ports = NULL;
 	plug->input_ports.sys_port_array = NULL;
 	plug->input_ports.ports_count = 0;
+	//zeroe event structs
+	plug->input_events.curr_size = 0;
+	plug->input_events.event_list = NULL;
+	plug->input_events.items = 0;
+	plug->input_events.total_size = 0;
+	plug->output_events.curr_size = 0;
+	plug->output_events.event_list = NULL;
+	plug->output_events.items = 0;
+	plug->output_events.total_size = 0;
+	
 	plug->clap_host_info = clap_info_host;
 	plug->id = i;
 	plug->plug_data = plug_data;
@@ -1035,6 +1073,21 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
+    //Initiate the event lists
+    plug->input_events.event_list = calloc(1, EVENT_LIST_SIZE);
+    plug->output_events.event_list = calloc(1, EVENT_LIST_SIZE);
+    if(!plug->input_events.event_list || !plug->output_events.event_list){
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Failed to create %s plugin event lists\n", plugin_name);
+	clap_plug_plug_stop_and_clean(plug_data, plug->id);
+	return -1;
+    }
+    plug->input_events.curr_size = 0;
+    plug->input_events.items = 0;
+    plug->input_events.total_size = EVENT_LIST_SIZE;
+    plug->output_events.curr_size = 0;
+    plug->output_events.items = 0;
+    plug->output_events.total_size = EVENT_LIST_SIZE;
+    //start processing the plugin
     context_sub_activate_start_process_msg(plug_data->control_data, plug->id, is_audio_thread);
     //TODO need to activate the plugin, create parameters
     return_id = plug->id;
