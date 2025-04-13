@@ -21,8 +21,6 @@ static thread_local bool is_audio_thread = false;
 #define SYNTH_OUTS 2
 //number of midi in ports for the synth
 #define SYNTH_IN_MIDI 1
-//How many midi events at the same time the system can handle
-#define MAX_MIDI_MSGS 25
 //Samples for wavetables
 #define OSC_TABLE_SAMPLES 2048
 //Maximum semitones, also lower than 0, for semitone to frequency conversion
@@ -302,7 +300,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 
     
     //init the midi container
-    synth_data->midi_cont = app_jack_init_midi_cont(MAX_MIDI_MSGS);
+    synth_data->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
     if(!synth_data->midi_cont){
 	synth_clean_memory(synth_data);
 	return NULL;

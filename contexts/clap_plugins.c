@@ -47,7 +47,14 @@ typedef struct _clap_plug_port{
     CLAP_PLUG_PORT_SYS* sys_port_array;
     clap_audio_buffer_t* audio_ports;
 }CLAP_PLUG_PORT;
-
+//note port struct holds the audio client sys ports and info about the ports
+typedef struct _clap_plug_note_port{
+    uint32_t ports_count;
+    void** sys_ports;
+    clap_id* ids;
+    uint32_t* supported_dialects;
+    uint32_t* preferred_dialects;
+}CLAP_PLUG_NOTE_PORT;
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
     int id; //plugin id on the clap_plug_info plugin array
@@ -65,6 +72,9 @@ typedef struct _clap_plug_plug{
     //CLAP_PLUG_PORT holds an array of sys backend audio ports (to connect to jack for example) and the clap_audio_buffer_t arrays, to send to plugin process function
     CLAP_PLUG_PORT input_ports;
     CLAP_PLUG_PORT output_ports;
+    //input and output note ports
+    CLAP_PLUG_NOTE_PORT input_note_ports;
+    CLAP_PLUG_NOTE_PORT output_note_ports;
     //event structs that hold memory for clap events
     CLAP_PLUG_EVENT input_events;
     CLAP_PLUG_EVENT output_events;
@@ -86,6 +96,7 @@ typedef struct _clap_plug_info{
     clap_host_thread_check_t ext_thread_check; //struct that holds functions to check if the thread is main or audio
     clap_host_log_t ext_log; //struct that holds function for logging messages (severity is not sent)
     clap_host_audio_ports_t ext_audio_ports; //struct that holds functions for the audio_ports extensions
+    clap_host_note_ports_t ext_note_ports; //struct that holds functions for the note-ports extension
     //address of the audio client
     void* audio_backend;
 }CLAP_PLUG_INFO;
@@ -156,11 +167,15 @@ static int clap_plug_destroy_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT* po
     return 0;
 }
 
-static int clap_plug_port_name_create(int name_size, char* full_name, int plug_id, const char* plug_inst_name, const char* port_name, uint32_t chan_num){
+static int clap_plug_port_name_create(int name_size, char* full_name, int plug_id, const char* plug_inst_name, const char* port_name, int chan_num){
     if(!plug_inst_name || !port_name)return -1;
     if(plug_id < 0)return -1;
     if(name_size <= 0)return -1;
     if(!full_name)return -1;
+    if(chan_num < 0){
+	snprintf(full_name, name_size, "%.2d_%s_|%s", plug_id, plug_inst_name, port_name);
+	return 0;
+    }
     snprintf(full_name, name_size, "%.2d_%s_|%s_%d", plug_id, plug_inst_name, port_name, chan_num);
     return 0;
 }
@@ -171,7 +186,7 @@ static int clap_plug_ports_rename(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plu
     if(!plug->plug_inst)return -1;
     int port_name_size = app_jack_port_name_size();
     if(port_name_size <= 0)return -1;
-    
+    //TODO in clap plugin source code warns to scan ports only if the plugin is deactivated, but the rescan flag of rename allows to rescan the ports right away?
     const clap_plugin_audio_ports_t* clap_plug_ports = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_AUDIO_PORTS);
     if(!clap_plug_ports)return -1;
     
@@ -270,6 +285,59 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_P
     port->ports_count = clap_ports_count;
     return 0;
 }
+//rename the note ports
+static int clap_plug_note_ports_rename(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug, bool input_ports){
+    if(!plug_data)return -1;
+    if(!plug)return -1;
+    if(!plug->plug_inst)return -1;
+    int port_name_size = app_jack_port_name_size();
+    if(port_name_size <= 0)return -1;
+    //TODO in clap plugin source code warns to scan ports only if the plugin is deactivated, but the rescan flag of rename allows to rescan the ports right away?
+    const clap_plugin_note_ports_t* clap_note_ports = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_NOTE_PORTS);
+    if(!clap_note_ports)return -1;
+
+    CLAP_PLUG_NOTE_PORT cur_port = plug->output_note_ports;
+    if(input_ports)cur_port = plug->input_note_ports;
+    uint32_t port_count = cur_port.ports_count;
+    if(port_count != clap_note_ports->count(plug->plug_inst, input_ports))return -1;
+    
+    for(uint32_t i = 0; i < port_count; i++){
+	void* cur_sys_port = cur_port.sys_ports[i];
+	if(!cur_sys_port)continue;
+	clap_note_port_info_t note_port_info;
+	if(!clap_note_ports->get(plug->plug_inst, i, input_ports, &note_port_info))continue;
+	char full_port_name[port_name_size];
+	if(clap_plug_port_name_create(port_name_size, full_port_name, plug->id, plug->plug_inst->desc->name, note_port_info.name, -1) != 0)continue;
+	app_jack_port_rename(plug_data->audio_backend, cur_sys_port, full_port_name);
+    }
+    return 0;
+}
+//clear note_port memory
+static int clap_plug_note_ports_destroy(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_NOTE_PORT* note_port){
+    if(!plug_data)return -1;
+    if(!note_port)return -1;
+
+    for(uint32_t i = 0; i < note_port->ports_count; i++){
+	void* cur_sys_port = note_port->sys_ports[i];
+	if(cur_sys_port)
+	    app_jack_unregister_port(plug_data->audio_backend, cur_sys_port);
+	if(note_port->ids)free(note_port->ids);
+	note_port->ids = NULL;
+	if(note_port->preferred_dialects)free(note_port->preferred_dialects);
+	note_port->preferred_dialects = NULL;
+	if(note_port->supported_dialects)free(note_port->supported_dialects);
+	note_port->supported_dialects = NULL;
+    }
+    note_port->ports_count = 0;
+    if(note_port->sys_ports)free(note_port->sys_ports);
+    note_port->sys_ports = NULL;
+    return 0;
+}
+//create note_ports
+static int clap_plug_note_ports_create(CLAP_PLUG_INFO* plug_data, int id, bool input_ports){
+
+    return 0;
+}
 //host extension function for audio_ports - return true if a rescan with the flag is supported by this host
 static bool clap_plug_ext_audio_ports_is_rescan_flag_supported(const clap_host_t* host, uint32_t flag){
     //this function is only usable on the [main-thread]
@@ -311,6 +379,42 @@ static void clap_plug_ext_audio_ports_rescan(const clap_host_t* host, uint32_t f
     
     clap_plug_create_ports(plug_data, plug->id, &(plug->output_ports), 0);
     clap_plug_create_ports(plug_data, plug->id, &(plug->input_ports), 1);
+}
+//for note-ports extension return what note dialects are supported by this host
+static uint32_t clap_plug_ext_note_ports_supported_dialects(const clap_host_t* host){
+    if(is_audio_thread)return 0;
+    uint32_t supported = 0;
+    supported = supported | CLAP_NOTE_DIALECT_CLAP;
+    supported = supported | CLAP_NOTE_DIALECT_MIDI;
+    supported = supported | CLAP_NOTE_DIALECT_MIDI2;
+    //right now MPE is not supported
+    //supported = supported | CLAP_NOTE_DIALECT_MIDI_MPE;
+    return supported;
+}
+//for note-ports extension rescan the note ports and get what is changed (create the ports again)
+static void clap_plug_ext_note_ports_rescan(const clap_host_t* host, uint32_t flags){
+    if(is_audio_thread)return;
+    if(flags == 0)return;
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    if(!plug->plug_inst)return;
+    //if only the names of the ports changed (and nothing else) rename the ports - can be done with active plugin
+    if(flags ^ CLAP_NOTE_PORTS_RESCAN_NAMES == 0){
+        clap_plug_note_ports_rename(plug_data, plug, 0);
+	clap_plug_note_ports_rename(plug_data, plug, 1);
+	return;
+    }
+    //other flags need deactivated plugin instance
+    if(plug->plug_inst_activated)return;
+    //destroy and create the note ports again
+    if((flags & CLAP_NOTE_PORTS_RESCAN_ALL) == 1){
+	clap_plug_note_ports_destroy(plug_data, &(plug->input_note_ports));
+	clap_plug_note_ports_destroy(plug_data, &(plug->output_note_ports));
+	clap_plug_note_ports_create(plug_data, plug->id, 0);
+	clap_plug_note_ports_create(plug_data, plug->id, 1);
+    }
 }
 
 //clean the single plugin struct
@@ -356,6 +460,9 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
     plug->output_events.event_list = NULL;
     plug->output_events.items = 0;
     plug->output_events.total_size = 0;
+    //clean the note ports
+    clap_plug_note_ports_destroy(plug_data, &(plug->input_note_ports));
+    clap_plug_note_ports_destroy(plug_data, &(plug->output_note_ports));
     //clean the parameters
     if(plug->plug_params){
 	param_clean_param_container(plug->plug_params);
@@ -413,6 +520,9 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
     }
     if(strcmp(ex_id, CLAP_EXT_AUDIO_PORTS) == 0){
 	return &(plug_data->ext_audio_ports);
+    }
+    if(strcmp(ex_id, CLAP_EXT_NOTE_PORTS) == 0){
+	return &(plug_data->ext_note_ports);
     }
     //if there is no extension implemented that the plugin needs send the name of the extension to the ui
     context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "%s asked for ext %s\n", plug->plug_path, ex_id);
@@ -760,27 +870,13 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     //audio-ports extension
     plug_data->ext_audio_ports.is_rescan_flag_supported = clap_plug_ext_audio_ports_is_rescan_flag_supported;
     plug_data->ext_audio_ports.rescan = clap_plug_ext_audio_ports_rescan;
+    //note-ports extension
+    plug_data->ext_note_ports.supported_dialects = clap_plug_ext_note_ports_supported_dialects;
+    plug_data->ext_note_ports.rescan = clap_plug_ext_note_ports_rescan;
 
     //the array holds one more plugin, it will be an empty shell to check if the total number of plugins arent too many
     for(int i = 0; i < (MAX_INSTANCES+1); i++){
         CLAP_PLUG_PLUG* plug = &(plug_data->plugins[i]);
-	//zeroe audio structs
-	plug->output_ports.audio_ports = NULL;
-	plug->output_ports.sys_port_array = NULL;
-	plug->output_ports.ports_count = 0;
-	plug->input_ports.audio_ports = NULL;
-	plug->input_ports.sys_port_array = NULL;
-	plug->input_ports.ports_count = 0;
-	//zeroe event structs
-	plug->input_events.curr_size = 0;
-	plug->input_events.event_list = NULL;
-	plug->input_events.items = 0;
-	plug->input_events.total_size = 0;
-	plug->output_events.curr_size = 0;
-	plug->output_events.event_list = NULL;
-	plug->output_events.items = 0;
-	plug->output_events.total_size = 0;
-	
 	plug->clap_host_info = clap_info_host;
 	plug->id = i;
 	plug->plug_data = plug_data;

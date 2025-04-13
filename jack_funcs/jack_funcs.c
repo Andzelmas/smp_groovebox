@@ -269,7 +269,7 @@ JACK_MIDI_CONT* app_jack_init_midi_cont(unsigned int array_size){
     ret_midi_cont->note_pitches = NULL;
     ret_midi_cont->types = NULL;
     ret_midi_cont->vel_trig = NULL;
-    
+ 
     ret_midi_cont->buf_size = calloc(array_size, sizeof(size_t));
     if(!ret_midi_cont->buf_size){
 	app_jack_clean_midi_cont(ret_midi_cont);

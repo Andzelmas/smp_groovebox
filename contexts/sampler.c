@@ -20,8 +20,6 @@
 #define OUTS 2
 //number of midi in ports for the samples
 #define IN_MIDI 1
-//max midi events to store in the midi_cont container
-#define MIDI_CONT_ARRAY_SIZE 50
 
 static thread_local bool is_audio_thread = false;
 
@@ -261,7 +259,7 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
      
      //inititalize the callbacks from the audio backend
      smp_data->audio_backend = audio_backend;
-     smp_data->midi_cont = app_jack_init_midi_cont(MIDI_CONT_ARRAY_SIZE);
+     smp_data->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
      if(!smp_data->midi_cont){
 	 smp_clean_memory(smp_data);
 	 return NULL;

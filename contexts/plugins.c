@@ -51,8 +51,6 @@
 #define DEFAULT_SAMPLE_RATE 48000
 //default midi buffer size (and event too)
 #define DEFAULT_MIDI_BUF_SIZE 4096U
-//the size of the midi containers on the plugins
-#define MIDI_CONT_SIZE 50
 //atom message body size
 #ifndef MSG_BUFFER_SIZE
 #  define MSG_BUFFER_SIZE 1024
@@ -1111,7 +1109,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 	plug->plug_params = plug_params;
     }
     
-    plug->midi_cont = app_jack_init_midi_cont(MIDI_CONT_SIZE);
+    plug->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
     if(!plug->midi_cont){
 	plug_stop_and_remove_plug(plug_data, plug->id);
 	return -1;
