@@ -19,11 +19,12 @@ SRC = util_funcs/wav_funcs.c contexts/sampler.c contexts/plugins.c contexts/clap
 PI_DIR = ~/Audio/Source/smp_groovebox/
 
 MAIN_SRC = smp_sampler_ncurses.c
+MAIN_CLI_SRC = smp_sampler.c
 
 create_smp_sampler: make_dir
 	$(CC) -g -x c -o $(FILE) $(MAIN_SRC) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
-build_sanitize:
-	$(CC) -g -fsanitize=thread -x c -o $(FILE) $(MAIN_SRC) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
+build_sanitize: make_dir
+	$(CC) -g -fsanitize=thread -x c -o $(FILE) $(MAIN_CLI_SRC) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
 run:
 	(cd build && ./smp_sampler)
 run_valgrind:
