@@ -1,8 +1,10 @@
 # smp_groovebox
 ## Simple groovebox for linux based systems. Works on rpi too.
+Check out https://brumakes.com/programming.php for development blog and some videos.
 
 Everything is written in C.
 As of today its possible to load lv2 plugins, route audio/midi streams, use a very simple synth and even more simple sampler.
+Furthermore CLAP implementation is on its way. Now it is possible to load CLAP plugins, use their audio buffers. When the parameter and event extensions will be in the code, the plugins will be fully usable and I will add other extensions as I develop.
 
 This software uses minimal dependencies and its ui is using ncurses, so it can be used from a terminal and without any graphical environment.
 Further more the gui adapts to small screens, so works nicely with rpi touch screens - this was the main catalyst to make this software in the first place.
@@ -13,22 +15,17 @@ The synth uses oscillator lookup table code by Nigel Redmon here https://www.ear
 
 ### Installing
 ### Dependencies: jack2, libsndfile, json-c, lilv, ncurses, clap
-CLAP is not supported at this moment, but development has begun on this.
 
 ### When all dependencies installed:
 
-mkdir build in the smp_groovebox folder.
-
-Copy the smp_conf.json file to the build folder (holds default structure for the app).
-
-Copy the ui_conf.json file to the build folder (user can config ui aspects here). 
-
-### Now run jack2 and then "make" and "make run" to build and run the software.
+- Command "make"
+- Run jack2
+- "Make run" command or run the smp_sampler in build/ directory to run the application.
 
 ### ui_conf.json file
 Inside users can change some aspects of the user interface.
 
-max_main_contexts - how many contexts are shown in the middle window.
+max_main_contexts - how many contexts are shown in the middle window. Number of parameters for a plugin and similar.
 
 keyboard_shortcuts:
 
