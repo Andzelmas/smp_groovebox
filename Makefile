@@ -20,7 +20,7 @@ PI_DIR = ~/Audio/Source/smp_groovebox/
 
 MAIN_SRC = smp_sampler_ncurses.c
 
-create_smp_sampler:
+create_smp_sampler: make_dir
 	$(CC) -g -x c -o $(FILE) $(MAIN_SRC) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
 build_sanitize:
 	$(CC) -g -fsanitize=thread -x c -o $(FILE) $(MAIN_SRC) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
@@ -30,6 +30,10 @@ run_valgrind:
 	(cd build && valgrind --leak-check=full --log-file=val_log ./smp_sampler)
 clean_build:
 	(cd build && rm -r *)
+make_dir:
+	mkdir -p build/
+	cp smp_conf.json build/
+	cp ui_conf.json build/
 
 .PHONY: rsync_src
 pi_build: rsync_src
