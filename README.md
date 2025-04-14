@@ -4,10 +4,11 @@ Check out https://brumakes.com/programming.php for development blog and some vid
 
 Everything is written in C.
 As of today its possible to load lv2 plugins, route audio/midi streams, use a very simple synth and even more simple sampler.
+
 Furthermore CLAP implementation is on its way. Now it is possible to load CLAP plugins, use their audio buffers. When the parameter and event extensions will be in the code, the plugins will be fully usable and I will add other extensions as I develop.
 
 This software uses minimal dependencies and its ui is using ncurses, so it can be used from a terminal and without any graphical environment.
-Further more the gui adapts to small screens, so works nicely with rpi touch screens - this was the main catalyst to make this software in the first place.
+Also, the gui adapts to small screens, so works nicely with rpi touch screens - this was the main catalyst to make this software in the first place.
 
 The lv2 plugin loader uses adapted jalv lv2 host code by David Robillard, check it out here https://gitlab.com/drobilla/jalv
 
