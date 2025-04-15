@@ -335,7 +335,46 @@ static int clap_plug_note_ports_destroy(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_NOT
 }
 //create note_ports
 static int clap_plug_note_ports_create(CLAP_PLUG_INFO* plug_data, int id, bool input_ports){
-
+    if(!plug_data)return -1;
+    if(id >= MAX_INSTANCES || id < 0)return -1;
+    CLAP_PLUG_PLUG* plug = &(plug_data->plugins[id]);
+    if(plug->plug_inst_created != 1)return -1;
+    if(!plug->plug_inst)return -1;
+    int port_name_size = app_jack_port_name_size();
+    if(port_name_size <= 0)return -1;
+    
+    const clap_plugin_note_ports_t* clap_plug_note_ports = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_NOTE_PORTS);
+    if(!clap_plug_note_ports)return -1;
+    
+    uint32_t clap_ports_count = clap_plug_note_ports->count(plug->plug_inst, input_ports);
+    if(clap_ports_count <= 0)return 0;
+    //create the sys port pointer and other arrays per note port
+    CLAP_PLUG_NOTE_PORT* note_port = &(plug->output_note_ports);
+    if(input_ports)note_port = &(plug->input_note_ports);
+    //TODO test 
+    note_port->sys_ports = calloc(clap_ports_count, sizeof(void*));
+    note_port->ports_count = clap_ports_count;
+    note_port->ids = calloc(clap_ports_count, sizeof(clap_id));
+    note_port->supported_dialects = calloc(clap_ports_count, sizeof(uint32_t));
+    note_port->preferred_dialects = calloc(clap_ports_count, sizeof(uint32_t));
+    if(!note_port->sys_ports || !note_port->ids || !note_port->supported_dialects || !note_port->preferred_dialects){
+	clap_plug_note_ports_destroy(plug_data, note_port);
+	return -1;
+    }
+    
+    for(uint32_t i = 0; i < clap_ports_count; i++){
+	clap_note_port_info_t note_port_info;
+	if(!clap_plug_note_ports->get(plug->plug_inst, i, input_ports, &note_port_info))continue;
+	char full_port_name[port_name_size];
+	if(clap_plug_port_name_create(port_name_size, full_port_name, id, plug->plug_inst->desc->name, note_port_info.name, -1) != 0)continue;
+	unsigned int io_flow = 0x2;
+	if(input_ports == 1)io_flow = 0x1;
+	note_port->sys_ports[i] = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_MIDI, io_flow, full_port_name);
+	note_port->ids[i] = note_port_info.id;
+	note_port->preferred_dialects[i] = note_port_info.preferred_dialect;
+	note_port->supported_dialects[i] = note_port_info.supported_dialects;
+    }
+	
     return 0;
 }
 //host extension function for audio_ports - return true if a rescan with the flag is supported by this host
@@ -1177,15 +1216,19 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
-    plug->input_events.curr_size = 0;
-    plug->input_events.items = 0;
     plug->input_events.total_size = EVENT_LIST_SIZE;
-    plug->output_events.curr_size = 0;
-    plug->output_events.items = 0;
     plug->output_events.total_size = EVENT_LIST_SIZE;
+    //Initiate the note ports on the audio client backend
+    int note_port_out_err = clap_plug_note_ports_create(plug_data, plug->id, 0);
+    int note_port_in_err = clap_plug_note_ports_create(plug_data, plug->id, 1);
+    if(note_port_in_err == -1 || note_port_out_err == -1){
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Failed to create %s plugin note ports\n", plugin_name);
+	clap_plug_plug_stop_and_clean(plug_data, plug->id);
+	return -1;
+    }
     //start processing the plugin
     context_sub_activate_start_process_msg(plug_data->control_data, plug->id, is_audio_thread);
-    //TODO need to activate the plugin, create parameters
+    //TODO need to create parameters
     return_id = plug->id;
     return return_id;
 }
