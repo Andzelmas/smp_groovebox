@@ -55,11 +55,8 @@ void plug_set_block_length(PLUG_INFO* plug_data, uint32_t block_length);
 //returns 0 on success
 int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug);
 
-//param manipulation functions, should be called only on [main-thread]
+//returns param ocntainer on the plugin, use on [main-thread]
 PRM_CONTAIN* plug_param_return_param_container(PLUG_INFO* plug_data, int plug_id);
-//set param value on the param container, also send a message to the [audio-thread] to set the value on the same rt param
-//because of the message has to be done here
-int plug_param_set_value(PLUG_INFO* plug_data, int plug_id, int param_id, float param_val, unsigned char param_op);
 
 //connect the ports, run the plugins instances for nframes, and update the output ports, use on [audio-thread]
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes);

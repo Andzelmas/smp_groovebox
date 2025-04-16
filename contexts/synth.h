@@ -18,8 +18,6 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes);
 //functions for param manipulation, should be called only on [main-thread]
 PRM_CONTAIN* synth_param_return_param_container(SYNTH_DATA* synth_data, int osc_id);
-//set value is a separate function, since it needs to send a message to the param_ui_to_rt ring_buffer
-int synth_param_set_value(SYNTH_DATA* synth_data, int osc_id, int param_id, float param_val, unsigned char param_op);
 
 //activate the audio ports
 int synth_activate_backend_ports(SYNTH_DATA* synth_data, SYNTH_OSC* osc);

@@ -39,9 +39,6 @@ int app_jack_read_rt_to_ui_messages(JACK_INFO* jack_data);
 
 //parameter manipulation functions for ui
 PRM_CONTAIN* app_jack_param_return_param_container(JACK_INFO* jack_data);
-//set parameter value on [main-thread] and send a message to set the parameter on [audio-thread] too
-//because of this message this function has to be here
-int app_jack_param_set_value(JACK_INFO* jack_data, int param_id, float param_val, unsigned char param_op);
 
 //clean the midi container
 void app_jack_clean_midi_cont(JACK_MIDI_CONT* midi_cont);

@@ -7,7 +7,6 @@
 #include <stdbool.h>
 //my libraries
 #include "jack_funcs.h"
-#include "../util_funcs/ring_buffer.h"
 #include "../types.h"
 #include "../util_funcs/log_funcs.h"
 #include "../contexts/context_control.h"
@@ -33,9 +32,6 @@ typedef struct _jack_info{
     //rt tick var, that goes from 0 to RT_CYCLES, rt thread will send info to ui thread only when rt tick var is 0
     //should only be touched on [audio-thread]
     int rt_tick;
-    //communication ring buffers for rt and main thread
-    RING_BUFFER* param_rt_to_ui;
-    RING_BUFFER* param_ui_to_rt;
     //control_data for sys messages, for jack currently only uses the [thread-safe] messaging system, since this does not have any subcontexts
     CXCONTROL* control_data;
 }JACK_INFO;
@@ -58,19 +54,7 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
         return NULL;
     }
     jack_data->rt_tick = 0;
-    jack_data->param_rt_to_ui = NULL;
-    jack_data->param_ui_to_rt = NULL;
     jack_data->control_data = NULL;
-    jack_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    if(!jack_data->param_rt_to_ui){
-        jack_clean_memory(jack_data);
-	return NULL;
-    }
-    jack_data->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    if(!jack_data->param_ui_to_rt){
-	jack_clean_memory(jack_data);
-	return NULL;
-    }
 
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
@@ -140,15 +124,7 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
     context_sub_process_rt(jack_data->control_data);
     
     //read the param ui_to_rt messages and set the parameter values
-    RING_BUFFER* ring_buffer = jack_data->param_ui_to_rt;
-    if(!ring_buffer)return -1;
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	PARAM_RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	param_set_value(jack_data->trk_params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 1);
-    }
+    param_msgs_process(jack_data->trk_params, 1);
 
     //if rt params just got new parameter values from the ui they will be just changed
     //in that case jack will create a new transport object and request a transport change
@@ -164,48 +140,22 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
 	if(pos.valid != JackPositionBBT)pos_ready = 0;
 	if(pos_ready == 1){
 	    unsigned char val_type = 0;
-	    PARAM_RING_DATA_BIT send_bit;
-	    send_bit.cx_id = 0;
-	    send_bit.param_op = Operation_SetValue;
 	    if(state == JackTransportRolling){
+		//After setting the value, get the value so the parameter is_changed will be 0 and app_jack_update_transport_from_params_rt will not create a new tranport object
+		//even though a parameter was not changed by the ui
 		//get the bars
 		param_set_value(jack_data->trk_params, 1, (float)pos.bar, Operation_SetValue, 1);
-		//only send to [main-thread] if the parameter has changed
-		if(param_get_if_changed(jack_data->trk_params, 1, 1) == 1){
-		    send_bit.param_id = 1;
-		    //by getting the value change the just_changed var of the parameter to 0, so the app_jack_update_transport_from_params_rt() does not create a new jack pos object
-		    send_bit.param_value = param_get_value(jack_data->trk_params, 1, &val_type, 0, 0, 1);
-		    if(val_type != 0)
-			ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
-		}
+	        param_get_value(jack_data->trk_params, 1, &val_type, 0, 0, 1);
 		//get the beat
 		param_set_value(jack_data->trk_params, 2, (float)pos.beat, Operation_SetValue, 1);
-		//only send to [main-thread] if the parameter has changed
-		if(param_get_if_changed(jack_data->trk_params, 2, 1) == 1){
-		    send_bit.param_id = 2;
-		    send_bit.param_value = param_get_value(jack_data->trk_params, 2, &val_type, 0, 0, 1);
-		    if(val_type != 0)
-			ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
-		}
+		param_get_value(jack_data->trk_params, 2, &val_type, 0, 0, 1);
 		//get the tick
 		param_set_value(jack_data->trk_params, 3, (float)pos.tick, Operation_SetValue, 1);
-		//only send to [main-thread] if the parameter has changed
-		if(param_get_if_changed(jack_data->trk_params, 3, 1) == 1){
-		    send_bit.param_id = 3;
-		    send_bit.param_value = param_get_value(jack_data->trk_params, 3, &val_type, 0, 0, 1);
-		    if(val_type != 0)
-			ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
-		}
+		param_get_value(jack_data->trk_params, 3, &val_type, 0, 0, 1);
 	    }
 	    //get the isPlaying state even if the Jack transport head is not rolling
 	    param_set_value(jack_data->trk_params, 4, (float)state, Operation_SetValue, 1);
-	    //only send to [main-thread] if the parameter has changed
-	    if(param_get_if_changed(jack_data->trk_params, 4, 1) == 1){
-		send_bit.param_id = 4;
-		send_bit.param_value = param_get_value(jack_data->trk_params, 4, &val_type, 0, 0, 1);
-		if(val_type != 0)
-		    ring_buffer_write(jack_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
-	    }
+	    param_get_value(jack_data->trk_params, 4, &val_type, 0, 0, 1);
 	}
     }
     return 0;
@@ -217,15 +167,8 @@ int app_jack_read_rt_to_ui_messages(JACK_INFO* jack_data){
     context_sub_process_ui(jack_data->control_data);
     
     //read the param rt_to_ui messages and set the parameter values
-    RING_BUFFER* ring_buffer = jack_data->param_rt_to_ui;
-    if(!ring_buffer)return -1;
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	PARAM_RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	param_set_value(jack_data->trk_params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 0);
-    }    
+    param_msgs_process(jack_data->trk_params, 0);
+    
     return 0;    
 }
 
@@ -233,20 +176,6 @@ PRM_CONTAIN* app_jack_param_return_param_container(JACK_INFO* jack_data){
     if(!jack_data)return NULL;
     if(!jack_data->trk_params)return NULL;
     return jack_data->trk_params;
-}
-int app_jack_param_set_value(JACK_INFO* jack_data, int param_id, float param_val, unsigned char param_op){
-    if(!jack_data)return -1;
-    if(!jack_data->trk_params)return -1;
-    //set the parameter directly on the ui thread
-    param_set_value(jack_data->trk_params, param_id, param_val, param_op, 0);
-    //send message to set the parameter on the [audio-thread] too
-    PARAM_RING_DATA_BIT send_bit;
-    send_bit.cx_id = 0;
-    send_bit.param_id = param_id;
-    send_bit.param_op = param_op;
-    send_bit.param_value = param_val;
-    ring_buffer_write(jack_data->param_ui_to_rt, &send_bit, sizeof(send_bit));
-    return 0;
 }
 
 void app_jack_clean_midi_cont(JACK_MIDI_CONT* midi_cont){
@@ -586,9 +515,6 @@ void jack_clean_memory(void* jack_data_in){
     //clean the general parameters
     if(jack_data->trk_params)param_clean_param_container(jack_data->trk_params);
 
-    //clean the ring buffers
-    ring_buffer_clean(jack_data->param_rt_to_ui);
-    ring_buffer_clean(jack_data->param_ui_to_rt);
     context_sub_clean(jack_data->control_data);
     free(jack_data);
 }

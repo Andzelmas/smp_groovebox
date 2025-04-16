@@ -17,9 +17,10 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
 //add a curve table for exponential, logarithmic etc. parameters
 //should be added in the initialization stage, while the rt thread is not launched, since will add to rt and ui parameters
 int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_TABLE* table);
+//process ring_buffers - set values on ui params when a message says so from rt thread and vise a versa
+void param_msgs_process(PRM_CONTAIN* param_container, unsigned int rt_params);
 //set the parameter value. param_op is what to do with parameter, check types.h the paramOperType enum
-int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, unsigned char param_op,
-		    unsigned int rt_params);
+int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, unsigned char param_op, unsigned int rt_params);
 //return the parameter increment amount (by how much the parameter value increases or decreases)
 SAMPLE_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
 //get the parameter value. What type of value is returned to val_type, check appReturntype enum in types.h for the list

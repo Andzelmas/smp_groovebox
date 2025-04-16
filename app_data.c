@@ -18,25 +18,6 @@ static thread_local bool is_audio_thread = false;
 
 //the client name that will be shown in the audio client and added next to the port names
 const char* client_name = "smp_grvbox";
-//single bit of data in the ring buffers
-//it stores few ints like value and similar
-typedef struct _app_ring_data_bit{
-    //the parameter container address for the parameter (where to set the parameter)
-    //this should be obtained depending on the cx_type and put in here (for example
-    //trk_params if the trk parameter should be set)
-    PRM_CONTAIN* param_container;
-    //the id of the object in the contex, a sample, track or plugin id or similar.
-    int cx_id;
-    //the parameter id of the object.
-    int param_id;
-    //the parameter value to what to set the parameter or what the parameter value is now
-    float param_value;
-    //what to do with parameter? check paramOperType in types.h for options
-    unsigned char param_op;
-    //value type of the parameter, usually used for display purposes, so we know how to correctly show
-    //the param value for the user. Check the appReturnType
-    unsigned char value_type;
-}RING_DATA_BIT;
 
 typedef struct _app_info{
     //the smapler data
@@ -308,19 +289,9 @@ static PRM_CONTAIN* app_get_context_param_container(APP_INFO* app_data, unsigned
 
 int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, float param_value, unsigned char param_op){
     if(!app_data)return -1;
-    if(cx_type == Context_type_Trk){
-	return app_jack_param_set_value(app_data->trk_jack, param_id, param_value, param_op);
-    }    
-    if(cx_type == Context_type_Sampler){
-	return smp_param_set_value(app_data->smp_data, cx_id, param_id, param_value, param_op);
-    }
-    if(cx_type == Context_type_Synth){
-	return synth_param_set_value(app_data->synth_data, cx_id, param_id, param_value, param_op);
-    }
-    if(cx_type == Context_type_Plugins){
-	return plug_param_set_value(app_data->plug_data, cx_id, param_id, param_value, param_op);
-    }
-    return -1;
+    PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
+    if(!param_cont)return -1;
+    return param_set_value(param_cont, param_id, param_value, param_op, 0);
 }
 
 SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){

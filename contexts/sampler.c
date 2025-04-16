@@ -7,7 +7,6 @@
 #include "sampler.h"
 #include "../util_funcs/log_funcs.h"
 #include "../jack_funcs/jack_funcs.h"
-#include "../util_funcs/ring_buffer.h"
 #include "context_control.h"
 
 //how many samples to read to SMP_SMP buffer at once
@@ -81,9 +80,6 @@ typedef struct _smp_info{
     JACK_MIDI_CONT* midi_cont;
     //control_data struct to control sys messages between [audio-thread] and [main-thread] (stop processing sample, start processing sample and etc.)
     CXCONTROL* control_data;
-    //ring buffer for the parameter mesages (set parameter messages for example)
-    RING_BUFFER* param_rt_to_ui;
-    RING_BUFFER* param_ui_to_rt;
 }SMP_INFO; 
 
 //functions for thread safe string messages
@@ -125,23 +121,12 @@ int smp_read_ui_to_rt_messages(SMP_INFO* smp_data){
     if(!smp_data)return -1;
     context_sub_process_rt(smp_data->control_data);
     
-    //read the param ui_to_rt messages and set the parameter values
-    RING_BUFFER* ring_buffer = smp_data->param_ui_to_rt;
-    if(!ring_buffer){
-	return -1;
-    }
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	PARAM_RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.cx_id >= MAX_SAMPLES)continue;
-	//check if sample is processing
-	SMP_SMP* smp = &(smp_data->samples[cur_bit.cx_id]);
+    for(unsigned int i = 0; i < MAX_SAMPLES; i++){
+	SMP_SMP* smp = &(smp_data->samples[i]);
 	//do nothing if the sample is stopped
 	if(smp->processing == 0)continue;
 	if(!smp->buffer || !smp->params)continue;
-	param_set_value(smp->params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 1);
+	param_msgs_process(smp->params, 1);
     }
     return 0;
 }
@@ -150,17 +135,10 @@ int smp_read_rt_to_ui_messages(SMP_INFO* smp_data){
     context_sub_process_ui(smp_data->control_data);
 
     //read the param rt_to_ui messages and set the parameter values
-    RING_BUFFER* ring_buffer = smp_data->param_rt_to_ui;
-    if(!ring_buffer)return -1;
-    unsigned int  cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	PARAM_RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.cx_id >= MAX_SAMPLES)continue;
-	SMP_SMP* smp = &(smp_data->samples[cur_bit.cx_id]);
+    for(unsigned int i = 0; i < MAX_SAMPLES; i++){
+	SMP_SMP* smp = &(smp_data->samples[i]);
 	if(!smp->buffer || !smp->params)continue;
-	param_set_value(smp->params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 0);
+        param_msgs_process(smp->params, 0);
     }    
     return 0;
 }
@@ -211,8 +189,6 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
     }
 
     smp_data->midi_cont = NULL;
-    smp_data->param_rt_to_ui = NULL;
-    smp_data->param_ui_to_rt = NULL;
     smp_data->buffer_size = buffer_size;
     smp_data->samplerate = samplerate;
     //init the ports
@@ -267,16 +243,6 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
      
      smp_activate_backend_ports(smp_data);
 
-     smp_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-     if(!(smp_data->param_rt_to_ui)){
-	 smp_clean_memory(smp_data);
-	 return NULL;
-     }
-     smp_data->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-     if(!(smp_data->param_ui_to_rt)){
-	 smp_clean_memory(smp_data);
-	 return NULL;
-     }
      return smp_data;
 }
 
@@ -445,22 +411,6 @@ PRM_CONTAIN* smp_param_return_param_container(SMP_INFO* smp_data, int smp_id){
     if(!smp->buffer || !smp->params)return NULL;
     return smp->params;
 }
-int smp_param_set_value(SMP_INFO* smp_data, int smp_id, int param_id, float param_val, unsigned char param_op){
-    if(!smp_data)return -1;
-    if(smp_id >= MAX_SAMPLES || smp_id < 0)return -1;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
-    if(!smp->buffer || !smp->params)return -1;
-    //set the param directly on the ui thread
-    param_set_value(smp->params, param_id, param_val, param_op, 0);
-    //send a message to set the param on the [audio-thread] too
-    PARAM_RING_DATA_BIT send_bit;
-    send_bit.cx_id = smp_id;
-    send_bit.param_id = param_id;
-    send_bit.param_op = param_op;
-    send_bit.param_value = param_val;
-    ring_buffer_write(smp_data->param_ui_to_rt, &send_bit, sizeof(send_bit));
-    return 0;
-}
 
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){
     if(!smp_data)return NULL;
@@ -502,8 +452,6 @@ int smp_clean_memory(SMP_INFO *smp_data){
     }
     smp_data->midi_cont = NULL;
 
-    ring_buffer_clean(smp_data->param_rt_to_ui);
-    ring_buffer_clean(smp_data->param_ui_to_rt);
     context_sub_clean(smp_data->control_data);
     free(smp_data);
 

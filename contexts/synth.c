@@ -7,7 +7,6 @@
 #include "../util_funcs/osc_wavelookup.h"
 #include "../jack_funcs/jack_funcs.h"
 #include "../util_funcs/math_funcs.h"
-#include "../util_funcs/ring_buffer.h"
 #include "context_control.h"
 #include <threads.h>
 
@@ -148,9 +147,6 @@ typedef struct _synth_data{
     JACK_MIDI_CONT* midi_cont;
     //this is the audio backend object to send to the audio functions
     void* audio_backend;
-    //ring buffers for parameter manipulation communication
-    RING_BUFFER* param_rt_to_ui;
-    RING_BUFFER* param_ui_to_rt;
     //this is control for [audio-thread] and [main-thread] sys communication
     //(since there is no need to remove and add the oscillators this is used right now only for thread safe message sending)
     CXCONTROL* control_data;
@@ -170,20 +166,10 @@ int synth_read_ui_to_rt_messages(SYNTH_DATA* synth_data){
     //process the sys messages, right now only need for send messages, so on [audio-thread] does not do anything
     context_sub_process_rt(synth_data->control_data);
     
-    //read the param ui_to_rt messages and set the parameter values
-    RING_BUFFER* ring_buffer = synth_data->param_ui_to_rt;
-    if(!ring_buffer){
-	return -1;
-    }
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	PARAM_RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.cx_id >= MAX_OSCS)continue;
-	SYNTH_OSC* osc = &(synth_data->osc_array[cur_bit.cx_id]);
+    for(unsigned int i = 0; i < MAX_OSCS; i++){
+	SYNTH_OSC* osc = &(synth_data->osc_array[i]);
 	if(!osc->params)continue;
-	param_set_value(osc->params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 1);
+	param_msgs_process(osc->params, 1);
     }
     return 0;
 }
@@ -193,17 +179,10 @@ int synth_read_rt_to_ui_messages(SYNTH_DATA* synth_data){
     context_sub_process_ui(synth_data->control_data);
     
     //read the param rt_to_ui messages and set the parameter values
-    RING_BUFFER* ring_buffer = synth_data->param_rt_to_ui;
-    if(!ring_buffer)return -1;
-    unsigned int  cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	PARAM_RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.cx_id >= MAX_OSCS)continue;
-	SYNTH_OSC* osc = &(synth_data->osc_array[cur_bit.cx_id]);
+    for(unsigned int i = 0; i < MAX_OSCS; i++){
+	SYNTH_OSC* osc = &(synth_data->osc_array[i]);
 	if(!osc->params)continue;
-	param_set_value(osc->params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 0);
+	param_msgs_process(osc->params, 0);
     }    
     return 0;
 }
@@ -238,8 +217,6 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	free(synth_data);
 	return NULL;
     }    
-    synth_data->param_rt_to_ui = NULL;
-    synth_data->param_ui_to_rt = NULL;
     synth_data->buffer_size = buffer_size;
     synth_data->samplerate = sample_rate;
     synth_data->with_metronome = with_metronome;
@@ -503,17 +480,6 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 
 	synth_activate_backend_ports(synth_data, cur_osc);
     }
-
-    synth_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    if(!(synth_data->param_rt_to_ui)){
-	synth_clean_memory(synth_data);
-	return NULL;
-    }
-    synth_data->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    if(!(synth_data->param_ui_to_rt)){
-	synth_clean_memory(synth_data);
-	return NULL;
-    }
     
     return synth_data;   
 }
@@ -524,23 +490,6 @@ PRM_CONTAIN* synth_param_return_param_container(SYNTH_DATA* synth_data, int osc_
     SYNTH_OSC* cur_osc = &(synth_data->osc_array[osc_id]);
     if(!cur_osc->params)return NULL;
     return cur_osc->params;
-}
-
-int synth_param_set_value(SYNTH_DATA* synth_data, int osc_id, int param_id, float param_val, unsigned char param_op){
-    if(!synth_data)return -1;
-    if(osc_id >= MAX_OSCS)return -1;
-    SYNTH_OSC* cur_osc = &(synth_data->osc_array[osc_id]);
-    if(!cur_osc->params)return -1;
-    //set the parameter directly on the ui thread
-    param_set_value(cur_osc->params, param_id, param_val, param_op, 0);
-    //now send the message to set the parameter on the rt [audio-thread] too
-    PARAM_RING_DATA_BIT send_bit;
-    send_bit.cx_id = osc_id;
-    send_bit.param_id = param_id;
-    send_bit.param_op = param_op;
-    send_bit.param_value = param_val;
-    ring_buffer_write(synth_data->param_ui_to_rt, &send_bit, sizeof(send_bit));
-    return 0;
 }
 
 int synth_activate_backend_ports(SYNTH_DATA* synth_data, SYNTH_OSC* osc){
@@ -1018,8 +967,6 @@ int synth_clean_memory(SYNTH_DATA* synth_data){
     if(synth_data->log_curve)math_range_table_clean(synth_data->log_curve);
     if(synth_data->amp_to_exp)math_range_table_clean(synth_data->amp_to_exp);
 
-    ring_buffer_clean(synth_data->param_rt_to_ui);
-    ring_buffer_clean(synth_data->param_ui_to_rt);
     context_sub_clean(synth_data->control_data);
     
     free(synth_data);

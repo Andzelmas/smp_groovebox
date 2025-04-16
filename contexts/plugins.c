@@ -36,7 +36,6 @@
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/string_funcs.h"
 #include "../jack_funcs/jack_funcs.h"
-#include "../util_funcs/ring_buffer.h"
 //a simple macro to get the max of the two values
 #ifndef MAX
 #  define MAX(a, b) (((a) > (b)) ? (a) : (b))
@@ -281,9 +280,6 @@ typedef struct _plug_info{
     unsigned int isPlaying; // is the tranport playing
     uint32_t posFrame; //the position frame
     float bpm;
-    //ring buffers for parameter manipulation communication
-    RING_BUFFER* param_rt_to_ui;
-    RING_BUFFER* param_ui_to_rt;
     //this is control for [audio-thread] and [main-thread] sys communication (wait for a plugin pause etc.)
     CXCONTROL* control_data;
     //rt tick var, that goes from 0 to RT_CYCLES, rt thread will send info to ui thread only when rt tick var is 0
@@ -670,8 +666,6 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_data->posFrame = 0;
     plug_data->bpm = 120.0f;
     plug_data->isPlaying = 0;
-    plug_data->param_rt_to_ui = NULL;
-    plug_data->param_ui_to_rt = NULL;
     
     lilv_world_load_all(plug_data->lv_world);    
     plug_data->symap = symap_new();
@@ -754,19 +748,6 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
 
 	//init atom forge
 	lv2_atom_forge_init(&(plug->forge), &(plug->map));
-    }
-
-    plug_data->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    if(!(plug_data->param_rt_to_ui)){
-	plug_clean_memory(plug_data);
-	*plug_errors = plug_failed_malloc;
-	return NULL;
-    }
-    plug_data->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    if(!(plug_data->param_ui_to_rt)){
-	plug_clean_memory(plug_data);
-	*plug_errors = plug_failed_malloc;
-	return NULL;
     }
     
     return plug_data;
@@ -870,23 +851,12 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
     
     //process the control_data sys messages for [audio_thread] (stop plugin and similar)
     context_sub_process_rt(plug_data->control_data);
-    //read the param ui_to_rt messages and set the parameter values
-    RING_BUFFER* ring_buffer = plug_data->param_ui_to_rt;
-    if(!ring_buffer){
-	return -1;
-    }
-    unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	PARAM_RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.cx_id >= MAX_INSTANCES)continue;
-	//check if plugin is processing
-	PLUG_PLUG* cur_plug = &(plug_data->plugins[cur_bit.cx_id]);
-	//do nothing if the plugin is stopped
+    //read the param messages for plugins
+    for(unsigned int i = 0; i < MAX_INSTANCES; i++){
+	PLUG_PLUG* cur_plug = &(plug_data->plugins[i]);
 	if(cur_plug->is_processing == 0)continue;
-	if(!cur_plug->plug_instance || !cur_plug->plug_params)continue;
-	param_set_value(cur_plug->plug_params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 1);
+	if(!cur_plug->plug_instance)continue;
+	param_msgs_process(cur_plug->plug_params, 1);
     }
     return 0;
 }
@@ -895,18 +865,11 @@ int plug_read_rt_to_ui_messages(PLUG_INFO* plug_data){
     //process the control_data sys messages for [main_thread] (like send msg)
     context_sub_process_ui(plug_data->control_data);
     //read the param rt_to_ui messages and set the parameter values
-    RING_BUFFER* ring_buffer = plug_data->param_rt_to_ui;
-    if(!ring_buffer)return -1;
-    unsigned int  cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	PARAM_RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	if(cur_bit.cx_id >= MAX_INSTANCES)continue;
-	PLUG_PLUG* cur_plug = &(plug_data->plugins[cur_bit.cx_id]);
-	if(!cur_plug->plug_instance || !cur_plug->plug_params)continue;
-	param_set_value(cur_plug->plug_params, cur_bit.param_id, cur_bit.param_value, cur_bit.param_op, 0);
-    }    
+    for(unsigned int i = 0; i < MAX_INSTANCES; i++){
+	PLUG_PLUG* cur_plug = &(plug_data->plugins[i]);
+	if(!cur_plug->plug_instance)continue;
+	param_msgs_process(cur_plug->plug_params, 0);
+    }   
     return 0;
 }
 
@@ -1530,22 +1493,6 @@ PRM_CONTAIN* plug_param_return_param_container(PLUG_INFO* plug_data, int plug_id
     if(!cur_plug->plug_instance || !cur_plug->plug_params)return NULL;
     return cur_plug->plug_params;
 }
-int plug_param_set_value(PLUG_INFO* plug_data, int plug_id, int param_id, float param_val, unsigned char param_op){
-    if(!plug_data)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-    PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_instance || !cur_plug->plug_params)return -1;
-    //set the parameter directly on the ui thread
-    param_set_value(cur_plug->plug_params, param_id, param_val, param_op, 0);
-    //now send the message to set the parameter on the rt [audio-thread] too
-    PARAM_RING_DATA_BIT send_bit;
-    send_bit.cx_id = plug_id;
-    send_bit.param_id = param_id;
-    send_bit.param_op = param_op;
-    send_bit.param_value = param_val;
-    ring_buffer_write(plug_data->param_ui_to_rt, &send_bit, sizeof(send_bit));
-    return 0;
-}
 
 void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){ 
     if(!plug_data){
@@ -1724,20 +1671,12 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		//set param but not too often to not swamp the rt_to_ui ring buffer.
 		//it does not matter that the [audio-thread] parameter will be set at the same speed, since it output parameter
 		if(plug_data->rt_tick == 0){
-		    //set the val directly on the [audio-thread]
+		    //set the val on param container
 		    param_set_value(plug->plug_params, cur_port->param_index, cur_port->control, Operation_SetValue, 1);
-		    //only send message to ui if the parameter changed
-		    if(param_get_if_changed(plug->plug_params, cur_port->param_index, 1) == 1){
-			unsigned char val_type;
-			//get the value that was just set so just_changed parameter var will be 0 again
-			SAMPLE_T new_val = param_get_value(plug->plug_params, cur_port->param_index, &val_type, 0, 0, 1);
-			PARAM_RING_DATA_BIT send_bit;
-			send_bit.cx_id = plug->id;
-			send_bit.param_id = cur_port->param_index;
-			send_bit.param_op = Operation_SetValue;
-			send_bit.param_value = new_val;
-			ring_buffer_write(plug_data->param_rt_to_ui, &send_bit, sizeof(send_bit));
-		    }
+		    //get the parameter value, so the parameter is_changed will be 0, otherwise on next cycle this parameter value will be sent to the plugin
+		    //no need for that since we got this value from the plugin already
+		    unsigned char param_val_type = 0;
+		    SAMPLE_T param_value = param_get_value(plug->plug_params, cur_port->param_index, &param_val_type, 0, 0, 1);
 		}
 	    }
 	    if(cur_port->type == TYPE_EVENT){
@@ -1803,8 +1742,6 @@ void plug_clean_memory(PLUG_INFO* plug_data){
 	lilv_node_free(*n);
     }    
     if(plug_data->lv_world)lilv_world_free(plug_data->lv_world);
-    ring_buffer_clean(plug_data->param_rt_to_ui);
-    ring_buffer_clean(plug_data->param_ui_to_rt);
 
     context_sub_clean(plug_data->control_data);
     free(plug_data);
