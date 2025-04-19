@@ -22,19 +22,10 @@
 //how many clap plugins can there be in the plugin array
 #define MAX_INSTANCES 5
 
-//size for the event lists in the CLAP_PLUG_EVENT
+//size for the event lists
 #define EVENT_LIST_SIZE 2048
 
 static thread_local bool is_audio_thread = false;
-
-//event struct that has the clap_event_header event list and information about that list
-//this struct is in clap_input_events and clap_output_events void* ctx variable
-typedef struct _clap_plug_event{
-    clap_event_header_t* event_list; //address to the start of the reserved memory for the events, each item can be different size
-    uint32_t total_size; //the size of the event_list in bytes
-    uint32_t curr_size; //size in bytes that is currently occupied in the event_list
-    uint32_t items; //items in the event_list, remember - each item can be of different size, event_list[n].size tells how big the current item is
-}CLAP_PLUG_EVENT;
 
 //sys port struct, that holds info about the port and a backend audio client port equivalent
 typedef struct _clap_plug_port_sys{
@@ -75,9 +66,6 @@ typedef struct _clap_plug_plug{
     //input and output note ports
     CLAP_PLUG_NOTE_PORT input_note_ports;
     CLAP_PLUG_NOTE_PORT output_note_ports;
-    //event structs that hold memory for clap events
-    CLAP_PLUG_EVENT input_events;
-    CLAP_PLUG_EVENT output_events;
 }CLAP_PLUG_PLUG;
 
 //the main clap struct
