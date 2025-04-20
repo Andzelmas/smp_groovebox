@@ -1138,6 +1138,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     }
     
     //Initiate the event lists
+    //TODO TEST if EVENT_LIST_SIZE and EVENT_LIST_ITEMS are good enough sizes
     clap_input_events_t* in_events = &(plug->input_events);
     in_events->ctx = (void*)ub_init(EVENT_LIST_SIZE, EVENT_LIST_ITEMS);
     in_events->get = clap_plug_ext_events_get;
