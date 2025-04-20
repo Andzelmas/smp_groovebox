@@ -13,7 +13,7 @@ LIBS = -lm -ljack -lsndfile -ljson-c -llilv-0 -lncurses
 JALV_C = util_funcs/jalv/symap.c util_funcs/jalv/worker.c util_funcs/jalv/zix/allocator.c util_funcs/jalv/zix/allocator.h util_funcs/jalv/zix/attributes.h util_funcs/jalv/zix/ring.c
 
 #additional sources
-SRC = util_funcs/wav_funcs.c contexts/sampler.c contexts/plugins.c contexts/clap_plugins.c contexts/context_control.c jack_funcs/jack_funcs.c util_funcs/math_funcs.c app_data.c app_intrf.c util_funcs/string_funcs.c util_funcs/json_funcs.c util_funcs/ring_buffer.c util_funcs/log_funcs.c contexts/params.c util_funcs/osc_wavelookup.c contexts/synth.c $(JALV_C)
+SRC = util_funcs/wav_funcs.c contexts/sampler.c contexts/plugins.c contexts/clap_plugins.c contexts/context_control.c jack_funcs/jack_funcs.c util_funcs/math_funcs.c app_data.c app_intrf.c util_funcs/string_funcs.c util_funcs/json_funcs.c util_funcs/ring_buffer.c util_funcs/log_funcs.c contexts/params.c util_funcs/osc_wavelookup.c contexts/synth.c util_funcs/uniform_buffer.c $(JALV_C)
 
 #Remote dir for the source code
 PI_DIR = ~/Audio/Source/smp_groovebox/

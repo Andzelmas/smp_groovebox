@@ -12,6 +12,7 @@
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/string_funcs.h"
 #include "../util_funcs/ring_buffer.h"
+#include "../util_funcs/uniform_buffer.h"
 #include "../types.h"
 #include "context_control.h"
 #include "params.h"
@@ -24,6 +25,7 @@
 
 //size for the event lists
 #define EVENT_LIST_SIZE 2048
+#define EVENT_LIST_ITEMS 16
 
 static thread_local bool is_audio_thread = false;
 
@@ -66,6 +68,9 @@ typedef struct _clap_plug_plug{
     //input and output note ports
     CLAP_PLUG_NOTE_PORT input_note_ports;
     CLAP_PLUG_NOTE_PORT output_note_ports;
+    //input output event streams
+    clap_input_events_t input_events;
+    clap_output_events_t output_events;
 }CLAP_PLUG_PLUG;
 
 //the main clap struct
@@ -444,6 +449,28 @@ static void clap_plug_ext_note_ports_rescan(const clap_host_t* host, uint32_t fl
     }
 }
 
+static uint32_t clap_plug_ext_events_size(const struct clap_input_events* list){
+    if(!list)return 0;
+    UB_EVENT* ub_ev = (UB_EVENT*)list->ctx;
+    if(!ub_ev)return 0;
+    return ub_size(ub_ev);
+}
+static const clap_event_header_t* clap_plug_ext_events_get(const struct clap_input_events* list, uint32_t index){
+    if(!list)return NULL;
+    UB_EVENT* ub_ev = (UB_EVENT*)list->ctx;
+    if(!ub_ev)return NULL;
+    clap_event_header_t* header = (clap_event_header_t*)ub_item_get(ub_ev, index);
+    return header;
+}
+static bool clap_plug_ext_events_try_push(const struct clap_output_events* list, const clap_event_header_t* event){
+    if(!list)return false;
+    UB_EVENT* ub_ev = (UB_EVENT*)list->ctx;
+    if(!ub_ev)return false;
+
+    int push_err = ub_push(ub_ev, (void*)event, event->size);
+    if(push_err != 0)return false;
+    return true;
+}
 //clean the single plugin struct
 //before calling this the plug_inst_processing should be == 0
 static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
@@ -476,20 +503,16 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
     //clean the audio ports
     clap_plug_destroy_ports(plug_data, &(plug->output_ports));
     clap_plug_destroy_ports(plug_data, &(plug->input_ports));
-    //clean the event structs
-    if(plug->input_events.event_list)free(plug->input_events.event_list);
-    plug->input_events.curr_size = 0;
-    plug->input_events.event_list = NULL;
-    plug->input_events.items = 0;
-    plug->input_events.total_size = 0;
-    if(plug->output_events.event_list)free(plug->output_events.event_list);
-    plug->output_events.curr_size = 0;
-    plug->output_events.event_list = NULL;
-    plug->output_events.items = 0;
-    plug->output_events.total_size = 0;
     //clean the note ports
     clap_plug_note_ports_destroy(plug_data, &(plug->input_note_ports));
     clap_plug_note_ports_destroy(plug_data, &(plug->output_note_ports));
+    //clean the event structs
+    clap_input_events_t* in_events = &(plug->input_events);
+    ub_clean((UB_EVENT*)in_events->ctx);
+    in_events->ctx = NULL;
+    clap_output_events_t* out_events = &(plug->output_events);
+    ub_clean((UB_EVENT*)out_events->ctx);
+    out_events->ctx = NULL;
     //clean the parameters
     if(plug->plug_params){
 	param_clean_param_container(plug->plug_params);
@@ -916,89 +939,6 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
 	plug->plug_params = NULL;
 	plug->plug_path = NULL;
     }    
-    /*
-    void* handle;
-    int* iptr;
-    handle = dlopen(plug_path, RTLD_LOCAL | RTLD_LAZY);
-    if(!handle){
-	log_append_logfile("failed to load %s dso \n", plug_path);
-    }
-    
-    iptr = (int*)dlsym(handle, "clap_entry");
-    clap_plugin_entry_t* plug_entry = (clap_plugin_entry_t*)iptr;
-    
-    unsigned int init_err = plug_entry->init(plug_path);
-    if(!init_err){
-	log_append_logfile("failed to init the %s plugin entry\n", plug_path);
-	return;
-    }
-    
-    const clap_plugin_factory_t* plug_fac = plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
-    uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
-    if(plug_count <= 0){
-	log_append_logfile("no plugins in %s dso \n", plug_path);
-	return;
-    }
-
-    //TODO iterating through the clap files should be in the clap_plug_return_plugin_names function
-    //TODO when user chooses which plugin to load, go through the clap files (and the plugins in the files) and compare the plugin name
-    //to the name the user sent, if its the same load this plugin
-    for(uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++){
-	const clap_plugin_descriptor_t* plug_desc = plug_fac->get_plugin_descriptor(plug_fac, pl_iter);
-	if(!plug_desc)continue;
-	if(plug_desc->name){
-	    log_append_logfile("Got clap_plugin %s descriptor\n", plug_desc->name);
-	}
-	if(plug_desc->description){
-	    log_append_logfile("%s info: %s\n", plug_desc->name, plug_desc->description);
-	}
-
-	const clap_plugin_t* plug_inst = plug_fac->create_plugin(plug_fac, &clap_info_host, plug_desc->id);
-	if(!plug_inst){
-	    log_append_logfile("Failed to create %s plugin\n", plug_path);
-	    continue;
-	}
-
-	bool inst_err = plug_inst->init(plug_inst);
-	if(!inst_err){
-	    log_append_logfile("Failed to init %s plugin\n", plug_path);
-	    continue;
-	}
-
-	plug_inst->activate(plug_inst, 48000, 32, 1024);
-
-	const clap_plugin_params_t* plug_inst_params = plug_inst->get_extension(plug_inst, CLAP_EXT_PARAMS);
-	if(plug_inst_params){
-	    uint32_t params_count = plug_inst_params->count(plug_inst);
-	    log_append_logfile("found %d params\n", params_count);
-	    for(uint32_t pr_iter = 0; pr_iter < params_count; pr_iter++){
-		clap_param_info_t param_info;
-		bool got_info = plug_inst_params->get_info(plug_inst, pr_iter, &param_info);
-		if(!got_info)continue;
-		log_append_logfile("Param name %s, min_val %g, max_val %g, default_val %g\n",
-				   param_info.name, param_info.module,
-				   param_info.min_value, param_info.max_value, param_info.default_value);
-		double cur_value = 0;
-		bool got_val = plug_inst_params->get_value(plug_inst, param_info.id, &cur_value);
-		if(!got_val)continue;
-		char val_text[MAX_VALUE_LEN];
-		if(plug_inst_params->value_to_text(plug_inst, param_info.id, cur_value,
-						   val_text, MAX_VALUE_LEN)){
-		    log_append_logfile("Current value double %f, text %s, param is enum %d, is_stepped %d, requires_process %d\n",
-				       cur_value, val_text,
-				       (param_info.flags & CLAP_PARAM_IS_ENUM),
-				       (param_info.flags & CLAP_PARAM_IS_STEPPED),
-				       (param_info.flags & CLAP_PARAM_REQUIRES_PROCESS));
-		}
-	    }
-	}
-	
-	plug_inst->deactivate(plug_inst);
-	plug_inst->destroy(plug_inst);
-    }
-
-    plug_entry->deinit();
-    */
     return plug_data;
 }
 
@@ -1196,16 +1136,21 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
+    
     //Initiate the event lists
-    plug->input_events.event_list = calloc(1, EVENT_LIST_SIZE);
-    plug->output_events.event_list = calloc(1, EVENT_LIST_SIZE);
-    if(!plug->input_events.event_list || !plug->output_events.event_list){
-	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Failed to create %s plugin event lists\n", plugin_name);
+    clap_input_events_t* in_events = &(plug->input_events);
+    in_events->ctx = (void*)ub_init(EVENT_LIST_SIZE, EVENT_LIST_ITEMS);
+    in_events->get = clap_plug_ext_events_get;
+    in_events->size = clap_plug_ext_events_size;   
+    clap_output_events_t* out_events = &(plug->output_events);
+    out_events->ctx = (void*)ub_init(EVENT_LIST_SIZE, EVENT_LIST_ITEMS);
+    out_events->try_push = clap_plug_ext_events_try_push;
+    if(!in_events->ctx || !out_events->ctx){
+	context_sub_send_msg(plug_data->control_data, is_audio_thread, "Failed to create %s plugin clap event structs\n", plugin_name);
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
-    plug->input_events.total_size = EVENT_LIST_SIZE;
-    plug->output_events.total_size = EVENT_LIST_SIZE;
+    
     //Initiate the note ports on the audio client backend
     int note_port_out_err = clap_plug_note_ports_create(plug_data, plug->id, 0);
     int note_port_in_err = clap_plug_note_ports_create(plug_data, plug->id, 1);
@@ -1231,14 +1176,6 @@ char* clap_plug_return_plugin_name(CLAP_PLUG_INFO* plug_data, int plug_id){
     if(!ret_string)return NULL;
     strcpy(ret_string, name_string);
     return ret_string;
-}
-//TODO some plugin try to get event size, while events are not implemented this will save the app from crashing
-uint32_t test_event_function(const struct clap_input_events *list){
-    return 0;
-}
-//TODO while events are not implemented push function placeholder so plugins do not crash that get this function
-bool test_output_event_function(const struct clap_output_events *list, const clap_event_header_t *event){
-    return false;
 }
 
 static int clap_prepare_input_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT* input_ports, unsigned int nframes){
@@ -1317,7 +1254,6 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
     for(int id = 0; id < MAX_INSTANCES; id++){
 	CLAP_PLUG_PLUG* plug = &(plug_data->plugins[id]);
 	if(plug->plug_inst_processing == 0)continue;
-	if(!plug->plug_inst)continue;
 	//TODO if stopped but only sleeping, check input events or audio inputs if needs to start processing again
 	if(plug->plug_inst_processing == 2){
 
@@ -1340,19 +1276,20 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	
 	_process.audio_outputs = plug->output_ports.audio_ports;
 	_process.audio_outputs_count = plug->output_ports.ports_count;
-	
-	//TODO while events are not implemented
-	clap_input_events_t in_event;
-	in_event.size = test_event_function;
-	_process.in_events = &(in_event);
-	//TODO while events are not implemented
-	clap_output_events_t out_event;
-	out_event.try_push = test_output_event_function;
-	_process.out_events = &(out_event);
+
+	//prepare the event structs
+	clap_input_events_t* in_events = &(plug->input_events);
+	//TODO function that writes messages from midi and similar to the input events
+	_process.in_events = in_events;
+	clap_output_events_t* out_events = &(plug->output_events);
+	_process.out_events = out_events;
 
 	clap_process_status clap_status = plug->plug_inst->process(plug->plug_inst, &_process);
 	//copy clap audio output buffers to the audio backend audio buffers
 	clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes);
+	//TODO function that reads messages from midi and similar from the output events
+	ub_list_reset((UB_EVENT*)in_events->ctx);
+	ub_list_reset((UB_EVENT*)out_events->ctx);
     }
 }
 
