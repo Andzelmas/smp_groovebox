@@ -188,11 +188,11 @@ void app_jack_clean_midi_cont(JACK_MIDI_CONT* midi_cont){
 
 JACK_MIDI_CONT* app_jack_init_midi_cont(unsigned int array_size){
     JACK_MIDI_CONT* ret_midi_cont = NULL;
-    //TODO why *array_size? Test if necessary
-    ret_midi_cont = malloc(sizeof(JACK_MIDI_CONT) * array_size);
+    ret_midi_cont = malloc(sizeof(JACK_MIDI_CONT));
     if(!ret_midi_cont)return NULL;
     ret_midi_cont->array_size = array_size;
     ret_midi_cont->num_events = 0;
+    ret_midi_cont->w_pos = 0;
     ret_midi_cont->buf_size = NULL;
     ret_midi_cont->nframe_nums = NULL;
     ret_midi_cont->note_pitches = NULL;
@@ -237,6 +237,7 @@ void app_jack_midi_cont_reset(JACK_MIDI_CONT* midi_cont){
     unsigned int size = midi_cont->array_size;
     if(size<=0)return;
     midi_cont->num_events = 0;
+    midi_cont->w_pos = 0;
     memset(midi_cont->buf_size, 0, size * sizeof(size_t));
     memset(midi_cont->nframe_nums, 0, size * sizeof(NFRAMES_T));
     memset(midi_cont->note_pitches, 0, size * sizeof(MIDI_DATA_T));
@@ -392,27 +393,25 @@ void app_jack_return_notes_vels_rt(void* midi_in, JACK_MIDI_CONT* midi_cont){
     event_count = jack_midi_get_event_count(midi_in);
     if(event_count<=0)return;
     midi_cont->num_events = event_count;
+    if((midi_cont->num_events + midi_cont->w_pos) > midi_cont->array_size)midi_cont->num_events = (midi_cont->array_size - midi_cont->w_pos);
     //go through all the midi events
-    for(int en = 0; en<event_count; en++){
-	//if the number of events are more than the total size of the midi container
-	//buffers stop
-	if(en>=midi_cont->array_size)return;
-	
+    for(int en = 0; en<midi_cont->num_events; en++){	
 	jack_midi_event_t in_event;	
 	if(jack_midi_event_get(&in_event, midi_in, en)!=0)return;
 	
 	//if the note is correct set the vel_trig array of this note index to the
 	//midi event velocity
 	if(midi_cont->vel_trig!=NULL)
-	    midi_cont->vel_trig[en] = in_event.buffer[2];
+	    midi_cont->vel_trig[midi_cont->w_pos] = in_event.buffer[2];
 	if(midi_cont->note_pitches!=NULL)
-	    midi_cont->note_pitches[en] = in_event.buffer[1];
+	    midi_cont->note_pitches[midi_cont->w_pos] = in_event.buffer[1];
 	if(midi_cont->nframe_nums!=NULL)
-	    midi_cont->nframe_nums[en] = in_event.time;
+	    midi_cont->nframe_nums[midi_cont->w_pos] = in_event.time;
 	if(midi_cont->types!=NULL)
-	    midi_cont->types[en] = in_event.buffer[0];
+	    midi_cont->types[midi_cont->w_pos] = in_event.buffer[0];
 	if(midi_cont->buf_size!=NULL)
-	    midi_cont->buf_size[en] = in_event.size;
+	    midi_cont->buf_size[midi_cont->w_pos] = in_event.size;
+	midi_cont->w_pos += 1;
     }
 }
 

@@ -13,6 +13,7 @@
 #include "../util_funcs/string_funcs.h"
 #include "../util_funcs/ring_buffer.h"
 #include "../util_funcs/uniform_buffer.h"
+#include "../util_funcs/math_funcs.h"
 #include "../types.h"
 #include "context_control.h"
 #include "params.h"
@@ -25,7 +26,7 @@
 
 //size for the event lists
 #define EVENT_LIST_SIZE 2048
-#define EVENT_LIST_ITEMS 16
+#define EVENT_LIST_ITEMS 50
 
 static thread_local bool is_audio_thread = false;
 
@@ -47,6 +48,7 @@ typedef struct _clap_plug_note_port{
     clap_id* ids;
     uint32_t* supported_dialects;
     uint32_t* preferred_dialects;
+    JACK_MIDI_CONT* midi_cont;
 }CLAP_PLUG_NOTE_PORT;
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
@@ -324,6 +326,11 @@ static int clap_plug_note_ports_destroy(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_NOT
     note_port->ports_count = 0;
     if(note_port->sys_ports)free(note_port->sys_ports);
     note_port->sys_ports = NULL;
+    if(note_port->midi_cont){
+	app_jack_clean_midi_cont(note_port->midi_cont);
+	free(note_port->midi_cont);
+	note_port->midi_cont = NULL;
+    }
     return 0;
 }
 //create note_ports
@@ -344,7 +351,8 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO* plug_data, int id, bool i
     //create the sys port pointer and other arrays per note port
     CLAP_PLUG_NOTE_PORT* note_port = &(plug->output_note_ports);
     if(input_ports)note_port = &(plug->input_note_ports);
-    //TODO test 
+    //TODO test
+    note_port->midi_cont = app_jack_init_midi_cont(clap_ports_count);
     note_port->sys_ports = calloc(clap_ports_count, sizeof(void*));
     note_port->ports_count = clap_ports_count;
     note_port->ids = calloc(clap_ports_count, sizeof(clap_id));
@@ -1249,6 +1257,100 @@ static void clap_prepare_output_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT*
     }
 }
 
+static void clap_input_events_prepare(CLAP_PLUG_INFO* plug_data, unsigned int nframes, CLAP_PLUG_PLUG* plug){
+    if(!plug_data)return;
+    if(!plug)return;
+    clap_input_events_t* in_events = &(plug->input_events);
+    if(!in_events->ctx)return;
+    UB_EVENT* ub_in = (UB_EVENT*)in_events->ctx;
+    //should be empty, but reset just in case
+    ub_list_reset(ub_in);
+    //write to input note ports of the plugin
+    CLAP_PLUG_NOTE_PORT* note_ports = &(plug->input_note_ports);
+    if(note_ports->ports_count == 0)return;
+    //TODO write to the plug->input_events sorted by the sample time! will have to modify when parameters are added - paremeters will have to be sorted by time too!
+    //first add the system midi messages
+    for(uint32_t port_num = 0; port_num < note_ports->ports_count; port_num++){
+	if(!(note_ports->sys_ports[port_num]))continue;
+	app_jack_midi_cont_reset(note_ports->midi_cont);
+	void* midi_buffer = app_jack_get_buffer_rt(note_ports->sys_ports[port_num], nframes);
+	if(!midi_buffer)continue;
+	app_jack_return_notes_vels_rt(midi_buffer, note_ports->midi_cont);
+	uint32_t note_dialect = note_ports->preferred_dialects[port_num];
+	//write the midi1 messages, depending on the preferred dialect of the note port
+	for(uint32_t midi_num = 0; midi_num < note_ports->midi_cont->num_events; midi_num++){
+	    clap_event_header_t clap_head;
+	    clap_head.time = note_ports->midi_cont->nframe_nums[midi_num];
+	    clap_head.flags = CLAP_EVENT_IS_LIVE;
+	    clap_head.space_id = CLAP_CORE_EVENT_SPACE_ID;
+	    
+	    int32_t note_id = -1; 
+	    int16_t port_index = note_ports->ids[port_num];
+	    int16_t channel = 0;
+	    int16_t key = 0;
+	    double  velocity = 0;
+	    
+	    MIDI_DATA_T type = note_ports->midi_cont->types[midi_num];
+	    //Handle note off and on events
+	    if((type & 0xf0) == 0x80 || (type & 0xf0) == 0x90){
+		if((note_dialect & CLAP_NOTE_DIALECT_CLAP) == CLAP_NOTE_DIALECT_CLAP){
+		    clap_head.type = CLAP_EVENT_NOTE_OFF;
+		    if((type & 0xf0) == 0x90)
+			clap_head.type = CLAP_EVENT_NOTE_ON;
+		    
+		    clap_head.size = sizeof(clap_event_note_t);
+		    channel = (int16_t)(type & 0x0f);
+		    key = (int16_t)note_ports->midi_cont->note_pitches[midi_num];      
+		    velocity = (double)fit_range(127, 0, 0, 1, (SAMPLE_T)note_ports->midi_cont->vel_trig[midi_num]);
+		    
+		    clap_event_note_t clap_note;
+		    clap_note.channel = channel;
+		    clap_note.header = clap_head;
+		    clap_note.key = key;
+		    clap_note.note_id = note_id;
+		    clap_note.port_index = port_index;
+		    clap_note.velocity = velocity;
+		    //TODO will need to add to some temp array first and then sort probably
+		    ub_push(ub_in, (void*)&(clap_note), (uint32_t)sizeof(clap_note));
+		    continue;
+		}
+		if((note_dialect & CLAP_NOTE_DIALECT_MIDI) == CLAP_NOTE_DIALECT_MIDI){
+		    clap_head.type = CLAP_EVENT_MIDI;
+		    clap_head.size = sizeof(clap_event_midi_t);
+		    clap_event_midi_t clap_midi;
+		    clap_midi.data[0] = (uint8_t)type;
+		    clap_midi.data[1] = (uint8_t)note_ports->midi_cont->note_pitches[midi_num];
+		    clap_midi.data[2] = (uint8_t)note_ports->midi_cont->vel_trig[midi_num];
+		    clap_midi.header = clap_head;
+		    clap_midi.port_index = port_index;
+		    //TODO will need to add to some temp array first and then sort probably
+		    ub_push(ub_in, (void*)&(clap_midi), (uint32_t)sizeof(clap_midi));
+		    continue;
+		}
+	    }
+	    //Handle Polyphonic aftertouch events
+	    if((type & 0xf0) == 0xA0){
+	    }
+	    //Control mode change events
+	    if((type & 0xf0) == 0xB0){
+	    }
+	    //Handle program change events
+	    if((type & 0xf0) == 0xC0){
+	    }
+	    //Handle Channel aftertouch events
+	    if((type & 0xf0) == 0xD0){
+	    }
+	    //Handle pitch bend change events
+	    if((type & 0xf0) == 0xE0){
+	    }
+	    //Handle system events (Timing clock, start, continue etc.)
+	    if((type & 0xf0) == 0xF0){
+	    }    
+	}
+
+    }
+}
+
 void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
     if(!plug_data)return;
     if(!plug_data->plugins)return;
@@ -1278,18 +1380,19 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	_process.audio_outputs = plug->output_ports.audio_ports;
 	_process.audio_outputs_count = plug->output_ports.ports_count;
 
-	//prepare the event structs
-	clap_input_events_t* in_events = &(plug->input_events);
-	//TODO function that writes messages from midi and similar to the input events
-	_process.in_events = in_events;
+	//write messages from midi, parameters and similar to the input events
+	clap_input_events_prepare(plug_data, nframes, plug);
+	_process.in_events = &(plug->input_events);
 	clap_output_events_t* out_events = &(plug->output_events);
+	//should be empty, but reset just in case
+	ub_list_reset((UB_EVENT*)out_events->ctx);
 	_process.out_events = out_events;
 
 	clap_process_status clap_status = plug->plug_inst->process(plug->plug_inst, &_process);
 	//copy clap audio output buffers to the audio backend audio buffers
 	clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes);
 	//TODO function that reads messages from midi and similar from the output events
-	ub_list_reset((UB_EVENT*)in_events->ctx);
+	ub_list_reset((UB_EVENT*)(&plug->input_events)->ctx);
 	ub_list_reset((UB_EVENT*)out_events->ctx);
     }
 }

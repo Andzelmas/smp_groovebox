@@ -18,6 +18,8 @@ typedef struct _jack_midi_cont{
     size_t* buf_size;
     //the number of events that occured
     NFRAMES_T num_events;
+    //the index of the event that should be written to in the buffer
+    NFRAMES_T w_pos;
     //the total size of each of the arrays on this struct
     unsigned int array_size;
 }JACK_MIDI_CONT;
