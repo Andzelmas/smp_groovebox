@@ -71,9 +71,9 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
 
     //initialize the general song trk parameters like current bar, beat, play etc.
     jack_data->trk_params = params_init_param_container(7, (char*[7]){"Tempo", "Bar", "Beat", "Tick", "Play", "BPB", "Beat_Type"},
-							(float[7]){100, 1, 1, 0, 0, 4, 4},
-							(float[7]){10, 1, 1, 0, 0, 2, 2}, (float[7]){500, MAX_BARS, 16, 2000, 1, 16, 16},
-							(float[7]){1, 1, 1, floor(time_ticks_per_beat/4), 1, 1, 1},
+							(PARAM_T[7]){100, 1, 1, 0, 0, 4, 4},
+							(PARAM_T[7]){10, 1, 1, 0, 0, 2, 2}, (PARAM_T[7]){500, MAX_BARS, 16, 2000, 1, 16, 16},
+							(PARAM_T[7]){1, 1, 1, floor(time_ticks_per_beat/4), 1, 1, 1},
 							(unsigned char[7]){Int_type, Int_type, Int_type, Int_type, Int_type, Int_type, Int_type});
     if(!jack_data->trk_params){
 	jack_clean_memory(jack_data);

@@ -21,9 +21,9 @@ Copyright 2012 Nigel Redmon
 #define BASEFREQUENCY 20
 
 typedef struct _wavetable{
-    SAMPLE_T topFreq;
+    PARAM_T topFreq;
     int waveTableLen;
-    SAMPLE_T* waveTable;
+    PARAM_T* waveTable;
 }OSC_WAVETABLE;
 
 typedef struct _osc_wavetable_obj{
@@ -34,7 +34,7 @@ typedef struct _osc_wavetable_obj{
 }OSC_OBJ;
 
 
-static void defineSaw(int len, int numHarmonics, SAMPLE_T* ar, SAMPLE_T* ai){
+static void defineSaw(int len, int numHarmonics, PARAM_T* ar, PARAM_T* ai){
     if(numHarmonics > (len >> 1)) numHarmonics = (len >> 1);
     //zeroe the nums
     for (int i = 0; i < len; i++){
@@ -43,13 +43,13 @@ static void defineSaw(int len, int numHarmonics, SAMPLE_T* ar, SAMPLE_T* ai){
     }
 
     for (int i = 1, j = len - 1; i <= numHarmonics; i++, j--){
-	SAMPLE_T temp = -1.0 / i;
+	PARAM_T temp = -1.0 / i;
 	ar[i] = -temp;
 	ar[j] = temp;
     }
 }
 
-static void defineSqr(int len, int numHarmonics, SAMPLE_T* ar, SAMPLE_T* ai){
+static void defineSqr(int len, int numHarmonics, PARAM_T* ar, PARAM_T* ai){
     if(numHarmonics > (len >> 1)) numHarmonics = (len >> 1);
     //zeroe the nums
     for (int i = 0; i < len; i++){
@@ -58,13 +58,13 @@ static void defineSqr(int len, int numHarmonics, SAMPLE_T* ar, SAMPLE_T* ai){
     }
 
     for (int i = 1, j = len - 1; i <= numHarmonics; i++, j--){
-	SAMPLE_T temp = i & 0x01 ? 1.0 / i : 0.0;
+	PARAM_T temp = i & 0x01 ? 1.0 / i : 0.0;
 	ar[i] = -temp;
 	ar[j] = temp;
     }
 }
 
-static void defineTriang(int len, int numHarmonics, SAMPLE_T* ar, SAMPLE_T* ai){
+static void defineTriang(int len, int numHarmonics, PARAM_T* ar, PARAM_T* ai){
     if(numHarmonics > (len >> 1)) numHarmonics = (len >> 1);
     //zeroe the nums
     for (int i = 0; i < len; i++){
@@ -72,9 +72,9 @@ static void defineTriang(int len, int numHarmonics, SAMPLE_T* ar, SAMPLE_T* ai){
 	ar[i] = 0;
     }
 
-    SAMPLE_T sign = 1;
+    PARAM_T sign = 1;
     for (int i = 1, j = len - 1; i <= numHarmonics; i++, j--){
-	SAMPLE_T temp = i & 0x01 ? 1.0 / (i * i) * (sign = -sign) : 0.0;
+	PARAM_T temp = i & 0x01 ? 1.0 / (i * i) * (sign = -sign) : 0.0;
 	ar[i] = -temp;
 	ar[j] = temp;
     }
@@ -90,13 +90,13 @@ static void defineTriang(int len, int numHarmonics, SAMPLE_T* ar, SAMPLE_T* ai){
  Computer Science Dept. 
  Princeton University 08544
 */
-static void fft(int N, SAMPLE_T* ar, SAMPLE_T* ai){
+static void fft(int N, PARAM_T* ar, PARAM_T* ai){
     int i, j, k, L;            /* indexes */
     int M, TEMP, LE, LE1, ip;  /* M = log N */
     int NV2, NM1;
-    SAMPLE_T t;               /* temp */
-    SAMPLE_T Ur, Ui, Wr, Wi, Tr, Ti;
-    SAMPLE_T Ur_old;
+    PARAM_T t;               /* temp */
+    PARAM_T Ur, Ui, Wr, Wi, Tr, Ti;
+    PARAM_T Ur_old;
     
     // if ((N > 1) && !(N & (N - 1)))   // make sure we have a power of 2
     
@@ -152,9 +152,9 @@ static void fft(int N, SAMPLE_T* ar, SAMPLE_T* ai){
     }
 }
 
-static int addWaveTable(OSC_OBJ* osc, int len, SAMPLE_T* waveTableIn, SAMPLE_T topFreq){
+static int addWaveTable(OSC_OBJ* osc, int len, PARAM_T* waveTableIn, PARAM_T topFreq){
     if(osc->numWaveTables < WAVETABLE_SLOTS){
-	SAMPLE_T* waveTable = malloc(sizeof(SAMPLE_T) * len);
+	PARAM_T* waveTable = malloc(sizeof(PARAM_T) * len);
 	if(!waveTable)return -1;
 	osc->waveTables[osc->numWaveTables].waveTableLen = len;
 	osc->waveTables[osc->numWaveTables].topFreq = topFreq;
@@ -171,19 +171,19 @@ static int addWaveTable(OSC_OBJ* osc, int len, SAMPLE_T* waveTableIn, SAMPLE_T t
     return osc->numWaveTables;
 }
 
-static SAMPLE_T makeWaveTable(OSC_OBJ* osc, int len, SAMPLE_T* ar, SAMPLE_T* ai, SAMPLE_T scale, SAMPLE_T topFreq){
+static PARAM_T makeWaveTable(OSC_OBJ* osc, int len, PARAM_T* ar, PARAM_T* ai, PARAM_T scale, PARAM_T topFreq){
     fft(len, ar, ai);
     if(scale == 0.0){
-	SAMPLE_T max = 0;
+	PARAM_T max = 0;
 	for(int i = 0; i < len; i++){
-	    SAMPLE_T temp = fabs((double)ai[i]);
+	    PARAM_T temp = fabs((double)ai[i]);
 	    if(max < temp) max = temp;
 	}
 	if(max > 0)scale = 1.0 / max * .999;
     }
 
     //normalize
-    SAMPLE_T* wave = malloc(sizeof(SAMPLE_T) * len);
+    PARAM_T* wave = malloc(sizeof(PARAM_T) * len);
     if(wave){
 	for(int i = 0; i < len; i++){
 	    wave[i] = ai[i] * scale;
@@ -198,7 +198,7 @@ static SAMPLE_T makeWaveTable(OSC_OBJ* osc, int len, SAMPLE_T* ar, SAMPLE_T* ai,
     return scale;
 }
 
-OSC_OBJ* osc_init_osc_wavetable(int table_type, SAMPLE_T esr){
+OSC_OBJ* osc_init_osc_wavetable(int table_type, PARAM_T esr){
     OSC_OBJ* osc = (OSC_OBJ*)malloc(sizeof(OSC_OBJ));
     if(!osc)return NULL;
     osc->sampleRate = esr;
@@ -225,20 +225,20 @@ OSC_OBJ* osc_init_osc_wavetable(int table_type, SAMPLE_T esr){
     v++;
     if(v < 256) v = 256;
     int tableLen = v * 2 * OVERSAMPLE;
-    SAMPLE_T* ar = malloc(sizeof(SAMPLE_T) * tableLen);
+    PARAM_T* ar = malloc(sizeof(PARAM_T) * tableLen);
     if(!ar){
 	osc_clean_osc_wavetable(osc);
 	return NULL;
     }    
-    SAMPLE_T* ai = malloc(sizeof(SAMPLE_T) * tableLen);
+    PARAM_T* ai = malloc(sizeof(PARAM_T) * tableLen);
     if(!ai){
 	if(ar)free(ar);
 	osc_clean_osc_wavetable(osc);
 	return NULL;
     }
 
-    SAMPLE_T topFreq = BASEFREQUENCY * 2.0 / osc->sampleRate;
-    SAMPLE_T scale = 0.0; 
+    PARAM_T topFreq = BASEFREQUENCY * 2.0 / osc->sampleRate;
+    PARAM_T scale = 0.0; 
     for(; maxHarms >= 1; maxHarms >>=1){
 	if(table_type == SIN_WAVETABLE || table_type == SAW_WAVETABLE) {
 	    defineSaw(tableLen, maxHarms, ar, ai);
@@ -264,20 +264,20 @@ OSC_OBJ* osc_init_osc_wavetable(int table_type, SAMPLE_T esr){
     return osc;
 }
 
-void osc_updatePhase(OSC_OBJ* osc, SAMPLE_T* phasor, SAMPLE_T freq){
+void osc_updatePhase(OSC_OBJ* osc, PARAM_T* phasor, PARAM_T freq){
     if(!osc)return;
 
-    SAMPLE_T phaseInc = freq / osc->sampleRate;
+    PARAM_T phaseInc = freq / osc->sampleRate;
     
     *phasor += phaseInc;
     if(*phasor >= 1.0) *phasor -= 1.0;
     if(*phasor >= 1.0) *phasor = 0.0;
 }
 
-SAMPLE_T osc_getOutput(OSC_OBJ* osc, SAMPLE_T phasor, SAMPLE_T freq, int with_phaseOfs, SAMPLE_T phaseOfs){
+PARAM_T osc_getOutput(OSC_OBJ* osc, PARAM_T phasor, PARAM_T freq, int with_phaseOfs, PARAM_T phaseOfs){
     if(!osc)return 0.0;
 
-    SAMPLE_T phaseInc = freq / osc->sampleRate;
+    PARAM_T phaseInc = freq / osc->sampleRate;
     int waveTableIdx = 0;
     while((phaseInc >= osc->waveTables[waveTableIdx].topFreq) && (waveTableIdx < (osc->numWaveTables -1))){
 	++waveTableIdx;
@@ -285,16 +285,16 @@ SAMPLE_T osc_getOutput(OSC_OBJ* osc, SAMPLE_T phasor, SAMPLE_T freq, int with_ph
     OSC_WAVETABLE* waveTable = &(osc->waveTables[waveTableIdx]);
     if(!waveTable)return 0.0;
     
-    SAMPLE_T temp = phasor * waveTable->waveTableLen;
-    SAMPLE_T samp = math_get_from_table_lerp(waveTable->waveTable, waveTable->waveTableLen, temp);
+    PARAM_T temp = phasor * waveTable->waveTableLen;
+    PARAM_T samp = math_get_from_table_lerp(waveTable->waveTable, waveTable->waveTableLen, temp);
     if(with_phaseOfs == 0)return samp;
 
-    SAMPLE_T offsetPhasor = phasor + phaseOfs;
+    PARAM_T offsetPhasor = phasor + phaseOfs;
     if(offsetPhasor >= 1.0) offsetPhasor -= 1.0;
     if(offsetPhasor >= 1.0) offsetPhasor = 0.0;
     
     temp = offsetPhasor * waveTable->waveTableLen;
-    SAMPLE_T samp_ofs = math_get_from_table_lerp(waveTable->waveTable, waveTable->waveTableLen, temp);
+    PARAM_T samp_ofs = math_get_from_table_lerp(waveTable->waveTable, waveTable->waveTableLen, temp);
     return samp - samp_ofs;
     
 }

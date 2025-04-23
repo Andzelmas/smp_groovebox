@@ -32,15 +32,15 @@ static thread_local bool is_audio_thread = false;
 #define ADSR_MAX_TIME 5
 
 typedef struct _synth_adsr{
-    SAMPLE_T amp;//the current calculated amp from the adsr
-    SAMPLE_T r_amp; //release amp, that holds the amp that was at the release phase initiation
+    PARAM_T amp;//the current calculated amp from the adsr
+    PARAM_T r_amp; //release amp, that holds the amp that was at the release phase initiation
     unsigned int phase;//current phase of the ADSR (1 - A, 2 - D etc.)
     int time_frames;//how long the adsr is progressing
     int r_frames;//release frames to calc when to end the release phase
-    SAMPLE_T a;
-    SAMPLE_T d;
-    SAMPLE_T s;
-    SAMPLE_T r;
+    PARAM_T a;
+    PARAM_T d;
+    PARAM_T s;
+    PARAM_T r;
     SAMPLE_T samplerate;
 }SYNTH_ADSR;
 
@@ -61,9 +61,9 @@ typedef struct _synth_voice{
     //the voice amp adsr
     SYNTH_ADSR* vco_adsr;
     //the current phase of the vco
-    SAMPLE_T vco_ph;
+    PARAM_T vco_ph;
     //the current phase of the detune wobble lfo
-    SAMPLE_T wobble_ph;
+    PARAM_T wobble_ph;
     //random seed for random stuff in the voice, this should
     //be updated when the voices starts playing
     unsigned int rand_seed;
@@ -240,8 +240,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
     }
     //fill the semitone to frequency multiplier convert table with values
     for(int i = 0; i < math_range_table_get_len(synth_data->semi_to_freq_table); i++){
-	SAMPLE_T cur_semitones = math_range_table_get_value(synth_data->semi_to_freq_table, i);
-	SAMPLE_T cur_freq_ratio = exp_range_ratio(12.0, cur_semitones);
+	PARAM_T cur_semitones = math_range_table_get_value(synth_data->semi_to_freq_table, i);
+	PARAM_T cur_freq_ratio = exp_range_ratio(12.0, cur_semitones);
 	math_range_table_enter_value(synth_data->semi_to_freq_table, i, cur_freq_ratio);
     }
     
@@ -252,8 +252,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
     }
     //fill the midivel to amp table with values
     for(int i = 0; i < math_range_table_get_len(synth_data->log_curve); i++){
-	SAMPLE_T cur_val = math_range_table_get_value(synth_data->log_curve, i);
-	SAMPLE_T cur_log = 0.0;
+	PARAM_T cur_val = math_range_table_get_value(synth_data->log_curve, i);
+	PARAM_T cur_log = 0.0;
 	if(cur_val > 0.0){
 	    cur_log = 0.25*(log10((double)cur_val)/log10(2.0)) + 1;
 	}
@@ -269,8 +269,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
     }
     //fill the amp exponential table
     for(int i = 0; i < math_range_table_get_len(synth_data->amp_to_exp); i++){
-	SAMPLE_T cur_amp = math_range_table_get_value(synth_data->amp_to_exp, i);
-	SAMPLE_T cur_exp = pow(2.0, cur_amp * (10.0) - 10.0);
+	PARAM_T cur_amp = math_range_table_get_value(synth_data->amp_to_exp, i);
+	PARAM_T cur_exp = pow(2.0, cur_amp * (10.0) - 10.0);
 	if(cur_amp == 0) cur_exp = 0.0;
 	math_range_table_enter_value(synth_data->amp_to_exp, i, cur_exp);
     }
@@ -465,10 +465,10 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	}
 
 	cur_osc->params = params_init_param_container(10, (char* [10]){"Amp", "Freq", "Spread", "Wobble", "Octave", "Table", "A", "D", "S", "R"},
-						      (float [10]){0.8, 0, 0, 0, 0, 0, 0.0, 0.0, 1.0, 0.001},
-						      (float [10]){0.00001, -12, 0, 0, ((MAX_SEMITONES - 12)/12)*-1, 0, 0.0, 0.0, 0.0, 0.0},
-						      (float [10]){1, 12, 1, 1, (MAX_SEMITONES - 12)/12, 3, 5.0, 5.0, 1.0, 5.0},
-						      (float [10]){0.01, 0.1, 0.01, 0.05, 1, 1, 0.1, 0.1, 0.01, 0.1},
+						      (PARAM_T [10]){0.8, 0, 0, 0, 0, 0, 0.0, 0.0, 1.0, 0.001},
+						      (PARAM_T [10]){0.00001, -12, 0, 0, ((MAX_SEMITONES - 12)/12)*-1, 0, 0.0, 0.0, 0.0, 0.0},
+						      (PARAM_T [10]){1, 12, 1, 1, (MAX_SEMITONES - 12)/12, 3, 5.0, 5.0, 1.0, 5.0},
+						      (PARAM_T [10]){0.01, 0.1, 0.01, 0.05, 1, 1, 0.1, 0.1, 0.01, 0.1},
 						      (unsigned char [10]){DB_Return_Type, Float_type, Float_type, Float_type, Int_type, String_Return_Type,
 							  Curve_Float_Return_Type, Curve_Float_Return_Type, Float_type, Curve_Float_Return_Type});
 	//write strings to parameters that are String_Return_Type
@@ -505,12 +505,12 @@ int synth_activate_backend_ports(SYNTH_DATA* synth_data, SYNTH_OSC* osc){
     return 0;
 }
 
-static int synth_process_adsr(SYNTH_ADSR* adsr, unsigned int voice_playing, SAMPLE_T* ret_amp){
+static int synth_process_adsr(SYNTH_ADSR* adsr, unsigned int voice_playing, PARAM_T* ret_amp){
     if(!adsr)return -1;
 
-    SAMPLE_T a_frames = adsr->a * adsr->samplerate;
-    SAMPLE_T d_frames = adsr->d * adsr->samplerate;
-    SAMPLE_T r_frames = adsr->r * adsr->samplerate;
+    PARAM_T a_frames = adsr->a * adsr->samplerate;
+    PARAM_T d_frames = adsr->d * adsr->samplerate;
+    PARAM_T r_frames = adsr->r * adsr->samplerate;
     
     if(voice_playing == 1){
 	adsr->time_frames += 1;
@@ -528,7 +528,7 @@ static int synth_process_adsr(SYNTH_ADSR* adsr, unsigned int voice_playing, SAMP
     int ret_val = 0;
     //attack phase
     if(adsr->phase == 1){
-	adsr->amp = fit_range(a_frames, 0.0, 1.0, 0.0, (SAMPLE_T)adsr->time_frames);
+	adsr->amp = fit_range(a_frames, 0.0, 1.0, 0.0, (PARAM_T)adsr->time_frames);
 	ret_val = 1;
 	
 	if(adsr->amp >= 1.0 || adsr->time_frames >= a_frames){
@@ -538,7 +538,7 @@ static int synth_process_adsr(SYNTH_ADSR* adsr, unsigned int voice_playing, SAMP
     }
 
     if(adsr->phase == 2){
-	adsr->amp = fit_range(a_frames + d_frames, a_frames, adsr->s, 1.0, (SAMPLE_T)adsr->time_frames);
+	adsr->amp = fit_range(a_frames + d_frames, a_frames, adsr->s, 1.0, (PARAM_T)adsr->time_frames);
 	ret_val = 2;
 	
 	if(adsr->amp <= adsr->s || adsr->time_frames >= (a_frames + d_frames)){
@@ -553,7 +553,7 @@ static int synth_process_adsr(SYNTH_ADSR* adsr, unsigned int voice_playing, SAMP
     }
 
     if(adsr->phase == 4){
-	adsr->amp = fit_range(r_frames, 0.0, 0.0, adsr->r_amp, (SAMPLE_T)adsr->r_frames);
+	adsr->amp = fit_range(r_frames, 0.0, 0.0, adsr->r_amp, (PARAM_T)adsr->r_frames);
 	adsr->r_frames += 1;
 	ret_val = 4;
 	if(adsr->amp <= 0.0 || adsr->r <= 0.0){
@@ -579,7 +579,7 @@ static void synth_adsr_reset(SYNTH_ADSR* adsr){
     adsr->time_frames = 0;
 }
 
-static void synth_adsr_update(SYNTH_ADSR* adsr, SAMPLE_T a, SAMPLE_T d, SAMPLE_T s, SAMPLE_T r, SAMPLE_T samplerate){
+static void synth_adsr_update(SYNTH_ADSR* adsr, PARAM_T a, PARAM_T d, PARAM_T s, PARAM_T r, PARAM_T samplerate){
     if(!adsr)return;
     adsr->a = a;
     adsr->d = d;
@@ -597,16 +597,16 @@ static void synth_process_osc_voices(SYNTH_DATA* synth_data, SYNTH_OSC* osc, NFR
     
     unsigned char ret_type = 0;
     //interpolate the amp value
-    SAMPLE_T amp_in = param_get_value(osc->params, 0, &ret_type, 0, 1, 1);
-    SAMPLE_T freq_in = param_get_value(osc->params, 1, &ret_type, 0, 0, 1);
-    SAMPLE_T octave_in =  param_get_value(osc->params, 4, &ret_type, 0, 0, 1);
-    SAMPLE_T wobble = param_get_value(osc->params, 3, &ret_type, 0, 0, 1);
-    SAMPLE_T spread = param_get_value(osc->params, 2, &ret_type, 0, 0, 1);
+    PARAM_T amp_in = param_get_value(osc->params, 0, &ret_type, 0, 1, 1);
+    PARAM_T freq_in = param_get_value(osc->params, 1, &ret_type, 0, 0, 1);
+    PARAM_T octave_in =  param_get_value(osc->params, 4, &ret_type, 0, 0, 1);
+    PARAM_T wobble = param_get_value(osc->params, 3, &ret_type, 0, 0, 1);
+    PARAM_T spread = param_get_value(osc->params, 2, &ret_type, 0, 0, 1);
     //get the adsr values from the user parameters
-    SAMPLE_T vco_a = param_get_value(osc->params, 6, &ret_type, 1, 0, 1);
-    SAMPLE_T vco_d = param_get_value(osc->params, 7, &ret_type, 1, 0, 1);
-    SAMPLE_T vco_s = param_get_value(osc->params, 8, &ret_type, 0, 0, 1);
-    SAMPLE_T vco_r = param_get_value(osc->params, 9, &ret_type, 1, 0, 1);
+    PARAM_T vco_a = param_get_value(osc->params, 6, &ret_type, 1, 0, 1);
+    PARAM_T vco_d = param_get_value(osc->params, 7, &ret_type, 1, 0, 1);
+    PARAM_T vco_s = param_get_value(osc->params, 8, &ret_type, 0, 0, 1);
+    PARAM_T vco_r = param_get_value(osc->params, 9, &ret_type, 1, 0, 1);
 
     for(int i = 0; i < osc->num_voices; i++){
 	SYNTH_VOICE* cur_voice = &(osc->osc_voices[i]);
@@ -625,36 +625,36 @@ static void synth_process_osc_voices(SYNTH_DATA* synth_data, SYNTH_OSC* osc, NFR
 	srand((i + 1) * cur_voice->rand_seed);
 	int rand_val = rand();
 	//spread randomness
-	SAMPLE_T spread_am = 0;
+	PARAM_T spread_am = 0;
 	if(spread != 0){
-	    spread_am = fit_range((SAMPLE_T)RAND_MAX, 0.0, spread, spread * -1, (SAMPLE_T)rand_val);
+	    spread_am = fit_range((PARAM_T)RAND_MAX, 0.0, spread, spread * -1, (PARAM_T)rand_val);
 	}	    
 	//wobble frequency randomness
-	SAMPLE_T wobble_freq = 1.5;
-	SAMPLE_T wobble_am = 0.0;
+	PARAM_T wobble_freq = 1.5;
+	PARAM_T wobble_am = 0.0;
 	if(wobble!=0){
-	    wobble_freq = fit_range((SAMPLE_T)RAND_MAX, 0.0, wobble_freq * 0.5, wobble_freq, (SAMPLE_T)rand_val);
-	    wobble_am = fit_range((SAMPLE_T)RAND_MAX, 0.0, wobble, wobble * 0.5, (SAMPLE_T)rand_val);
+	    wobble_freq = fit_range((PARAM_T)RAND_MAX, 0.0, wobble_freq * 0.5, wobble_freq, (PARAM_T)rand_val);
+	    wobble_am = fit_range((PARAM_T)RAND_MAX, 0.0, wobble, wobble * 0.5, (PARAM_T)rand_val);
 	}
 	    
-	SAMPLE_T freq = midi_note_to_freq(cur_voice->midi_note);	
+	PARAM_T freq = midi_note_to_freq(cur_voice->midi_note);	
 	//linear midi vel to amp
-	SAMPLE_T midi_amp = fit_range(127.0, 0.0, 1.0, 0.0, cur_voice->midi_vel);
+	PARAM_T midi_amp = fit_range(127.0, 0.0, 1.0, 0.0, cur_voice->midi_vel);
 	//midi vel to amp with a curve
 	midi_amp = math_range_table_convert_value(synth_data->log_curve, midi_amp);
 	
 	//process the wavetable, get buffer
 	for(int j = 0; j < nframes; j++){     
 	    //add the octaves and semitones
-	    SAMPLE_T octaves_semitones = octave_in * 12;
-	    SAMPLE_T freq_final = freq * math_range_table_convert_value(synth_data->semi_to_freq_table, octaves_semitones + freq_in);
+	    PARAM_T octaves_semitones = octave_in * 12;
+	    PARAM_T freq_final = freq * math_range_table_convert_value(synth_data->semi_to_freq_table, octaves_semitones + freq_in);
 	    //process the adsr
-	    SAMPLE_T adsr_amp = 1.0;
+	    PARAM_T adsr_amp = 1.0;
 	    int adsr_phase = synth_process_adsr(cur_voice->vco_adsr, cur_voice->playing, &adsr_amp);
 	    //spread will help spread the voices in stereo, by simply making random voices more quite in
 	    //left or right side
-	    SAMPLE_T spread_mult_L = 1;
-	    SAMPLE_T spread_mult_R = 1;
+	    PARAM_T spread_mult_L = 1;
+	    PARAM_T spread_mult_R = 1;
 	    if(spread!=0){
 		if(spread_am < 0) spread_mult_R -= (spread_am * -1);
 		if(spread_am > 0) spread_mult_L -= spread_am;
@@ -662,17 +662,17 @@ static void synth_process_osc_voices(SYNTH_DATA* synth_data, SYNTH_OSC* osc, NFR
 	    
 	    //randomly wobble the voices if the parameter is not 0
 	    if(wobble!=0){
-		SAMPLE_T wobble_semitones = osc_getOutput(osc->sin_osc, cur_voice->wobble_ph, wobble_freq, 0, 0) * wobble_am;
+		PARAM_T wobble_semitones = osc_getOutput(osc->sin_osc, cur_voice->wobble_ph, wobble_freq, 0, 0) * wobble_am;
 		freq_final = freq_final * math_range_table_convert_value(synth_data->semi_to_freq_table, wobble_semitones);	
 		osc_updatePhase(osc->sin_osc, &(cur_voice->wobble_ph), wobble_freq);
 	    }
 
-	    SAMPLE_T wave_sample_L = osc_getOutput(osc_table, cur_voice->vco_ph, freq_final, 0, 0);
-	    SAMPLE_T wave_sample_R = wave_sample_L;
+	    PARAM_T wave_sample_L = osc_getOutput(osc_table, cur_voice->vco_ph, freq_final, 0, 0);
+	    PARAM_T wave_sample_R = wave_sample_L;
 	    osc_updatePhase(osc_table, &(cur_voice->vco_ph), freq_final);
 
-	    SAMPLE_T interp_amp_in_L = params_interp_val_get_value(cur_voice->vco_amp_L, amp_in * adsr_amp * spread_mult_L * midi_amp);
-	    SAMPLE_T interp_amp_in_R = params_interp_val_get_value(cur_voice->vco_amp_R, amp_in * adsr_amp * spread_mult_R * midi_amp);	    
+	    PARAM_T interp_amp_in_L = params_interp_val_get_value(cur_voice->vco_amp_L, amp_in * adsr_amp * spread_mult_L * midi_amp);
+	    PARAM_T interp_amp_in_R = params_interp_val_get_value(cur_voice->vco_amp_R, amp_in * adsr_amp * spread_mult_R * midi_amp);	    
 	    
 	    osc->buffer_L[j] += wave_sample_L * math_range_table_convert_value(synth_data->amp_to_exp, interp_amp_in_L);
 	    osc->buffer_R[j] += wave_sample_R * math_range_table_convert_value(synth_data->amp_to_exp, interp_amp_in_R);
@@ -715,7 +715,7 @@ static void synth_process_osc_voices(SYNTH_DATA* synth_data, SYNTH_OSC* osc, NFR
 }
 
 //this function finds a voice to play, does not produce any sound though
-static void synth_play_osc_rt(SYNTH_OSC* osc, MIDI_DATA_T vel, MIDI_DATA_T note, SAMPLE_T rand_seed){
+static void synth_play_osc_rt(SYNTH_OSC* osc, MIDI_DATA_T vel, MIDI_DATA_T note, PARAM_T rand_seed){
     if(!osc)return;   
     //go through the voices and if its stopped, play it
     if(!osc->osc_voices)return;
@@ -731,7 +731,7 @@ static void synth_play_osc_rt(SYNTH_OSC* osc, MIDI_DATA_T vel, MIDI_DATA_T note,
 	    to_play_voice = cur_voice;
 	    //calc a random phase for this voice, so each voice does not start on the same phase
 	    srand((unsigned int)(vel * (to_play_voice->id+1)*45999));
-	    to_play_voice->vco_ph = fit_range((SAMPLE_T)RAND_MAX, 0.0, 1.0, 0.0, (SAMPLE_T)rand());
+	    to_play_voice->vco_ph = fit_range((PARAM_T)RAND_MAX, 0.0, 1.0, 0.0, (PARAM_T)rand());
 	    found_voice = 1;
 	    break;
 	}
@@ -766,7 +766,7 @@ static void synth_play_osc_rt(SYNTH_OSC* osc, MIDI_DATA_T vel, MIDI_DATA_T note,
 	//its set before playing the voice so the table does not change while the sound is playing
 	to_play_voice->osc_table = osc->sin_osc;
 	unsigned char ret_type = 0;
-	SAMPLE_T table  = param_get_value(osc->params, 5, &ret_type, 0, 0, 1);
+	PARAM_T table  = param_get_value(osc->params, 5, &ret_type, 0, 0, 1);
 	if(table == SIN_WAVETABLE)to_play_voice->osc_table = osc->sin_osc;	
 	if(table == TRIANGLE_WAVETABLE)to_play_voice->osc_table = osc->triang_osc;
 	if(table == SAW_WAVETABLE)to_play_voice->osc_table = osc->saw_osc;

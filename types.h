@@ -1,5 +1,7 @@
 #pragma once
-#define MAX_STRING_MSG_LENGTH 128 //max string size for sys messages, parameter names
+#include "structs.h"
+#define MAX_STRING_MSG_LENGTH 128 //max string size for sys messages
+#define MAX_PARAM_NAME_LENGTH 100 //the max length for param names
 #define MAX_SYS_BUFFER_ARRAY_SIZE 256 //max size for ring buffer arrays in sys messages between threads
 #define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 2048 //max size for the parameter ring buffer messaging arrays
 #define RT_CYCLES 25 //in what interval the rt thread should give info to the ui thread to not overwhelm it.
@@ -99,7 +101,7 @@ typedef struct _app_param_ring_data_bit{
     //the parameter id of the object.
     int param_id;
     //the parameter value to what to set the parameter or what the parameter value is now
-    float param_value;
+    PARAM_T param_value;
     //what to do with parameter? check paramOperType
     unsigned char param_op;
 }PARAM_RING_DATA_BIT;

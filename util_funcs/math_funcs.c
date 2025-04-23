@@ -3,17 +3,17 @@
 #include <stdlib.h>
 
 typedef struct _range_table{
-    SAMPLE_T min_pt; //minimum value in the table
-    SAMPLE_T max_pt;//maximum value in the table
-    SAMPLE_T pt_inc;//the increment that the values will be looked up by
+    PARAM_T min_pt; //minimum value in the table
+    PARAM_T max_pt;//maximum value in the table
+    PARAM_T pt_inc;//the increment that the values will be looked up by
     unsigned int len;//table total length, calculated
-    SAMPLE_T* table;//the table filled with values, growing in pt_inc increments
+    PARAM_T* table;//the table filled with values, growing in pt_inc increments
 }MATH_RANGE_TABLE;
 
-MATH_RANGE_TABLE* math_init_range_table(SAMPLE_T min_pt, SAMPLE_T max_pt, SAMPLE_T pt_inc){
-    SAMPLE_T total_len = (max_pt - min_pt) / pt_inc;
+MATH_RANGE_TABLE* math_init_range_table(PARAM_T min_pt, PARAM_T max_pt, PARAM_T pt_inc){
+    PARAM_T total_len = (max_pt - min_pt) / pt_inc;
     unsigned int len_int = (unsigned int)total_len;
-    SAMPLE_T fracPart = total_len - len_int;
+    PARAM_T fracPart = total_len - len_int;
     //this means that with given pt_inc we cant get the max_pt going from min_pt, so max_pt will be increased later
     if(fracPart > 0) len_int += 1;
     //the length of the table has to be 1 bigger
@@ -24,13 +24,13 @@ MATH_RANGE_TABLE* math_init_range_table(SAMPLE_T min_pt, SAMPLE_T max_pt, SAMPLE
     range_table->max_pt = max_pt;
     range_table->pt_inc = pt_inc;
     range_table->len = len_int;
-    range_table->table = malloc(sizeof(SAMPLE_T) * len_int);
+    range_table->table = malloc(sizeof(PARAM_T) * len_int);
     if(!range_table->table){
 	free(range_table);
 	return NULL;
     }
     //just to track the max_pt in case the max_pt cant be reached with pt_inc given, and we have to increase max_pt
-    SAMPLE_T cur_max_pt = min_pt;
+    PARAM_T cur_max_pt = min_pt;
     //fill the table with 0.0
     for(unsigned int i = 0; i < len_int; i++){
 	range_table->table[i] = 0.0;
@@ -40,14 +40,14 @@ MATH_RANGE_TABLE* math_init_range_table(SAMPLE_T min_pt, SAMPLE_T max_pt, SAMPLE
     return range_table;
 }
 
-SAMPLE_T math_range_table_convert_value(MATH_RANGE_TABLE* range_table, SAMPLE_T get_value){
+PARAM_T math_range_table_convert_value(MATH_RANGE_TABLE* range_table, PARAM_T get_value){
     if(!range_table)return 0.0;
     if(!range_table->table)return 0.0;
     if(range_table->pt_inc <= 0)return 0.0;
     if(range_table->len <= 0) return 0.0;
     //get_value is the value user wants to convert to a value in the table
     //so first calculate what index is this
-    SAMPLE_T index = (get_value - range_table->min_pt) / range_table->pt_inc;
+    PARAM_T index = (get_value - range_table->min_pt) / range_table->pt_inc;
     if(index >= range_table->len) index -= 1.0;
     //if the index is still beyond the table user gave us a huge value, just wrap around the table
     if(index >= range_table->len) index = range_table->len - 1.0;
@@ -55,7 +55,7 @@ SAMPLE_T math_range_table_convert_value(MATH_RANGE_TABLE* range_table, SAMPLE_T 
     return math_get_from_table_lerp(range_table->table, range_table->len, index);
 }
 
-SAMPLE_T math_range_table_get_value(MATH_RANGE_TABLE* range_table, unsigned int index){
+PARAM_T math_range_table_get_value(MATH_RANGE_TABLE* range_table, unsigned int index){
     if(!range_table)return 0.0;
     if(!range_table->table)return 0.0;
     if(range_table->pt_inc <= 0)return 0.0;
@@ -70,7 +70,7 @@ unsigned int math_range_table_get_len(MATH_RANGE_TABLE* range_table){
     return range_table->len;
 }
 
-int math_range_table_enter_value(MATH_RANGE_TABLE* range_table, unsigned int index, SAMPLE_T val){
+int math_range_table_enter_value(MATH_RANGE_TABLE* range_table, unsigned int index, PARAM_T val){
     if(!range_table)return -1;
     if(index >= range_table->len)return -1;
     range_table->table[index] = val;
@@ -84,13 +84,13 @@ void math_range_table_clean(MATH_RANGE_TABLE* range_table){
 }
 
 //fit old range to a new one
-SAMPLE_T fit_range(SAMPLE_T i_end, SAMPLE_T i_start, SAMPLE_T o_end, SAMPLE_T o_start, SAMPLE_T in){
-    SAMPLE_T slope = 1.0*(o_end-o_start)/(i_end-i_start);
+PARAM_T fit_range(PARAM_T i_end, PARAM_T i_start, PARAM_T o_end, PARAM_T o_start, PARAM_T in){
+    PARAM_T slope = 1.0*(o_end-o_start)/(i_end-i_start);
     return o_start + slope*(in - i_start);
 }
 
-SAMPLE_T midi_note_to_freq(MIDI_DATA_T note_in){
-    SAMPLE_T ret_val = 440;
+PARAM_T midi_note_to_freq(MIDI_DATA_T note_in){
+    PARAM_T ret_val = 440;
     switch(note_in){
     case 0:
 	ret_val = 8.1757989156;
@@ -482,29 +482,29 @@ SAMPLE_T midi_note_to_freq(MIDI_DATA_T note_in){
     return ret_val;
 }
 
-SAMPLE_T exp_range_ratio(SAMPLE_T num_items, SAMPLE_T cur_item){
+PARAM_T exp_range_ratio(PARAM_T num_items, PARAM_T cur_item){
     if(cur_item == 0)return 1;
     return pow(pow(2, 1.0/num_items), cur_item);
 }
 
-SAMPLE_T freq_add_semitones(SAMPLE_T freq_in, SAMPLE_T semitones){
-    SAMPLE_T ret_freq = freq_in;
+PARAM_T freq_add_semitones(PARAM_T freq_in, PARAM_T semitones){
+    PARAM_T ret_freq = freq_in;
     if(semitones == 0)return freq_in;
-    SAMPLE_T freq_ratio = exp_range_ratio(12.0, semitones);
-    ret_freq = (SAMPLE_T)(freq_in * freq_ratio);
+    PARAM_T freq_ratio = exp_range_ratio(12.0, semitones);
+    ret_freq = (PARAM_T)(freq_in * freq_ratio);
     return ret_freq;
 }
 
-SAMPLE_T math_get_from_table_lerp(SAMPLE_T* table_in, unsigned int len, SAMPLE_T index){
+PARAM_T math_get_from_table_lerp(PARAM_T* table_in, unsigned int len, PARAM_T index){
     unsigned int int_idx = index;
     if(int_idx >= len) int_idx = len - 1;
     
-    SAMPLE_T fracPart = index - int_idx;
+    PARAM_T fracPart = index - int_idx;
     
-    SAMPLE_T samp0 = table_in[int_idx];
+    PARAM_T samp0 = table_in[int_idx];
     if(++int_idx >= len) int_idx = 0;
-    SAMPLE_T samp1 = table_in[int_idx];
-    SAMPLE_T samp = samp0 + (samp1 - samp0) * fracPart;
+    PARAM_T samp1 = table_in[int_idx];
+    PARAM_T samp = samp0 + (samp1 - samp0) * fracPart;
 
     return samp;
 }

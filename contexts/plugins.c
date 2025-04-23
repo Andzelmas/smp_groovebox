@@ -975,10 +975,10 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     if(plug->controls){
 	unsigned int num_of_params = plug->num_controls;
 	char** param_names = malloc(sizeof(char*) * num_of_params);
-	float* param_vals = malloc(sizeof(float) * num_of_params);
-	float* param_mins = malloc(sizeof(float) * num_of_params);
-	float* param_maxs = malloc(sizeof(float) * num_of_params);
-	float* param_incs = malloc(sizeof(float) * num_of_params);
+	PARAM_T* param_vals = malloc(sizeof(PARAM_T) * num_of_params);
+	PARAM_T* param_mins = malloc(sizeof(PARAM_T) * num_of_params);
+	PARAM_T* param_maxs = malloc(sizeof(PARAM_T) * num_of_params);
+	PARAM_T* param_incs = malloc(sizeof(PARAM_T) * num_of_params);
 	unsigned char* val_types = malloc(sizeof(char) * num_of_params);
 	
 	for(unsigned int ct_iter = 0; ct_iter < plug->num_controls; ct_iter++){
@@ -1015,8 +1015,8 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 		continue;
 	    }
 	    //decide how big the increment of the parameter will be
-	    float total_range = abs(param_maxs[ct_iter] - param_mins[ct_iter]);
-	    float cur_inc = 1;
+	    PARAM_T total_range = abs(param_maxs[ct_iter] - param_mins[ct_iter]);
+	    PARAM_T cur_inc = 1;
 	    if(val_t == Float_type){
 		cur_inc = total_range * 0.01;
 	    }
@@ -1605,7 +1605,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    if(!cur_control)continue;
 	    if(!(cur_control->is_writable))continue;
 	    unsigned char param_val_type = 0;
-	    SAMPLE_T param_value = param_get_value(plug->plug_params, ctrl_iter, &param_val_type, 0, 0, 1);
+	    PARAM_T param_value = param_get_value(plug->plug_params, ctrl_iter, &param_val_type, 0, 0, 1);
 	    if(param_val_type == 0)continue;
 
 	    if(cur_control->type == PORT){
@@ -1676,7 +1676,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    //get the parameter value, so the parameter is_changed will be 0, otherwise on next cycle this parameter value will be sent to the plugin
 		    //no need for that since we got this value from the plugin already
 		    unsigned char param_val_type = 0;
-		    SAMPLE_T param_value = param_get_value(plug->plug_params, cur_port->param_index, &param_val_type, 0, 0, 1);
+		    PARAM_T param_value = param_get_value(plug->plug_params, cur_port->param_index, &param_val_type, 0, 0, 1);
 		}
 	    }
 	    if(cur_port->type == TYPE_EVENT){

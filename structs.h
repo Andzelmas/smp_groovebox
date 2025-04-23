@@ -9,6 +9,9 @@ typedef double SAMPLE_T;
 typedef jack_default_audio_sample_t SAMPLE_T;
 #endif
 
+//precision of the parameter values
+typedef double PARAM_T;
+
 //nframes type to use for buffer counts etc.
 typedef jack_nframes_t NFRAMES_T;
 

@@ -264,7 +264,7 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_P
 		//create buffer for float32
 		cur_clap_port->data32[chan] = calloc(plug_data->max_buffer_size, sizeof(float));
 	    }
-	    if((port_info.flags & CLAP_AUDIO_PORT_SUPPORTS_64BITS) == 1){
+	    if((port_info.flags & CLAP_AUDIO_PORT_SUPPORTS_64BITS) == CLAP_AUDIO_PORT_SUPPORTS_64BITS){
 		cur_clap_port->data64 = malloc(sizeof(double*) * channels);
 		if(cur_clap_port->data64){
 		    for(uint32_t chan = 0; chan < channels; chan++){
@@ -375,9 +375,119 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO* plug_data, int id, bool i
 	note_port->preferred_dialects[i] = note_port_info.preferred_dialect;
 	note_port->supported_dialects[i] = note_port_info.supported_dialects;
     }
-	
+
     return 0;
 }
+
+//clear all the parameters on the id plugin, the plugin should not be processing
+static int clap_plug_params_destroy(CLAP_PLUG_INFO* plug_data, int id){
+    if(!plug_data)return -1;
+    if(id >= MAX_INSTANCES || id < 0)return -1;
+    CLAP_PLUG_PLUG* plug = &(plug_data->plugins[id]);
+    if(plug->plug_params){
+	param_clean_param_container(plug->plug_params);
+	plug->plug_params = NULL;
+    }
+
+    return 0;
+}
+//TODO
+//create parameters on the id plugin, the plugin should not be processing
+static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
+    if(!plug_data)return -1;
+    if(id >= MAX_INSTANCES || id < 0)return -1;
+    CLAP_PLUG_PLUG* plug = &(plug_data->plugins[id]);
+    if(plug->plug_inst_created != 1)return -1;
+    if(!plug->plug_inst)return -1;
+    
+    const clap_plugin_params_t* clap_params = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
+    if(!clap_params)return -1;
+
+    uint32_t param_count = clap_params->count(plug->plug_inst);
+    if(param_count == 0)return 0;
+
+    char** param_names = calloc(param_count, sizeof(char*));
+    PARAM_T* param_vals = calloc(param_count, sizeof(PARAM_T));
+    PARAM_T* param_mins = calloc(param_count, sizeof(PARAM_T));
+    PARAM_T* param_maxs = calloc(param_count, sizeof(PARAM_T));
+    PARAM_T* param_incs = calloc(param_count, sizeof(PARAM_T));
+    unsigned char* val_types = calloc(param_count, sizeof(char));
+    if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types){
+	if(param_names)free(param_names);
+	if(param_vals)free(param_vals);
+	if(param_mins)free(param_mins);
+	if(param_maxs)free(param_maxs);
+	if(param_incs)free(param_incs);
+	if(val_types)free(val_types);
+	return -1;
+    }
+    for(uint32_t param_id = 0; param_id < param_count; param_id++){
+	//init to temp values
+	param_names[param_id] = "temp_param";
+	param_vals[param_id] = 0.0;
+	param_mins[param_id] = 0.0;
+	param_maxs[param_id] = 0.0;
+	param_incs[param_id] = 0.0;
+	val_types[param_id] = Float_type;
+
+	clap_param_info_t param_info;
+	if(!clap_params->get_info(plug->plug_inst, param_id, &param_info))continue;
+
+	
+	
+	double param_val = 0.0;
+	clap_params->get_value(plug->plug_inst, (clap_id)param_id, &param_val);
+	param_vals[param_id] = (PARAM_T)param_val;
+	
+	
+    }
+    params_init_param_container(param_count, param_names, param_vals, param_mins, param_maxs, param_incs, val_types);
+    free(param_names);
+    free(param_vals);
+    free(param_mins);
+    free(param_maxs);
+    free(param_incs);
+    free(val_types);
+    return 0;
+}
+
+static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_rescan_flags flags){
+    if(is_audio_thread)return;
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host;
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    if((flags & CLAP_PARAM_RESCAN_VALUES) == CLAP_PARAM_RESCAN_VALUES){
+	//TODO go through the params and simply set the values
+    }
+    if((flags & CLAP_PARAM_RESCAN_TEXT) == CLAP_PARAM_RESCAN_TEXT){
+	//have to stop the processing of the plugin for this
+	context_sub_wait_for_stop(plug_data->control_data, plug->id);
+	//TODO change the strings if param is enumed, or change the string next to the value if this is implemented
+	context_sub_wait_for_start(plug_data->control_data, plug->id);
+    }
+    if((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO){
+	//TODO need to add name change similar to set_value in the params.c for this
+    }
+    if((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL){
+	if(plug->plug_inst_activated == 1)return;
+	//TODO destroy and create the parameters again
+    }
+}
+//clear param of automation and modulation, since it is not implemented yet, does nothing
+static void clap_plug_ext_params_clear(const clap_host_t* host, clap_id param_id, clap_param_clear_flags flags){
+    return;
+}
+static void clap_plug_ext_params_request_flush(const clap_host_t* host){
+    if(is_audio_thread)return;
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host;
+    if(!plug)return;
+    CLAP_PLUG_INFO* plug_data = plug->plug_data;
+    if(!plug_data)return;
+    //since host can call either clap_plugin.process() or clap_plugin_params.flush(), simply request to process the plugin (run clap_plugin.process)
+    context_sub_wait_for_start(plug_data->control_data, plug->id);
+}
+
 //host extension function for audio_ports - return true if a rescan with the flag is supported by this host
 static bool clap_plug_ext_audio_ports_is_rescan_flag_supported(const clap_host_t* host, uint32_t flag){
     //this function is only usable on the [main-thread]
@@ -386,12 +496,12 @@ static bool clap_plug_ext_audio_ports_is_rescan_flag_supported(const clap_host_t
     if(!plug)return false;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
     if(!plug_data)return false;
-    if(flag & CLAP_AUDIO_PORTS_RESCAN_NAMES != 0)return true;
-    if(flag & CLAP_AUDIO_PORTS_RESCAN_FLAGS != 0)return true;
-    if(flag & CLAP_AUDIO_PORTS_RESCAN_CHANNEL_COUNT != 0)return true;
-    if(flag & CLAP_AUDIO_PORTS_RESCAN_PORT_TYPE != 0)return true;
-    if(flag & CLAP_AUDIO_PORTS_RESCAN_IN_PLACE_PAIR != 0)return true;
-    if(flag & CLAP_AUDIO_PORTS_RESCAN_LIST != 0)return true;
+    if((flag & CLAP_AUDIO_PORTS_RESCAN_NAMES) != 0)return true;
+    if((flag & CLAP_AUDIO_PORTS_RESCAN_FLAGS) != 0)return true;
+    if((flag & CLAP_AUDIO_PORTS_RESCAN_CHANNEL_COUNT) != 0)return true;
+    if((flag & CLAP_AUDIO_PORTS_RESCAN_PORT_TYPE) != 0)return true;
+    if((flag & CLAP_AUDIO_PORTS_RESCAN_IN_PLACE_PAIR) != 0)return true;
+    if((flag & CLAP_AUDIO_PORTS_RESCAN_LIST) != 0)return true;
     return false;
 }
 
@@ -406,7 +516,7 @@ static void clap_plug_ext_audio_ports_rescan(const clap_host_t* host, uint32_t f
     if(!plug_data)return;
     if(!plug->plug_inst)return;
     //If the names of the ports changed, but nothing else did, rename the ports, this can be done with an activated plugin
-    if(flags ^ CLAP_AUDIO_PORTS_RESCAN_NAMES == 0){
+    if((flags ^ CLAP_AUDIO_PORTS_RESCAN_NAMES) == 0){
 	clap_plug_ports_rename(plug_data, plug, &(plug->input_ports), 1);
 	clap_plug_ports_rename(plug_data, plug, &(plug->output_ports), 0);
 	return;
@@ -424,9 +534,9 @@ static void clap_plug_ext_audio_ports_rescan(const clap_host_t* host, uint32_t f
 static uint32_t clap_plug_ext_note_ports_supported_dialects(const clap_host_t* host){
     if(is_audio_thread)return 0;
     uint32_t supported = 0;
-    supported = supported | CLAP_NOTE_DIALECT_CLAP;
-    supported = supported | CLAP_NOTE_DIALECT_MIDI;
-    supported = supported | CLAP_NOTE_DIALECT_MIDI2;
+    supported = (supported | CLAP_NOTE_DIALECT_CLAP);
+    supported = (supported | CLAP_NOTE_DIALECT_MIDI);
+    supported = (supported | CLAP_NOTE_DIALECT_MIDI2);
     //right now MPE is not supported
     //supported = supported | CLAP_NOTE_DIALECT_MIDI_MPE;
     return supported;
@@ -441,7 +551,7 @@ static void clap_plug_ext_note_ports_rescan(const clap_host_t* host, uint32_t fl
     if(!plug_data)return;
     if(!plug->plug_inst)return;
     //if only the names of the ports changed (and nothing else) rename the ports - can be done with active plugin
-    if(flags ^ CLAP_NOTE_PORTS_RESCAN_NAMES == 0){
+    if((flags ^ CLAP_NOTE_PORTS_RESCAN_NAMES) == 0){
         clap_plug_note_ports_rename(plug_data, plug, 0);
 	clap_plug_note_ports_rename(plug_data, plug, 1);
 	return;
@@ -449,7 +559,7 @@ static void clap_plug_ext_note_ports_rescan(const clap_host_t* host, uint32_t fl
     //other flags need deactivated plugin instance
     if(plug->plug_inst_activated)return;
     //destroy and create the note ports again
-    if((flags & CLAP_NOTE_PORTS_RESCAN_ALL) == 1){
+    if((flags & CLAP_NOTE_PORTS_RESCAN_ALL) == CLAP_NOTE_PORTS_RESCAN_ALL){
 	clap_plug_note_ports_destroy(plug_data, &(plug->input_note_ports));
 	clap_plug_note_ports_destroy(plug_data, &(plug->output_note_ports));
 	clap_plug_note_ports_create(plug_data, plug->id, 0);
@@ -522,10 +632,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
     ub_clean((UB_EVENT*)out_events->ctx);
     out_events->ctx = NULL;
     //clean the parameters
-    if(plug->plug_params){
-	param_clean_param_container(plug->plug_params);
-	plug->plug_params = NULL;
-    }
+    clap_plug_params_destroy(plug_data, plug->id);
     plug->plug_inst_id = -1;
 
     return 0;

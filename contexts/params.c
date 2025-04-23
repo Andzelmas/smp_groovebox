@@ -6,34 +6,32 @@
 #include <math.h>
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/ring_buffer.h"
-//the max length for param names
-#define MAX_PARAM_NAME_LENGTH 100
 //default speed per samples to interpolate the parameters when requested
 #define INTERP_SAMPLES 400
 
 typedef struct _params_interp_val{
-    SAMPLE_T cur_inc; //how much to increment the value 
-    SAMPLE_T from_val; //from what value we are interpolating
-    SAMPLE_T to_val; //to what value interpolating
-    SAMPLE_T cur_val; //cur value that will be returned to the user
-    SAMPLE_T new_val; //new value that is given from the user, while the interpolation is not finished ignore this value
+    PARAM_T cur_inc; //how much to increment the value 
+    PARAM_T from_val; //from what value we are interpolating
+    PARAM_T to_val; //to what value interpolating
+    PARAM_T cur_val; //cur value that will be returned to the user
+    PARAM_T new_val; //new value that is given from the user, while the interpolation is not finished ignore this value
     int dir_mult; //to what direction to go, if from_val > to_val we have to cur_inc *= -1;
 }PRM_INTERP_VAL;
 
 typedef struct _params_param{
     //value of the parameter
-    float val;
-    float min_val;
-    float max_val;
-    float def_val; //default value
+    PARAM_T val;
+    PARAM_T min_val;
+    PARAM_T max_val;
+    PARAM_T def_val; //default value
     //how much to increase or decrease the parameter
-    float inc_am;
+    PARAM_T inc_am;
     //the type of the parameter value, used for ui display purposes
     //check the appReturnType in the types.h
     unsigned char val_type;
     //if this is 1 the parameter was just changed, this will change to 0 when get_value will be invoked
     unsigned int just_changed;
-    char name[MAX_STRING_MSG_LENGTH];
+    char name[MAX_PARAM_NAME_LENGTH];
     //sometimes we might want to get an interpolated version of the parameter, so it does not change so quickly,
     //for example to avoid a click when changing amplitude of a synth oscillator
     PRM_INTERP_VAL* interp_val;
@@ -60,13 +58,13 @@ typedef struct _params_container{
     RING_BUFFER* param_ui_to_rt;
 }PRM_CONTAIN;
 
-PRM_INTERP_VAL* params_init_interpolated_val(SAMPLE_T max_range, unsigned int total_samples){
+PRM_INTERP_VAL* params_init_interpolated_val(PARAM_T max_range, unsigned int total_samples){
     if(total_samples <= 0)return NULL;
     if(max_range <= 0)return NULL;
     PRM_INTERP_VAL* intrp_val = malloc(sizeof(PRM_INTERP_VAL));
     if(!intrp_val)return NULL;
     
-    intrp_val->cur_inc = (SAMPLE_T)(max_range / (SAMPLE_T)total_samples);
+    intrp_val->cur_inc = (PARAM_T)(max_range / (PARAM_T)total_samples);
     intrp_val->cur_val = 0.0;
     intrp_val->from_val = 0.0;
     intrp_val->to_val = 0.0;
@@ -75,7 +73,7 @@ PRM_INTERP_VAL* params_init_interpolated_val(SAMPLE_T max_range, unsigned int to
     return intrp_val;
 }
 
-SAMPLE_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, SAMPLE_T new_val){
+PARAM_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, PARAM_T new_val){
     if(!intrp_val)return new_val;
     intrp_val->new_val = new_val;
     
@@ -104,8 +102,8 @@ SAMPLE_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, SAMPLE_T new_val
     return intrp_val->cur_val;
 }
 
-PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, float* param_vals,
-					 float* param_mins, float* param_maxs, float* param_incs, unsigned char* val_types){
+PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, PARAM_T* param_vals,
+					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types){
     if(num_of_params<=0) return NULL;
     if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types) return NULL;
     PRM_CONTAIN* param_container = (PRM_CONTAIN*)malloc(sizeof(PRM_CONTAIN));
@@ -191,9 +189,9 @@ int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_T
     return 0;
 }
 
-static void param_set_value_directly(PRM_PARAM* cur_param, SAMPLE_T set_to, unsigned char param_op){
+static void param_set_value_directly(PRM_PARAM* cur_param, PARAM_T set_to, unsigned char param_op){
     if(!cur_param)return;
-    SAMPLE_T prev_value = cur_param->val;
+    PARAM_T prev_value = cur_param->val;
 
     switch(param_op){
     case Operation_Decrease:
@@ -251,7 +249,7 @@ void param_msgs_process(PRM_CONTAIN* param_container, unsigned int rt_params){
     
 }
 
-int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, unsigned char param_op, unsigned int rt_params){
+int param_set_value(PRM_CONTAIN* param_container, int val_id, PARAM_T set_to, unsigned char param_op, unsigned int rt_params){
     if(!param_container)return -1;
     if(isnan(set_to))return -1;
     PRM_PARAM* param_array = NULL;
@@ -282,7 +280,7 @@ int param_set_value(PRM_CONTAIN* param_container, int val_id, SAMPLE_T set_to, u
     return 0;    
 }
 
-SAMPLE_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
+PARAM_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
     if(!param_container)return -1;
     PRM_PARAM* param_array = NULL;
     int num_of_params = -1;
@@ -298,12 +296,12 @@ SAMPLE_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned 
 
     PRM_PARAM cur_param = param_array[val_id];
 
-    SAMPLE_T ret_increment = cur_param.inc_am;
+    PARAM_T ret_increment = cur_param.inc_am;
     
     return ret_increment;
 }
 
-SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char* val_type,
+PARAM_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char* val_type,
 			 unsigned int curved, unsigned int interp, unsigned int rt_params){
     if(!param_container)return -1;
     PRM_PARAM* param_array = NULL;
@@ -323,17 +321,17 @@ SAMPLE_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char
     //when returning the value we mark this param as no longer just_changed
     cur_param->just_changed = 0;
 
-    SAMPLE_T ret_val = cur_param->val;
+    PARAM_T ret_val = cur_param->val;
     //check if this parameter is of exponential or other curve nature
     if(curved == 1){
 	if(cur_param->curve_table){
 	    //if there is a curve table
-	    SAMPLE_T val_min = cur_param->min_val;
-	    SAMPLE_T val_max = cur_param->max_val;
+	    PARAM_T val_min = cur_param->min_val;
+	    PARAM_T val_max = cur_param->max_val;
 	    //first make the param range 0..1
-	    SAMPLE_T val_norm = fit_range(val_max, val_min, 1.0, 0.0, ret_val);
+	    PARAM_T val_norm = fit_range(val_max, val_min, 1.0, 0.0, ret_val);
 	    //now get what this value is in the table
-	    SAMPLE_T val_curve = math_range_table_convert_value(cur_param->curve_table, val_norm);
+	    PARAM_T val_curve = math_range_table_convert_value(cur_param->curve_table, val_norm);
 	    //and return to the original range
 	    ret_val = fit_range(1.0, 0.0, val_max, val_min, val_curve);
 	}
