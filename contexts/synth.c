@@ -596,18 +596,17 @@ static void synth_process_osc_voices(SYNTH_DATA* synth_data, SYNTH_OSC* osc, NFR
     memset(osc->buffer_L, '\0', sizeof(SAMPLE_T) * nframes);
     memset(osc->buffer_R, '\0', sizeof(SAMPLE_T) * nframes);
     
-    unsigned char ret_type = 0;
     //interpolate the amp value
-    PARAM_T amp_in = param_get_value(osc->params, 0, &ret_type, 0, 1, 1);
-    PARAM_T freq_in = param_get_value(osc->params, 1, &ret_type, 0, 0, 1);
-    PARAM_T octave_in =  param_get_value(osc->params, 4, &ret_type, 0, 0, 1);
-    PARAM_T wobble = param_get_value(osc->params, 3, &ret_type, 0, 0, 1);
-    PARAM_T spread = param_get_value(osc->params, 2, &ret_type, 0, 0, 1);
+    PARAM_T amp_in = param_get_value(osc->params, 0, 0, 1, 1);
+    PARAM_T freq_in = param_get_value(osc->params, 1, 0, 0, 1);
+    PARAM_T octave_in =  param_get_value(osc->params, 4, 0, 0, 1);
+    PARAM_T wobble = param_get_value(osc->params, 3, 0, 0, 1);
+    PARAM_T spread = param_get_value(osc->params, 2, 0, 0, 1);
     //get the adsr values from the user parameters
-    PARAM_T vco_a = param_get_value(osc->params, 6, &ret_type, 1, 0, 1);
-    PARAM_T vco_d = param_get_value(osc->params, 7, &ret_type, 1, 0, 1);
-    PARAM_T vco_s = param_get_value(osc->params, 8, &ret_type, 0, 0, 1);
-    PARAM_T vco_r = param_get_value(osc->params, 9, &ret_type, 1, 0, 1);
+    PARAM_T vco_a = param_get_value(osc->params, 6, 1, 0, 1);
+    PARAM_T vco_d = param_get_value(osc->params, 7, 1, 0, 1);
+    PARAM_T vco_s = param_get_value(osc->params, 8, 0, 0, 1);
+    PARAM_T vco_r = param_get_value(osc->params, 9, 1, 0, 1);
 
     for(int i = 0; i < osc->num_voices; i++){
 	SYNTH_VOICE* cur_voice = &(osc->osc_voices[i]);
@@ -766,8 +765,7 @@ static void synth_play_osc_rt(SYNTH_OSC* osc, MIDI_DATA_T vel, MIDI_DATA_T note,
 	//set which table to play for the voice
 	//its set before playing the voice so the table does not change while the sound is playing
 	to_play_voice->osc_table = osc->sin_osc;
-	unsigned char ret_type = 0;
-	PARAM_T table  = param_get_value(osc->params, 5, &ret_type, 0, 0, 1);
+	PARAM_T table  = param_get_value(osc->params, 5, 0, 0, 1);
 	if(table == SIN_WAVETABLE)to_play_voice->osc_table = osc->sin_osc;	
 	if(table == TRIANGLE_WAVETABLE)to_play_voice->osc_table = osc->triang_osc;
 	if(table == SAW_WAVETABLE)to_play_voice->osc_table = osc->saw_osc;

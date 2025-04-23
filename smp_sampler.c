@@ -35,12 +35,9 @@ int main(){
 	sel_cx = nav_ret_select_cx(app_intrf);
 
 	//enter the selected cx, also showing its value if thats a sort of cx that has a value
-	char* disp_string = malloc(sizeof(char) * MAX_DISPLAY_TEXT);
-	int disp_err = nav_get_cx_value_as_string(app_intrf, sel_cx, disp_string, MAX_DISPLAY_TEXT);
-	if(disp_string){
-	    if(disp_err == 0)printf("Val %s\n", disp_string);
-	    free(disp_string);
-	}
+	char disp_string[MAX_DISPLAY_TEXT];
+	unsigned int disp_err = nav_get_cx_value_as_string(app_intrf, sel_cx, disp_string, MAX_DISPLAY_TEXT);
+	if(disp_err == 1)printf("Val %s\n", disp_string);
 
         if(q=='q'){
 	    int exit_err =  nav_exit_cur_context(app_intrf);

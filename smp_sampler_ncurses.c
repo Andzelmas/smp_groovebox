@@ -1424,7 +1424,7 @@ int win_create(APP_INTRF* app_intrf, WIN* app_win, int height, int width, int st
 		app_win->children_array_size = 2;
 		app_win->children_array = win_init_win_array(app_intrf, app_win, 2, cx_param_array, NULL, (unsigned int[2]){20,15}, 0, (unsigned int[2]){1,0}, NULL);
 		//put the value of the param as the value window text right away, otherwise when refreshed the text would be empty for a moment
-		if(nav_get_cx_value_as_string(app_intrf, cx_obj, app_win->children_array[1]->display_text, MAX_VALUE_TEXT)!=0){
+		if(nav_get_cx_value_as_string(app_intrf, cx_obj, app_win->children_array[1]->display_text, MAX_VALUE_TEXT)!=1){
 		    app_win->children_array[1]->display_text = NULL;
 		}
 		app_win->children_array[1]->has_text = 1;
@@ -1546,7 +1546,7 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
     //if this is a parameter value update it
     //otherwise the value will stay the same as when the window was created
     if(win->cx_obj && win->win_type==(Param_win_type | Param_val_win_type)){
-	if(nav_get_cx_value_as_string(app_intrf, win->cx_obj, win->display_text, MAX_VALUE_TEXT)!=0){
+	if(nav_get_cx_value_as_string(app_intrf, win->cx_obj, win->display_text, MAX_VALUE_TEXT)!=1){
 	    win->display_text = NULL;
 	}
 	win->has_text = 1;

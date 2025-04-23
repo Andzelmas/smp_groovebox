@@ -96,7 +96,6 @@ typedef struct intrf_cx_val{
     //this is NULL unless user creates this name in the parameter configuration file
     //this variable is not saved when saving song or presets and is only used for display purposes, when nav_get_cx_name function is called
     char* val_display_name;
-    unsigned char val_type;
     int val_id;
     float float_val;
     //type of context that holds the parameter, like sampler or plugins, check appContextTypes in types.h
@@ -227,8 +226,8 @@ static void cx_process_params_from_file(void *arg,
     if(!parent_cx)return;
 
     //create new attribs and attrib_names with correct values to send to cx_init_cx_type
-    const char* new_attribs[8];
-    const char* new_attrib_names[8];
+    const char* new_attribs[7];
+    const char* new_attrib_names[7];
     
     char val_name[MAX_PARAM_CONFIG_STRING];
     snprintf(val_name, MAX_PARAM_CONFIG_STRING, "%s", cx_name);    
@@ -279,27 +278,21 @@ static void cx_process_params_from_file(void *arg,
     char* val_display_name = str_find_value_from_name(attrib_names, attribs, "display_name", attrib_size);
     float float_val = str_find_value_to_float(attrib_names, attribs, "default_val", attrib_size);
     float incr = str_find_value_to_float(attrib_names, attribs, "increment", attrib_size);
-    unsigned char val_type = 0;
-    app_param_get_value(app_intrf->app_data, cx_type, cx_id, val_id, &val_type, 0);
 
     new_attrib_names[3] = "val_display_name";
     new_attribs[3] = val_display_name;
-    char val_type_str[20];
-    snprintf(val_type_str, 20, "%2x", val_type);
-    new_attrib_names[4] = "val_type";
-    new_attribs[4] = val_type_str;
     char val_id_str[40];
     snprintf(val_id_str, 40, "%2d", val_id);
-    new_attrib_names[5] = "val_id";
-    new_attribs[5] = val_id_str;
+    new_attrib_names[4] = "val_id";
+    new_attribs[4] = val_id_str;
     char float_val_str[100];
     snprintf(float_val_str, 100, "%f", float_val);
-    new_attrib_names[6] = "float_val";
-    new_attribs[6] = float_val_str;
+    new_attrib_names[5] = "float_val";
+    new_attribs[5] = float_val_str;
     char val_incr_str[100];
     snprintf(val_incr_str, 100, "%f", incr);
-    new_attrib_names[7] = "val_incr";
-    new_attribs[7] = val_incr_str;
+    new_attrib_names[6] = "val_incr";
+    new_attribs[6] = val_incr_str;
     
     cx_init_cx_type(app_intrf, parent_cx->name, cx_name, type, new_attribs, new_attrib_names, 8);
     
@@ -697,7 +690,6 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
         if(!cx_val)return NULL;
 	cx_val->val_name = NULL;
 	cx_val->val_display_name = NULL; //this name is not saved and only != NULL if user sets it in the parameter conf file
-	cx_val->val_type = 0;
 	cx_val->val_id = -1;
 	cx_val->float_val = -1000;
 	cx_val->cx_type = 0;
@@ -712,8 +704,6 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 							 "val_name", attrib_size);
 	    cx_val->val_display_name = str_find_value_from_name(type_attrib_names, type_attribs,
 							 "val_display_name", attrib_size);	    
-	    cx_val->val_type = str_find_value_to_hex(type_attrib_names, type_attribs,
-							 "val_type", attrib_size);
 	    cx_val->val_id = str_find_value_to_int(type_attrib_names, type_attribs,
 							 "val_id", attrib_size);
 	    cx_val->float_val = str_find_value_to_float(type_attrib_names, type_attribs,
@@ -1120,22 +1110,6 @@ static int context_list_from_dir(APP_INTRF* app_intrf,
 
 /*CALLBACK FUNCTIONS FOR THE CX CONTEXTS, FOR INTERNAL USE*/
 /*--------------------------------------------------------*/
-static float cx_get_value_callback(APP_INTRF* app_intrf, CX* self, unsigned char* ret_type){
-    CX_VAL* cx_val = (CX_VAL*)self;
-    PARAM_T ret_val = 0;
-    ret_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_type, 0);
-    if(ret_val == -1 && *ret_type == 0) return -1;
-    cx_val->float_val = ret_val;
-
-    //if this parameter has a weird curve, return the value from the curve table
-    //we make this separate call because we dont want to store the curved value on the cx_val,
-    //because it would be save converted to the save file, we need saved values for these parameters to be linear
-    //otherwise on song load the converted value would be set on the parameter
-    if((*ret_type & 0xff) == Curve_Float_Return_Type)
-	ret_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_type, 1);
-
-    return ret_val;
-}
 static void cx_set_value_callback(APP_INTRF* app_intrf, CX* self, float set_to, unsigned char param_op){
     if(!app_intrf)return;
     if(self->type != Val_cx_e)return;
@@ -1497,15 +1471,6 @@ static void intrf_callback_set_value(APP_INTRF* app_intrf, CX* self, int set_to)
 	cx_set_value_callback(app_intrf, self, abs(set_to), param_op);
     }
 }
-static float intrf_callback_get_value(APP_INTRF* app_intrf, CX* self, unsigned char* ret_type){
-    unsigned int cur_type = self->type;    
-    float ret_val = -1;
-    //get_value callback for value buttons
-    if(cur_type == Val_cx_e){
-	ret_val = cx_get_value_callback(app_intrf, self, ret_type);
-    }
-    return ret_val;
-}
 //if invoke returns 1, it means that the context structure was modified (for example nodes deleted
 //when cancel button was pressed)
 static int intrf_callback_enter(APP_INTRF* app_intrf, CX* self){
@@ -1748,29 +1713,11 @@ CX* nav_ret_select_cx(APP_INTRF* app_intrf){
     return ret_cx;
 }
 
-int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_string, int name_len){
-    if(sel_cx==NULL)return -1;
-    unsigned char ret_type = 0;
-    PARAM_T cx_val = (PARAM_T)intrf_callback_get_value(app_intrf, sel_cx, &ret_type);
-    if(cx_val == -1 && ret_type == 0)return -1;
-    CX_VAL* param_cx = NULL;
-    if(sel_cx->type == Val_cx_e)param_cx = (CX_VAL*) sel_cx;
-    if(!param_cx)return -1;
-    if(name_len>0){
-	if((ret_type & 0xff) == Uchar_type)snprintf(ret_string, name_len, "%02X", (unsigned int) cx_val);
-	if((ret_type & 0xff) == Int_type)snprintf(ret_string, name_len, "%d", (int) cx_val);
-	if((ret_type & 0xff) == Float_type)snprintf(ret_string, name_len, "%g", cx_val);
-	if((ret_type & 0xff) == DB_Return_Type)snprintf(ret_string, name_len, "%0.3gDB", log10((double)cx_val) * 20);
-	if((ret_type & 0xff) == Curve_Float_Return_Type)snprintf(ret_string, name_len, "%g", cx_val);
-	if((ret_type & 0xff) == String_Return_Type && param_cx != NULL){
-	    const char* param_string = app_param_get_string(app_intrf->app_data, param_cx->cx_type, param_cx->cx_id, param_cx->val_id);
-	    if(param_string == NULL){
-		return -1;
-	    }
-	    snprintf(ret_string, name_len, "%s", param_string);
-	}
-    }
-    return 0;
+unsigned int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_string, uint32_t name_len){
+    if(sel_cx==NULL)return 0;
+    if(sel_cx->type != Val_cx_e)return 0;
+    CX_VAL* param_cx = (CX_VAL*) sel_cx;
+    return app_param_get_value_as_string(app_intrf->app_data, param_cx->cx_type, param_cx->cx_id, param_cx->val_id, ret_string, name_len);
 }
 
 int nav_set_cx_value(APP_INTRF* app_intrf, CX* select_cx, int set_to){
@@ -1911,45 +1858,34 @@ static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_
     }
     if((top_cx->type & 0xff00) == Val_cx_e){
 	CX_VAL* cx_val = (CX_VAL*)top_cx;
-	//just in case get the value from the ui_param so the value is 100% up to date before saving
-	//since the value on the cx updates only when we get the value with the cx_get_value_callback
-	//but dont do this if its a subtype of Val_cx_e, for example a container
+	//check type again to not get value if it is a parameter container
 	if(top_cx->type == Val_cx_e){
-	    unsigned char ret_type = 0;
-	    PARAM_T updated_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, &ret_type, 0);
-	    if(updated_val != -1 && ret_type != 0){
-		cx_val->float_val = updated_val;
-	    }
+	    cx_val->float_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id);
 	}
 	attrib_names[1] = "val_name";
 	attrib_vals[1] = cx_val->val_name;
 	    
-	attrib_names[2] = "val_type";
-	char val_type[12];
-	snprintf(val_type, 12, "%2x", cx_val->val_type);
-	attrib_vals[2] = val_type;
-	    
-	attrib_names[3] = "val_id";
+	attrib_names[2] = "val_id";
 	char val_id[40];
 	snprintf(val_id, 40, "%2d", cx_val->val_id);
-	attrib_vals[3] = val_id;
+	attrib_vals[2] = val_id;
 
-	attrib_names[4] = "float_val";
+	attrib_names[3] = "float_val";
 	char float_val[100];
 	snprintf(float_val, 100, "%f", cx_val->float_val);
-	attrib_vals[4] = float_val;
+	attrib_vals[3] = float_val;
 
-	attrib_names[5] = "cx_type";
+	attrib_names[4] = "cx_type";
 	char cx_type[12];
 	snprintf(cx_type, 12, "%d", cx_val->cx_type);
-	attrib_vals[5] = cx_type;
+	attrib_vals[4] = cx_type;
 	    
-	attrib_names[6] = "cx_id";
+	attrib_names[5] = "cx_id";
 	char cx_id[20];
 	snprintf(cx_id, 20, "%d", cx_val->cx_id);
-	attrib_vals[6] = cx_id;
+	attrib_vals[5] = cx_id;
 
-	iter = 7;	    
+	iter = 6;	    
     }
     if((top_cx->type & 0xff00) == Button_cx_e){
 	CX_BUTTON* cx_button = (CX_BUTTON*)top_cx;
@@ -1999,7 +1935,7 @@ static int helper_cx_remove_cx_and_data(APP_INTRF* app_intrf, CX* rem_cx){
 	CX_SAMPLE* cx_smp = (CX_SAMPLE*)rem_cx;
 	app_subcontext_remove(app_intrf->app_data, Context_type_Sampler, cx_smp->id);
     }
-    if((rem_cx->type & 0xff00) == Plugin_cx_e){
+    if(rem_cx->type == Plugin_cx_e){
 	CX_PLUGIN* cx_plug = (CX_PLUGIN*)rem_cx;
 	app_subcontext_remove(app_intrf->app_data, Context_type_Plugins, cx_plug->id);
     }
@@ -2141,14 +2077,13 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 	unsigned int param_num;
 	char** param_names = NULL;
 	char** param_vals = NULL;
-	char** param_types = NULL;
 
 	int got_params = app_param_return_all_as_string(app_intrf->app_data, cx_type, cx_id,
-							&param_names, &param_vals, &param_types, &param_num);  
+							&param_names, &param_vals, &param_num);  
 	if(got_params >= 0 && param_num > 0 && param_names !=NULL){	    	
 	    for(int i=0; i<param_num; i++){
 		if(param_names[i] == NULL)continue;
-		if(param_vals[i]==NULL || param_types[i]==NULL)continue;
+		if(param_vals[i]==NULL)continue;
 		char val_id[40];
 		snprintf(val_id, 40, "%d", i);
 		char val_cx_type [12];
@@ -2156,8 +2091,8 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 		char val_cx_id [20];
 		snprintf(val_cx_id, 20, "%d", cx_id);
 		CX* created_cx = cx_init_cx_type(app_intrf, parent_node->name, param_names[i], Val_cx_e,
-				    (const char*[6]){param_names[i], val_id, param_types[i], param_vals[i], val_cx_type, val_cx_id},
-						 (const char*[6]){"val_name", "val_id", "val_type", "float_val", "cx_type", "cx_id"}, 6);
+				    (const char*[5]){param_names[i], val_id, param_vals[i], val_cx_type, val_cx_id},
+						 (const char*[5]){"val_name", "val_id", "float_val", "cx_type", "cx_id"}, 5);
 		//dont stop if there was an error creating the val, the val simply will not be created
 		/*
 		if(!created_cx){
@@ -2166,11 +2101,8 @@ static int helper_cx_create_cx_for_default_params(APP_INTRF* app_intrf, CX* pare
 		*/
 		if(param_names[i])free(param_names[i]);
 		if(param_vals[i])free(param_vals[i]);
-		if(param_types[i])free(param_types[i]);
-
 	    }
 	}
-	if(param_types)free(param_types);
 	if(param_vals)free(param_vals);
 	if(param_names)free(param_names);
 	JSONHANDLE* obj = NULL;

@@ -388,7 +388,6 @@ static int  plug_remove_plug(PLUG_INFO* plug_data, int id){
     cur_plug->request_update = false;
     cur_plug->safe_restore = false;
     cur_plug->plug = NULL;
-    
     return 0;
 }
 
@@ -1604,9 +1603,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	    PLUG_CONTROL* cur_control = plug->controls[ctrl_iter];
 	    if(!cur_control)continue;
 	    if(!(cur_control->is_writable))continue;
-	    unsigned char param_val_type = 0;
-	    PARAM_T param_value = param_get_value(plug->plug_params, ctrl_iter, &param_val_type, 0, 0, 1);
-	    if(param_val_type == 0)continue;
+	    PARAM_T param_value = param_get_value(plug->plug_params, ctrl_iter, 0, 0, 1);
 
 	    if(cur_control->type == PORT){
 		uint32_t port_index = cur_control->index;
@@ -1676,7 +1673,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    //get the parameter value, so the parameter is_changed will be 0, otherwise on next cycle this parameter value will be sent to the plugin
 		    //no need for that since we got this value from the plugin already
 		    unsigned char param_val_type = 0;
-		    PARAM_T param_value = param_get_value(plug->plug_params, cur_port->param_index, &param_val_type, 0, 0, 1);
+		    PARAM_T param_value = param_get_value(plug->plug_params, cur_port->param_index, 0, 0, 1);
 		}
 	    }
 	    if(cur_port->type == TYPE_EVENT){

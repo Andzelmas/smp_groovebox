@@ -1,5 +1,5 @@
 #pragma once
-
+#include <stdint.h>
 //enum that holds the types of the various contexts
 enum cx_types_enum{
     //main context, a cx that has cx children and has a path  member
@@ -212,9 +212,6 @@ static void cx_exit_app_callback(APP_INTRF* app_intrf, CX* self);
 /*THESE FUNCTIONS FILTER WHICH CALLBACK TO CALL*/
 //filters out which set_value callback to call depending on type and subtype
 static void intrf_callback_set_value(APP_INTRF* app_intrf, CX* self, int set_to);
-//filters out which get_value callback to call depending on type and subtype
-//returns a float but from ret_type can see what type of data it is originally
-static float intrf_callback_get_value(APP_INTRF* app_intrf, CX* self, unsigned char* ret_type);
 //filters out which enter callback to call depending on type and subtype
 //returns 1 if the context structure changed
 static int intrf_callback_enter(APP_INTRF* app_intrf, CX* self);
@@ -264,7 +261,7 @@ CX* nav_ret_curr_cx(APP_INTRF* app_intrf);
 //return the currently selected cx
 CX* nav_ret_select_cx(APP_INTRF* app_intrf);
 //get the value on cx Val_cx_e as a string, ret_string has to be name_len size, if the value string is longer the value will be cut
-int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_string, int name_len);
+unsigned int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_string, uint32_t name_len);
 //set the value of the selected cx - this will be a Button_cx_e that will increment or lower the apropriate
 //value of its parent cx (set_to<0 decrease the value, set_to>0 - increase the value).
 //though set_to is int, the actual value on the parameter will be float, the context will convert this value

@@ -301,12 +301,11 @@ PARAM_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int c
     return param_get_increment(param_cont, param_id, 0);
 }
 
-PARAM_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
-			     unsigned char* val_type, unsigned int curved){
+PARAM_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
     if(!app_data)return -1;
     PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
     if(!param_cont)return -1;
-    return param_get_value(param_cont, param_id, val_type, curved, 0, 0);
+    return param_get_value(param_cont, param_id, 0, 0, 0);
 }
 
 int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name){
@@ -316,15 +315,14 @@ int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id,
     return param_find_name(param_cont, param_name, 0);
 }
 
-const char* app_param_get_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
-    if(!app_data)return NULL;
+unsigned int app_param_get_value_as_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, char* ret_string, uint32_t string_len){
+    if(!app_data)return 0;
     PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
-    if(!param_cont)return NULL;
-    return param_get_param_string(param_cont, param_id, 0);
+    if(!param_cont)return 0;
+    return param_get_value_as_string(param_cont, param_id, ret_string, string_len);
 }
 
-int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, char*** param_names, char*** param_vals,
-			 char*** param_types, unsigned int* param_num){
+int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, char*** param_names, char*** param_vals, unsigned int* param_num){
     if(!app_data)return -1;
     *param_num = 0;
     PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
@@ -336,27 +334,21 @@ int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, in
     if(!this_names)return -1;
     char** this_vals = (char**)malloc(sizeof(char*) * (*param_num));
     if(!this_vals)return -1;
-    char** this_types = (char**)malloc(sizeof(char*) * (*param_num));
-    if(!this_types)return -1;
     for(int i=0; i < *param_num; i++){
 	this_names[i] = NULL;
 	this_vals[i] = NULL;
-	this_types[i] = NULL;
 	
-	const char* cur_name = NULL;
-	cur_name = param_get_name(param_cont, i, 0);
-	if(!cur_name)continue;
+	char cur_name[MAX_PARAM_NAME_LENGTH];
+	if(param_get_name(param_cont, i, cur_name, MAX_PARAM_NAME_LENGTH) != 1)continue;
 	
 	char* param_name = (char*)malloc(sizeof(char) * (strlen(cur_name)+1));
 	if(!param_name)continue;
 	strcpy(param_name, cur_name);
 	this_names[i] = param_name;
 	
-	unsigned char cur_type = 0;
         float cur_val = -1;
-	cur_val = app_param_get_value(app_data, cx_type, cx_id, i, &cur_type, 0);
-
-	if(cur_type == 0)continue;
+	cur_val = app_param_get_value(app_data, cx_type, cx_id, i);
+	
 	int name_len = 0;
 	name_len = snprintf(NULL, 0, "%f", cur_val);
 	if(name_len<=0)continue;
@@ -365,17 +357,9 @@ int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, in
 	    snprintf(ret_val, name_len+1, "%f", cur_val);
 	    this_vals[i] = ret_val;
 	}
-	name_len = snprintf(NULL, 0, "%d", (unsigned int)cur_type);
-	if(name_len<=0)continue;
-	char* ret_type = (char*)malloc(sizeof(char)*(name_len+1));
-	if(ret_type){
-	    snprintf(ret_type, name_len+1, "%d", (unsigned int)cur_type);
-	    this_types[i] = ret_type;
-	}
     }
     *param_names = this_names;
     *param_vals = this_vals;
-    *param_types = this_types;
     return 0;
 }
 
@@ -549,10 +533,10 @@ int app_subcontext_remove(APP_INFO* app_data, unsigned char cx_type, int id){
 	clap_plug_plug_stop_and_clean(app_data->clap_plug_data, id);
     }
     if(cx_type == Context_type_Plugins){
-	smp_stop_and_remove_sample(app_data->smp_data, id);
+	plug_stop_and_remove_plug(app_data->plug_data, id);
     }
     if(cx_type == Context_type_Sampler){
-	plug_stop_and_remove_plug(app_data->plug_data, id);
+	smp_stop_and_remove_sample(app_data->smp_data, id);
     }
     return 0;
 }

@@ -49,16 +49,14 @@ int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, in
 //return the parameter increment amount (by how much the value increases or decreases)
 PARAM_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id);
 //get value, the val_type returns what type of value for display purposes.
-//curved == 1 the parameter should be returned from the curve_table if there is one on the parameter
-PARAM_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, unsigned char* val_type, unsigned int curved);
+PARAM_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id);
 //get the parameter id given the context type, cx id and parameter id. Returns -1 if no such parameter is found
 int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name);
-//get the string of the String_Return_Type parameter
-const char* app_param_get_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id);
-//returns all the parameters values, types and names to the param_names, param_vals and param_types arrays. User has to free these arrays
-//if the current name is NULL something went wrong. Also if the parameter val is -1 and the param type is 0 something went wrong.
-int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, char*** param_names, char*** param_vals,
-				   char*** param_types, unsigned int* param_num);
+//get the parameter value formated as ret_string to display to the ui
+unsigned int app_param_get_value_as_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, char* ret_string, uint32_t string_len);
+//returns all the parameters values and names to the param_names, param_vals. User has to free these arrays
+//if the current name is NULL something went wrong.
+int app_param_return_all_as_string(APP_INFO* app_data, unsigned char cx_type, int cx_id, char*** param_names, char*** param_vals, unsigned int* param_num);
 //returns all names of the cx of the context type, for example all names of the oscillators of the synth
 const char** app_context_return_names(APP_INFO* app_data, unsigned char cx_type, int* cx_num);
 //return the name of a context by its cx_id (for example the name of a sample by its id, or name of a plugin by its id)

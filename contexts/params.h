@@ -26,22 +26,23 @@ void* param_user_data_return(PRM_CONTAIN* param_container, int val_id, unsigned 
 //return the parameter increment amount (by how much the parameter value increases or decreases)
 PARAM_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
 //get the parameter value. What type of value is returned to val_type, check appReturntype enum in types.h for the list
-//if returned value is -1 and val_type is 0, something went wrong
 //if interp == 1 the value will be interpolated slowly on each param_get_value call (the speed is INTERP_SAMPLES in params.c)
 //if curved == 1 get the value from the curve_table if there is one
-PARAM_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char* val_type,
-			 unsigned int curved, unsigned int interp, unsigned int rt_params);
+PARAM_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned int curved, unsigned int interp, unsigned int rt_params);
 //set the strings for paramter, the type must be String_Return_type
 int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings, unsigned int num_strings);
 //get the parameter string, from the current parameter value, the values must go from >= 0 in positive direction
 const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
+//Write to ret_string how to display the parameter value to the user. Use only on [main-thread]
+unsigned int param_get_value_as_string(PRM_CONTAIN* param_container, int val_id, char* ret_string, uint32_t string_len);
 //check if the parameter is just changed - returns 1 if this parameters value was not retrieved with param_get_value
 int param_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
 //check if any of the parameters have changed in the parameter set. If at least one parameter has a just_changed
 //1 the for loop will break and return 1
 int param_get_if_any_changed(PRM_CONTAIN* param_container, unsigned int rt_params);
-//get the parameter name
-const char* param_get_name(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
+//get the parameter name, and snprintf it to ret_name, returns 1 if succesful
+//should be used on [main-thread]
+unsigned int param_get_name(PRM_CONTAIN* param_container, int val_id, char* ret_name, uint32_t name_len);
 //return id of parameter given its name, will return -1 if name was not found
 int param_find_name(PRM_CONTAIN* param_container, const char* param_name, unsigned int rt_params);
 //return how many parameters are there on the param container

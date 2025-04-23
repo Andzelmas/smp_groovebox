@@ -340,8 +340,7 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
 	if(cur_smp->chans<=0)continue;
 	if(cur_smp->samples_loaded <=0)continue;
 	//get the note parameter from the current samples rt_param array
-	unsigned char type = 0;
-	unsigned char cur_note = (unsigned char)param_get_value(cur_smp->params, 0, &type, 0, 0, 1);
+	unsigned char cur_note = (unsigned char)param_get_value(cur_smp->params, 0, 0, 0, 1);
 	//go through the frames
 	//TODO really like that goes through each frame, but not sure how to find the
 	//midi event differently

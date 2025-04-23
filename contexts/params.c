@@ -166,8 +166,8 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
 	ui_params->val_type = val_types[i];
 	
 	const char* param_name = param_names[i];
-	snprintf(rt_params->name, MAX_STRING_MSG_LENGTH, "%s", param_name);
-	snprintf(ui_params->name, MAX_STRING_MSG_LENGTH, "%s", param_name);
+	snprintf(rt_params->name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
+	snprintf(ui_params->name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
 
 	if(user_data_array){
 	    rt_params->user_data = user_data_array[i];
@@ -325,8 +325,26 @@ PARAM_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned i
     return ret_increment;
 }
 
-PARAM_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char* val_type,
-			 unsigned int curved, unsigned int interp, unsigned int rt_params){
+static unsigned char param_get_val_type(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
+    if(!param_container)return 0;
+    PRM_PARAM* param_array = NULL;
+    int num_of_params = -1;
+    if(rt_params == 0){
+	param_array = param_container->ui_params;
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	param_array = param_container->rt_params;
+	num_of_params = param_container->num_of_params_rt;
+    }
+    if(val_id >= num_of_params)return 0;
+    if(!param_array)return 0;
+    
+    PRM_PARAM* cur_param = &(param_array[val_id]);
+    return cur_param->val_type;
+}
+
+PARAM_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned int curved, unsigned int interp, unsigned int rt_params){
     if(!param_container)return -1;
     PRM_PARAM* param_array = NULL;
     int num_of_params = -1;
@@ -339,9 +357,8 @@ PARAM_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned char*
 	num_of_params = param_container->num_of_params_rt;
     }
     if(val_id >= num_of_params)return -1;
-
+    if(!param_array)return -1;
     PRM_PARAM* cur_param = &(param_array[val_id]);
-    *val_type = cur_param->val_type;
     //when returning the value we mark this param as no longer just_changed
     cur_param->just_changed = 0;
 
@@ -445,6 +462,36 @@ const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, uns
     
     return cur_param.param_strings[cur_val];
 }
+//TODO store a user function pointer on param_container to convert the value to the string, if it does not exist do what is done now
+unsigned int param_get_value_as_string(PRM_CONTAIN* param_container, int val_id, char* ret_string, uint32_t string_len){
+    if(string_len == 0)return 0;
+    if(!ret_string)return 0;
+    unsigned char val_type = 0;
+    val_type = param_get_val_type(param_container, val_id, 0);
+    if(val_type == 0)return 0;
+
+    unsigned int curved = 0;
+    if(val_type == Curve_Float_Return_Type)curved = 1;
+
+    PARAM_T val = param_get_value(param_container, val_id, curved, 0, 0);
+
+    if(val_type == Uchar_type)snprintf(ret_string, string_len, "%02X", (unsigned int)val);
+    
+    if(val_type == Int_type)snprintf(ret_string, string_len, "%d", (int)val);
+    
+    if(val_type == Float_type)snprintf(ret_string, string_len, "%g", val);
+    
+    if(val_type == DB_Return_Type)snprintf(ret_string, string_len, "%0.3gDB", log10((double)val) * 20);
+    
+    if(val_type == Curve_Float_Return_Type)snprintf(ret_string, string_len, "%g", val);
+    
+    if(val_type == String_Return_Type){
+	const char* param_string = param_get_param_string(param_container, val_id, 0);
+	if(!param_string)return 0;
+	snprintf(ret_string, string_len, "%s", param_string);
+    }
+    return 1;
+}
 
 int param_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
     if(!param_container)return -1;
@@ -479,23 +526,16 @@ int param_get_if_any_changed(PRM_CONTAIN* param_container, unsigned int rt_param
     return params_changed;
 }
 
-const char* param_get_name(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
-    if(!param_container)return NULL;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
-    }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-    if(val_id >= num_of_params)return NULL;
+unsigned int param_get_name(PRM_CONTAIN* param_container, int val_id, char* ret_name, uint32_t name_len){
+    if(!param_container)return 0;
+    PRM_PARAM* param_array = param_container->ui_params;
+    int num_of_params = param_container->num_of_params_ui;
+    
+    if(val_id >= num_of_params)return 0;
 
     PRM_PARAM cur_param = param_array[val_id];
-    const char* cur_name = cur_param.name;
-    return cur_name;
+    snprintf(ret_name, name_len, "%s", cur_param.name);
+    return 1;
 }
 
 int param_find_name(PRM_CONTAIN* param_container, const char* param_name, unsigned int rt_params){
