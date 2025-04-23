@@ -45,12 +45,12 @@ int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, unsigned in
 //initialize a sample on sampler context
 int app_smp_sample_init(APP_INFO* app_data, const char* samp_path, int in_id);
 //call appropriate cx_type context function to set parameter value
-int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, float param_value, unsigned char param_op);
+int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, PARAM_T param_value, unsigned char param_op);
 //return the parameter increment amount (by how much the value increases or decreases)
-SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id);
+PARAM_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id);
 //get value, the val_type returns what type of value for display purposes.
 //curved == 1 the parameter should be returned from the curve_table if there is one on the parameter
-SAMPLE_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, unsigned char* val_type, unsigned int curved);
+PARAM_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, unsigned char* val_type, unsigned int curved);
 //get the parameter id given the context type, cx id and parameter id. Returns -1 if no such parameter is found
 int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name);
 //get the string of the String_Return_Type parameter

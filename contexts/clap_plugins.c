@@ -412,6 +412,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
     PARAM_T* param_maxs = calloc(param_count, sizeof(PARAM_T));
     PARAM_T* param_incs = calloc(param_count, sizeof(PARAM_T));
     unsigned char* val_types = calloc(param_count, sizeof(char));
+    void** cookies_array = calloc(param_count, sizeof(void*));
     if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types){
 	if(param_names)free(param_names);
 	if(param_vals)free(param_vals);
@@ -429,7 +430,8 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	param_maxs[param_id] = 0.0;
 	param_incs[param_id] = 0.0;
 	val_types[param_id] = Float_type;
-
+	cookies_array[param_id] = NULL;
+	
 	clap_param_info_t param_info;
 	if(!clap_params->get_info(plug->plug_inst, param_id, &param_info))continue;
 
@@ -441,7 +443,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	
 	
     }
-    params_init_param_container(param_count, param_names, param_vals, param_mins, param_maxs, param_incs, val_types);
+    params_init_param_container(param_count, param_names, param_vals, param_mins, param_maxs, param_incs, val_types, cookies_array);
     free(param_names);
     free(param_vals);
     free(param_mins);

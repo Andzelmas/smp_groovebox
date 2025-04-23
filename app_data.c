@@ -287,21 +287,21 @@ static PRM_CONTAIN* app_get_context_param_container(APP_INFO* app_data, unsigned
     return NULL;
 }
 
-int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, float param_value, unsigned char param_op){
+int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, PARAM_T param_value, unsigned char param_op){
     if(!app_data)return -1;
     PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
     if(!param_cont)return -1;
     return param_set_value(param_cont, param_id, param_value, param_op, 0);
 }
 
-SAMPLE_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
+PARAM_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
     if(!app_data)return -1;
     PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
     if(!param_cont)return -1;
     return param_get_increment(param_cont, param_id, 0);
 }
 
-SAMPLE_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
+PARAM_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id,
 			     unsigned char* val_type, unsigned int curved){
     if(!app_data)return -1;
     PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);

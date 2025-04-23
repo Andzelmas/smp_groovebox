@@ -263,8 +263,6 @@ CX* nav_ret_root_cx(APP_INTRF* app_intrf);
 CX* nav_ret_curr_cx(APP_INTRF* app_intrf);
 //return the currently selected cx
 CX* nav_ret_select_cx(APP_INTRF* app_intrf);
-//get the value of the cx, ret_type returns what type the value is originally
-float nav_get_cx_value(APP_INTRF* app_intrf, CX* sel_cx, unsigned char* ret_type);
 //get the value on cx Val_cx_e as a string, ret_string has to be name_len size, if the value string is longer the value will be cut
 int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_string, int name_len);
 //set the value of the selected cx - this will be a Button_cx_e that will increment or lower the apropriate

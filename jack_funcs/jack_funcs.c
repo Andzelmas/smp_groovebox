@@ -74,7 +74,8 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
 							(PARAM_T[7]){100, 1, 1, 0, 0, 4, 4},
 							(PARAM_T[7]){10, 1, 1, 0, 0, 2, 2}, (PARAM_T[7]){500, MAX_BARS, 16, 2000, 1, 16, 16},
 							(PARAM_T[7]){1, 1, 1, floor(time_ticks_per_beat/4), 1, 1, 1},
-							(unsigned char[7]){Int_type, Int_type, Int_type, Int_type, Int_type, Int_type, Int_type});
+							(unsigned char[7]){Int_type, Int_type, Int_type, Int_type, Int_type, Int_type, Int_type},
+							NULL);
     if(!jack_data->trk_params){
 	jack_clean_memory(jack_data);
 	return NULL;

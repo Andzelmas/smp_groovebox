@@ -21,8 +21,6 @@
 #include "util_funcs/log_funcs.h"
 //how many strings in the attribute name or attribute value arrays
 #define MAX_ATTRIB_ARRAY 40
-//how big is the string for parameter values when they are returned as string
-#define MAX_VALUE_STRING 40
 //how big is the string for parameter configuration file names
 #define MAX_PARAM_CONFIG_STRING 100
 //the file extension we are using for songs and presets
@@ -1124,7 +1122,7 @@ static int context_list_from_dir(APP_INTRF* app_intrf,
 /*--------------------------------------------------------*/
 static float cx_get_value_callback(APP_INTRF* app_intrf, CX* self, unsigned char* ret_type){
     CX_VAL* cx_val = (CX_VAL*)self;
-    float ret_val = 0;
+    PARAM_T ret_val = 0;
     ret_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_type, 0);
     if(ret_val == -1 && *ret_type == 0) return -1;
     cx_val->float_val = ret_val;
@@ -1750,17 +1748,10 @@ CX* nav_ret_select_cx(APP_INTRF* app_intrf){
     return ret_cx;
 }
 
-float nav_get_cx_value(APP_INTRF* app_intrf, CX* sel_cx, unsigned char* ret_type){
-    float ret_val = -1;
-    if(sel_cx==NULL)return ret_val;
-    ret_val = intrf_callback_get_value(app_intrf, sel_cx, ret_type);
-    return ret_val;
-}
-
 int nav_get_cx_value_as_string(APP_INTRF* app_intrf, CX* sel_cx, char* ret_string, int name_len){
     if(sel_cx==NULL)return -1;
     unsigned char ret_type = 0;
-    float cx_val = intrf_callback_get_value(app_intrf, sel_cx, &ret_type);
+    PARAM_T cx_val = (PARAM_T)intrf_callback_get_value(app_intrf, sel_cx, &ret_type);
     if(cx_val == -1 && ret_type == 0)return -1;
     CX_VAL* param_cx = NULL;
     if(sel_cx->type == Val_cx_e)param_cx = (CX_VAL*) sel_cx;
@@ -1925,7 +1916,7 @@ static void helper_cx_prepare_for_save(void* arg, APP_INTRF* app_intrf, CX* top_
 	//but dont do this if its a subtype of Val_cx_e, for example a container
 	if(top_cx->type == Val_cx_e){
 	    unsigned char ret_type = 0;
-	    float updated_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, &ret_type, 0);
+	    PARAM_T updated_val = app_param_get_value(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, &ret_type, 0);
 	    if(updated_val != -1 && ret_type != 0){
 		cx_val->float_val = updated_val;
 	    }

@@ -42,6 +42,8 @@ typedef struct _params_param{
     //for parameters that contain strings to display for user
     unsigned int param_strings_num; // how many strings there are for this parameter
     char** param_strings; //the string array
+    //user data for convenience (for example clap plugins has a void* cookie for faster loading of params from events)
+    void* user_data;
 }PRM_PARAM;
 
 typedef struct _params_container{
@@ -103,7 +105,7 @@ PARAM_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, PARAM_T new_val){
 }
 
 PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, PARAM_T* param_vals,
-					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types){
+					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types, void** user_data_array){
     if(num_of_params<=0) return NULL;
     if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types) return NULL;
     PRM_CONTAIN* param_container = (PRM_CONTAIN*)malloc(sizeof(PRM_CONTAIN));
@@ -166,6 +168,11 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
 	const char* param_name = param_names[i];
 	snprintf(rt_params->name, MAX_STRING_MSG_LENGTH, "%s", param_name);
 	snprintf(ui_params->name, MAX_STRING_MSG_LENGTH, "%s", param_name);
+
+	if(user_data_array){
+	    rt_params->user_data = user_data_array[i];
+	    ui_params->user_data = user_data_array[i];
+	}
     }
 
     return param_container;
@@ -279,7 +286,24 @@ int param_set_value(PRM_CONTAIN* param_container, int val_id, PARAM_T set_to, un
     }
     return 0;    
 }
+void* param_user_data_return(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
+    if(!param_container)return NULL;
+    PRM_PARAM* param_array = NULL;
+    int num_of_params = -1;
+    if(rt_params == 0){
+	param_array = param_container->ui_params;
+	num_of_params = param_container->num_of_params_ui;
+    }
+    if(rt_params == 1){
+	param_array = param_container->rt_params;
+	num_of_params = param_container->num_of_params_rt;
+    }
+    if(val_id >= num_of_params)return NULL;
 
+    PRM_PARAM cur_param = param_array[val_id];
+    
+    return cur_param.user_data;
+}
 PARAM_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
     if(!param_container)return -1;
     PRM_PARAM* param_array = NULL;

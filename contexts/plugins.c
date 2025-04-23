@@ -1031,7 +1031,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
 	    param_incs[ct_iter] = cur_inc;
 	}
 	PRM_CONTAIN* plug_params = params_init_param_container(num_of_params, param_names,
-							       param_vals, param_mins, param_maxs, param_incs, val_types);
+							       param_vals, param_mins, param_maxs, param_incs, val_types, NULL);
 	//go through the controls again and set the strings for parameters that are string type
 	for(unsigned int ct_iter = 0; ct_iter < plug->num_controls; ct_iter++){
 	    PLUG_CONTROL* cur_ctrl = plug->controls[ct_iter];
