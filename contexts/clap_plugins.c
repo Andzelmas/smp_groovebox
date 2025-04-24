@@ -445,9 +445,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	clap_param_info_t param_info;
 	if(!clap_params->get_info(plug->plug_inst, param_id, &param_info))continue;
 	
-	double param_val = 0.0;
-	clap_params->get_value(plug->plug_inst, (clap_id)param_id, &param_val);
-	param_vals[param_id] = (PARAM_T)param_val;
+	param_vals[param_id] = param_info.default_value;
 
 	param_mins[param_id] = param_info.min_value;
 	param_maxs[param_id] = param_info.max_value;
@@ -471,7 +469,10 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	snprintf(param_names[param_id], MAX_PARAM_NAME_LENGTH, "%s", param_info.name);
     }
     plug->plug_params = params_init_param_container(param_count, param_names, param_vals, param_mins, param_maxs, param_incs, val_types, cookies_array);
-    param_get_user_data(plug->plug_params, (void*)plug, clap_plug_params_value_to_text);
+    PRM_USER_DATA param_user_data;
+    param_user_data.user_data = (void*)plug;
+    param_user_data.val_to_string = clap_plug_params_value_to_text;
+    params_add_user_data(plug->plug_params, param_user_data);
 
     for(uint32_t i = 0; i < param_count; i++){
 	if(param_names[i])free(param_names[i]);

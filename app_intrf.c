@@ -1930,19 +1930,25 @@ static int helper_cx_iterate_with_callback(APP_INTRF* app_intrf, CX* top_cx, voi
 static int helper_cx_remove_cx_and_data(APP_INTRF* app_intrf, CX* rem_cx){
     if(!app_intrf)return -1;
     if(!rem_cx)return -1;
+    unsigned char context_type = 0;
+    int cx_id = -1;
     //if this is a sample remove it in smp_data
     if((rem_cx->type & 0xff00) == Sample_cx_e){
 	CX_SAMPLE* cx_smp = (CX_SAMPLE*)rem_cx;
-	app_subcontext_remove(app_intrf->app_data, Context_type_Sampler, cx_smp->id);
+	cx_id = cx_smp->id;
+	context_type = Context_type_Sampler;
     }
     if(rem_cx->type == Plugin_cx_e){
 	CX_PLUGIN* cx_plug = (CX_PLUGIN*)rem_cx;
-	app_subcontext_remove(app_intrf->app_data, Context_type_Plugins, cx_plug->id);
+	cx_id = cx_plug->id;
+	context_type = Context_type_Plugins;
     }
     if(rem_cx->type == (Plugin_cx_e | Plugin_Clap_cx_st)){
 	CX_PLUGIN* cx_plug = (CX_PLUGIN*)rem_cx;
-	app_subcontext_remove(app_intrf->app_data, Context_type_Clap_Plugins, cx_plug->id);
+	cx_id = cx_plug->id;
+	context_type = Context_type_Clap_Plugins;
     }
+    app_subcontext_remove(app_intrf->app_data, context_type, cx_id);
     cx_remove_this_and_children(rem_cx);
     
     return 0;

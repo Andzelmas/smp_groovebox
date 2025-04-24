@@ -7,6 +7,15 @@ typedef struct _params_interp_val PRM_INTERP_VAL;
 typedef struct _params_container PRM_CONTAIN;
 //parameter
 typedef struct _params_param PRM_PARAM;
+//struct that holds user data and additional user functions like value to string function
+//user can set the members of this struct directly
+typedef struct _params_user_data{
+    //user data for functions such as value to string
+    void* user_data;
+    //user function that returns a string to ret_string, for example 10DB or 2Khz or similar
+    //Should be used only on [main-thread] for ui display purposes. Will be called in param_get_value_as_string function if this is not NULL
+    unsigned int(*val_to_string)(const void* user_data, int param_id, PARAM_T value, char* ret_string, uint32_t string_len);
+}PRM_USER_DATA;
 //init the interpoalting val
 PRM_INTERP_VAL* params_init_interpolated_val(PARAM_T max_range, unsigned int total_samples);
 //interpolate the value and get the cur val
@@ -14,6 +23,8 @@ PARAM_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, PARAM_T new_val);
 //initializes the parameter container the parameter value arrays (for min val, names etc) have to be the same size
 PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, PARAM_T* param_vals,
 					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types, void** user_data_per_param);
+//add the user_data struct to the param_container
+void params_add_user_data(PRM_CONTAIN* param_container, PRM_USER_DATA user_data);
 //add a curve table for exponential, logarithmic etc. parameters
 //should be added in the initialization stage, while the rt thread is not launched, since will add to rt and ui parameters
 int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_TABLE* table);
@@ -21,7 +32,7 @@ int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_T
 void param_msgs_process(PRM_CONTAIN* param_container, unsigned int rt_params);
 //set the parameter value. param_op is what to do with parameter, check types.h the paramOperType enum
 int param_set_value(PRM_CONTAIN* param_container, int val_id, PARAM_T set_to, unsigned char param_op, unsigned int rt_params);
-//return the user_data from the param (it is used for convenience - for exmaple in clap plugins a cookie is added for fast retrieval of params from events)
+//return the user_data from the param (it is used for convenience - for example in clap plugins a cookie is added for fast retrieval of params from events)
 void* param_user_data_return(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
 //return the parameter increment amount (by how much the parameter value increases or decreases)
 PARAM_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
@@ -33,8 +44,6 @@ PARAM_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned int c
 int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings, unsigned int num_strings);
 //get the parameter string, from the current parameter value, the values must go from >= 0 in positive direction
 const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
-//Add user_data pointer and a pointer to a user function that converts parameter value to a string
-void param_get_user_data(PRM_CONTAIN* param_container, void* user_data, unsigned int(* val_to_string)(const void* user_data, int param_id, PARAM_T value, char* ret_string, uint32_t string_len));
 //Write to ret_string how to display the parameter value to the user. Use only on [main-thread]
 unsigned int param_get_value_as_string(PRM_CONTAIN* param_container, int val_id, char* ret_string, uint32_t string_len);
 //check if the parameter is just changed - returns 1 if this parameters value was not retrieved with param_get_value
@@ -49,5 +58,5 @@ unsigned int param_get_name(PRM_CONTAIN* param_container, int val_id, char* ret_
 int param_find_name(PRM_CONTAIN* param_container, const char* param_name, unsigned int rt_params);
 //return how many parameters are there on the param container
 unsigned int param_return_num_params(PRM_CONTAIN* param_container, unsigned int rt_params);
-//cleans the parameter containerx
+//cleans the parameter container
 void param_clean_param_container(PRM_CONTAIN* param_container);
