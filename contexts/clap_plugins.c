@@ -16,7 +16,6 @@
 #include "../util_funcs/math_funcs.h"
 #include "../types.h"
 #include "context_control.h"
-#include "params.h"
 #include "../jack_funcs/jack_funcs.h"
 //what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
@@ -391,7 +390,18 @@ static int clap_plug_params_destroy(CLAP_PLUG_INFO* plug_data, int id){
 
     return 0;
 }
-//TODO
+//function that uses the value_to_text function on the param extension. use on [main-thread]
+//this function is on param_container and will be used when the function param_get_value_as_string is called in params.c
+static unsigned int clap_plug_params_value_to_text(const void* user_data, int param_id, PARAM_T value, char* ret_string, uint32_t string_len){
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)user_data;
+    if(!plug)return 0;
+    if(!plug->plug_inst)return 0;
+    const clap_plugin_params_t* clap_params = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
+    if(!clap_params)return 0;    
+
+    unsigned int convert_err = (unsigned int)clap_params->value_to_text(plug->plug_inst, (clap_id)param_id, (double)value, ret_string, string_len);
+    return convert_err;
+}
 //create parameters on the id plugin, the plugin should not be processing
 static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
     if(!plug_data)return -1;
@@ -424,35 +434,66 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
     }
     for(uint32_t param_id = 0; param_id < param_count; param_id++){
 	//init to temp values
-	param_names[param_id] = "temp_param";
+	param_names[param_id] = NULL;
 	param_vals[param_id] = 0.0;
 	param_mins[param_id] = 0.0;
 	param_maxs[param_id] = 0.0;
-	param_incs[param_id] = 0.0;
+	param_incs[param_id] = 0.001;
 	val_types[param_id] = Float_type;
 	cookies_array[param_id] = NULL;
 	
 	clap_param_info_t param_info;
 	if(!clap_params->get_info(plug->plug_inst, param_id, &param_info))continue;
-
-	
 	
 	double param_val = 0.0;
 	clap_params->get_value(plug->plug_inst, (clap_id)param_id, &param_val);
 	param_vals[param_id] = (PARAM_T)param_val;
+
+	param_mins[param_id] = param_info.min_value;
+	param_maxs[param_id] = param_info.max_value;
+
+	cookies_array[param_id] = param_info.cookie;
+
+	if((param_info.flags & CLAP_PARAM_IS_STEPPED) == CLAP_PARAM_IS_STEPPED){
+	    val_types[param_id] = Int_type;
+	    param_incs[param_id] = 1.0;
+	}
+	//TODO for now hidden params will be shown to user but the user wont be able to modify them
+	if((param_info.flags & CLAP_PARAM_IS_HIDDEN) == CLAP_PARAM_IS_HIDDEN){
+	    val_types[param_id] = Int_type;
+	    param_incs[param_id] = 0;
+	}
+	if((param_info.flags & CLAP_PARAM_IS_READONLY) == CLAP_PARAM_IS_READONLY){
+	    param_incs[param_id] = 0;
+	}
 	
-	
+	param_names[param_id] = calloc(MAX_PARAM_NAME_LENGTH, sizeof(char));
+	snprintf(param_names[param_id], MAX_PARAM_NAME_LENGTH, "%s", param_info.name);
     }
-    params_init_param_container(param_count, param_names, param_vals, param_mins, param_maxs, param_incs, val_types, cookies_array);
+    plug->plug_params = params_init_param_container(param_count, param_names, param_vals, param_mins, param_maxs, param_incs, val_types, cookies_array);
+    param_get_user_data(plug->plug_params, (void*)plug, clap_plug_params_value_to_text);
+
+    for(uint32_t i = 0; i < param_count; i++){
+	if(param_names[i])free(param_names[i]);
+    }
     free(param_names);
     free(param_vals);
     free(param_mins);
     free(param_maxs);
     free(param_incs);
     free(val_types);
+    free(cookies_array);
     return 0;
 }
+PRM_CONTAIN* clap_plug_param_return_param_container(CLAP_PLUG_INFO* plug_data, int plug_id){
+    if(!plug_data)return NULL;
+    if(plug_id >= MAX_INSTANCES || plug_id < 0)return NULL;
+    CLAP_PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+    if(!plug->plug_params)return NULL;
 
+    return plug->plug_params;
+}
+//TODO ext_params_ functions not added to the CLAP_PLUG_INFO struct yet
 static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_rescan_flags flags){
     if(is_audio_thread)return;
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host;
@@ -463,10 +504,8 @@ static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_resc
 	//TODO go through the params and simply set the values
     }
     if((flags & CLAP_PARAM_RESCAN_TEXT) == CLAP_PARAM_RESCAN_TEXT){
-	//have to stop the processing of the plugin for this
-	context_sub_wait_for_stop(plug_data->control_data, plug->id);
-	//TODO change the strings if param is enumed, or change the string next to the value if this is implemented
-	context_sub_wait_for_start(plug_data->control_data, plug->id);
+	//TODO not sure what clap api expects here, if the text changed it will be displayed in the next cycle so do nothing here.
+	//if the function that converts value to text changed would need to update the user function on the parameter container (param_container->val_to_string pointer)
     }
     if((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO){
 	//TODO need to add name change similar to set_value in the params.c for this
@@ -1277,9 +1316,15 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
     }
+    //create the parameter cotainer
+    if(clap_plug_params_create(plug_data, plug->id) != 0){
+	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Failed to create %s plugin parameters container\n", plugin_name);
+	clap_plug_plug_stop_and_clean(plug_data, plug->id);
+	return -1;
+    }
     //start processing the plugin
     context_sub_activate_start_process_msg(plug_data->control_data, plug->id, is_audio_thread);
-    //TODO need to create parameters
+
     return_id = plug->id;
     return return_id;
 }

@@ -13,7 +13,7 @@ PRM_INTERP_VAL* params_init_interpolated_val(PARAM_T max_range, unsigned int tot
 PARAM_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, PARAM_T new_val);
 //initializes the parameter container the parameter value arrays (for min val, names etc) have to be the same size
 PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, PARAM_T* param_vals,
-					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types, void** user_data_array);
+					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types, void** user_data_per_param);
 //add a curve table for exponential, logarithmic etc. parameters
 //should be added in the initialization stage, while the rt thread is not launched, since will add to rt and ui parameters
 int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_TABLE* table);
@@ -33,6 +33,8 @@ PARAM_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned int c
 int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings, unsigned int num_strings);
 //get the parameter string, from the current parameter value, the values must go from >= 0 in positive direction
 const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
+//Add user_data pointer and a pointer to a user function that converts parameter value to a string
+void param_get_user_data(PRM_CONTAIN* param_container, void* user_data, unsigned int(* val_to_string)(const void* user_data, int param_id, PARAM_T value, char* ret_string, uint32_t string_len));
 //Write to ret_string how to display the parameter value to the user. Use only on [main-thread]
 unsigned int param_get_value_as_string(PRM_CONTAIN* param_container, int val_id, char* ret_string, uint32_t string_len);
 //check if the parameter is just changed - returns 1 if this parameters value was not retrieved with param_get_value

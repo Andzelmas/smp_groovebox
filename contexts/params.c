@@ -58,6 +58,11 @@ typedef struct _params_container{
     //ring buffers for parameter manipulation/communication
     RING_BUFFER* param_rt_to_ui;
     RING_BUFFER* param_ui_to_rt;
+    //user data for functions such as value to string
+    void* user_data;
+    //user function that returns a string to ret_string, for example 10DB or 2Khz or similar
+    //Should be used only on [main-thread] for ui display purposes. Will be called in param_get_value_as_string function if this is not NULL
+    unsigned int(*val_to_string)(const void* user_data, int param_id, PARAM_T value, char* ret_string, uint32_t string_len);
 }PRM_CONTAIN;
 
 PRM_INTERP_VAL* params_init_interpolated_val(PARAM_T max_range, unsigned int total_samples){
@@ -105,7 +110,7 @@ PARAM_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, PARAM_T new_val){
 }
 
 PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, PARAM_T* param_vals,
-					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types, void** user_data_array){
+					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types, void** user_data_per_param){
     if(num_of_params<=0) return NULL;
     if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types) return NULL;
     PRM_CONTAIN* param_container = (PRM_CONTAIN*)malloc(sizeof(PRM_CONTAIN));
@@ -116,6 +121,8 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
     param_container->num_of_params_ui = 0;
     param_container->rt_params = NULL;
     param_container->ui_params = NULL;
+    param_container->user_data = NULL;
+    param_container->val_to_string = NULL;
     
     param_container->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
     param_container->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
@@ -169,9 +176,9 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
 	snprintf(rt_params->name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
 	snprintf(ui_params->name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
 
-	if(user_data_array){
-	    rt_params->user_data = user_data_array[i];
-	    ui_params->user_data = user_data_array[i];
+	if(user_data_per_param){
+	    rt_params->user_data = user_data_per_param[i];
+	    ui_params->user_data = user_data_per_param[i];
 	}
     }
 
@@ -462,7 +469,11 @@ const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, uns
     
     return cur_param.param_strings[cur_val];
 }
-//TODO store a user function pointer on param_container to convert the value to the string, if it does not exist do what is done now
+void param_get_user_data(PRM_CONTAIN* param_container, void* user_data, unsigned int(* val_to_string)(const void* user_data, int param_id, PARAM_T value, char* ret_string, uint32_t string_len)){
+    if(!param_container)return;
+    param_container->user_data = user_data;
+    param_container->val_to_string = val_to_string;
+}
 unsigned int param_get_value_as_string(PRM_CONTAIN* param_container, int val_id, char* ret_string, uint32_t string_len){
     if(string_len == 0)return 0;
     if(!ret_string)return 0;
@@ -474,6 +485,11 @@ unsigned int param_get_value_as_string(PRM_CONTAIN* param_container, int val_id,
     if(val_type == Curve_Float_Return_Type)curved = 1;
 
     PARAM_T val = param_get_value(param_container, val_id, curved, 0, 0);
+    //if there is a user provided function to convert the parameter value to string, use it
+    if(param_container->val_to_string && param_container->user_data){
+	if(param_container->val_to_string(param_container->user_data, val_id, val, ret_string, string_len) == 1)
+	    return 1;
+    }
 
     if(val_type == Uchar_type)snprintf(ret_string, string_len, "%02X", (unsigned int)val);
     

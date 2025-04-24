@@ -284,6 +284,9 @@ static PRM_CONTAIN* app_get_context_param_container(APP_INFO* app_data, unsigned
     if(cx_type == Context_type_Plugins){
 	return plug_param_return_param_container(app_data->plug_data, cx_id);
     }
+    if(cx_type == Context_type_Clap_Plugins){
+	return clap_plug_param_return_param_container(app_data->clap_plug_data, cx_id);
+    }
     return NULL;
 }
 
