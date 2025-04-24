@@ -1,4 +1,5 @@
 # smp_groovebox
+## Still early development. Some parts of code can change completely.
 ## Simple groovebox for linux based systems. Works on rpi too.
 Check out https://brumakes.com/programming.php for development blog and some videos.
 
