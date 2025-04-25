@@ -398,8 +398,9 @@ static unsigned int clap_plug_params_value_to_text(const void* user_data, int pa
     if(!plug->plug_inst)return 0;
     const clap_plugin_params_t* clap_params = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
     if(!clap_params)return 0;    
-
-    unsigned int convert_err = (unsigned int)clap_params->value_to_text(plug->plug_inst, (clap_id)param_id, (double)value, ret_string, string_len);
+    clap_param_info_t param_info;
+    if(!clap_params->get_info(plug->plug_inst, param_id, &param_info))return 0;
+    unsigned int convert_err = (unsigned int)clap_params->value_to_text(plug->plug_inst, param_info.id, (double)value, ret_string, string_len);
     return convert_err;
 }
 //create parameters on the id plugin, the plugin should not be processing
@@ -444,7 +445,6 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	
 	clap_param_info_t param_info;
 	if(!clap_params->get_info(plug->plug_inst, param_id, &param_info))continue;
-	
 	param_vals[param_id] = param_info.default_value;
 
 	param_mins[param_id] = param_info.min_value;
