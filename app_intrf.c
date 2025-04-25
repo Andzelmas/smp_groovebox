@@ -532,7 +532,6 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 							    type_attribs, "preset_path", attrib_size);
 	}
 	//create the plugin
-
 	unsigned char plugin_type = Context_type_Plugins;
 	if(type == (Plugin_cx_e | Plugin_Clap_cx_st))plugin_type = Context_type_Clap_Plugins;
 	int plug_id = app_plug_init_plugin(app_intrf->app_data, cx_plug->plug_path,  plugin_type, cx_plug->id);
@@ -1946,7 +1945,6 @@ static int helper_cx_remove_cx_and_data(APP_INTRF* app_intrf, CX* rem_cx){
 	    context_type = Context_type_Clap_Plugins;
 	}
     }
-
     app_subcontext_remove(app_intrf->app_data, context_type, cx_id);
     cx_remove_this_and_children(rem_cx);
     

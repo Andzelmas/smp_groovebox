@@ -400,7 +400,12 @@ static unsigned int clap_plug_params_value_to_text(const void* user_data, int pa
     if(!clap_params)return 0;    
     clap_param_info_t param_info;
     if(!clap_params->get_info(plug->plug_inst, param_id, &param_info))return 0;
-    unsigned int convert_err = (unsigned int)clap_params->value_to_text(plug->plug_inst, param_info.id, (double)value, ret_string, string_len);
+    //TODO have to create a long string first, because Juice wrapper and some CLAP plugins do not respect the string_len given to the value_to_text function
+    char long_string[MAX_STRING_MSG_LENGTH];
+    unsigned int convert_err = clap_params->value_to_text(plug->plug_inst, param_info.id, (double)value, long_string, MAX_STRING_MSG_LENGTH);
+    if(convert_err == 1){
+	snprintf(ret_string, string_len, "%s", long_string);
+    }
     return convert_err;
 }
 //create parameters on the id plugin, the plugin should not be processing
@@ -439,6 +444,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	param_vals[param_id] = 0.0;
 	param_mins[param_id] = 0.0;
 	param_maxs[param_id] = 0.0;
+	//TODO need a way to calculate or get the increment of the parameter
 	param_incs[param_id] = 0.001;
 	val_types[param_id] = Float_type;
 	cookies_array[param_id] = NULL;
@@ -456,9 +462,15 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	    val_types[param_id] = Int_type;
 	    param_incs[param_id] = 1.0;
 	}
+	//TODO not sure what to do with periodic parameters
+	if((param_info.flags & CLAP_PARAM_IS_PERIODIC) == CLAP_PARAM_IS_PERIODIC){
+	}
+	//TODO not sure what to do with periodic parameters
+	if((param_info.flags & CLAP_PARAM_IS_BYPASS) == CLAP_PARAM_IS_BYPASS){
+	}
 	//TODO for now hidden params will be shown to user but the user wont be able to modify them
+	//TODO need to make parameter hidden status switchable and to not show these parameters to the user 
 	if((param_info.flags & CLAP_PARAM_IS_HIDDEN) == CLAP_PARAM_IS_HIDDEN){
-	    val_types[param_id] = Int_type;
 	    param_incs[param_id] = 0;
 	}
 	if((param_info.flags & CLAP_PARAM_IS_READONLY) == CLAP_PARAM_IS_READONLY){
@@ -499,21 +511,33 @@ static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_resc
     if(is_audio_thread)return;
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host;
     if(!plug)return;
+    if(!plug->plug_params)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
     if(!plug_data)return;
     if((flags & CLAP_PARAM_RESCAN_VALUES) == CLAP_PARAM_RESCAN_VALUES){
-	//TODO go through the params and simply set the values
+	//go through the params and simply set the values
+	const clap_plugin_params_t* clap_params = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
+	if(!clap_params)return;
+	uint32_t param_count = (uint32_t)param_return_num_params(plug->plug_params, 0);
+	for(uint32_t param_num = 0; param_num < param_count; param_num++){
+	    clap_param_info_t param_info;
+	    if(!clap_params->get_info(plug->plug_inst, param_num, &param_info))continue;
+	    double cur_value = 0;
+	    if(!clap_params->get_value(plug->plug_inst, param_info.id, &cur_value))continue;
+	    param_set_value(plug->plug_params, param_num, (PARAM_T)cur_value, Operation_SetValue, 0);
+	}
     }
     if((flags & CLAP_PARAM_RESCAN_TEXT) == CLAP_PARAM_RESCAN_TEXT){
-	//TODO not sure what clap api expects here, if the text changed it will be displayed in the next cycle so do nothing here.
-	//if the function that converts value to text changed would need to update the user function on the parameter container (param_container->val_to_string pointer)
+	//TODO not sure what clap api expects here, if the text needs to be rendered again it will automaticaly on the next ui cycle
     }
     if((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO){
 	//TODO need to add name change similar to set_value in the params.c for this
+	//TODO need to be able to change if parameter is hidden
     }
     if((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL){
 	if(plug->plug_inst_activated == 1)return;
-	//TODO destroy and create the parameters again
+        clap_plug_params_destroy(plug_data, plug->id);
+	clap_plug_params_create(plug_data, plug->id);
     }
 }
 //clear param of automation and modulation, since it is not implemented yet, does nothing

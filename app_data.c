@@ -240,12 +240,11 @@ char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned int indx, unsign
 
 int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id){
     if(!plugin_uri)return -1;
-    int return_id = -1;
     if(cx_type == Context_type_Plugins)
-	return_id = plug_load_and_activate(app_data->plug_data, plugin_uri, id);
+	return plug_load_and_activate(app_data->plug_data, plugin_uri, id);
     if(cx_type == Context_type_Clap_Plugins)
-	return_id = clap_plug_load_and_activate(app_data->clap_plug_data, plugin_uri, id);
-    return return_id;
+	return clap_plug_load_and_activate(app_data->clap_plug_data, plugin_uri, id);
+    return -1;
 }
 
 int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, unsigned int cx_type, const int plug_id){

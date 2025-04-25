@@ -479,6 +479,7 @@ unsigned int param_get_value_as_string(PRM_CONTAIN* param_container, int val_id,
     if(val_type == Curve_Float_Return_Type)curved = 1;
 
     PARAM_T val = param_get_value(param_container, val_id, curved, 0, 0);
+
     //if there is a user provided function to convert the parameter value to string, use it
     if(param_container->user_data.user_data && param_container->user_data.val_to_string){
 	if(param_container->user_data.val_to_string(param_container->user_data.user_data, val_id, val, ret_string, string_len) == 1)
