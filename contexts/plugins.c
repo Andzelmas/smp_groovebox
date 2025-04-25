@@ -296,7 +296,7 @@ static int plug_sys_send_msg(void* user_data, const char* msg){
 
 static int  plug_remove_plug(PLUG_INFO* plug_data, int id){
     if(!plug_data)return -1;
-    if(id >= MAX_INSTANCES)return -1;
+    if(id >= MAX_INSTANCES || id < 0)return -1;
       
     PLUG_PLUG* cur_plug = &(plug_data->plugins[id]);
     //remove preset
