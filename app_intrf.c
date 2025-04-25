@@ -240,7 +240,7 @@ static void cx_process_params_from_file(void *arg,
 	cx_type = Context_type_Sampler;
 	cx_id = cx_samp->id;
     }
-    if(top_cx->type == Plugin_cx_e){
+    if((top_cx->type & 0xff00) == Plugin_cx_e){
 	CX_PLUGIN* cx_plug = (CX_PLUGIN*)top_cx;
 	cx_type = Context_type_Plugins;
 	if(top_cx->type == (Plugin_cx_e | Plugin_Clap_cx_st))
@@ -1938,16 +1938,15 @@ static int helper_cx_remove_cx_and_data(APP_INTRF* app_intrf, CX* rem_cx){
 	cx_id = cx_smp->id;
 	context_type = Context_type_Sampler;
     }
-    if(rem_cx->type == Plugin_cx_e){
+    if((rem_cx->type & 0xff00) == Plugin_cx_e){
 	CX_PLUGIN* cx_plug = (CX_PLUGIN*)rem_cx;
 	cx_id = cx_plug->id;
 	context_type = Context_type_Plugins;
+	if(rem_cx->type == (Plugin_cx_e | Plugin_Clap_cx_st)){
+	    context_type = Context_type_Clap_Plugins;
+	}
     }
-    if(rem_cx->type == (Plugin_cx_e | Plugin_Clap_cx_st)){
-	CX_PLUGIN* cx_plug = (CX_PLUGIN*)rem_cx;
-	cx_id = cx_plug->id;
-	context_type = Context_type_Clap_Plugins;
-    }
+
     app_subcontext_remove(app_intrf->app_data, context_type, cx_id);
     cx_remove_this_and_children(rem_cx);
     
