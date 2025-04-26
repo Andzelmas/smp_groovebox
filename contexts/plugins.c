@@ -1669,7 +1669,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		//it does not matter that the [audio-thread] parameter will be set at the same speed, since it output parameter
 		if(plug_data->rt_tick == 0){
 		    //set the val on param container
-		    param_set_value(plug->plug_params, cur_port->param_index, cur_port->control, Operation_SetValue, 1);
+		    param_set_value(plug->plug_params, cur_port->param_index, cur_port->control, NULL, Operation_SetValue, 1);
 		    //get the parameter value, so the parameter is_changed will be 0, otherwise on next cycle this parameter value will be sent to the plugin
 		    //no need for that since we got this value from the plugin already
 		    unsigned char param_val_type = 0;

@@ -144,17 +144,17 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
 		//After setting the value, get the value so the parameter is_changed will be 0 and app_jack_update_transport_from_params_rt will not create a new tranport object
 		//even though a parameter was not changed by the ui
 		//get the bars
-		param_set_value(jack_data->trk_params, 1, (float)pos.bar, Operation_SetValue, 1);
+		param_set_value(jack_data->trk_params, 1, (float)pos.bar, NULL, Operation_SetValue, 1);
 	        param_get_value(jack_data->trk_params, 1, 0, 0, 1);
 		//get the beat
-		param_set_value(jack_data->trk_params, 2, (float)pos.beat, Operation_SetValue, 1);
+		param_set_value(jack_data->trk_params, 2, (float)pos.beat, NULL, Operation_SetValue, 1);
 		param_get_value(jack_data->trk_params, 2, 0, 0, 1);
 		//get the tick
-		param_set_value(jack_data->trk_params, 3, (float)pos.tick, Operation_SetValue, 1);
+		param_set_value(jack_data->trk_params, 3, (float)pos.tick, NULL, Operation_SetValue, 1);
 		param_get_value(jack_data->trk_params, 3, 0, 0, 1);
 	    }
 	    //get the isPlaying state even if the Jack transport head is not rolling
-	    param_set_value(jack_data->trk_params, 4, (float)state, Operation_SetValue, 1);
+	    param_set_value(jack_data->trk_params, 4, (float)state, NULL, Operation_SetValue, 1);
 	    param_get_value(jack_data->trk_params, 4, 0, 0, 1);
 	}
     }

@@ -31,7 +31,7 @@ int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_T
 //process ring_buffers - set values on ui params when a message says so from rt thread and vise a versa
 void param_msgs_process(PRM_CONTAIN* param_container, unsigned int rt_params);
 //set the parameter value. param_op is what to do with parameter, check types.h the paramOperType enum
-int param_set_value(PRM_CONTAIN* param_container, int val_id, PARAM_T set_to, unsigned char param_op, unsigned int rt_params);
+int param_set_value(PRM_CONTAIN* param_container, int val_id, PARAM_T set_to, const char* set_string_to, unsigned char param_op, unsigned int rt_params);
 //return the user_data from the param (it is used for convenience - for example in clap plugins a cookie is added for fast retrieval of params from events)
 void* param_user_data_return(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
 //return the parameter increment amount (by how much the parameter value increases or decreases)
@@ -51,7 +51,11 @@ int param_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int 
 //check if any of the parameters have changed in the parameter set. If at least one parameter has a just_changed
 //1 the for loop will break and return 1
 int param_get_if_any_changed(PRM_CONTAIN* param_container, unsigned int rt_params);
-//get the parameter name, and snprintf it to ret_name, returns 1 if succesful
+//get if parameter is hidden or not
+unsigned int param_is_hidden(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
+//return if parameter name just changed, and set the parameter name_just_changed to 0 after that
+unsigned int param_name_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
+//get the parameter name, and snprintf it to ret_name, returns 1 if succesful, also sets name_just_changed to 0
 //should be used on [main-thread]
 unsigned int param_get_name(PRM_CONTAIN* param_container, int val_id, char* ret_name, uint32_t name_len);
 //return id of parameter given its name, will return -1 if name was not found

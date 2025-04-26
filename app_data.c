@@ -293,7 +293,7 @@ int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, in
     if(!app_data)return -1;
     PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
     if(!param_cont)return -1;
-    return param_set_value(param_cont, param_id, param_value, param_op, 0);
+    return param_set_value(param_cont, param_id, param_value, NULL, param_op, 0);
 }
 
 PARAM_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){

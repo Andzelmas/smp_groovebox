@@ -350,7 +350,7 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO* plug_data, int id, bool i
     //create the sys port pointer and other arrays per note port
     CLAP_PLUG_NOTE_PORT* note_port = &(plug->output_note_ports);
     if(input_ports)note_port = &(plug->input_note_ports);
-    //TODO test
+
     note_port->midi_cont = app_jack_init_midi_cont(clap_ports_count);
     note_port->sys_ports = calloc(clap_ports_count, sizeof(void*));
     note_port->ports_count = clap_ports_count;
@@ -444,8 +444,6 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	param_vals[param_id] = 0.0;
 	param_mins[param_id] = 0.0;
 	param_maxs[param_id] = 0.0;
-	//TODO need a way to calculate or get the increment of the parameter
-	param_incs[param_id] = 0.001;
 	val_types[param_id] = Float_type;
 	cookies_array[param_id] = NULL;
 	
@@ -455,7 +453,10 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 
 	param_mins[param_id] = param_info.min_value;
 	param_maxs[param_id] = param_info.max_value;
-
+	//calculate the increment
+	PARAM_T param_range = abs(param_maxs[param_id] - param_mins[param_id]);
+	param_incs[param_id] = param_range / 100.0;
+	
 	cookies_array[param_id] = param_info.cookie;
 
 	if((param_info.flags & CLAP_PARAM_IS_STEPPED) == CLAP_PARAM_IS_STEPPED){
@@ -465,7 +466,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	//TODO not sure what to do with periodic parameters
 	if((param_info.flags & CLAP_PARAM_IS_PERIODIC) == CLAP_PARAM_IS_PERIODIC){
 	}
-	//TODO not sure what to do with periodic parameters
+	//TODO not sure what to do with bypass parameter
 	if((param_info.flags & CLAP_PARAM_IS_BYPASS) == CLAP_PARAM_IS_BYPASS){
 	}
 	//TODO for now hidden params will be shown to user but the user wont be able to modify them
@@ -476,7 +477,6 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	if((param_info.flags & CLAP_PARAM_IS_READONLY) == CLAP_PARAM_IS_READONLY){
 	    param_incs[param_id] = 0;
 	}
-	
 	param_names[param_id] = calloc(MAX_PARAM_NAME_LENGTH, sizeof(char));
 	snprintf(param_names[param_id], MAX_PARAM_NAME_LENGTH, "%s", param_info.name);
     }
@@ -524,15 +524,16 @@ static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_resc
 	    if(!clap_params->get_info(plug->plug_inst, param_num, &param_info))continue;
 	    double cur_value = 0;
 	    if(!clap_params->get_value(plug->plug_inst, param_info.id, &cur_value))continue;
-	    param_set_value(plug->plug_params, param_num, (PARAM_T)cur_value, Operation_SetValue, 0);
+	    param_set_value(plug->plug_params, param_num, (PARAM_T)cur_value, NULL, Operation_SetValue, 0);
 	}
     }
     if((flags & CLAP_PARAM_RESCAN_TEXT) == CLAP_PARAM_RESCAN_TEXT){
-	//TODO not sure what clap api expects here, if the text needs to be rendered again it will automaticaly on the next ui cycle
+	//TODO not sure what clap api expects here, if the text needs to be rendered again it will do so automaticaly on the next ui cycle
     }
     if((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO){
-	//TODO need to add name change similar to set_value in the params.c for this
-	//TODO need to be able to change if parameter is hidden
+	//TODO get if any parameter name changed, and set it with set_value Operation_NameChange on params
+	//though right now ui does nothing if a parameter name changes on the data side
+	//TODO get if any parameter is hidden or not, and set with set_value Operation_ToggleHidden
     }
     if((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL){
 	if(plug->plug_inst_activated == 1)return;

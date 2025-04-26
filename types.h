@@ -38,7 +38,9 @@ enum paramOperType{
     Operation_SetValue = 0x03,
     Operation_DefValue = 0x04, //set the value of the parameter to the default value
     Operation_SetIncr = 0x05, //set the increment of the parameter to this value
-    Operation_SetDefValue = 0x06 // set the default value to this value
+    Operation_SetDefValue = 0x06, // set the default value to this value
+    Operation_ChangeName = 0x07, // change the name of the parameter
+    Operation_ToggleHidden = 0x08 //value should change if the parameter is hidden or not
 };
 
 //wavetables
@@ -102,6 +104,8 @@ typedef struct _app_param_ring_data_bit{
     int param_id;
     //the parameter value to what to set the parameter or what the parameter value is now
     PARAM_T param_value;
+    //this can be used to send a new name to the parameter for example
+    char param_string[MAX_PARAM_NAME_LENGTH];
     //what to do with parameter? check paramOperType
     unsigned char param_op;
 }PARAM_RING_DATA_BIT;
