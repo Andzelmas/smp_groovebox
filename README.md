@@ -6,7 +6,8 @@ Check out https://brumakes.com/programming.php for development blog and some vid
 Everything is written in C.
 As of today its possible to load lv2 plugins, route audio/midi streams, use a very simple synth and even more simple sampler.
 
-Furthermore CLAP implementation is on its way. Now it is possible to load CLAP plugins, use their audio buffers. When the parameter and event extensions will be in the code, the plugins will be fully usable and I will add other extensions as I develop.
+Furthermore CLAP implementation is on its way. Now it is possible to load CLAP plugins, use their audio buffers, send midi events, change parameters and use parameter config files the same way as with lv2 plugins.
+Short term still need to implement event input output for all cases and save/load states for preset saving/loading. Other Clap extensions are of lower priority and I will implement them as i go along.
 
 This software uses minimal dependencies and its ui is using ncurses, so it can be used from a terminal and without any graphical environment.
 Also, the gui adapts to small screens, so works nicely with rpi touch screens - this was the main catalyst to make this software in the first place.
