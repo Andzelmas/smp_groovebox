@@ -477,7 +477,6 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	}
 	//TODO need to make parameter hidden status switchable and to not show these parameters to the user 
 	if((param_info.flags & CLAP_PARAM_IS_HIDDEN) == CLAP_PARAM_IS_HIDDEN){
-	    param_incs[param_id] = 0;
 	}
 	if((param_info.flags & CLAP_PARAM_IS_READONLY) == CLAP_PARAM_IS_READONLY){
 	    param_incs[param_id] = 0;
@@ -511,7 +510,6 @@ PRM_CONTAIN* clap_plug_param_return_param_container(CLAP_PLUG_INFO* plug_data, i
 
     return plug->plug_params;
 }
-//TODO ext_params_ functions not added to the CLAP_PLUG_INFO struct yet
 static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_rescan_flags flags){
     if(is_audio_thread)return;
     CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
