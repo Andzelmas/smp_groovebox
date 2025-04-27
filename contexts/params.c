@@ -46,6 +46,7 @@ typedef struct _params_param{
     char** param_strings; //the string array
     //user data for convenience (for example clap plugins has a void* cookie for faster loading of params from events)
     void* user_data;
+    //TODO instead of is hidden implement flag system for parameters
     //is the parameter hidden
     uint16_t is_hidden;
 }PRM_PARAM;

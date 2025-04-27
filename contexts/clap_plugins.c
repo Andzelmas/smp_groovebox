@@ -532,13 +532,17 @@ static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_resc
     }
     if((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO){
 	//TODO get if any parameter name changed, and set it with set_value Operation_NameChange on params
-	//though right now ui does nothing if a parameter name changes on the data side
+	//though right now ui does nothing if a parameter name changes on the data side - need to overhaul app_intrf.c for these changes to take effect
 	//TODO get if any parameter is hidden or not, and set with set_value Operation_ToggleHidden
     }
     if((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL){
 	if(plug->plug_inst_activated == 1)return;
+	//TODO app_intrf.c does not handle critical changes of parameters right now - need to overhaul the whole app_intrf for this
+	//TODO right now on app_intrf.c the parameters are created only when the plugin is added.
+	/*
         clap_plug_params_destroy(plug_data, plug->id);
 	clap_plug_params_create(plug_data, plug->id);
+	*/
     }
 }
 //clear param of automation and modulation, since it is not implemented yet, does nothing
