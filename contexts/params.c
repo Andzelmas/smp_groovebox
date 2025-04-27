@@ -45,7 +45,7 @@ typedef struct _params_param{
     unsigned int param_strings_num; // how many strings there are for this parameter
     char** param_strings; //the string array
     //user data for convenience (for example clap plugins has a void* cookie for faster loading of params from events)
-    void* user_data;
+    PRM_USER_DATA user_data;
     //TODO instead of is hidden implement flag system for parameters
     //is the parameter hidden
     uint16_t is_hidden;
@@ -63,7 +63,7 @@ typedef struct _params_container{
     //ring buffers for parameter manipulation/communication
     RING_BUFFER* param_rt_to_ui;
     RING_BUFFER* param_ui_to_rt;
-    PRM_USER_DATA user_data;
+    PRM_CONT_USER_DATA user_data;
 }PRM_CONTAIN;
 
 PRM_INTERP_VAL* params_init_interpolated_val(PARAM_T max_range, unsigned int total_samples){
@@ -111,7 +111,8 @@ PARAM_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, PARAM_T new_val){
 }
 
 PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, PARAM_T* param_vals,
-					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types, void** user_data_per_param){
+					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types,
+					 PRM_USER_DATA* user_data_per_param, const PRM_CONT_USER_DATA* user_data_per_container){
     if(num_of_params<=0) return NULL;
     if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types) return NULL;
     PRM_CONTAIN* param_container = (PRM_CONTAIN*)malloc(sizeof(PRM_CONTAIN));
@@ -122,8 +123,12 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
     param_container->num_of_params_ui = 0;
     param_container->rt_params = NULL;
     param_container->ui_params = NULL;
-    (&param_container->user_data)->user_data = NULL;
-    (&param_container->user_data)->val_to_string = NULL;
+    param_container->user_data.user_data = NULL;
+    param_container->user_data.val_to_string = NULL;
+    if(user_data_per_container){
+	param_container->user_data.user_data = user_data_per_container->user_data;
+	param_container->user_data.val_to_string = user_data_per_container->val_to_string;
+    }
     
     param_container->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
     param_container->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
@@ -190,10 +195,6 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
     }
 
     return param_container;
-}
-void params_add_user_data(PRM_CONTAIN* param_container, PRM_USER_DATA user_data){
-    if(!param_container)return;
-    param_container->user_data = user_data;
 }
 int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_TABLE* table){
     if(!param_container)return -1;
@@ -314,8 +315,8 @@ int param_set_value(PRM_CONTAIN* param_container, int val_id, PARAM_T set_to, co
     }
     return 0;    
 }
-void* param_user_data_return(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
-    if(!param_container)return NULL;
+int param_user_data_return(PRM_CONTAIN* param_container, int val_id, PRM_USER_DATA* user_data, unsigned int rt_params){
+    if(!param_container)return -1;
     PRM_PARAM* param_array = NULL;
     int num_of_params = -1;
     if(rt_params == 0){
@@ -326,11 +327,11 @@ void* param_user_data_return(PRM_CONTAIN* param_container, int val_id, unsigned 
 	param_array = param_container->rt_params;
 	num_of_params = param_container->num_of_params_rt;
     }
-    if(val_id >= num_of_params)return NULL;
+    if(val_id >= num_of_params)return -1;
 
     PRM_PARAM cur_param = param_array[val_id];
-    
-    return cur_param.user_data;
+    *user_data = cur_param.user_data;
+    return 0;
 }
 PARAM_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
     if(!param_container)return -1;

@@ -61,7 +61,7 @@ typedef struct _clap_plug_plug{
     int plug_inst_id; //the plugin instance index in the array of the plugin factory
     char* plug_path; //the path for the clap file
     PRM_CONTAIN* plug_params; //plugin parameter container for params.c
-    clap_host_t clap_host_info; //need when creating the plugin instance, this struct has this CLAP_PLUG_PLUG in the host var as (void*)
+    clap_host_t clap_host_info; //need when creating the plugin instance, this struct has this CLAP_PLUG_PLUG in the host_data var as (void*)
     CLAP_PLUG_INFO* plug_data; //CLAP_PLUG_INFO struct address for convenience
     //CLAP_PLUG_PORT holds an array of sys backend audio ports (to connect to jack for example) and the clap_audio_buffer_t arrays, to send to plugin process function
     CLAP_PLUG_PORT input_ports;
@@ -91,6 +91,7 @@ typedef struct _clap_plug_info{
     clap_host_log_t ext_log; //struct that holds function for logging messages (severity is not sent)
     clap_host_audio_ports_t ext_audio_ports; //struct that holds functions for the audio_ports extensions
     clap_host_note_ports_t ext_note_ports; //struct that holds functions for the note-ports extension
+    clap_host_params_t ext_params; //struct that holds functions for the params extension
     //address of the audio client
     void* audio_backend;
 }CLAP_PLUG_INFO;
@@ -351,7 +352,7 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO* plug_data, int id, bool i
     CLAP_PLUG_NOTE_PORT* note_port = &(plug->output_note_ports);
     if(input_ports)note_port = &(plug->input_note_ports);
 
-    note_port->midi_cont = app_jack_init_midi_cont(clap_ports_count);
+    note_port->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
     note_port->sys_ports = calloc(clap_ports_count, sizeof(void*));
     note_port->ports_count = clap_ports_count;
     note_port->ids = calloc(clap_ports_count, sizeof(clap_id));
@@ -428,7 +429,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
     PARAM_T* param_maxs = calloc(param_count, sizeof(PARAM_T));
     PARAM_T* param_incs = calloc(param_count, sizeof(PARAM_T));
     unsigned char* val_types = calloc(param_count, sizeof(char));
-    void** cookies_array = calloc(param_count, sizeof(void*));
+    PRM_USER_DATA* user_data_array = calloc(param_count, sizeof(PRM_USER_DATA));
     if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types){
 	if(param_names)free(param_names);
 	if(param_vals)free(param_vals);
@@ -436,6 +437,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	if(param_maxs)free(param_maxs);
 	if(param_incs)free(param_incs);
 	if(val_types)free(val_types);
+	if(user_data_array)free(user_data_array);
 	return -1;
     }
     for(uint32_t param_id = 0; param_id < param_count; param_id++){
@@ -445,7 +447,10 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	param_mins[param_id] = 0.0;
 	param_maxs[param_id] = 0.0;
 	val_types[param_id] = Float_type;
-	cookies_array[param_id] = NULL;
+	PRM_USER_DATA param_data;
+	param_data.data = NULL;
+	param_data.user_id = 0;
+	user_data_array[param_id] = param_data;
 	
 	clap_param_info_t param_info;
 	if(!clap_params->get_info(plug->plug_inst, param_id, &param_info))continue;
@@ -457,7 +462,8 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	PARAM_T param_range = abs(param_maxs[param_id] - param_mins[param_id]);
 	param_incs[param_id] = param_range / 100.0;
 	
-	cookies_array[param_id] = param_info.cookie;
+	user_data_array[param_id].data = param_info.cookie;
+	user_data_array[param_id].user_id = param_info.id;
 
 	if((param_info.flags & CLAP_PARAM_IS_STEPPED) == CLAP_PARAM_IS_STEPPED){
 	    val_types[param_id] = Int_type;
@@ -469,7 +475,6 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	//TODO not sure what to do with bypass parameter
 	if((param_info.flags & CLAP_PARAM_IS_BYPASS) == CLAP_PARAM_IS_BYPASS){
 	}
-	//TODO for now hidden params will be shown to user but the user wont be able to modify them
 	//TODO need to make parameter hidden status switchable and to not show these parameters to the user 
 	if((param_info.flags & CLAP_PARAM_IS_HIDDEN) == CLAP_PARAM_IS_HIDDEN){
 	    param_incs[param_id] = 0;
@@ -480,11 +485,11 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
 	param_names[param_id] = calloc(MAX_PARAM_NAME_LENGTH, sizeof(char));
 	snprintf(param_names[param_id], MAX_PARAM_NAME_LENGTH, "%s", param_info.name);
     }
-    plug->plug_params = params_init_param_container(param_count, param_names, param_vals, param_mins, param_maxs, param_incs, val_types, cookies_array);
-    PRM_USER_DATA param_user_data;
-    param_user_data.user_data = (void*)plug;
-    param_user_data.val_to_string = clap_plug_params_value_to_text;
-    params_add_user_data(plug->plug_params, param_user_data);
+    PRM_CONT_USER_DATA container_user_data;
+    container_user_data.user_data = (void*)plug;
+    container_user_data.val_to_string = clap_plug_params_value_to_text;
+    plug->plug_params = params_init_param_container(param_count, param_names, param_vals, param_mins, param_maxs, param_incs, val_types,
+						    user_data_array, &container_user_data);
 
     for(uint32_t i = 0; i < param_count; i++){
 	if(param_names[i])free(param_names[i]);
@@ -495,7 +500,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO* plug_data, int id){
     free(param_maxs);
     free(param_incs);
     free(val_types);
-    free(cookies_array);
+    free(user_data_array);
     return 0;
 }
 PRM_CONTAIN* clap_plug_param_return_param_container(CLAP_PLUG_INFO* plug_data, int plug_id){
@@ -509,7 +514,7 @@ PRM_CONTAIN* clap_plug_param_return_param_container(CLAP_PLUG_INFO* plug_data, i
 //TODO ext_params_ functions not added to the CLAP_PLUG_INFO struct yet
 static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_rescan_flags flags){
     if(is_audio_thread)return;
-    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host;
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     if(!plug->plug_params)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
@@ -528,15 +533,18 @@ static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_resc
 	}
     }
     if((flags & CLAP_PARAM_RESCAN_TEXT) == CLAP_PARAM_RESCAN_TEXT){
+	context_sub_send_msg(plug_data->control_data, is_audio_thread, "Plugin %s requested CLAP_PARAM_RESCAN_TEXT\n", plug->plug_path);
 	//TODO not sure what clap api expects here, if the text needs to be rendered again it will do so automaticaly on the next ui cycle
     }
     if((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO){
+	context_sub_send_msg(plug_data->control_data, is_audio_thread, "Plugin %s requested CLAP_PARAM_RESCAN_INFO\n", plug->plug_path);
 	//TODO get if any parameter name changed, and set it with set_value Operation_NameChange on params
 	//though right now ui does nothing if a parameter name changes on the data side - need to overhaul app_intrf.c for these changes to take effect
 	//TODO get if any parameter is hidden or not, and set with set_value Operation_ToggleHidden
     }
     if((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL){
 	if(plug->plug_inst_activated == 1)return;
+	context_sub_send_msg(plug_data->control_data, is_audio_thread, "Plugin %s requested CLAP_PARAM_RESCAN_ALL\n", plug->plug_path);
 	//TODO app_intrf.c does not handle critical changes of parameters right now - need to overhaul the whole app_intrf for this
 	//TODO right now on app_intrf.c the parameters are created only when the plugin is added.
 	/*
@@ -551,7 +559,7 @@ static void clap_plug_ext_params_clear(const clap_host_t* host, clap_id param_id
 }
 static void clap_plug_ext_params_request_flush(const clap_host_t* host){
     if(is_audio_thread)return;
-    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host;
+    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)host->host_data;
     if(!plug)return;
     CLAP_PLUG_INFO* plug_data = plug->plug_data;
     if(!plug_data)return;
@@ -760,6 +768,9 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
     if(strcmp(ex_id, CLAP_EXT_NOTE_PORTS) == 0){
 	return &(plug_data->ext_note_ports);
     }
+    if(strcmp(ex_id, CLAP_EXT_PARAMS) == 0){
+	return &(plug_data->ext_params);
+    }
     //if there is no extension implemented that the plugin needs send the name of the extension to the ui
     context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "%s asked for ext %s\n", plug->plug_path, ex_id);
 
@@ -897,12 +908,25 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data){
     //process the sys messages (stop, start plugin and similar)
     context_sub_process_rt(plug_data->control_data);
     
+    //read the param messages for plugins on the [audio-thread]
+    for(unsigned int i = 0; i < MAX_INSTANCES; i++){
+	CLAP_PLUG_PLUG* cur_plug = &(plug_data->plugins[i]);
+	if(cur_plug->plug_inst_processing == 0)continue;
+	if(!cur_plug->plug_inst)continue;
+	param_msgs_process(cur_plug->plug_params, 1);
+    }
     return 0;
 }
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data){
     if(!plug_data)return -1;
     //process the sys messages on [main-thread] (send msg, activate and process a plugin, restart plugin etc.)
     context_sub_process_ui(plug_data->control_data);
+    //read the param messages for plugins on the [main-thread]
+    for(unsigned int i = 0; i < MAX_INSTANCES; i++){
+	CLAP_PLUG_PLUG* cur_plug = &(plug_data->plugins[i]);
+	if(!cur_plug->plug_inst)continue;
+	param_msgs_process(cur_plug->plug_params, 0);
+    }    
     return 0;
 }
 
@@ -1109,6 +1133,10 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     //note-ports extension
     plug_data->ext_note_ports.supported_dialects = clap_plug_ext_note_ports_supported_dialects;
     plug_data->ext_note_ports.rescan = clap_plug_ext_note_ports_rescan;
+    //param extension
+    plug_data->ext_params.clear = clap_plug_ext_params_clear;
+    plug_data->ext_params.request_flush = clap_plug_ext_params_request_flush;
+    plug_data->ext_params.rescan = clap_plug_ext_params_rescan;
 
     //the array holds one more plugin, it will be an empty shell to check if the total number of plugins arent too many
     for(int i = 0; i < (MAX_INSTANCES+1); i++){
@@ -1305,9 +1333,8 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	return -1;
     }
     plug->plug_inst = plug_inst;
-    plug->plug_inst_created = 1;
-    
-    bool inst_err = plug_inst->init(plug_inst);
+    plug->plug_inst_created = 1;    
+    bool inst_err = plug->plug_inst->init(plug->plug_inst);
     if(!inst_err){
 	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Failed to init %s plugin\n", plugin_name);
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
@@ -1440,6 +1467,19 @@ static void clap_prepare_output_ports(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PORT*
 	}
     }
 }
+//TODO get events from parameters, midi etc. and use this data
+static void clap_output_events_read(CLAP_PLUG_INFO* plug_data, unsigned int nframes, CLAP_PLUG_PLUG* plug){
+    if(!plug_data)return;
+    if(!plug)return;
+    clap_output_events_t* out_events = &(plug->output_events);
+    if(!out_events->ctx)return;
+    UB_EVENT* ub_out = (UB_EVENT*)out_events->ctx;
+
+    uint32_t events_count = ub_size(ub_out);
+    //TODO to implement output event processing need to find a plugin that outputs them
+    if(events_count > 0)
+	context_sub_send_msg(plug_data->control_data, is_audio_thread, "events %d\n", events_count);
+}
 
 static void clap_input_events_prepare(CLAP_PLUG_INFO* plug_data, unsigned int nframes, CLAP_PLUG_PLUG* plug){
     if(!plug_data)return;
@@ -1449,11 +1489,40 @@ static void clap_input_events_prepare(CLAP_PLUG_INFO* plug_data, unsigned int nf
     UB_EVENT* ub_in = (UB_EVENT*)in_events->ctx;
     //should be empty, but reset just in case
     ub_list_reset(ub_in);
+    
+    //TODO right now smp_groovebox does not handle automation or modulation so simply put the parameter changes into the event buffer first on the 0 offset frame
+    //put parameter changes into the event queue
+    uint32_t param_count = param_return_num_params(plug->plug_params, 1);
+    for(uint32_t param_idx = 0; param_idx < param_count; param_idx++){
+	if(param_get_if_changed(plug->plug_params, (int)param_idx, 1) != 1)continue;
+	clap_event_header_t head;
+	head.flags = CLAP_EVENT_IS_LIVE;
+	head.size = sizeof(clap_event_param_value_t);
+	head.space_id = CLAP_CORE_EVENT_SPACE_ID;
+	head.time = 0;
+	head.type = CLAP_EVENT_PARAM_VALUE;
+
+	clap_event_param_value_t param_val;
+	param_val.channel = -1;
+	PRM_USER_DATA param_user_data;
+	param_user_data.data = NULL;
+	param_user_data.user_id = -1;
+	param_user_data_return(plug->plug_params, (int)param_idx, &param_user_data, 1);
+	param_val.cookie = param_user_data.data;
+	param_val.header = head;
+	param_val.key = -1;
+	param_val.note_id = -1;
+	param_val.param_id = param_user_data.user_id;
+	param_val.port_index = -1;
+	param_val.value = (double)param_get_value(plug->plug_params, (int)param_idx, 0, 0, 1);
+	ub_push(ub_in, (void*)&(param_val), (uint32_t)sizeof(clap_event_param_value_t));
+    }
+    //TODO how to add transport events so everything is sorted by the frames offset?
+    
     //write to input note ports of the plugin
     CLAP_PLUG_NOTE_PORT* note_ports = &(plug->input_note_ports);
     if(note_ports->ports_count == 0)return;
-    //TODO write to the plug->input_events sorted by the sample time! will have to modify when parameters are added - paremeters will have to be sorted by time too!
-    //first add the system midi messages
+    //Add the system midi messages
     for(uint32_t port_num = 0; port_num < note_ports->ports_count; port_num++){
 	if(!(note_ports->sys_ports[port_num]))continue;
 	app_jack_midi_cont_reset(note_ports->midi_cont);
@@ -1469,7 +1538,7 @@ static void clap_input_events_prepare(CLAP_PLUG_INFO* plug_data, unsigned int nf
 	    clap_head.space_id = CLAP_CORE_EVENT_SPACE_ID;
 	    
 	    int32_t note_id = -1; 
-	    int16_t port_index = note_ports->ids[port_num];
+	    int16_t port_index = (int16_t)port_num;
 	    int16_t channel = 0;
 	    int16_t key = 0;
 	    double  velocity = 0;
@@ -1481,7 +1550,6 @@ static void clap_input_events_prepare(CLAP_PLUG_INFO* plug_data, unsigned int nf
 		    clap_head.type = CLAP_EVENT_NOTE_OFF;
 		    if((type & 0xf0) == 0x90)
 			clap_head.type = CLAP_EVENT_NOTE_ON;
-		    
 		    clap_head.size = sizeof(clap_event_note_t);
 		    channel = (int16_t)(type & 0x0f);
 		    key = (int16_t)note_ports->midi_cont->note_pitches[midi_num];      
@@ -1494,7 +1562,6 @@ static void clap_input_events_prepare(CLAP_PLUG_INFO* plug_data, unsigned int nf
 		    clap_note.note_id = note_id;
 		    clap_note.port_index = port_index;
 		    clap_note.velocity = velocity;
-		    //TODO will need to add to some temp array first and then sort probably
 		    ub_push(ub_in, (void*)&(clap_note), (uint32_t)sizeof(clap_note));
 		    continue;
 		}
@@ -1507,7 +1574,6 @@ static void clap_input_events_prepare(CLAP_PLUG_INFO* plug_data, unsigned int nf
 		    clap_midi.data[2] = (uint8_t)note_ports->midi_cont->vel_trig[midi_num];
 		    clap_midi.header = clap_head;
 		    clap_midi.port_index = port_index;
-		    //TODO will need to add to some temp array first and then sort probably
 		    ub_push(ub_in, (void*)&(clap_midi), (uint32_t)sizeof(clap_midi));
 		    continue;
 		}
@@ -1567,16 +1633,21 @@ void clap_process_data_rt(CLAP_PLUG_INFO* plug_data, unsigned int nframes){
 	//write messages from midi, parameters and similar to the input events
 	clap_input_events_prepare(plug_data, nframes, plug);
 	_process.in_events = &(plug->input_events);
-	clap_output_events_t* out_events = &(plug->output_events);
 	//should be empty, but reset just in case
+	clap_output_events_t* out_events = &(plug->output_events);
 	ub_list_reset((UB_EVENT*)out_events->ctx);
 	_process.out_events = out_events;
 
 	clap_process_status clap_status = plug->plug_inst->process(plug->plug_inst, &_process);
+	
 	//copy clap audio output buffers to the audio backend audio buffers
 	clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes);
-	//TODO function that reads messages from midi and similar from the output events
-	ub_list_reset((UB_EVENT*)(&plug->input_events)->ctx);
+	
+	//read parameter, midi etc. events and distribute them into smp_groovebox contexts
+	clap_output_events_read(plug_data, nframes, plug);
+	//reset the input and output events before ending the rt cycle
+	clap_input_events_t* in_events = &(plug->input_events);
+	ub_list_reset((UB_EVENT*)in_events->ctx);
 	ub_list_reset((UB_EVENT*)out_events->ctx);
     }
 }

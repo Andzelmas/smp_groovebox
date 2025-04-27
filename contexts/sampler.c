@@ -278,7 +278,7 @@ int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
     SMP_SMP *cur_smp = &(smp_data->samples[smp_id]);
     //init the sample parameters to default values
     cur_smp->params = params_init_param_container(NUM_PARAMS, (char*[1]){"Note"}, (PARAM_T[1]){40}, (PARAM_T[1]){0},
-						  (PARAM_T[1]){127}, (PARAM_T[1]){1}, (unsigned char[1]){Uchar_type}, NULL);
+						  (PARAM_T[1]){127}, (PARAM_T[1]){1}, (unsigned char[1]){Uchar_type}, NULL, NULL);
     
     //TODO samplerate is not needed, when we load sample to memory we also need to convert it to the system
     //sample rate, when system sample rate changes, the jack callback of samplerate change

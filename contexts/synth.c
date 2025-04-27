@@ -471,7 +471,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 						      (PARAM_T [10]){0.01, 0.1, 0.01, 0.05, 1, 1, 0.1, 0.1, 0.01, 0.1},
 						      (unsigned char [10]){DB_Return_Type, Float_type, Float_type, Float_type, Int_type, String_Return_Type,
 							  Curve_Float_Return_Type, Curve_Float_Return_Type, Float_type, Curve_Float_Return_Type},
-						      NULL);
+						      NULL, NULL);
 	//write strings to parameters that are String_Return_Type
 	param_set_param_strings(cur_osc->params, 5, (char* [4]){"sin", "triang", "saw", "sqr"}, 4);
 	//put a curve table for the params that should be returned as curves
