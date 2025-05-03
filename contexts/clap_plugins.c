@@ -1275,38 +1275,6 @@ static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO* plug_data, const char
     return 0;
 }
 
-static bool clap_plug_preset_indexer_declare_filetype(const struct clap_preset_discovery_indexer* indexer, const clap_preset_discovery_filetype_t* filetype){
-    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)indexer->indexer_data;
-    if(!plug)return false;
-    CLAP_PLUG_INFO* plug_data = plug->plug_data;
-    if(!plug_data)return false;
-    context_sub_send_msg(plug_data->control_data, is_audio_thread, "Filetype %s\n", filetype->name);
-    return true;
-}
-static bool clap_plug_preset_indexer_declare_location(const struct clap_preset_discovery_indexer* indexer, const clap_preset_discovery_location_t* location){
-    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)indexer->indexer_data;
-    if(!plug)return false;
-    CLAP_PLUG_INFO* plug_data = plug->plug_data;
-    if(!plug_data)return false;
-    context_sub_send_msg(plug_data->control_data, is_audio_thread, "Location %s\n", location->name);
-    return true;
-}
-static bool clap_plug_preset_indexer_declare_soundpack(const struct clap_preset_discovery_indexer* indexer, const clap_preset_discovery_soundpack_t* soundpack){
-    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)indexer->indexer_data;
-    if(!plug)return false;
-    CLAP_PLUG_INFO* plug_data = plug->plug_data;
-    if(!plug_data)return false;
-    context_sub_send_msg(plug_data->control_data, is_audio_thread, "Soundpack %s\n", soundpack->name);
-    return true;
-}
-static const void* clap_plug_preset_indexer_get_extension(const struct clap_preset_discovery_indexer* indexer, const char* extension_id){
-    CLAP_PLUG_PLUG* plug = (CLAP_PLUG_PLUG*)indexer->indexer_data;
-    if(!plug)return NULL;
-    CLAP_PLUG_INFO* plug_data = plug->plug_data;
-    if(!plug_data)return NULL;
-    context_sub_send_msg(plug_data->control_data, is_audio_thread, "Requested preset extension %s\n", extension_id);
-    return NULL;
-}
 int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_name, int id){
     int return_id = -1;
     if(!plug_data)return -1;
@@ -1412,33 +1380,6 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
 	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "Failed to create %s plugin parameters container\n", plugin_name);
 	clap_plug_plug_stop_and_clean(plug_data, plug->id);
 	return -1;
-    }
-
-    //preset-discovery factory
-    const clap_preset_discovery_factory_t* preset_fac = plug->plug_entry->get_factory(CLAP_PRESET_DISCOVERY_FACTORY_ID);
-    if(preset_fac){
-	uint32_t provider_count = preset_fac->count(preset_fac);
-	for(uint32_t i = 0; i < provider_count; i++){
-	    const clap_preset_discovery_provider_descriptor_t* preset_desc = preset_fac->get_descriptor(preset_fac, i);
-	    if(!preset_desc)continue;
-	    context_sub_send_msg(plug_data->control_data, is_audio_thread, "Preset provider NAME %s \n", preset_desc->name);
-	    clap_preset_discovery_indexer_t preset_indexer;
-	    preset_indexer.clap_version = plug->clap_host_info.clap_version;
-	    preset_indexer.declare_filetype = clap_plug_preset_indexer_declare_filetype;
-	    preset_indexer.declare_location = clap_plug_preset_indexer_declare_location;
-	    preset_indexer.declare_soundpack = clap_plug_preset_indexer_declare_soundpack;
-	    preset_indexer.get_extension = clap_plug_preset_indexer_get_extension;
-	    preset_indexer.indexer_data = (void*)plug;
-	    preset_indexer.name = plug->clap_host_info.name;
-	    preset_indexer.vendor = plug->clap_host_info.vendor;
-	    preset_indexer.url = plug->clap_host_info.url;
-	    preset_indexer.version = plug->clap_host_info.version;
-	    const clap_preset_discovery_provider_t* preset_discovery = preset_fac->create(preset_fac, &preset_indexer, preset_desc->id);
-	    if(!preset_discovery)continue;
-	    if(!preset_discovery->init(preset_discovery))continue;
-
-	    preset_discovery->destroy(preset_discovery);
-	}
     }
     
     //start processing the plugin
