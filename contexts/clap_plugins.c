@@ -17,6 +17,9 @@
 #include "../types.h"
 #include "context_control.h"
 #include "../jack_funcs/jack_funcs.h"
+
+#include "clap_ext/clap_ext_preset_factory.h"
+
 //what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
 #define CLAP_PATH "/usr/lib/clap/"
@@ -1384,6 +1387,15 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     
     //start processing the plugin
     context_sub_activate_start_process_msg(plug_data->control_data, plug->id, is_audio_thread);
+
+    //TODO testing preset-factory
+    CLAP_EXT_PRESET_FACTORY* preset_fac = clap_ext_preset_init(plug->plug_entry, plug->clap_host_info);
+    for(uint32_t i = 0; i < clap_ext_preset_location_count(preset_fac); i++){
+	char loc_name[MAX_PARAM_NAME_LENGTH];
+	clap_ext_preset_location_name(preset_fac, i, loc_name, MAX_PARAM_NAME_LENGTH);
+	context_sub_send_msg(plug_data->control_data, is_audio_thread, "location name: %s\n", loc_name);
+    }
+    clap_ext_preset_clean(preset_fac);
 
     return_id = plug->id;
     return return_id;
