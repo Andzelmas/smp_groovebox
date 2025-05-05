@@ -55,6 +55,7 @@ typedef struct _clap_plug_note_port{
 //the single clap plugin struct
 typedef struct _clap_plug_plug{
     int id; //plugin id on the clap_plug_info plugin array
+    char plugin_id[MAX_UNIQUE_ID_STRING]; //unique plugin id that is from the clap_plugin_descriptor. Used rarely (now to match if preset container from preset-factory is can be used with the plugin)
     clap_plugin_entry_t* plug_entry; //the clap library file for this plugin
     const clap_plugin_t* plug_inst; //the plugin instance
     unsigned int plug_inst_created; //was a init function called in the descriptor for this plugin
@@ -1317,6 +1318,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     if(plug_desc->description){
 	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "%s info: %s\n", plug_desc->name, plug_desc->description);
     }
+    snprintf(plug->plugin_id, MAX_STRING_MSG_LENGTH, "%s", plug_desc->id);
     //add the clap_host_t struct to the plug
     clap_host_t clap_info_host;
     clap_info_host.clap_version = plug_data->clap_host_info.clap_version;
@@ -1389,7 +1391,10 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     context_sub_activate_start_process_msg(plug_data->control_data, plug->id, is_audio_thread);
 
     //TODO testing preset-factory
-    CLAP_EXT_PRESET_FACTORY* preset_fac = clap_ext_preset_init(plug->plug_entry, plug->clap_host_info);
+    CLAP_EXT_PRESET_USER_FUNCS preset_user_funcs;
+    preset_user_funcs.ext_preset_send_msg = clap_sys_msg;
+    preset_user_funcs.user_data = (void*)plug_data;
+    CLAP_EXT_PRESET_FACTORY* preset_fac = clap_ext_preset_init(plug->plug_entry, plug->clap_host_info, preset_user_funcs);
     for(uint32_t i = 0; i < clap_ext_preset_location_count(preset_fac); i++){
 	char loc_name[MAX_PARAM_NAME_LENGTH];
 	clap_ext_preset_location_name(preset_fac, i, loc_name, MAX_PARAM_NAME_LENGTH);
