@@ -142,6 +142,8 @@ static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery
 	if(cur_container->load_key)
 	    snprintf(cur_container->load_key, strlen(load_key) + 1, "%s", load_key);
     }
+    //TODO location on the cur_container will have to be the full filepath of this preset container if the loc_kind is FILE and we are crawling through directories
+    //otherwise can use the cur_loc->loc_location
     if(cur_loc->loc_location){
 	cur_container->location = calloc(strlen(cur_loc->loc_location) + 1, sizeof(char));
 	if(cur_container->location)
