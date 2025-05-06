@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "../../types.h"
 #include "../../util_funcs/log_funcs.h"
 
@@ -17,6 +18,8 @@ typedef struct _clap_ext_preset_single_loc{
     char* loc_name;
     uint32_t loc_kind;
     char* loc_location;
+    char** file_paths;
+    uint32_t file_paths_count;
     CLAP_EXT_PRESET_CONTAINER* preset_containers;
     uint32_t preset_containers_count;
     CLAP_EXT_PRESET_USER_FUNCS user_funcs; //user functions are copied to each location for convenience
@@ -69,6 +72,8 @@ static bool clap_ext_preset_indexer_declare_location(const struct clap_preset_di
     cur_loc->loc_kind = location->kind;
     cur_loc->loc_location = NULL;
     cur_loc->loc_name = NULL;
+    cur_loc->file_paths = NULL;
+    cur_loc->file_paths_count = 0;
     cur_loc->preset_containers = NULL;
     cur_loc->preset_containers_count = 0;
     cur_loc->user_funcs = ext_preset_fac->user_funcs;
@@ -108,6 +113,14 @@ static void clap_ext_single_loc_clean(CLAP_EXT_PRESET_SINGLE_LOC* single_loc){
 	}
 	free(single_loc->preset_containers);
     }
+    if(single_loc->file_paths){
+	for(uint32_t i = 0; i < single_loc->file_paths_count; i++){
+	    char* cur_filepath = single_loc->file_paths[i];
+	    if(cur_filepath)
+		free(cur_filepath);
+	}
+	free(single_loc->file_paths);
+    }
     single_loc->preset_containers_count = 0;
 }
 void clap_ext_preset_clean(CLAP_EXT_PRESET_FACTORY* clap_ext_preset_data){
@@ -139,10 +152,9 @@ static void clap_ext_preset_meta_on_error(const struct clap_preset_discovery_met
     cur_loc->user_funcs.ext_preset_send_msg(cur_loc->user_funcs.user_data, error_message); 
 }
 static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery_metadata_receiver* receiver, const char* name, const char* load_key){
-    //on errors returning true too, so the transmitter will still use the receiver callbacks, just that this preset container will not be indexed
-    if(!receiver)return true;
+    if(!receiver)return false;
     CLAP_EXT_PRESET_SINGLE_LOC* cur_loc = receiver->receiver_data;
-    if(!cur_loc)return true;
+    if(!cur_loc)return false;
     //location kind will be the same for all the preset containers, because it comes from the CLAP_EXT_PRESET_SINGLE_LOC
     uint32_t location_kind = cur_loc->loc_kind;
 
@@ -150,7 +162,7 @@ static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery
     CLAP_EXT_PRESET_CONTAINER* temp_array = realloc(cur_loc->preset_containers, sizeof(CLAP_EXT_PRESET_CONTAINER) * cur_loc->preset_containers_count);
     if(!temp_array){
 	cur_loc->preset_containers_count -= 1;
-	return true;
+	return false;
     }
 
     cur_loc->preset_containers = temp_array;
@@ -173,7 +185,7 @@ static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery
 	if(cur_container->load_key)
 	    snprintf(cur_container->load_key, strlen(load_key) + 1, "%s", load_key);
     }
-
+    //TODO if cur_loc->loc_location was a directory with files cur_container->location should become the preset full file path
     if(cur_loc->loc_location){
 	cur_container->location = calloc(strlen(cur_loc->loc_location) + 1, sizeof(char));
 	log_append_logfile("location %s\n", cur_loc->loc_location);
@@ -222,6 +234,14 @@ static void clap_ext_preset_meta_add_extra_info(const struct clap_preset_discove
     return;
 }
 
+static int path_is_directory(const char* path){
+    struct stat statbuf;
+    if(stat(path, &statbuf) == -1)return -1;
+    int is_dir = 0;
+    if((statbuf.st_mode & S_IFMT) == S_IFDIR)is_dir = 1;
+    return is_dir;
+}
+
 CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_entry, clap_host_t clap_host_info, CLAP_EXT_PRESET_USER_FUNCS user_funcs){
     CLAP_EXT_PRESET_FACTORY* clap_ext_preset_data = calloc(1, sizeof(CLAP_EXT_PRESET_FACTORY));
     if(!clap_ext_preset_data)return NULL;
@@ -247,7 +267,7 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
     //copy the struct containing the user functions (send message and similar)
     clap_ext_preset_data->user_funcs = user_funcs;
     //all the locations from all the providers will be put into the single CLAP_EXT_PRESET_FACTORY struct
-    //preset containers from the metada will be put into the CLAP_EXT_PRESET_SINGLE_LOC->preset_containers, but only the preset containers that can be used with the provided plugin_id
+    //preset containers from the metada will be put into the CLAP_EXT_PRESET_SINGLE_LOC->preset_containers
     uint32_t provider_count = preset_fac->count(preset_fac);
     uint32_t curr_idx_from = 0;
     for(uint32_t i = 0; i < provider_count; i++){
@@ -287,13 +307,27 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
 	    metada_rec.set_description = clap_ext_preset_meta_set_description;
 	    metada_rec.set_timestamps = clap_ext_preset_meta_set_timestamps;
 	    metada_rec.add_feature = clap_ext_preset_meta_add_feature;
-	    metada_rec.add_extra_info =clap_ext_preset_meta_add_extra_info;
-	    //TODO if cur_loc->loc_kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE need to crawl the directories and call get_metadata for each file (matching all clap_ext_preset_data->fileextensions)
-	    //If clap_ext_preset_data->fileextensions are NULLS or "" match all files
-	    //If the cur_loc->loc_kind is a file not a directory dont crawl just call get_metadata
-	    //otherwise send cur_loc->loc_location
-	    preset_discovery->get_metadata(preset_discovery, cur_loc->loc_kind, "/usr/share/surge-xt/patches_factory/Basses/Attacky.fxp", &metada_rec);
-	    //preset_discovery->get_metadata(preset_discovery, cur_loc->loc_kind, cur_loc->loc_location, &metada_rec);
+	    metada_rec.add_extra_info = clap_ext_preset_meta_add_extra_info;
+	    //if the location kind is plugin, the plugin preset containers are inside the plugin, no need to crawl through the location 
+	    if(cur_loc->loc_kind == CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN){
+		preset_discovery->get_metadata(preset_discovery, cur_loc->loc_kind, cur_loc->loc_location, &metada_rec);
+		continue;
+	    }
+	    //if the location kind is a file but the location itself is not a directory (hopefully a file), don't crawl - the plugin should return presets from the single file
+	    if(cur_loc->loc_kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE && path_is_directory(cur_loc->loc_location) == 0){
+		preset_discovery->get_metadata(preset_discovery, cur_loc->loc_kind, cur_loc->loc_location, &metada_rec);
+		continue;
+	    }
+	    //TODO if the loc_kind is a file, and the path is a directory crawl through the directories and add the filepaths to cur_loc->filepaths, increasing the cur_loc->filepaths_count
+	    //if clap_ext_preset_data->file_extensions are not NULLs or not "", only add files with these extensions, otherwise match all regular files
+	    //call get_metada function for each of the cur_loc->filepaths (could event call get_metada as traveling through the directory)
+	    //the clap_ext_preset_meta_begin_preset function should check the cur_loc->filepaths array - if it is not empty add the filepath to the CLAP_EXT_PRESET_CONTAINER->location instead of
+	    //the cur_loc->location
+	    if(cur_loc->loc_kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE && path_is_directory(cur_loc->loc_location) == 1){
+		//TODO crawl the directories here
+		preset_discovery->get_metadata(preset_discovery, cur_loc->loc_kind, "/usr/share/surge-xt/patches_factory/Basses/Attacky.fxp", &metada_rec);
+		continue;
+	    }
 	}
 
 	curr_idx_from = loc_idx + 1;
