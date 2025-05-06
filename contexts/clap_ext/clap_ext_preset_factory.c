@@ -185,7 +185,7 @@ static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery
 	if(cur_container->load_key)
 	    snprintf(cur_container->load_key, strlen(load_key) + 1, "%s", load_key);
     }
-    //TODO if cur_loc->loc_location was a directory with files cur_container->location should become the preset full file path
+    //TODO if cur_loc->loc_location was a directory cur_loc->filepaths will not be NULL and cur_loc->filepaths_count > 0, so cur_container->location will be cur_loc->filepaths[cur_loc->filepaths_count - 1]
     if(cur_loc->loc_location){
 	cur_container->location = calloc(strlen(cur_loc->loc_location) + 1, sizeof(char));
 	log_append_logfile("location %s\n", cur_loc->loc_location);
