@@ -7,6 +7,7 @@
 #define RT_CYCLES 25 //in what interval the rt thread should give info to the ui thread to not overwhelm it.
 #define MAX_MIDI_CONT_ITEMS 50 //how many midi events there can be in the jack midi container struct
 #define MAX_UNIQUE_ID_STRING 128 //max length for unique ids that use char* (for example the clap unique id for plugins)
+#define MAX_FILETYPE_STRING 20 //max length for the char* that has a filetype ("txt", "json" etc)
 
 //TODO not tested and not implemented, here for future development
 #define SAMPLE_T_AS_DOUBLE 0//by default SAMPLE_T is float (in structs.h), if this is 1 SAMPLE_T will be double and audio buffers will use 64bits

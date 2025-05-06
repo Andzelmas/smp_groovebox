@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../../types.h"
+#include "../../util_funcs/log_funcs.h"
 
 typedef struct _clap_ext_preset_container{
     char* name;
@@ -24,11 +25,32 @@ typedef struct _clap_ext_preset_single_loc{
 typedef struct _clap_ext_preset_factory{
     CLAP_EXT_PRESET_SINGLE_LOC* clap_ext_locations;
     uint32_t loc_count;
+    char** file_extensions;
+    uint32_t fileextensions_count;
     CLAP_EXT_PRESET_USER_FUNCS user_funcs;
 }CLAP_EXT_PRESET_FACTORY;
 
 static bool clap_ext_preset_indexer_declare_filetype(const struct clap_preset_discovery_indexer* indexer, const clap_preset_discovery_filetype_t* filetype){
-    //TODO not doing anything with filetype as of now
+    if(!indexer)return false;
+    CLAP_EXT_PRESET_FACTORY* ext_preset_fac = (CLAP_EXT_PRESET_FACTORY*)indexer->indexer_data;
+    //TODO right now only interested in file extension, filetype description and name is not saved
+    ext_preset_fac->fileextensions_count += 1;
+    uint32_t cur_item = ext_preset_fac->fileextensions_count - 1;
+    char** temp_extensions = realloc(ext_preset_fac->file_extensions, sizeof(char*) * ext_preset_fac->fileextensions_count);
+    if(!temp_extensions){
+	ext_preset_fac->fileextensions_count -= 1;
+	return false;
+    }
+    ext_preset_fac->file_extensions = temp_extensions;
+    ext_preset_fac->file_extensions[cur_item] = NULL;
+    char* cur_extension = NULL;
+    if(filetype->file_extension){
+	cur_extension = calloc(strlen(filetype->file_extension) + 1, sizeof(char));
+	if(cur_extension){
+	    snprintf(cur_extension, strlen(filetype->file_extension) + 1, "%s", filetype->file_extension);
+	    ext_preset_fac->file_extensions[cur_item] = cur_extension;
+	}
+    }
     return true;
 }
 static bool clap_ext_preset_indexer_declare_location(const struct clap_preset_discovery_indexer* indexer, const clap_preset_discovery_location_t* location){
@@ -97,7 +119,15 @@ void clap_ext_preset_clean(CLAP_EXT_PRESET_FACTORY* clap_ext_preset_data){
 	free(clap_ext_preset_data->clap_ext_locations);
     }
     clap_ext_preset_data->loc_count = 0;
-	
+
+    if(clap_ext_preset_data->file_extensions){
+	for(uint32_t i = 0; i < clap_ext_preset_data->fileextensions_count; i++){
+	    char* cur_filextension = clap_ext_preset_data->file_extensions[i];
+	    if(cur_filextension)
+		free(cur_filextension);
+	}
+	free(clap_ext_preset_data->file_extensions);
+    }
     free(clap_ext_preset_data);
 }
 
@@ -139,13 +169,14 @@ static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery
     }
     if(load_key){
 	cur_container->load_key = calloc(strlen(load_key) + 1, sizeof(char));
+	log_append_logfile("load_key %s name %s location kind %d\n", load_key, name, location_kind);
 	if(cur_container->load_key)
 	    snprintf(cur_container->load_key, strlen(load_key) + 1, "%s", load_key);
     }
-    //TODO location on the cur_container will have to be the full filepath of this preset container if the loc_kind is FILE and we are crawling through directories
-    //otherwise can use the cur_loc->loc_location
+
     if(cur_loc->loc_location){
 	cur_container->location = calloc(strlen(cur_loc->loc_location) + 1, sizeof(char));
+	log_append_logfile("location %s\n", cur_loc->loc_location);
 	if(cur_container->location)
 	    snprintf(cur_container->location, strlen(cur_loc->loc_location) + 1, "%s", cur_loc->loc_location);
     }
@@ -195,8 +226,15 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
     CLAP_EXT_PRESET_FACTORY* clap_ext_preset_data = calloc(1, sizeof(CLAP_EXT_PRESET_FACTORY));
     if(!clap_ext_preset_data)return NULL;
     clap_ext_preset_data->loc_count = 0;
+    clap_ext_preset_data->file_extensions = NULL;
+    clap_ext_preset_data->fileextensions_count = 0;
     clap_ext_preset_data->clap_ext_locations = calloc(1, sizeof(CLAP_EXT_PRESET_SINGLE_LOC));
     if(!clap_ext_preset_data->clap_ext_locations){
+	clap_ext_preset_clean(clap_ext_preset_data);
+	return NULL;
+    }
+    clap_ext_preset_data->file_extensions = calloc(1, sizeof(char*));
+    if(!clap_ext_preset_data->file_extensions){
 	clap_ext_preset_clean(clap_ext_preset_data);
 	return NULL;
     }
@@ -234,7 +272,6 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
 	for(; loc_idx < clap_ext_preset_data->loc_count; loc_idx++){
 	    CLAP_EXT_PRESET_SINGLE_LOC* cur_loc = &(clap_ext_preset_data->clap_ext_locations[loc_idx]);
 	    if(!cur_loc->loc_name)continue;
-	    //TODO memory leak
 	    cur_loc->preset_containers = calloc(1, sizeof(CLAP_EXT_PRESET_CONTAINER));
 	    if(!cur_loc->preset_containers)continue;
 	    cur_loc->preset_containers_count = 0;
@@ -251,7 +288,8 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
 	    metada_rec.set_timestamps = clap_ext_preset_meta_set_timestamps;
 	    metada_rec.add_feature = clap_ext_preset_meta_add_feature;
 	    metada_rec.add_extra_info =clap_ext_preset_meta_add_extra_info;
-	    //TODO if cur_loc->loc_kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE need to crawl the directories and call get_metadata for each file, instead of cur_loc->loc_location sending the full filename path
+	    //TODO if cur_loc->loc_kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE need to crawl the directories and call get_metadata for each file (matching all clap_ext_preset_data->fileextensions)
+	    //If clap_ext_preset_data->fileextensions are NULLS or "" match all files
 	    //If the cur_loc->loc_kind is a file not a directory dont crawl just call get_metadata
 	    //otherwise send cur_loc->loc_location
 	    preset_discovery->get_metadata(preset_discovery, cur_loc->loc_kind, "/usr/share/surge-xt/patches_factory/Basses/Attacky.fxp", &metada_rec);
