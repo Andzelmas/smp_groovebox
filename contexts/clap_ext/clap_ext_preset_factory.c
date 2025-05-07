@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include "../../types.h"
 #include "../../util_funcs/log_funcs.h"
 
@@ -15,7 +16,7 @@ typedef struct _clap_ext_preset_container{
 }CLAP_EXT_PRESET_CONTAINER;
 
 typedef struct _clap_ext_preset_dirs{
-    char* dir_path;
+    char dir_path[MAX_PATH_STRING];
     CLAP_EXT_PRESET_CONTAINER* preset_container;
     uint32_t preset_container_count;
 }CLAP_EXT_PRESET_DIRS;
@@ -128,7 +129,6 @@ static void clap_ext_single_loc_clean(CLAP_EXT_PRESET_SINGLE_LOC* single_loc){
     if(single_loc->preset_dirs){
 	for(uint32_t i = 0; i < single_loc->preset_dirs_count; i++){
 	    CLAP_EXT_PRESET_DIRS* cur_dir = &(single_loc->preset_dirs[i]);
-	    if(cur_dir->dir_path)free(cur_dir->dir_path);
 	    if(cur_dir->preset_container){
 		for(uint32_t j = 0; j < cur_dir->preset_container_count; j++){
 		    clap_ext_preset_container_clean(&(cur_dir->preset_container[j]));
@@ -173,26 +173,39 @@ static void clap_ext_preset_meta_on_error(const struct clap_preset_discovery_met
 }
 static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery_metadata_receiver* receiver, const char* name, const char* load_key){
     if(!receiver)return false;
-    CLAP_EXT_PRESET_SINGLE_LOC* cur_loc = receiver->receiver_data;
+    CLAP_EXT_PRESET_SINGLE_LOC* cur_loc = (CLAP_EXT_PRESET_SINGLE_LOC*)receiver->receiver_data;
     if(!cur_loc)return false;
     //location kind will be the same for all the preset containers, because it comes from the CLAP_EXT_PRESET_SINGLE_LOC
     uint32_t location_kind = cur_loc->loc_kind;
-    //TODO if the cur_loc->preset_dirs is not NULL dont realloc the preset_containers,
-    //fill the cur_loc->preset_dirs[cur_loc->preset_dirs_count-1]->preset_container[preset_container_count-1] struct, but dont touch the location
-    cur_loc->preset_containers_count += 1;
-    CLAP_EXT_PRESET_CONTAINER* temp_array = realloc(cur_loc->preset_containers, sizeof(CLAP_EXT_PRESET_CONTAINER) * cur_loc->preset_containers_count);
-    if(!temp_array){
-	cur_loc->preset_containers_count -= 1;
-	return false;
+    CLAP_EXT_PRESET_CONTAINER* cur_container = NULL;
+    //if preset_dirs are empty it means the loc_kind is plugin or file but the cur_loc->location is a filepath
+    if(cur_loc->preset_dirs == NULL){
+	cur_loc->preset_containers_count += 1;
+	CLAP_EXT_PRESET_CONTAINER* temp_array = realloc(cur_loc->preset_containers, sizeof(CLAP_EXT_PRESET_CONTAINER) * cur_loc->preset_containers_count);
+	if(!temp_array){
+	    cur_loc->preset_containers_count -= 1;
+	    return false;
+	}
+
+	cur_loc->preset_containers = temp_array;
+	uint32_t cur_item = cur_loc->preset_containers_count - 1;
+
+	cur_container = &(cur_loc->preset_containers[cur_item]);
+	if(cur_loc->loc_location){
+	    cur_container->location = calloc(strlen(cur_loc->loc_location) + 1, sizeof(char));
+	    if(cur_container->location)
+		snprintf(cur_container->location, strlen(cur_loc->loc_location) + 1, "%s", cur_loc->loc_location);
+	}
     }
-
-    cur_loc->preset_containers = temp_array;
-    uint32_t cur_item = cur_loc->preset_containers_count - 1;
-
-    CLAP_EXT_PRESET_CONTAINER* cur_container = &(cur_loc->preset_containers[cur_item]);
+    //if preset_dirs are not empty it means get_metada is called for each preset file, so the cur_container->location is already filled with the full path of the file
+    if(cur_loc->preset_dirs !=NULL){
+	CLAP_EXT_PRESET_DIRS* cur_dir = &(cur_loc->preset_dirs[cur_loc->preset_dirs_count-1]);
+	cur_container = &(cur_dir->preset_container[cur_dir->preset_container_count-1]);
+    }
+    if(!cur_container)return false;
+    
     cur_container->load_key = NULL;
     cur_container->loc_kind = location_kind;
-    cur_container->location = NULL;
     cur_container->name = NULL;
 
     if(name){
@@ -202,27 +215,29 @@ static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery
     }
     if(load_key){
 	cur_container->load_key = calloc(strlen(load_key) + 1, sizeof(char));
-	log_append_logfile("load_key %s name %s location kind %d\n", load_key, name, location_kind);
 	if(cur_container->load_key)
 	    snprintf(cur_container->load_key, strlen(load_key) + 1, "%s", load_key);
     }
-    if(cur_loc->loc_location){
-	cur_container->location = calloc(strlen(cur_loc->loc_location) + 1, sizeof(char));
-	log_append_logfile("location %s\n", cur_loc->loc_location);
-	if(cur_container->location)
-	    snprintf(cur_container->location, strlen(cur_loc->loc_location) + 1, "%s", cur_loc->loc_location);
-    }
+    if(cur_container->location)
+	log_append_logfile("\npreset container location %s\n", cur_container->location);
     return true;
 }
 static void clap_ext_preset_meta_add_plugin_id(const struct clap_preset_discovery_metadata_receiver* receiver, const clap_universal_plugin_id_t* plugin_id){
     if(!receiver)return;
-    CLAP_EXT_PRESET_SINGLE_LOC* cur_loc = receiver->receiver_data;
+    CLAP_EXT_PRESET_SINGLE_LOC* cur_loc = (CLAP_EXT_PRESET_SINGLE_LOC*)receiver->receiver_data;
     if(!cur_loc)return;
 
     if(!plugin_id->id)return;
-
-    uint32_t cur_item = cur_loc->preset_containers_count - 1;
-    CLAP_EXT_PRESET_CONTAINER* cur_container = &(cur_loc->preset_containers[cur_item]);
+    CLAP_EXT_PRESET_CONTAINER* cur_container = NULL;
+    if(cur_loc->preset_dirs == NULL){
+	uint32_t cur_item = cur_loc->preset_containers_count - 1;
+	cur_container = &(cur_loc->preset_containers[cur_item]);
+    }
+    if(cur_loc->preset_dirs != NULL){
+	CLAP_EXT_PRESET_DIRS* cur_preset_dir = &(cur_loc->preset_dirs[cur_loc->preset_dirs_count-1]);
+	cur_container = &(cur_preset_dir->preset_container[cur_preset_dir->preset_container_count-1]);
+    }
+    if(!cur_container)return;
     snprintf(cur_container->plugin_id, MAX_UNIQUE_ID_STRING, "%s", plugin_id->id);
 }
 static void clap_ext_preset_meta_set_soundpack_id(const struct clap_preset_discovery_metadata_receiver* receiver, const char* soundpack_id){
@@ -261,7 +276,178 @@ static int path_is_directory(const char* path){
     if((statbuf.st_mode & S_IFMT) == S_IFDIR)is_dir = 1;
     return is_dir;
 }
+static int path_is_regular_file(const char* path){
+    struct stat statbuf;
+    if(stat(path, &statbuf) == -1)return -1;
+    int is_file = 0;
+    if((statbuf.st_mode & S_IFMT) == S_IFREG)is_file = 1;
+    return is_file;
+}
+static const char *path_get_filename_ext(const char *filename) {
+    if(!filename)return NULL;
+    const char *dot = strrchr(filename, '.');
+    if(!dot || dot == filename) return NULL;
+    return dot + 1;
+}
+static int path_extension_matches(const char* full_path, const char* file_ext){
+    if(!full_path)return -1;
+    if(!file_ext)return -1;
+    const char* this_file_ext = path_get_filename_ext(full_path);
+    if(!this_file_ext)return -1;
+    int found = 0;
+    if(strcmp(this_file_ext, file_ext) == 0)found = 1;
+    return found;
+}
+//check if there is at least one file in the path, matching file_ext extensions (or any file if file_ext == NULL)
+//or directory if dir==1 (will not consider "." and ".." as directories)
+static int path_has_dir(const char* path, char** file_ext, uint32_t ext_count, uint32_t is_dir){
+    struct dirent* d;
+    DIR* dir = opendir(path);
+    if(!dir)return -1;
+    d = readdir(dir);
 
+    int found = 0;
+    while(d != NULL){
+	if(strcmp(d->d_name, ".") == 0){
+	    d = readdir(dir);
+	    continue;
+	}
+	if(strcmp(d->d_name, "..") == 0){
+	    d = readdir(dir);
+	    continue;
+	}
+	char full_path[MAX_PATH_STRING];
+	snprintf(full_path, MAX_PATH_STRING, "%s/%s", path, d->d_name);
+	if(path_is_regular_file(full_path) && is_dir==0){
+	    if(file_ext==NULL){
+		found = 1;
+		break;
+	    }
+	    for(uint32_t i = 0; i < ext_count; i++){
+		char* cur_ext = file_ext[i];
+		if(path_extension_matches(full_path, cur_ext) == 1){
+		    found = 1;
+		    break;
+		}
+	    }
+	    if(found == 1)break;
+	}
+	if(path_is_directory(full_path) && is_dir==1){
+	    found = 1;
+	    break;
+	}
+	d = readdir(dir);
+    }
+    closedir(dir);
+    return found;
+}
+static void clap_ext_preset_container_create_for_file(CLAP_EXT_PRESET_FACTORY* preset_data, CLAP_EXT_PRESET_SINGLE_LOC* cur_loc, const char* filepath,
+						      const clap_preset_discovery_metadata_receiver_t* metada_rec, const clap_preset_discovery_provider_t* preset_discovery){
+    if(!preset_data)return;
+    if(!cur_loc)return;
+    //FOR DEBUG
+    if(cur_loc->preset_dirs_count >= 2)return;
+    uint32_t cur_preset_dir_num = cur_loc->preset_dirs_count - 1;
+    CLAP_EXT_PRESET_DIRS* cur_preset_dir = &(cur_loc->preset_dirs[cur_preset_dir_num]);
+    //FOR DEBUG
+    if(cur_preset_dir->preset_container_count >= 1)return;
+    cur_preset_dir->preset_container_count += 1;
+    CLAP_EXT_PRESET_CONTAINER* temp_array = realloc(cur_preset_dir->preset_container, sizeof(CLAP_EXT_PRESET_CONTAINER) * cur_preset_dir->preset_container_count);
+    if(!temp_array){
+	cur_preset_dir->preset_container -= 1;
+	return;
+    }
+    cur_preset_dir->preset_container = temp_array;
+
+    uint32_t cur_container_num = cur_preset_dir->preset_container_count - 1;
+    CLAP_EXT_PRESET_CONTAINER* cur_container = &(cur_preset_dir->preset_container[cur_container_num]);
+    cur_container->load_key = NULL;
+    cur_container->loc_kind = cur_loc->loc_kind;
+    cur_container->location = NULL;
+    cur_container->name = NULL;
+    cur_container->location = calloc(strlen(filepath) + 1, sizeof(char));
+    if(cur_container->location)
+	snprintf(cur_container->location, strlen(filepath) + 1, "%s", filepath);
+    preset_discovery->get_metadata(preset_discovery, cur_loc->loc_kind, cur_container->location, metada_rec);
+}
+static void clap_ext_preset_location_crawl(CLAP_EXT_PRESET_FACTORY* preset_data, CLAP_EXT_PRESET_SINGLE_LOC* cur_loc, char* location_path,
+					   const clap_preset_discovery_metadata_receiver_t* metada_rec, const clap_preset_discovery_provider_t* preset_discovery){
+    if(!preset_data);
+    if(!cur_loc)return;
+    if(!location_path)return;
+    if(path_is_directory(location_path) != 1)return;
+    //check if there are legit files in the location_path
+    int found_files = path_has_dir(location_path, preset_data->file_extensions, preset_data->fileextensions_count, 0);
+
+    //if found crawl the location_path for files and create preset_container for each file that maches the preset filetype
+    if(found_files == 1){
+	cur_loc->preset_dirs_count += 1;
+	CLAP_EXT_PRESET_DIRS* temp_array = realloc(cur_loc->preset_dirs, sizeof(CLAP_EXT_PRESET_DIRS) * cur_loc->preset_dirs_count);
+	if(!temp_array){
+	    cur_loc->preset_dirs_count -= 1;
+	}
+	if(temp_array){
+	    cur_loc->preset_dirs = temp_array;
+	    uint32_t cur_preset_dir_num = cur_loc->preset_dirs_count - 1;
+	    CLAP_EXT_PRESET_DIRS* cur_preset_dir = &(cur_loc->preset_dirs[cur_preset_dir_num]);
+	    cur_preset_dir->preset_container = NULL;
+	    cur_preset_dir->preset_container_count = 0;
+	    snprintf(cur_preset_dir->dir_path, MAX_PATH_STRING, "%s", location_path);
+	    //go through files and create the preset_containers
+	    struct dirent* d;
+	    DIR* dir = opendir(location_path);
+	    if(!dir)return;
+	    d = readdir(dir);
+	    int found = 0;
+	    while(d != NULL){
+		char full_path[MAX_PATH_STRING];
+		snprintf(full_path, MAX_PATH_STRING, "%s/%s", location_path, d->d_name);
+		if(path_is_directory(full_path) == 1){
+		    d = readdir(dir);
+		    continue;
+		}
+		if(preset_data->file_extensions == NULL){
+		    clap_ext_preset_container_create_for_file(preset_data, cur_loc, full_path, metada_rec, preset_discovery);
+		    d = readdir(dir);
+		    continue;
+		}
+		for(uint32_t i = 0; i < preset_data->fileextensions_count; i++){
+		    char* cur_ext = preset_data->file_extensions[i];
+		    if(path_extension_matches(full_path, cur_ext) == 1){
+			clap_ext_preset_container_create_for_file(preset_data, cur_loc, full_path, metada_rec, preset_discovery);
+		    }
+		}
+		d = readdir(dir);
+	    }
+	    closedir(dir);
+	}
+    }
+    //check if there are legit directories in the location_path
+    int found_dirs = path_has_dir(location_path, NULL, 0, 1);
+    if(found_dirs != 1)return;
+    
+    //if found call this function for these directories
+    struct dirent* d;
+    DIR* dir = opendir(location_path);
+    if(!dir)return;
+    d = readdir(dir);
+    int found = 0;
+    while(d != NULL){
+	if(strcmp(d->d_name, ".") == 0){
+	    d = readdir(dir);
+	    continue;
+	}
+	if(strcmp(d->d_name, "..") == 0){
+	    d = readdir(dir);
+	    continue;
+	}
+	char full_path[MAX_PATH_STRING];
+	snprintf(full_path, MAX_PATH_STRING, "%s/%s", location_path, d->d_name);
+	clap_ext_preset_location_crawl(preset_data, cur_loc, full_path, metada_rec, preset_discovery);
+	d = readdir(dir);
+    }
+    closedir(dir);    
+}
 CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_entry, clap_host_t clap_host_info, CLAP_EXT_PRESET_USER_FUNCS user_funcs){
     CLAP_EXT_PRESET_FACTORY* clap_ext_preset_data = calloc(1, sizeof(CLAP_EXT_PRESET_FACTORY));
     if(!clap_ext_preset_data)return NULL;
@@ -326,14 +512,10 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
 	    metada_rec.set_timestamps = clap_ext_preset_meta_set_timestamps;
 	    metada_rec.add_feature = clap_ext_preset_meta_add_feature;
 	    metada_rec.add_extra_info = clap_ext_preset_meta_add_extra_info;
-	    //TODO if the loc_kind is a file, and the path is a directory crawl through the directories
-	    //if a directory contains preset files with extensions in clap_ext_preset_data->file_extensions, or any files if those extensions are NULL or "", realloc cur_loc->preset_dirs
-	    //then for each file realloc the preset_container array on the cur_loc->preset_dirs[cur_loc->preset_dirs_count-1] struct and call the get_metada function
-	    //_begin_preset callback should not realloc any arrays in this case
-	    //this way preset_containers will be structured PRESET_DIR->Preset_Container_files, so at least for now nested directories in directories are not supported and will be flattened
+	    //if the loc_kind is file and loc_location is a directory, crawl through each directory creating preset_dirs on cur_loc
+	    //create the preset_dirs only if the directory is not empty and files inside match the clap_ext_preset_data->file_extensions or all files if it is NULL
 	    if(cur_loc->loc_kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE && path_is_directory(cur_loc->loc_location) == 1){
-		//TODO crawl the directories here
-		preset_discovery->get_metadata(preset_discovery, cur_loc->loc_kind, "/usr/share/surge-xt/patches_factory/Basses/Attacky.fxp", &metada_rec);
+		clap_ext_preset_location_crawl(clap_ext_preset_data, cur_loc, cur_loc->loc_location, &metada_rec, preset_discovery);
 		continue;
 	    }
 	    //if the loc_location is not a file or loc_kind is plugin we will fill the preset_containers array in the _begin_preset function
