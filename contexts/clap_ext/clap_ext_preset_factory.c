@@ -16,6 +16,7 @@ typedef struct _clap_ext_preset_container{
 }CLAP_EXT_PRESET_CONTAINER;
 
 typedef struct _clap_ext_preset_dirs{
+    //TODO should calloc this to prevent losing of really long paths and to save memory?
     char dir_path[MAX_PATH_STRING];
     CLAP_EXT_PRESET_CONTAINER* preset_container;
     uint32_t preset_container_count;
@@ -169,7 +170,8 @@ static void clap_ext_preset_meta_on_error(const struct clap_preset_discovery_met
     if(!cur_loc)return;
 
     if(!(cur_loc->user_funcs.ext_preset_send_msg))return;
-    cur_loc->user_funcs.ext_preset_send_msg(cur_loc->user_funcs.user_data, error_message); 
+    cur_loc->user_funcs.ext_preset_send_msg(cur_loc->user_funcs.user_data, error_message);
+    cur_loc->user_funcs.ext_preset_send_msg(cur_loc->user_funcs.user_data, "\n");
 }
 static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery_metadata_receiver* receiver, const char* name, const char* load_key){
     if(!receiver)return false;
@@ -219,7 +221,7 @@ static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery
 	    snprintf(cur_container->load_key, strlen(load_key) + 1, "%s", load_key);
     }
     if(cur_container->location)
-	log_append_logfile("\npreset container location %s\n", cur_container->location);
+	log_append_logfile("preset container location %s\n", cur_container->location);
     return true;
 }
 static void clap_ext_preset_meta_add_plugin_id(const struct clap_preset_discovery_metadata_receiver* receiver, const clap_universal_plugin_id_t* plugin_id){
@@ -345,12 +347,8 @@ static void clap_ext_preset_container_create_for_file(CLAP_EXT_PRESET_FACTORY* p
 						      const clap_preset_discovery_metadata_receiver_t* metada_rec, const clap_preset_discovery_provider_t* preset_discovery){
     if(!preset_data)return;
     if(!cur_loc)return;
-    //FOR DEBUG
-    if(cur_loc->preset_dirs_count >= 2)return;
     uint32_t cur_preset_dir_num = cur_loc->preset_dirs_count - 1;
     CLAP_EXT_PRESET_DIRS* cur_preset_dir = &(cur_loc->preset_dirs[cur_preset_dir_num]);
-    //FOR DEBUG
-    if(cur_preset_dir->preset_container_count >= 1)return;
     cur_preset_dir->preset_container_count += 1;
     CLAP_EXT_PRESET_CONTAINER* temp_array = realloc(cur_preset_dir->preset_container, sizeof(CLAP_EXT_PRESET_CONTAINER) * cur_preset_dir->preset_container_count);
     if(!temp_array){
@@ -500,7 +498,7 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
 	    if(!cur_loc->loc_name)continue;
 	    cur_loc->preset_containers_count = 0;
 	    //fill the preset container array of the current preset location 
-	    clap_preset_discovery_metadata_receiver_t metada_rec;
+	    clap_preset_discovery_metadata_receiver_t metada_rec;		
 	    metada_rec.receiver_data = (void*)cur_loc;
 	    metada_rec.on_error = clap_ext_preset_meta_on_error;
 	    metada_rec.begin_preset = clap_ext_preset_meta_begin_preset;
