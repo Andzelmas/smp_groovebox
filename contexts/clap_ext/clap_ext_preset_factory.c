@@ -87,14 +87,16 @@ static bool clap_ext_preset_indexer_declare_location(const struct clap_preset_di
     cur_loc->preset_containers_count = 0;
     cur_loc->user_funcs = ext_preset_fac->user_funcs;
 
-    cur_loc->loc_location = calloc(strlen(location->location) + 1, sizeof(char));
-    if(cur_loc->loc_location)
-	snprintf(cur_loc->loc_location, strlen(location->location) + 1, "%s", location->location);
-
-    cur_loc->loc_name = calloc(strlen(location->name) + 1, sizeof(char));
-    if(cur_loc->loc_name)
-	snprintf(cur_loc->loc_name, strlen(location->name) + 1, "%s", location->name);
-    
+    if(location->location){
+	cur_loc->loc_location = calloc(strlen(location->location) + 1, sizeof(char));
+	if(cur_loc->loc_location)
+	    snprintf(cur_loc->loc_location, strlen(location->location) + 1, "%s", location->location);
+    }
+    if(location->name){
+	cur_loc->loc_name = calloc(strlen(location->name) + 1, sizeof(char));
+	if(cur_loc->loc_name)
+	    snprintf(cur_loc->loc_name, strlen(location->name) + 1, "%s", location->name);
+    }
     return true;
 }
 static bool clap_ext_preset_indexer_declare_soundpack(const struct clap_preset_discovery_indexer* indexer, const clap_preset_discovery_soundpack_t* soundpack){
