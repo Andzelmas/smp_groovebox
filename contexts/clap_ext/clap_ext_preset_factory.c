@@ -15,9 +15,9 @@ typedef struct _clap_ext_preset_container{
 }CLAP_EXT_PRESET_CONTAINER;
 
 typedef struct _clap_ext_preset_dirs{
-    char* file_path;
-    uint32_t this_dir;
-    CLAP_EXT_PRESET_CONTAINER preset_container;
+    char* dir_path;
+    CLAP_EXT_PRESET_CONTAINER* preset_container;
+    uint32_t preset_container_count;
 }CLAP_EXT_PRESET_DIRS;
 
 typedef struct _clap_ext_preset_single_loc{
@@ -25,7 +25,7 @@ typedef struct _clap_ext_preset_single_loc{
     uint32_t loc_kind;
     char* loc_location;
     //if the loc_kind is file and loc_location is the root directory preset_containers will be empty
-    //this array will be filled with the CLAP_EXT_PRESET_DIRS structs. If this_dir==1, preset_container will not be populated, since file_path is a dir
+    //this array will be filled with the CLAP_EXT_PRESET_DIRS structs. dir_path is the directory where the preset_container are located
     CLAP_EXT_PRESET_DIRS* preset_dirs; 
     uint32_t preset_dirs_count;
     //if the loc_kind is plugin, or loc_location is a file preset_dirs will be empty and this array populated
@@ -126,8 +126,14 @@ static void clap_ext_single_loc_clean(CLAP_EXT_PRESET_SINGLE_LOC* single_loc){
     if(single_loc->preset_dirs){
 	for(uint32_t i = 0; i < single_loc->preset_dirs_count; i++){
 	    CLAP_EXT_PRESET_DIRS* cur_dir = &(single_loc->preset_dirs[i]);
-	    if(cur_dir->file_path)free(cur_dir->file_path);
-	    clap_ext_preset_container_clean(&(cur_dir->preset_container));
+	    if(cur_dir->dir_path)free(cur_dir->dir_path);
+	    if(cur_dir->preset_container){
+		for(uint32_t j = 0; j < cur_dir->preset_container_count; j++){
+		    clap_ext_preset_container_clean(&(cur_dir->preset_container[j]));
+		}
+		cur_dir->preset_container_count = 0;
+		free(cur_dir->preset_container);
+	    }
 	}
 	free(single_loc->preset_dirs);
     }
@@ -170,7 +176,7 @@ static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery
     //location kind will be the same for all the preset containers, because it comes from the CLAP_EXT_PRESET_SINGLE_LOC
     uint32_t location_kind = cur_loc->loc_kind;
     //TODO if the cur_loc->preset_dirs is not NULL dont realloc the preset_containers,
-    //fill the cur_loc->preset_dirs[cur_loc->preset_dirs_count-1]->preset_container
+    //fill the cur_loc->preset_dirs[cur_loc->preset_dirs_count-1]->preset_container[preset_container_count-1] struct, but dont touch the location
     cur_loc->preset_containers_count += 1;
     CLAP_EXT_PRESET_CONTAINER* temp_array = realloc(cur_loc->preset_containers, sizeof(CLAP_EXT_PRESET_CONTAINER) * cur_loc->preset_containers_count);
     if(!temp_array){
@@ -318,11 +324,11 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
 	    metada_rec.set_timestamps = clap_ext_preset_meta_set_timestamps;
 	    metada_rec.add_feature = clap_ext_preset_meta_add_feature;
 	    metada_rec.add_extra_info = clap_ext_preset_meta_add_extra_info;
-	    //TODO if the loc_kind is a file, and the path is a directory crawl through the directories and realloc the CLAP_EXT_PRESET_DIRS structs in the cur_loc->preset_dirs array
-	    //if clap_ext_preset_data->file_extensions are not NULLs or not "", only add files with these extensions, otherwise match all regular files
-	    //while traveling call the get_metada function for each preset file, if going into a directory simply realloc the cur_loc->preset_dirs and this_dir=1 for the current CLAP_EXT_PRESET_DIRS
-	    //the _begin_preset function should check if the preset_dirs is not empty and fill the preset_dirs[preset_dirs_count-1]->preset_container, using the full preset filepath as the location
-	    //this way preset_dirs will not only contain the preset containers, but also the preset directories that can be used as categories by the UI
+	    //TODO if the loc_kind is a file, and the path is a directory crawl through the directories
+	    //if a directory contains preset files with extensions in clap_ext_preset_data->file_extensions, or any files if those extensions are NULL or "", realloc cur_loc->preset_dirs
+	    //then for each file realloc the preset_container array on the cur_loc->preset_dirs[cur_loc->preset_dirs_count-1] struct and call the get_metada function
+	    //_begin_preset callback should not realloc any arrays in this case
+	    //this way preset_containers will be structured PRESET_DIR->Preset_Container_files, so at least for now nested directories in directories are not supported and will be flattened
 	    if(cur_loc->loc_kind == CLAP_PRESET_DISCOVERY_LOCATION_FILE && path_is_directory(cur_loc->loc_location) == 1){
 		//TODO crawl the directories here
 		preset_discovery->get_metadata(preset_discovery, cur_loc->loc_kind, "/usr/share/surge-xt/patches_factory/Basses/Attacky.fxp", &metada_rec);
