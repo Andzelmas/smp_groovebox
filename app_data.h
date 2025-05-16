@@ -37,7 +37,7 @@ APP_INFO* app_init(app_status_t *app_status);
 //return the available names for plugins on the system
 char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types);
 //return the available names of the presets available for the plugin
-char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned int indx, unsigned int* total_presets);
+char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets);
 //initialize a plugin on the plug_data context
 int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id);
 //load a new preset for the plugin

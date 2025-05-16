@@ -1081,6 +1081,15 @@ char** clap_plug_return_plugin_names(CLAP_PLUG_INFO* plug_data, unsigned int* si
     return return_names;
 }
 
+char** clap_plug_presets_return_names(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx, unsigned int* total_presets){
+    //TODO return preset file names from the preset-factory extension and the state extension
+    return NULL;
+    if(!plug_data)return NULL;
+    if(plug_idx >= MAX_INSTANCES)return NULL;
+
+    //first get the presets (if there are any) from the preset-factory
+}
+
 CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_size, SAMPLE_T samplerate,
 			       clap_plug_status_t* plug_error, void* audio_backend){
     if(!audio_backend)return NULL;
@@ -1318,7 +1327,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     if(plug_desc->description){
 	context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "%s info: %s\n", plug_desc->name, plug_desc->description);
     }
-    snprintf(plug->plugin_id, MAX_STRING_MSG_LENGTH, "%s", plug_desc->id);
+    snprintf(plug->plugin_id, MAX_UNIQUE_ID_STRING, "%s", plug_desc->id);
     //add the clap_host_t struct to the plug
     clap_host_t clap_info_host;
     clap_info_host.clap_version = plug_data->clap_host_info.clap_version;

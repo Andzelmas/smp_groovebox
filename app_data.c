@@ -233,9 +233,15 @@ fail_clean:
     return NULL;
 }
 
-char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned int indx, unsigned int* total_presets){
+char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets){
     if(!app_data)return NULL;
-    return plug_return_plugin_presets_names(app_data->plug_data, indx, total_presets);
+    if(cx_type == Context_type_Plugins)
+	return plug_return_plugin_presets_names(app_data->plug_data, indx, total_presets);
+    if(cx_type == Context_type_Clap_Plugins){
+	return clap_plug_presets_return_names(app_data->clap_plug_data, indx, total_presets);
+    }
+
+    return NULL;
 }
 
 int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id){

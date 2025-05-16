@@ -1363,10 +1363,12 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 	//if list plugin preset names
 	else if(cx_addList->uchar_val == Load_plugin_preset_purp){
 	    if(self->parent){
-		if(self->parent->type == Plugin_cx_e){
+		if((self->parent->type & 0xff00) == Plugin_cx_e){
 		    CX_PLUGIN* plugin = (CX_PLUGIN*)self->parent;
 		    unsigned int plug_id = plugin->id;
-		    names = app_plug_get_plugin_presets(app_intrf->app_data, plug_id, &plug_name_size);
+		    unsigned char cx_type = Context_type_Plugins;
+		    if(self->parent->type == (Plugin_cx_e | Plugin_Clap_cx_st))cx_type = Context_type_Clap_Plugins;
+		    names = app_plug_get_plugin_presets(app_intrf->app_data, cx_type, plug_id, &plug_name_size);
 		}
 	    }
 	}
