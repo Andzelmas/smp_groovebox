@@ -76,6 +76,9 @@ typedef struct _clap_plug_plug{
     //input output event streams
     clap_input_events_t input_events;
     clap_output_events_t output_events;
+    //preset factory struct for the plugin internal preset system (extension preset-factory)
+    //this can be NULL, if the plugin has a preset-factory this will be created when clap_plug_presets_return_names function is called
+    CLAP_EXT_PRESET_FACTORY* preset_fac;
 }CLAP_PLUG_PLUG;
 
 //the main clap struct
@@ -714,6 +717,11 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
     out_events->ctx = NULL;
     //clean the parameters
     clap_plug_params_destroy(plug_data, plug->id);
+    //remove presets
+    clap_ext_preset_clean(plug->preset_fac);
+    plug->preset_fac = NULL;
+
+    
     plug->plug_inst_id = -1;
 
     return 0;
@@ -1086,8 +1094,21 @@ char** clap_plug_presets_return_names(CLAP_PLUG_INFO* plug_data, unsigned int pl
     return NULL;
     if(!plug_data)return NULL;
     if(plug_idx >= MAX_INSTANCES)return NULL;
+    CLAP_PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_idx]);
+    if(!cur_plug->plug_inst)return NULL;
+    //create the preset-factory struct first, if the preset-factory does not exist on the plugin this will be NULL
+    //first clean the current clap_ext preset struct
+    clap_ext_preset_clean(cur_plug->preset_fac);
+    CLAP_EXT_PRESET_USER_FUNCS preset_user_funcs;
+    preset_user_funcs.ext_preset_send_msg = clap_sys_msg;
+    preset_user_funcs.user_data = (void*)plug_data;
+    cur_plug->preset_fac = clap_ext_preset_init(cur_plug->plug_entry, cur_plug->clap_host_info, preset_user_funcs);
+    char** return_strings = NULL;
+    //if the preset-factory exists return the preset names
+    if(cur_plug->preset_fac){
+    }
 
-    //first get the presets (if there are any) from the preset-factory
+    //return presets from the state extension
 }
 
 CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_size, SAMPLE_T samplerate,
@@ -1167,6 +1188,7 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
         plug->plug_inst_processing = 0;
 	plug->plug_params = NULL;
 	plug->plug_path = NULL;
+	plug->preset_fac = NULL;
     }    
     return plug_data;
 }
@@ -1398,18 +1420,6 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO* plug_data, const char* plugin_na
     
     //start processing the plugin
     context_sub_activate_start_process_msg(plug_data->control_data, plug->id, is_audio_thread);
-
-    //TODO testing preset-factory
-    CLAP_EXT_PRESET_USER_FUNCS preset_user_funcs;
-    preset_user_funcs.ext_preset_send_msg = clap_sys_msg;
-    preset_user_funcs.user_data = (void*)plug_data;
-    CLAP_EXT_PRESET_FACTORY* preset_fac = clap_ext_preset_init(plug->plug_entry, plug->clap_host_info, preset_user_funcs);
-    for(uint32_t i = 0; i < clap_ext_preset_location_count(preset_fac); i++){
-	char loc_name[MAX_PARAM_NAME_LENGTH];
-	clap_ext_preset_location_name(preset_fac, i, loc_name, MAX_PARAM_NAME_LENGTH);
-	context_sub_send_msg(plug_data->control_data, is_audio_thread, "location name: %s\n", loc_name);
-    }
-    clap_ext_preset_clean(preset_fac);
 
     return_id = plug->id;
     return return_id;
