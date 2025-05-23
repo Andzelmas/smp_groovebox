@@ -551,7 +551,3 @@ void clap_ext_preset_location_name(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t
     if(!single_location->loc_name)return;
     snprintf(return_name, name_len, "%s", single_location->loc_name);
 }
-
-char** clap_ext_preset_container_return_names(CLAP_EXT_PRESET_FACTORY* clap_ext_preset_data, const char* plugin_id){
-    //TODO check if the preset container name and load_key are not null and if plug_id is the same as the preset container plugin id
-}

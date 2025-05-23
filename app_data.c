@@ -232,7 +232,9 @@ fail_clean:
     if(clap_names)free(clap_names);
     return NULL;
 }
-
+//TODO should return a void* struct that cotains the preset full path name, short name and the category path, also the struct should contain the cx_type and idx
+//TODO each call to app_plug_get_plugin_presets should return the next void* struct, if there are no more presets this function should return NULL
+//TODO separate function should return the full path name, another the short name and a third function should return the category path
 char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets){
     if(!app_data)return NULL;
     if(cx_type == Context_type_Plugins)
