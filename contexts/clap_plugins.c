@@ -31,6 +31,12 @@
 #define EVENT_LIST_ITEMS 50
 
 static thread_local bool is_audio_thread = false;
+//struct that has the plugin preset info
+typedef struct _clap_plug_preset_info{
+    char short_name[MAX_PARAM_NAME_LENGTH]; //the short name, without any extensions or path symbols
+    char full_path[MAX_PATH_STRING]; //the full path of the plugin preset
+    char categories[MAX_PATH_STRING]; //the categories path, separated by /
+}CLAP_PLUG_PRESET_INFO;
 
 //sys port struct, that holds info about the port and a backend audio client port equivalent
 typedef struct _clap_plug_port_sys{
@@ -1089,6 +1095,27 @@ char** clap_plug_return_plugin_names(CLAP_PLUG_INFO* plug_data, unsigned int* si
     return return_names;
 }
 
+void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx, uint32_t* iter){
+    if(!plug_data)return NULL;
+    if(plug_idx >= MAX_INSTANCES)return NULL;
+    CLAP_PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_idx]);
+    if(!cur_plug->plug_inst)return NULL;
+    if(*iter == 0){
+	//create the preset-factory struct first, if the preset-factory does not exist on the plugin this will be NULL
+	//first clean the current clap_ext preset struct
+	clap_ext_preset_clean(cur_plug->preset_fac);
+	CLAP_EXT_PRESET_USER_FUNCS preset_user_funcs;
+	preset_user_funcs.ext_preset_send_msg = clap_sys_msg;
+	preset_user_funcs.user_data = (void*)plug_data;
+	cur_plug->preset_fac = clap_ext_preset_init(cur_plug->plug_entry, cur_plug->clap_host_info, preset_user_funcs);
+    }
+    if(!cur_plug->preset_fac)return NULL;
+
+    //now go through the cur_plug->preset_fac and return the _clap_plug_preset_info struct
+
+    *iter += 1;
+}
+//TODO clap_plug_presets_iterate will replace this function
 char** clap_plug_presets_return_names(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx, unsigned int* total_presets){
     //TODO return preset file names from the preset-factory extension and the state extension
     return NULL;

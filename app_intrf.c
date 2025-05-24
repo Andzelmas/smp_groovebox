@@ -1369,6 +1369,9 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 		    unsigned char cx_type = Context_type_Plugins;
 		    if(self->parent->type == (Plugin_cx_e | Plugin_Clap_cx_st))cx_type = Context_type_Clap_Plugins;
 		    names = app_plug_presets_get(app_intrf->app_data, cx_type, plug_id, &plug_name_size);
+		    //TODO use app_plug_presets_iterate function instead of the _get function
+		    //TODO when iterating through presets check if cx with the "str_val" of the preset full path does not already exist
+		    //TODO when iterating through and creating the category containers for the presets check if the category name does not already exist
 		}
 	    }
 	}
