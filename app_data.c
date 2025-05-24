@@ -232,10 +232,8 @@ fail_clean:
     if(clap_names)free(clap_names);
     return NULL;
 }
-//TODO should return a void* struct that cotains the preset full path name, short name and the category path, also the struct should contain the cx_type and idx
-//TODO each call to app_plug_get_plugin_presets should return the next void* struct, if there are no more presets this function should return NULL
-//TODO separate function should return the full path name, another the short name and a third function should return the category path
-char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets){
+//TODO should return a void* struct that cotains the preset full path name, short name and the category path
+char** app_plug_presets_get(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets){
     if(!app_data)return NULL;
     if(cx_type == Context_type_Plugins)
 	return plug_return_plugin_presets_names(app_data->plug_data, indx, total_presets);
@@ -244,6 +242,16 @@ char** app_plug_get_plugin_presets(APP_INFO* app_data, unsigned char cx_type, un
     }
 
     return NULL;
+}
+//TODO return the short name of the preset from the preset_data. Depends on the cx_type how the short name is returned (for lv2 plugins might be different than CLAP plugins)
+int app_plug_plugin_presets_get_short_name(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, void* preset_data, char* return_name, uint32_t name_len){
+}
+//TODO return the full path of the preset. It can be some other string, not necessaraly a path, but given this return_path, the preset load function will load the preset
+int app_plug_plugin_presets_get_full_path(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, void* preset_data, char* return_path, uint32_t path_len){
+}
+//TODO iterate the categories. Iterate the preset categories in the preset_data, and return cur_category for each iter. Iter is increased on each call to this function
+//TODO when the function returns 1 - stop iterating, end of the preset categories
+int app_plug_plugin_presets_categories_iterate(APP_INFO* app_data, unsigned char cx_type, unsigned idx, void* preset_data, char* cur_category, uint32_t cat_len, uint32_t* iter){
 }
 
 int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id){
