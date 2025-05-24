@@ -232,7 +232,12 @@ fail_clean:
     if(clap_names)free(clap_names);
     return NULL;
 }
-//TODO should return a void* struct that cotains the preset full path name, short name and the category path
+//TODO this function should be used instead of the app_plug_presets_get
+//TODO returns a void* struct per preset. This struct can be used to get the preset short name, full path or to iterate through the preset categories
+//TODO what the void* struct is depends on the cx_type. Different plugin types can have different methods to interact with the presets
+//TODO when the iterator reaches the end of the preset array it return NULL
+void* app_plug_presets_iterate(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, uint32_t* iter){
+}
 char** app_plug_presets_get(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets){
     if(!app_data)return NULL;
     if(cx_type == Context_type_Plugins)
