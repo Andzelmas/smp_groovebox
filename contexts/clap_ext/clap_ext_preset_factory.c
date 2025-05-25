@@ -220,8 +220,6 @@ static bool clap_ext_preset_meta_begin_preset(const struct clap_preset_discovery
 	if(cur_container->load_key)
 	    snprintf(cur_container->load_key, strlen(load_key) + 1, "%s", load_key);
     }
-    if(cur_container->location)
-	log_append_logfile("preset container location %s\n", cur_container->location);
     return true;
 }
 static void clap_ext_preset_meta_add_plugin_id(const struct clap_preset_discovery_metadata_receiver* receiver, const clap_universal_plugin_id_t* plugin_id){
@@ -537,6 +535,39 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
     }
 
     return clap_ext_preset_data;
+}
+
+int clap_ext_preset_short_name_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t idx){
+    if(!preset_fac)return -1;
+    if(preset_fac->loc_count <= 0)return -1;
+    uint32_t iter = 0;
+    uint32_t count = 0;
+    for(uint32_t loc_id = 0; loc_id < preset_fac->loc_count; loc_id++){
+	CLAP_EXT_PRESET_SINGLE_LOC* cur_loc = &(preset_fac->clap_ext_locations[loc_id]);
+	if(cur_loc->preset_dirs){
+	    for(uint32_t dir_id = 0; dir_id < cur_loc->preset_dirs_count; dir_id++){
+		CLAP_EXT_PRESET_DIRS* cur_dir = &(cur_loc->preset_dirs[dir_id]);
+		iter = count;
+		count += cur_dir->preset_container_count;
+		if(count <= idx)continue;
+		for(uint32_t preset_id = 0; preset_id < cur_dir->preset_container_count; preset_id++){
+		    if(iter == idx){
+			CLAP_EXT_PRESET_CONTAINER* cur_preset = &(cur_dir->preset_container[preset_id]);
+			log_append_logfile("found preset %s, location %s, load_key %s\n",
+					   cur_preset->name ? cur_preset->name: "",
+					   cur_preset->location ? cur_preset->location: "",
+					   cur_preset->load_key ? cur_preset->load_key: "");
+			return 1;
+		    }
+		    iter += 1;
+		}
+	    }
+	}
+	//TODO if the preset containers are stored on the cur_loc directly, not in separate directories
+	if(!cur_loc->preset_dirs && cur_loc->preset_containers){
+	}
+    }
+    return 0;
 }
 
 uint32_t clap_ext_preset_location_count(CLAP_EXT_PRESET_FACTORY* preset_fac){

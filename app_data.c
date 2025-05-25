@@ -243,6 +243,10 @@ char** app_plug_presets_get(APP_INFO* app_data, unsigned char cx_type, unsigned 
     if(cx_type == Context_type_Plugins)
 	return plug_return_plugin_presets_names(app_data->plug_data, indx, total_presets);
     if(cx_type == Context_type_Clap_Plugins){
+	//TODO testing the new preset system
+	uint32_t iter = 0;
+	clap_plug_presets_iterate(app_data->clap_plug_data, indx, &iter);
+	
 	return clap_plug_presets_return_names(app_data->clap_plug_data, indx, total_presets);
     }
 

@@ -15,6 +15,8 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO* plug_data);
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data);
 //return the names of the plugins in the plugin directory
 char** clap_plug_return_plugin_names(CLAP_PLUG_INFO* plug_data, unsigned int* size);
+//iterate through the presets and return the preset struct, that can be used to return the preset short name, path, categories
+void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx, uint32_t* iter);
 //return the names of the plugin presets (either from the internal preset-factory or the save state extension)
 char** clap_plug_presets_return_names(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx, unsigned int* total_presets); 
 //initiate the main plugin data struct. 

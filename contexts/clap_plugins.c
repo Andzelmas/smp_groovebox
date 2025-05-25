@@ -1100,6 +1100,7 @@ void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx
     if(plug_idx >= MAX_INSTANCES)return NULL;
     CLAP_PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_idx]);
     if(!cur_plug->plug_inst)return NULL;
+    //if this is the first iteration, create the preset factory struct, if the preset-factory extension is available for the plugin
     if(*iter == 0){
 	//create the preset-factory struct first, if the preset-factory does not exist on the plugin this will be NULL
 	//first clean the current clap_ext preset struct
@@ -1109,9 +1110,13 @@ void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx
 	preset_user_funcs.user_data = (void*)plug_data;
 	cur_plug->preset_fac = clap_ext_preset_init(cur_plug->plug_entry, cur_plug->clap_host_info, preset_user_funcs);
     }
-    if(!cur_plug->preset_fac)return NULL;
-
-    //now go through the cur_plug->preset_fac and return the _clap_plug_preset_info struct
+    //if the preset-factory extension exists iterate through the presets
+    if(cur_plug->preset_fac){
+	//TODO function should get all strings for the CLAP_PLUG_PRESET_INFO struct
+	while(clap_ext_preset_short_name_return(cur_plug->preset_fac, *iter)==1){
+	    *iter += 1;
+	}
+    }
 
     *iter += 1;
 }
