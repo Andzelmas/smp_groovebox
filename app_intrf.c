@@ -1287,7 +1287,7 @@ static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
 		int load_preset = app_plug_load_preset(app_intrf->app_data, f_path, plugin_type, cx_plug->id);
 		if(load_preset == 1){
 		    //copy the preset name to preset_path of the plugin
-		    //TODO memory leak
+		    if(cx_plug->preset_path)free(cx_plug->preset_path);
 		    cx_plug->preset_path = (char*)malloc(sizeof(char)*(strlen(f_path)+1));
 		    if(cx_plug->preset_path){
 			strcpy(cx_plug->preset_path, f_path);

@@ -83,7 +83,7 @@ typedef struct _clap_plug_plug{
     clap_input_events_t input_events;
     clap_output_events_t output_events;
     //preset factory struct for the plugin internal preset system (extension preset-factory)
-    //this can be NULL, if the plugin has a preset-factory this will be created when clap_plug_presets_return_names function is called
+    //this can be NULL, if the plugin has a preset-factory this will be created when clap_plug_presets_iterate or clap_plug_preset_load_from_path function is called
     CLAP_EXT_PRESET_FACTORY* preset_fac;
 }CLAP_PLUG_PLUG;
 
@@ -1168,6 +1168,13 @@ int clap_plug_preset_load_from_path(CLAP_PLUG_INFO* plug_data, int plug_id, cons
     CLAP_PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
     if(!cur_plug->plug_inst)return -1;
 
+    if(!cur_plug->preset_fac){
+	//if the preset-factory struct does not exist try to create it, since preset_path can be fed here from a save file for example
+	CLAP_EXT_PRESET_USER_FUNCS preset_user_funcs;
+	preset_user_funcs.ext_preset_send_msg = clap_sys_msg;
+	preset_user_funcs.user_data = (void*)plug_data;
+	cur_plug->preset_fac = clap_ext_preset_init(cur_plug->plug_entry, cur_plug->clap_host_info, preset_user_funcs);
+    }
     //TODO first check if the preset_path is in the preset-factory
     if(cur_plug->preset_fac){
 	uint32_t loc_kind = 0;
