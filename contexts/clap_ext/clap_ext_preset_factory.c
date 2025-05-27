@@ -545,10 +545,27 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
     return clap_ext_preset_data;
 }
 
-int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t idx,
-				      char* name, uint32_t name_len,
-				      char* path, uint32_t path_len,
-				      char* categories, uint32_t categories_len){
+static void clap_ext_preset_container_info_return(CLAP_EXT_PRESET_CONTAINER* cur_preset,
+						  uint32_t* loc_kind,
+						  char* load_key, uint32_t load_key_len,
+						  char* name, uint32_t name_len,
+						  char* path, uint32_t path_len){
+    if(!cur_preset)return;
+    if(loc_kind)
+	*loc_kind = cur_preset->loc_kind;
+    if(cur_preset->location && path)
+	snprintf(path, path_len, "%s", cur_preset->location);
+    if(cur_preset->name && name)
+	snprintf(name, name_len, "%s", cur_preset->name);
+    if(cur_preset->load_key && load_key)
+	snprintf(load_key, load_key_len, "%s", cur_preset->load_key);    
+}
+int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t idx, const char* preset_path,
+				uint32_t* loc_kind,
+				char* load_key, uint32_t load_key_len,
+				char* name, uint32_t name_len,
+				char* path, uint32_t path_len,
+				char* categories, uint32_t categories_len){
     if(!preset_fac)return -1;
     if(preset_fac->loc_count <= 0)return -1;
     uint32_t iter = 0;
@@ -563,35 +580,38 @@ int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t id
 		count += cur_dir->preset_container_count;
 		if(count <= idx)continue;
 		for(uint32_t preset_id = 0; preset_id < cur_dir->preset_container_count; preset_id++){
-		    if(iter == idx){
-			CLAP_EXT_PRESET_CONTAINER* cur_preset = &(cur_dir->preset_container[preset_id]);
-			if(!cur_preset->location)continue;
-			snprintf(path, path_len, "%s", cur_preset->location);
-			if(cur_preset->name)
-			    snprintf(name, name_len, "%s", cur_preset->name);
-			if(cur_dir->dir_path)
-			    //TODO categories should be cur_loc->name / (cur_dir->dir_path - cur_loc->loc_location)
-			    snprintf(categories, categories_len, "%s", cur_dir->dir_path);
-			return 1;
+		    CLAP_EXT_PRESET_CONTAINER* cur_preset = &(cur_dir->preset_container[preset_id]);
+		    if(iter != idx && !preset_path){
+			iter += 1;
+			continue;
 		    }
-		    iter += 1;
+		    if(!cur_preset->location)continue;
+		    if(preset_path){
+			if(strcmp(cur_preset->location, preset_path) != 0)continue;
+		    }
+		    clap_ext_preset_container_info_return(cur_preset, loc_kind, load_key, load_key_len, name, name_len, path, path_len);
+		    if(cur_dir->dir_path && categories)
+			//TODO categories should be cur_loc->name / (cur_dir->dir_path - cur_loc->loc_location)
+			snprintf(categories, categories_len, "%s", cur_dir->dir_path);
+		    return 1;
 		}
 	    }
 	}
 	//if the preset containers are stored on the cur_loc directly, not in separate directories
 	if(!cur_loc->preset_dirs && cur_loc->preset_containers){
 	    for(uint32_t preset_id = 0; preset_id < cur_loc->preset_containers_count; preset_id++){
-		if(iter == idx){
-		    CLAP_EXT_PRESET_CONTAINER* cur_preset = &(cur_loc->preset_containers[preset_id]);
-		    if(cur_preset->name)
-			snprintf(name, name_len, "%s", cur_preset->name);
-		    if(cur_preset->location)
-			snprintf(path, path_len, "%s", cur_preset->location);
-		    if(cur_loc->loc_name)
-			snprintf(categories, categories_len, "%s", cur_loc->loc_name);
-		    return 1;
+		CLAP_EXT_PRESET_CONTAINER* cur_preset = &(cur_loc->preset_containers[preset_id]);
+		if(iter != idx && !preset_path){
+		    iter += 1;
+		    continue;
 		}
-		iter += 1;
+		if(preset_path){
+		    if(strcmp(cur_preset->location, preset_path) != 0)continue;
+		}
+		clap_ext_preset_container_info_return(cur_preset, loc_kind, load_key, load_key_len, name, name_len, path, path_len);
+		if(cur_loc->loc_name && categories)
+		    snprintf(categories, categories_len, "%s", cur_loc->loc_name);
+		return 1;
 	    }	    
 	}
     }

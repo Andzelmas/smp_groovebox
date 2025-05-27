@@ -105,6 +105,7 @@ typedef struct _clap_plug_info{
     clap_host_audio_ports_t ext_audio_ports; //struct that holds functions for the audio_ports extensions
     clap_host_note_ports_t ext_note_ports; //struct that holds functions for the note-ports extension
     clap_host_params_t ext_params; //struct that holds functions for the params extension
+    clap_host_preset_load_t ext_preset_load; //struct that holds functions for the preset-load extension
     //address of the audio client
     void* audio_backend;
 }CLAP_PLUG_INFO;
@@ -679,6 +680,14 @@ static bool clap_plug_ext_events_try_push(const struct clap_output_events* list,
     if(push_err != 0)return false;
     return true;
 }
+
+static void clap_ext_preset_load_on_error(const clap_host_t *host,  uint32_t location_kind, const char* location, const char* load_key, int32_t os_error, const char* msg){
+    return;
+}
+
+static void clap_ext_preset_load_on_load(const clap_host_t *host, uint32_t location_kind, const char* location, const char* load_key){
+    return;
+}
 //clean the single plugin struct
 //before calling this the plug_inst_processing should be == 0
 static int clap_plug_plug_clean(CLAP_PLUG_INFO* plug_data, int plug_id){
@@ -786,6 +795,9 @@ const void* get_extension(const clap_host_t* host, const char* ex_id){
     }
     if(strcmp(ex_id, CLAP_EXT_PARAMS) == 0){
 	return &(plug_data->ext_params);
+    }
+    if(strcmp(ex_id, CLAP_EXT_PRESET_LOAD) == 0){
+	return &(plug_data->ext_preset_load);
     }
     //if there is no extension implemented that the plugin needs send the name of the extension to the ui
     context_sub_send_msg(plug_data->control_data, clap_plug_return_is_audio_thread(), "%s asked for ext %s\n", plug->plug_path, ex_id);
@@ -1139,15 +1151,43 @@ void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx
     if(cur_plug->preset_fac){
 	CLAP_PLUG_PRESET_INFO* preset_info = (CLAP_PLUG_PRESET_INFO*)malloc(sizeof(CLAP_PLUG_PRESET_INFO));
 	if(!preset_info)return NULL;
-	int err = clap_ext_preset_info_return(cur_plug->preset_fac, iter,
-						    preset_info->short_name, MAX_PARAM_NAME_LENGTH,
-						    preset_info->full_path, MAX_PATH_STRING,
-						    preset_info->categories, MAX_PATH_STRING);
+	int err = clap_ext_preset_info_return(cur_plug->preset_fac, iter, NULL, NULL, NULL, 0,
+					      preset_info->short_name, MAX_PARAM_NAME_LENGTH,
+					      preset_info->full_path, MAX_PATH_STRING,
+					      preset_info->categories, MAX_PATH_STRING);
 	if(err == 1)return (void*)preset_info;
 	clap_plug_presets_clean_preset(plug_data, (void*)preset_info);
     }
     //TODO return presets from the state extension
     return NULL;
+}
+
+int clap_plug_preset_load_from_path(CLAP_PLUG_INFO* plug_data, int plug_id, const char* preset_path){
+    if(!plug_data)return -1;
+    if(plug_id >= MAX_INSTANCES)return -1;
+    CLAP_PLUG_PLUG* cur_plug = &(plug_data->plugins[plug_id]);
+    if(!cur_plug->plug_inst)return -1;
+
+    //TODO first check if the preset_path is in the preset-factory
+    if(cur_plug->preset_fac){
+	uint32_t loc_kind = 0;
+	char load_key[MAX_PATH_STRING];
+	char location[MAX_PATH_STRING];
+	int err = clap_ext_preset_info_return(cur_plug->preset_fac, 0, preset_path, &loc_kind, load_key, MAX_PATH_STRING, NULL, 0, location, MAX_PATH_STRING, NULL, 0);
+	if(err == 1){
+	    const clap_plugin_preset_load_t* preset_ext = cur_plug->plug_inst->get_extension(cur_plug->plug_inst, CLAP_EXT_PRESET_LOAD);
+	    if(preset_ext){
+		bool loaded = preset_ext->from_location(cur_plug->plug_inst, loc_kind, location, load_key);
+		if(loaded){
+		    return 1;
+		}
+	    }
+	}
+    }
+
+    //TODO if the preset_path is not in the preset-factory check if its a preset in the save extension
+    
+    return 0;
 }
 
 CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_size, SAMPLE_T samplerate,
@@ -1212,7 +1252,10 @@ CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_siz
     plug_data->ext_params.clear = clap_plug_ext_params_clear;
     plug_data->ext_params.request_flush = clap_plug_ext_params_request_flush;
     plug_data->ext_params.rescan = clap_plug_ext_params_rescan;
-
+    //preset-load extension
+    plug_data->ext_preset_load.loaded = clap_ext_preset_load_on_load;
+    plug_data->ext_preset_load.on_error = clap_ext_preset_load_on_error;
+    
     //the array holds one more plugin, it will be an empty shell to check if the total number of plugins arent too many
     for(int i = 0; i < (MAX_INSTANCES+1); i++){
         CLAP_PLUG_PLUG* plug = &(plug_data->plugins[i]);

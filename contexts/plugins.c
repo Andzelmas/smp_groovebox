@@ -1089,7 +1089,6 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
     if(!plug_data)return -1;
     if(!plug_data->plugins)return -1;
     if(!preset_name)return -1;
-    int return_val = 0;
     
     context_sub_wait_for_stop(plug_data->control_data, plug_id);
     
@@ -1109,7 +1108,6 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
 	if(new_preset)free(new_preset);
 	return -1;
     }
-    return_val = load_err;
     plug->preset = lilv_state_new_from_world(plug_data->lv_world, &(plug->map), new_preset);
 
     //TODO we could check here if the plugin allows safe_restore, if yes we would not need to pause
@@ -1135,7 +1133,7 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
     plug->request_update = true;
     //launch the plugin again
     context_sub_wait_for_start(plug_data->control_data, plug_id);
-    return return_val;
+    return 1;
 }
 
 static void plug_set_value_direct(const char* port_symbol,

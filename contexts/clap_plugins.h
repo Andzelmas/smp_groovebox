@@ -24,6 +24,8 @@ int clap_plug_presets_name_return(CLAP_PLUG_INFO* plug_data, void* preset_info, 
 int clap_plug_presets_path_return(CLAP_PLUG_INFO* plug_data, void* preset_info, char* path, uint32_t path_len);
 //clean the preset_info struct returned from the clap_plug_presets_iterate function
 void clap_plug_presets_clean_preset(CLAP_PLUG_INFO* plug_data, void* preset_info);
+//look for and load if found a preset from the full_path
+int clap_plug_preset_load_from_path(CLAP_PLUG_INFO* plug_data,int plug_id, const char* preset_path);
 //initiate the main plugin data struct. 
 CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_size, SAMPLE_T samplerate, clap_plug_status_t* plug_error, void* audio_backend);
 //return the plugin parameter container

@@ -560,7 +560,6 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
 	    return NULL;
 	}
 	//load preset if there is a preset path
-	//TODO app_plug_load_preset needs an argument for the type of plugin, or rather cx_type argument
 	if(cx_plug->preset_path)app_plug_load_preset(app_intrf->app_data, cx_plug->preset_path, plugin_type, cx_plug->id);
 	//button to load a preset for the plugin, if we fail to create it no big deal - presets wont load
 	cx_init_cx_type(app_intrf, ret_node->name, "load_preset", (Button_cx_e | AddList_cx_st),
@@ -1286,8 +1285,9 @@ static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
 		if(self->parent->parent->type == (Plugin_cx_e | Plugin_Clap_cx_st))
 		    plugin_type = Context_type_Clap_Plugins;
 		int load_preset = app_plug_load_preset(app_intrf->app_data, f_path, plugin_type, cx_plug->id);
-		if(load_preset >= 0){
+		if(load_preset == 1){
 		    //copy the preset name to preset_path of the plugin
+		    //TODO memory leak
 		    cx_plug->preset_path = (char*)malloc(sizeof(char)*(strlen(f_path)+1));
 		    if(cx_plug->preset_path){
 			strcpy(cx_plug->preset_path, f_path);

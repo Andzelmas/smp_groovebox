@@ -303,9 +303,8 @@ int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, unsigned in
     int return_val = -1;
     if(cx_type == Context_type_Plugins)
 	return_val = plug_load_preset(app_data->plug_data, plug_id, preset_uri);
-    //TODO load preset for the CLAP plugin
     if(cx_type == Context_type_Clap_Plugins)
-	return_val = -1;
+	return_val = clap_plug_preset_load_from_path(app_data->clap_plug_data, plug_id, preset_uri);
     
     return return_val;
 }
