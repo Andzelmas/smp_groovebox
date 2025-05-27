@@ -1369,9 +1369,31 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 		    unsigned char cx_type = Context_type_Plugins;
 		    if(self->parent->type == (Plugin_cx_e | Plugin_Clap_cx_st))cx_type = Context_type_Clap_Plugins;
 		    names = app_plug_presets_get(app_intrf->app_data, cx_type, plug_id, &plug_name_size);
-		    //TODO use app_plug_presets_iterate function instead of the _get function
-		    //TODO when iterating through presets check if cx with the "str_val" of the preset full path does not already exist
-		    //TODO when iterating through and creating the category containers for the presets check if the category name does not already exist
+		    //create preset lists only if this list is empty, user will have to press cancel button and refresh the list again if it has been filled
+		    if(!self->child->sib){
+			uint32_t iter = 0;
+			void* preset_struct = app_plug_presets_iterate(app_intrf->app_data, cx_type, plug_id, iter);
+			while(preset_struct != NULL){
+			    char preset_name[MAX_PARAM_NAME_LENGTH];
+			    char preset_path[MAX_PATH_STRING];
+			    //TODO first iterate through preset categories and create containers for presets
+			
+			    //TODO now not even checking if returned the string
+			    app_plug_plugin_presets_get_short_name(app_intrf->app_data, cx_type, preset_struct, preset_name, MAX_PARAM_NAME_LENGTH);
+			    app_plug_plugin_presets_get_full_path(app_intrf->app_data, cx_type, preset_struct, preset_path, MAX_PATH_STRING);
+			    app_plug_presets_clean(app_intrf->app_data, cx_type, preset_struct);
+			    //only create the preset cx option if there is no preset with the same full path already
+			    if(cx_find_with_str_val(preset_path, self->child, 1) == NULL){
+				char preset_name_with_iter[MAX_PARAM_NAME_LENGTH];
+				snprintf(preset_name_with_iter, MAX_PARAM_NAME_LENGTH, "%.1d_%s", iter, preset_name);
+				cx_init_cx_type(app_intrf, self->name, preset_name_with_iter, (Button_cx_e | Item_cx_st),
+						(const char*[1]){preset_path}, (const char*[1]){"str_val"}, 1);
+			    }
+			    //get the new preset struct
+			    iter += 1;
+			    preset_struct = app_plug_presets_iterate(app_intrf->app_data, cx_type, plug_id, iter);
+			}
+		    }
 		}
 	    }
 	}

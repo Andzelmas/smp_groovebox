@@ -16,9 +16,14 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO* plug_data);
 //return the names of the plugins in the plugin directory
 char** clap_plug_return_plugin_names(CLAP_PLUG_INFO* plug_data, unsigned int* size);
 //iterate through the presets and return the preset struct, that can be used to return the preset short name, path, categories
-void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx, uint32_t* iter);
-//return the names of the plugin presets (either from the internal preset-factory or the save state extension)
-char** clap_plug_presets_return_names(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx, unsigned int* total_presets); 
+//user has to call clap_plug_presets_clean_preset function after done with the struct
+void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx, uint32_t iter);
+//return the short name of the preset
+int clap_plug_presets_name_return(CLAP_PLUG_INFO* plug_data, void* preset_info, char* name, uint32_t name_len);
+//return the full path of the preset
+int clap_plug_presets_path_return(CLAP_PLUG_INFO* plug_data, void* preset_info, char* path, uint32_t path_len);
+//clean the preset_info struct returned from the clap_plug_presets_iterate function
+void clap_plug_presets_clean_preset(CLAP_PLUG_INFO* plug_data, void* preset_info);
 //initiate the main plugin data struct. 
 CLAP_PLUG_INFO* clap_plug_init(uint32_t min_buffer_size, uint32_t max_buffer_size, SAMPLE_T samplerate, clap_plug_status_t* plug_error, void* audio_backend);
 //return the plugin parameter container

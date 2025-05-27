@@ -233,36 +233,60 @@ fail_clean:
     return NULL;
 }
 //TODO this function should be used instead of the app_plug_presets_get
-//TODO returns a void* struct per preset. This struct can be used to get the preset short name, full path or to iterate through the preset categories
-//TODO what the void* struct is depends on the cx_type. Different plugin types can have different methods to interact with the presets
-//TODO when the iterator reaches the end of the preset array it return NULL
-void* app_plug_presets_iterate(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, uint32_t* iter){
+void* app_plug_presets_iterate(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, uint32_t iter){
+    if(!app_data)return NULL;
+    if(cx_type == Context_type_Plugins)
+	return NULL;
+    if(cx_type == Context_type_Clap_Plugins){
+	return clap_plug_presets_iterate(app_data->clap_plug_data, idx, iter);
+    }
+
+    return NULL;
 }
+//TODO this function should not be used at all, app_plug_presets_iterate should be used
 char** app_plug_presets_get(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets){
     if(!app_data)return NULL;
     if(cx_type == Context_type_Plugins)
 	return plug_return_plugin_presets_names(app_data->plug_data, indx, total_presets);
     if(cx_type == Context_type_Clap_Plugins){
-	//TODO testing the new preset system
-	uint32_t iter = 0;
-	clap_plug_presets_iterate(app_data->clap_plug_data, indx, &iter);
-	
-	return clap_plug_presets_return_names(app_data->clap_plug_data, indx, total_presets);
+	return NULL;
     }
 
     return NULL;
 }
-//TODO return the short name of the preset from the preset_data. Depends on the cx_type how the short name is returned (for lv2 plugins might be different than CLAP plugins)
-int app_plug_plugin_presets_get_short_name(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, void* preset_data, char* return_name, uint32_t name_len){
+int app_plug_plugin_presets_get_short_name(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* return_name, uint32_t name_len){
+    if(!app_data)return -1;
+    if(cx_type == Context_type_Plugins)
+	return -1;
+    if(cx_type == Context_type_Clap_Plugins){
+	return clap_plug_presets_name_return(app_data->clap_plug_data, preset_info, return_name, name_len);
+    }
+
+    return -1;
 }
-//TODO return the full path of the preset. It can be some other string, not necessaraly a path, but given this return_path, the preset load function will load the preset
-int app_plug_plugin_presets_get_full_path(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, void* preset_data, char* return_path, uint32_t path_len){
+int app_plug_plugin_presets_get_full_path(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* return_path, uint32_t path_len){
+    if(!app_data)return -1;
+    if(cx_type == Context_type_Plugins)
+	return -1;
+    if(cx_type == Context_type_Clap_Plugins){
+	return clap_plug_presets_path_return(app_data->clap_plug_data, preset_info, return_path, path_len);
+    }
+
+    return -1;
 }
-//TODO iterate the categories. Iterate the preset categories in the preset_data, and return cur_category for each iter. Iter is increased on each call to this function
+//TODO iterate the categories. Iterate the preset categories in the preset_data, and return cur_category for each iter. 
 //TODO when the function returns 1 - stop iterating, end of the preset categories
 int app_plug_plugin_presets_categories_iterate(APP_INFO* app_data, unsigned char cx_type, unsigned idx, void* preset_data, char* cur_category, uint32_t cat_len, uint32_t* iter){
 }
-
+void app_plug_presets_clean(APP_INFO* app_data, unsigned char cx_type, void* preset_info){
+    if(!app_data)return;
+    if(cx_type == Context_type_Plugins)
+	return;
+    if(cx_type == Context_type_Clap_Plugins){
+	clap_plug_presets_clean_preset(app_data->clap_plug_data, preset_info);
+	return;
+    }
+}
 int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id){
     if(!plugin_uri)return -1;
     if(cx_type == Context_type_Plugins)

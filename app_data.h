@@ -36,6 +36,14 @@ typedef struct _app_info APP_INFO;
 APP_INFO* app_init(app_status_t *app_status);
 //return the available names for plugins on the system
 char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types);
+//get the preset struct depending on the cx_type. This can be used to return the preset short name, path etc.
+void* app_plug_presets_iterate(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, uint32_t iter);
+//return the preset short name
+int app_plug_plugin_presets_get_short_name(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* return_name, uint32_t name_len);
+//return the preset full path
+int app_plug_plugin_presets_get_full_path(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* return_path, uint32_t path_len);
+//clean the struct returned by the app_plug_presets_iterate function
+void app_plug_presets_clean(APP_INFO* app_data, unsigned char cx_type, void* preset_info);
 //return the available names of the presets available for the plugin
 char** app_plug_presets_get(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets);
 //initialize a plugin on the plug_data context
