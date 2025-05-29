@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include "../../types.h"
 #include "../../util_funcs/log_funcs.h"
+#include "../../util_funcs/string_funcs.h"
 
 typedef struct _clap_ext_preset_container{
     char* name;
@@ -590,10 +591,18 @@ int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t id
 			if(strcmp(cur_preset->location, preset_path) != 0)continue;
 		    }
 		    clap_ext_preset_container_info_return(cur_preset, loc_kind, load_key, load_key_len, name, name_len, path, path_len);
-		    if(cur_dir->dir_path && categories)
+		    if(cur_dir->dir_path && categories){
 			//TODO categories should be cur_loc->name / (cur_dir->dir_path - cur_loc->loc_location)
-			snprintf(categories, categories_len, "%s", cur_dir->dir_path);
-		    return 1;
+			char* after_delim = NULL;
+			char* before_delim = str_split_string_delim(cur_dir->dir_path, cur_loc->loc_location, &after_delim);
+			if(after_delim)
+			    snprintf(categories, categories_len, "%s%s", cur_loc->loc_name, after_delim);
+			else
+			    snprintf(categories, categories_len, "%s", cur_loc->loc_name);
+			if(after_delim)free(after_delim);
+			if(before_delim)free(before_delim);
+			return 1;
+		    }
 		}
 	    }
 	}

@@ -1376,9 +1376,19 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 			while(preset_struct != NULL){
 			    char preset_name[MAX_PARAM_NAME_LENGTH];
 			    char preset_path[MAX_PATH_STRING];
-			    //TODO first iterate through preset categories and create containers for presets
-			
+			    //iterate through the preset categories and create the cx for the category and the preset inside
+			    char category[MAX_PATH_STRING];
+			    uint32_t category_iter = 0;
+			    int cat_err = app_plug_plugin_presets_categories_iterate(app_intrf->app_data, cx_type, preset_struct, category, MAX_PATH_STRING, category_iter);
+			    while(cat_err != -1){
+				//TODO the preset cx creating code should go here, since there should be at least one preset category
+				log_append_logfile("categories %s\n", category);
+				
+				category_iter += 1;
+				cat_err = app_plug_plugin_presets_categories_iterate(app_intrf->app_data, cx_type, preset_struct, category, MAX_PATH_STRING, category_iter);
+			    }
 			    //TODO now not even checking if returned the string
+			    //TODO this code should go inside the category iterating while loop
 			    app_plug_plugin_presets_get_short_name(app_intrf->app_data, cx_type, preset_struct, preset_name, MAX_PARAM_NAME_LENGTH);
 			    app_plug_plugin_presets_get_full_path(app_intrf->app_data, cx_type, preset_struct, preset_path, MAX_PATH_STRING);
 			    app_plug_presets_clean(app_intrf->app_data, cx_type, preset_struct);

@@ -274,9 +274,15 @@ int app_plug_plugin_presets_get_full_path(APP_INFO* app_data, unsigned char cx_t
 
     return -1;
 }
-//TODO iterate the categories. Iterate the preset categories in the preset_data, and return cur_category for each iter. 
-//TODO when the function returns 1 - stop iterating, end of the preset categories
-int app_plug_plugin_presets_categories_iterate(APP_INFO* app_data, unsigned char cx_type, unsigned idx, void* preset_data, char* cur_category, uint32_t cat_len, uint32_t* iter){
+int app_plug_plugin_presets_categories_iterate(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* cur_category, uint32_t cat_len, uint32_t iter){
+    if(!app_data)return -1;
+    if(cx_type == Context_type_Plugins)
+	return -1;
+    if(cx_type == Context_type_Clap_Plugins){
+	return clap_plug_presets_categories_iterate(app_data->clap_plug_data, preset_info, cur_category, cat_len, iter);
+    }
+
+    return -1;
 }
 void app_plug_presets_clean(APP_INFO* app_data, unsigned char cx_type, void* preset_info){
     if(!app_data)return;

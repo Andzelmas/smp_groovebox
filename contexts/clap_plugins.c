@@ -1132,6 +1132,41 @@ int clap_plug_presets_path_return(CLAP_PLUG_INFO* plug_data, void* preset_info, 
     snprintf(path, path_len, "%s", cur_preset->full_path);
     return 0;
 }
+int clap_plug_presets_categories_iterate(CLAP_PLUG_INFO* plug_data, void* preset_info, char* category, uint32_t category_len, uint32_t idx){
+    if(!plug_data)return -1;
+    if(!preset_info)return -1;
+    CLAP_PLUG_PRESET_INFO* cur_preset = (CLAP_PLUG_PRESET_INFO*)preset_info;
+    if(!cur_preset)return -1;
+    if(!cur_preset->categories)return -1;
+    uint32_t str_len = strlen(cur_preset->categories)+1;
+    char* ret_string = (char*)malloc(sizeof(char) * str_len);
+    if(!ret_string)return -1;
+    char* cur_category = NULL;
+    snprintf(ret_string, str_len, "%s", cur_preset->categories);
+    cur_category = strtok(ret_string, "/");
+    if(!cur_category && idx == 0){
+	snprintf(category, category_len, "%s", cur_preset->categories);
+	free(ret_string);
+	return 0;
+    }
+    if(!cur_category && idx > 0){
+	free(ret_string);
+	return -1;
+    }
+
+    uint32_t cur_iter = 0;
+    while(cur_category){
+	if(cur_iter == idx){
+	    snprintf(category, category_len, "%s", cur_category);
+	    free(ret_string);
+	    return 0;
+	}
+	cur_category = strtok(NULL, "/");
+	cur_iter += 1;
+    }
+    free(ret_string);
+    return -1;
+}
 void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx, uint32_t iter){
     if(!plug_data)return NULL;
     if(plug_idx >= MAX_INSTANCES)return NULL;

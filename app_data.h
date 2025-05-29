@@ -42,6 +42,8 @@ void* app_plug_presets_iterate(APP_INFO* app_data, unsigned char cx_type, unsign
 int app_plug_plugin_presets_get_short_name(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* return_name, uint32_t name_len);
 //return the preset full path
 int app_plug_plugin_presets_get_full_path(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* return_path, uint32_t path_len);
+//return preset category per iter, if returns -1 something went wrong or category under the iter does not exist
+int app_plug_plugin_presets_categories_iterate(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* cur_category, uint32_t cat_len, uint32_t iter);
 //clean the struct returned by the app_plug_presets_iterate function
 void app_plug_presets_clean(APP_INFO* app_data, unsigned char cx_type, void* preset_info);
 //return the available names of the presets available for the plugin

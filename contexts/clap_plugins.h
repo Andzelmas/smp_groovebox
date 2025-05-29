@@ -22,6 +22,8 @@ void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx
 int clap_plug_presets_name_return(CLAP_PLUG_INFO* plug_data, void* preset_info, char* name, uint32_t name_len);
 //return the full path of the preset
 int clap_plug_presets_path_return(CLAP_PLUG_INFO* plug_data, void* preset_info, char* path, uint32_t path_len);
+//return the category in the preset_info struct. Categories is a string, separated by "/", if idx is too big will return -1 
+int clap_plug_presets_categories_iterate(CLAP_PLUG_INFO* plug_data, void* preset_info, char* category, uint32_t category_len, uint32_t idx);
 //clean the preset_info struct returned from the clap_plug_presets_iterate function
 void clap_plug_presets_clean_preset(CLAP_PLUG_INFO* plug_data, void* preset_info);
 //look for and load if found a preset from the full_path
