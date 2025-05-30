@@ -1210,7 +1210,7 @@ int clap_plug_preset_load_from_path(CLAP_PLUG_INFO* plug_data, int plug_id, cons
 	preset_user_funcs.user_data = (void*)plug_data;
 	cur_plug->preset_fac = clap_ext_preset_init(cur_plug->plug_entry, cur_plug->clap_host_info, preset_user_funcs);
     }
-    //TODO first check if the preset_path is in the preset-factory
+    //first check if the preset_path is in the preset-factory
     if(cur_plug->preset_fac){
 	uint32_t loc_kind = 0;
 	char load_key[MAX_PATH_STRING];
@@ -1726,7 +1726,7 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO* plug_data, unsigned int nfr
 		    clap_head.size = sizeof(clap_event_note_t);
 		    channel = (int16_t)(type & 0x0f);
 		    key = (int16_t)note_ports->midi_cont->note_pitches[midi_num];      
-		    velocity = (double)fit_range(127, 0, 0, 1, (SAMPLE_T)note_ports->midi_cont->vel_trig[midi_num]);
+		    velocity = (double)fit_range(127, 0, 1, 0, (SAMPLE_T)note_ports->midi_cont->vel_trig[midi_num]);
 		    
 		    clap_event_note_t clap_note;
 		    clap_note.channel = channel;

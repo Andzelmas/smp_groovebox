@@ -28,6 +28,7 @@
 /*A FEW IMPORTANT RULES - no name or path strings can contain "<__>", its added to names automatically;
   if cx, path or any string is numbered should have"-" before the number;
   dont end path names with "/" symbol, and double slashes may result */
+//TODO if there would be void* user_data variable and some more additional ones, there would be no need to cast to other CX types
 typedef struct intrf_cx{
     //the child context
     //child and sib ar the same as left and right branches in a binary tree
@@ -37,7 +38,9 @@ typedef struct intrf_cx{
     //the previous context (prev)
     struct intrf_cx *prev;
     //the parent context
-    struct intrf_cx *parent;  
+    struct intrf_cx *parent;
+    //user data context, this can be an address to any cx that is convenient
+    struct intrf_cx* user_data;
     //the name of the context
     //IMPORTANT ALL NAMES ARE UNIQUE AND HAVE THEIR PARENT NAME AFTER <__> SYMBOL, DONT USE THIS
     //FOR CX NAMES WHEN MAKING NEW CX
@@ -1243,83 +1246,111 @@ static int cx_enter_dir_callback(APP_INTRF *app_intrf, CX* self){
 static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
     CX_BUTTON* cx_file = (CX_BUTTON*)self;
     if(!self->parent)return;
-    CX_BUTTON* cx_addList = (CX_BUTTON*)self->parent;
+    CX_BUTTON* cx_addList = NULL;
+    if((self->type & 0xff00) == Button_cx_e)
+	cx_addList = (CX_BUTTON*)self->parent;
     char* f_path = cx_file->str_val;
     //dont create anything if the file path is not loaded
     if(!f_path)return;
-    //if this buttons purpose is to add a new sample
-    if(cx_addList->uchar_val == Sample_purp){
-	//create the sample only if the str_val of self and of parent are equal - meaning if this was
-	//entered twice (first enter could only play the file not load it)
-	//create the cx_sample, the sample on the smp_data will be created in the cx_init_cx_type
-	if(cx_addList->str_val){
-	    if(strcmp(cx_addList->str_val, f_path)==0){
-		CX *cx_smp = cx_init_cx_type(app_intrf, self->parent->parent->name, "Smp", Sample_cx_e,
-					     (const char*[2]){f_path, "1"} ,
-					     (const char*[2]){"file_path", "init"}, 2);
-		free(cx_addList->str_val);
-		cx_addList->str_val = NULL;
+    if(cx_file->uchar_val == Load_plugin_preset_purp){
+	if(self->user_data){
+	    CX_PLUGIN* cur_plug = NULL;
+	    if((self->user_data->type & 0xff00) == Plugin_cx_e)
+		cur_plug = (CX_PLUGIN*)self->user_data;
+	    if(cur_plug){
+		unsigned int plugin_type = Context_type_Plugins;
+		if(self->user_data->type == (Plugin_cx_e | Plugin_Clap_cx_st))
+		    plugin_type = Context_type_Clap_Plugins;
+		int load_preset = app_plug_load_preset(app_intrf->app_data, f_path, plugin_type, cur_plug->id);
+		if(load_preset == 1){
+		    char* new_preset_path = (char*)malloc(sizeof(char) * (strlen(f_path)+1));
+		    if(new_preset_path){
+			snprintf(new_preset_path, strlen(f_path)+1, "%s", f_path);
+			if(cur_plug->preset_path)free(cur_plug->preset_path);
+			cur_plug->preset_path = new_preset_path;
+		    }
+		    log_append_logfile("Loaded plugin %s preset\n", f_path);
+		}
+	    }
+	}
+    }
+    if(cx_addList){
+	//if this buttons purpose is to add a new sample
+	if(cx_addList->uchar_val == Sample_purp){
+	    //create the sample only if the str_val of self and of parent are equal - meaning if this was
+	    //entered twice (first enter could only play the file not load it)
+	    //create the cx_sample, the sample on the smp_data will be created in the cx_init_cx_type
+	    if(cx_addList->str_val){
+		if(strcmp(cx_addList->str_val, f_path)==0){
+		    CX *cx_smp = cx_init_cx_type(app_intrf, self->parent->parent->name, "Smp", Sample_cx_e,
+						 (const char*[2]){f_path, "1"} ,
+						 (const char*[2]){"file_path", "init"}, 2);
+		    free(cx_addList->str_val);
+		    cx_addList->str_val = NULL;
+		}
+		else{
+		    helper_cx_copy_str_val(self, self->parent);
+		}
 	    }
 	    else{
 		helper_cx_copy_str_val(self, self->parent);
 	    }
 	}
-	else{
-	    helper_cx_copy_str_val(self, self->parent);
+	if(cx_addList->uchar_val == addPlugin_purp){
+	    //create the cx_plugin, the plugin instance on plug_data will be created in cx_init_cx_type
+	    //the type of plugin
+	    unsigned int plug_type = Plugin_cx_e;
+	    if(cx_file->uchar_val == CLAP_plugin_type)plug_type = (Plugin_cx_e | Plugin_Clap_cx_st);
+	    cx_init_cx_type(app_intrf, self->parent->parent->name, "Plug", plug_type,
+			    (const char*[2]){f_path, "1"}, (const char*[2]){"plug_path", "init"}, 2);
 	}
-    }
-    if(cx_addList->uchar_val == addPlugin_purp){
-	//create the cx_plugin, the plugin instance on plug_data will be created in cx_init_cx_type
-	//the type of plugin
-	unsigned int plug_type = Plugin_cx_e;
-	if(cx_file->uchar_val == CLAP_plugin_type)plug_type = (Plugin_cx_e | Plugin_Clap_cx_st);
-	cx_init_cx_type(app_intrf, self->parent->parent->name, "Plug", plug_type,
-			(const char*[2]){f_path, "1"}, (const char*[2]){"plug_path", "init"}, 2);
-    }
-    if(cx_addList->uchar_val == Load_plugin_preset_purp){
-	//load the plugin preset
-	if(self->parent->parent){
-	    if((self->parent->parent->type & 0xff00) == Plugin_cx_e){
-		CX_PLUGIN* cx_plug = (CX_PLUGIN*)self->parent->parent;
-		unsigned int plugin_type = Context_type_Plugins;
-		if(self->parent->parent->type == (Plugin_cx_e | Plugin_Clap_cx_st))
-		    plugin_type = Context_type_Clap_Plugins;
-		int load_preset = app_plug_load_preset(app_intrf->app_data, f_path, plugin_type, cx_plug->id);
-		if(load_preset == 1){
-		    //copy the preset name to preset_path of the plugin
-		    if(cx_plug->preset_path)free(cx_plug->preset_path);
-		    cx_plug->preset_path = (char*)malloc(sizeof(char)*(strlen(f_path)+1));
-		    if(cx_plug->preset_path){
-			strcpy(cx_plug->preset_path, f_path);
+	/*
+	if(cx_addList->uchar_val == Load_plugin_preset_purp){
+	    //load the plugin preset
+	    if(self->parent->parent){
+		if((self->parent->parent->type & 0xff00) == Plugin_cx_e){
+		    CX_PLUGIN* cx_plug = (CX_PLUGIN*)self->parent->parent;
+		    unsigned int plugin_type = Context_type_Plugins;
+		    if(self->parent->parent->type == (Plugin_cx_e | Plugin_Clap_cx_st))
+			plugin_type = Context_type_Clap_Plugins;
+		    int load_preset = app_plug_load_preset(app_intrf->app_data, f_path, plugin_type, cx_plug->id);
+		    if(load_preset == 1){
+			//copy the preset name to preset_path of the plugin
+			if(cx_plug->preset_path)free(cx_plug->preset_path);
+			cx_plug->preset_path = (char*)malloc(sizeof(char)*(strlen(f_path)+1));
+			if(cx_plug->preset_path){
+			    strcpy(cx_plug->preset_path, f_path);
+			}
+			log_append_logfile("Loaded plugin %s preset\n", cx_plug->preset_path);
 		    }
-		    log_append_logfile("Loaded plugin %s preset\n", cx_plug->preset_path);
 		}
 	    }
 	}
-    }
-    //if its a button to load a song or a preset
-    if(cx_addList->uchar_val == Load_purp){
-	if((self->parent->parent->type & 0xff00) == Main_cx_e){
-	    char* parent_name = NULL;
-	    if(self->parent->parent->type != (Main_cx_e | Root_cx_st)){
-		helper_cx_clear_cx(app_intrf, self->parent->parent);
-		parent_name = self->parent->parent->name;
-	    }
-	    //if this is a Root_cx_st
-	    else{
-		CX* clear_cx = self->parent->parent->child;
-		while(clear_cx){
-		    if(clear_cx->save == 1){
-			helper_cx_clear_cx(app_intrf, clear_cx);
-		    }
-		    clear_cx = clear_cx->sib;
+	*/
+	//if its a button to load a song or a preset
+	if(cx_addList->uchar_val == Load_purp){
+	    if((self->parent->parent->type & 0xff00) == Main_cx_e){
+		char* parent_name = NULL;
+		if(self->parent->parent->type != (Main_cx_e | Root_cx_st)){
+		    helper_cx_clear_cx(app_intrf, self->parent->parent);
+		    parent_name = self->parent->parent->name;
 		}
+		//if this is a Root_cx_st
+		else{
+		    CX* clear_cx = self->parent->parent->child;
+		    while(clear_cx){
+			if(clear_cx->save == 1){
+			    helper_cx_clear_cx(app_intrf, clear_cx);
+			}
+			clear_cx = clear_cx->sib;
+		    }
+		}
+		app_json_read_conf(NULL, f_path, parent_name, &app_intrf->load_from_conf, app_intrf, cx_process_from_file);
+		CX_MAIN* cx_main = (CX_MAIN*)self->parent->parent;
+		if(cx_main->path)free(cx_main->path);
+		cx_main->path =  (char*)malloc(sizeof(char)*strlen(f_path)+1);
+		strcpy(cx_main->path, f_path);
 	    }
-	    app_json_read_conf(NULL, f_path, parent_name, &app_intrf->load_from_conf, app_intrf, cx_process_from_file);
-	    CX_MAIN* cx_main = (CX_MAIN*)self->parent->parent;
-	    if(cx_main->path)free(cx_main->path);
-	    cx_main->path =  (char*)malloc(sizeof(char)*strlen(f_path)+1);
-	    strcpy(cx_main->path, f_path);
 	}
     }
 }
@@ -1380,25 +1411,41 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 			    char category[MAX_PATH_STRING];
 			    uint32_t category_iter = 0;
 			    int cat_err = app_plug_plugin_presets_categories_iterate(app_intrf->app_data, cx_type, preset_struct, category, MAX_PATH_STRING, category_iter);
+			    CX* cat_parent = self;
 			    //TODO category loop should create cx structure where the preset cx will go
-			    while(cat_err != -1){ategory
-				log_append_logfile("categories %s\n", category);
-				
+			    //TODO the preset cx'es will go into the last cx created by the category while loop
+			    while(cat_err != -1 && cat_parent){
+				CX* new_parent = cx_find_with_str_val(category, cat_parent->child, 0);
+				if(!new_parent){
+				    new_parent = cx_init_cx_type(app_intrf, cat_parent->name, category, (Button_cx_e | Item_cx_st),
+								 (const char*[1]){category}, (const char*[1]){"str_val"}, 1);
+				}
+				cat_parent = new_parent;
 				category_iter += 1;
 				cat_err = app_plug_plugin_presets_categories_iterate(app_intrf->app_data, cx_type, preset_struct, category, MAX_PATH_STRING, category_iter);
 			    }
-			    //TODO now not even checking if returned the string
-			    app_plug_plugin_presets_get_short_name(app_intrf->app_data, cx_type, preset_struct, preset_name, MAX_PARAM_NAME_LENGTH);
-			    app_plug_plugin_presets_get_full_path(app_intrf->app_data, cx_type, preset_struct, preset_path, MAX_PATH_STRING);
-			    app_plug_presets_clean(app_intrf->app_data, cx_type, preset_struct);
-			    //only create the preset cx option if there is no preset with the same full path already
-			    if(cx_find_with_str_val(preset_path, self->child, 1) == NULL){
-				char preset_name_with_iter[MAX_PARAM_NAME_LENGTH];
-				snprintf(preset_name_with_iter, MAX_PARAM_NAME_LENGTH, "%.1d_%s", iter, preset_name);
-				cx_init_cx_type(app_intrf, self->name, preset_name_with_iter, (Button_cx_e | Item_cx_st),
-						(const char*[1]){preset_path}, (const char*[1]){"str_val"}, 1);
+			    //create the preset cx in the last created preset category
+			    if(cat_parent){
+				int name_err = app_plug_plugin_presets_get_short_name(app_intrf->app_data, cx_type, preset_struct, preset_name, MAX_PARAM_NAME_LENGTH);
+				int path_err = app_plug_plugin_presets_get_full_path(app_intrf->app_data, cx_type, preset_struct, preset_path, MAX_PATH_STRING);
+				if(name_err != -1 && path_err != -1){
+				    //only create the preset cx option if there is no preset with the same full path already
+				    if(cx_find_with_str_val(preset_path, cat_parent->child, 1) == NULL){
+					char preset_name_with_iter[MAX_PARAM_NAME_LENGTH];
+					snprintf(preset_name_with_iter, MAX_PARAM_NAME_LENGTH, "%.1d_%s", nav_return_numchildren(app_intrf, cat_parent), preset_name);
+					char uchar_val[HEX_TYPES_CHAR_LENGTH];
+					snprintf(uchar_val, HEX_TYPES_CHAR_LENGTH, "%2x", Load_plugin_preset_purp);
+					CX* preset_cx = cx_init_cx_type(app_intrf, cat_parent->name, preset_name_with_iter, (Button_cx_e | Item_cx_st),
+									(const char*[2]){preset_path, uchar_val}, (const char*[2]){"str_val", "uchar_val"}, 2);
+					//add the plugin cx to the user_data
+					if(preset_cx){
+					    preset_cx->user_data = self->parent;
+					}
+				    }
+				}
 			    }
 			    //get the new preset struct
+			    app_plug_presets_clean(app_intrf->app_data, cx_type, preset_struct);
 			    iter += 1;
 			    preset_struct = app_plug_presets_iterate(app_intrf->app_data, cx_type, plug_id, iter);
 			}
@@ -1549,7 +1596,7 @@ static void intrf_callback_exit(APP_INTRF* app_intrf, CX* self){
 
 /*FUNCTIONS TO NAVIGATE THE CX STRUCTURE, THEY ARE FOR THE USER*/
 /*--------------------------------------------------------*/
-int nav_return_curr_numchildren(APP_INTRF* app_intrf, CX* this_cx){
+int nav_return_numchildren(APP_INTRF* app_intrf, CX* this_cx){
     if(!app_intrf)return -1;
     if(!this_cx)return -1;
     CX* next_cx = this_cx->child;

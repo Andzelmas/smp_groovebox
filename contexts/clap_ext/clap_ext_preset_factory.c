@@ -546,12 +546,12 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
     return clap_ext_preset_data;
 }
 
-static void clap_ext_preset_container_info_return(CLAP_EXT_PRESET_CONTAINER* cur_preset,
+static int clap_ext_preset_container_info_return(CLAP_EXT_PRESET_CONTAINER* cur_preset,
 						  uint32_t* loc_kind,
 						  char* load_key, uint32_t load_key_len,
 						  char* name, uint32_t name_len,
 						  char* path, uint32_t path_len){
-    if(!cur_preset)return;
+    if(!cur_preset)return -1;
     if(loc_kind)
 	*loc_kind = cur_preset->loc_kind;
     if(cur_preset->location && path)
@@ -559,7 +559,9 @@ static void clap_ext_preset_container_info_return(CLAP_EXT_PRESET_CONTAINER* cur
     if(cur_preset->name && name)
 	snprintf(name, name_len, "%s", cur_preset->name);
     if(cur_preset->load_key && load_key)
-	snprintf(load_key, load_key_len, "%s", cur_preset->load_key);    
+	snprintf(load_key, load_key_len, "%s", cur_preset->load_key);
+
+    return 1;
 }
 int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t idx, const char* preset_path,
 				uint32_t* loc_kind,
@@ -590,9 +592,8 @@ int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t id
 		    if(preset_path){
 			if(strcmp(cur_preset->location, preset_path) != 0)continue;
 		    }
-		    clap_ext_preset_container_info_return(cur_preset, loc_kind, load_key, load_key_len, name, name_len, path, path_len);
+
 		    if(cur_dir->dir_path && categories){
-			//TODO categories should be cur_loc->name / (cur_dir->dir_path - cur_loc->loc_location)
 			char* after_delim = NULL;
 			char* before_delim = str_split_string_delim(cur_dir->dir_path, cur_loc->loc_location, &after_delim);
 			if(after_delim)
@@ -601,8 +602,8 @@ int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t id
 			    snprintf(categories, categories_len, "%s", cur_loc->loc_name);
 			if(after_delim)free(after_delim);
 			if(before_delim)free(before_delim);
-			return 1;
 		    }
+		    return clap_ext_preset_container_info_return(cur_preset, loc_kind, load_key, load_key_len, name, name_len, path, path_len);
 		}
 	    }
 	}
@@ -617,10 +618,9 @@ int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t id
 		if(preset_path){
 		    if(strcmp(cur_preset->location, preset_path) != 0)continue;
 		}
-		clap_ext_preset_container_info_return(cur_preset, loc_kind, load_key, load_key_len, name, name_len, path, path_len);
 		if(cur_loc->loc_name && categories)
 		    snprintf(categories, categories_len, "%s", cur_loc->loc_name);
-		return 1;
+		return clap_ext_preset_container_info_return(cur_preset, loc_kind, load_key, load_key_len, name, name_len, path, path_len);
 	    }	    
 	}
     }

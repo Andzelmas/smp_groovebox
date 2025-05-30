@@ -9,6 +9,8 @@
 #define MAX_UNIQUE_ID_STRING 128 //max length for unique ids that use char* (for example the clap unique id for plugins)
 #define MAX_FILETYPE_STRING 20 //max length for the char* that has a filetype ("txt", "json" etc)
 #define MAX_PATH_STRING 2048 //max length for a filepath
+#define HEX_TYPES_CHAR_LENGTH 5 //length for a string that contains the hex representation of a number 
+#define INT_TYPES_CHAR_LENGTH 20 //length for a string that contains the int representation of a number
 
 //TODO not tested and not implemented, here for future development
 #define SAMPLE_T_AS_DOUBLE 0//by default SAMPLE_T is float (in structs.h), if this is 1 SAMPLE_T will be double and audio buffers will use 64bits
