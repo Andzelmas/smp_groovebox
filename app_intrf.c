@@ -780,6 +780,7 @@ static int cx_add_child(CX *parent_cx, CX *child_cx, const char *name, unsigned 
     child_cx->child = NULL;
     child_cx->sib = NULL;
     child_cx->prev = NULL;
+    child_cx->user_data = NULL;
     child_cx->type = type;
     child_cx->user_int = -1;
     
