@@ -1413,8 +1413,6 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 			    uint32_t category_iter = 0;
 			    int cat_err = app_plug_plugin_presets_categories_iterate(app_intrf->app_data, cx_type, preset_struct, category, MAX_PATH_STRING, category_iter);
 			    CX* cat_parent = self;
-			    //TODO category loop should create cx structure where the preset cx will go
-			    //TODO the preset cx'es will go into the last cx created by the category while loop
 			    while(cat_err != -1 && cat_parent){
 				CX* new_parent = cx_find_with_str_val(category, cat_parent->child, 0);
 				if(!new_parent){

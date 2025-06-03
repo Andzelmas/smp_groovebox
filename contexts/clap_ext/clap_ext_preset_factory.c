@@ -563,7 +563,7 @@ static int clap_ext_preset_container_info_return(CLAP_EXT_PRESET_CONTAINER* cur_
 
     return 1;
 }
-int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t idx, const char* preset_path,
+int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, char* plug_id, uint32_t idx, const char* preset_path,
 				uint32_t* loc_kind,
 				char* load_key, uint32_t load_key_len,
 				char* name, uint32_t name_len,
@@ -603,6 +603,8 @@ int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t id
 			if(after_delim)free(after_delim);
 			if(before_delim)free(before_delim);
 		    }
+		    //only return presets that have the same unique plugin_id string
+		    if(strcmp(cur_preset->plugin_id, plug_id) != 0)continue;
 		    return clap_ext_preset_container_info_return(cur_preset, loc_kind, load_key, load_key_len, name, name_len, path, path_len);
 		}
 	    }
@@ -620,6 +622,8 @@ int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t id
 		}
 		if(cur_loc->loc_name && categories)
 		    snprintf(categories, categories_len, "%s", cur_loc->loc_name);
+		//only return presets that have the same unique plugin_id string
+		if(strcmp(cur_preset->plugin_id, plug_id) != 0)continue;
 		return clap_ext_preset_container_info_return(cur_preset, loc_kind, load_key, load_key_len, name, name_len, path, path_len);
 	    }	    
 	}

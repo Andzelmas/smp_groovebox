@@ -13,7 +13,8 @@ CLAP_EXT_PRESET_FACTORY* clap_ext_preset_init(const clap_plugin_entry_t* plug_en
 //return the preset name, path and category list (string where each category is separated by "/")
 //also return the kind of location, load_key
 //if preset_path is not NULL idx will be ignored and a preset will be found matching the preset_path
-int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, uint32_t idx, const char* preset_path,
+//plug_id is the plugin unique string, only presets with matching plugin id will be returned
+int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY* preset_fac, char* plug_id, uint32_t idx, const char* preset_path,
 				uint32_t* loc_kind,
 				char* load_key, uint32_t load_key_len,
 				char* name, uint32_t name_len,

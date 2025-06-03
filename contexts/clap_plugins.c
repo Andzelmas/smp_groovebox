@@ -1186,7 +1186,7 @@ void* clap_plug_presets_iterate(CLAP_PLUG_INFO* plug_data, unsigned int plug_idx
     if(cur_plug->preset_fac){
 	CLAP_PLUG_PRESET_INFO* preset_info = (CLAP_PLUG_PRESET_INFO*)malloc(sizeof(CLAP_PLUG_PRESET_INFO));
 	if(!preset_info)return NULL;
-	int err = clap_ext_preset_info_return(cur_plug->preset_fac, iter, NULL, NULL, NULL, 0,
+	int err = clap_ext_preset_info_return(cur_plug->preset_fac, cur_plug->plugin_id, iter, NULL, NULL, NULL, 0,
 					      preset_info->short_name, MAX_PARAM_NAME_LENGTH,
 					      preset_info->full_path, MAX_PATH_STRING,
 					      preset_info->categories, MAX_PATH_STRING);
@@ -1215,7 +1215,7 @@ int clap_plug_preset_load_from_path(CLAP_PLUG_INFO* plug_data, int plug_id, cons
 	uint32_t loc_kind = 0;
 	char load_key[MAX_PATH_STRING];
 	char location[MAX_PATH_STRING];
-	int err = clap_ext_preset_info_return(cur_plug->preset_fac, 0, preset_path, &loc_kind, load_key, MAX_PATH_STRING, NULL, 0, location, MAX_PATH_STRING, NULL, 0);
+	int err = clap_ext_preset_info_return(cur_plug->preset_fac, cur_plug->plugin_id, 0, preset_path, &loc_kind, load_key, MAX_PATH_STRING, NULL, 0, location, MAX_PATH_STRING, NULL, 0);
 	if(err == 1){
 	    const clap_plugin_preset_load_t* preset_ext = cur_plug->plug_inst->get_extension(cur_plug->plug_inst, CLAP_EXT_PRESET_LOAD);
 	    if(preset_ext){
