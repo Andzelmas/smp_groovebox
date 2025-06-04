@@ -6,8 +6,9 @@ Check out https://brumakes.com/programming.php for development blog and some vid
 Everything is written in C.
 As of today its possible to load lv2 plugins, route audio/midi streams, use a very simple synth and even more simple sampler.
 
-Furthermore CLAP implementation is on its way. Now it is possible to load CLAP plugins, use their audio buffers, send midi events, change parameters and use parameter config files the same way as with lv2 plugins.
-Short term still need to implement event input output for all cases and save/load states for preset saving/loading. Other Clap extensions are of lower priority and I will implement them as i go along.
+Furthermore, CLAP implementation is on its way. Now it is possible to load CLAP plugins, use their audio buffers, send midi events, change parameters and use parameter config files the same way as with lv2 plugins.
+Also, can use internal CLAP presets if the plugin supports the preset-factory extension.
+Short term still need to implement event input output for all cases and save/load states extension. Other Clap extensions are of lower priority and I will implement them as I go along.
 
 This software uses minimal dependencies and its ui is using ncurses, so it can be used from a terminal and without any graphical environment.
 Also, the gui adapts to small screens, so works nicely with rpi touch screens - this was the main catalyst to make this software in the first place.
@@ -25,7 +26,7 @@ The synth uses oscillator lookup table code by Nigel Redmon here https://www.ear
 - Run jack2
 - "Make run" command or run the smp_sampler in build/ directory to run the application.
 
-### ui_conf.json file
+### ui_conf.json file in the build directory
 Inside users can change some aspects of the user interface.
 
 max_main_contexts - how many contexts are shown in the middle window. Number of parameters for a plugin and similar.
@@ -45,11 +46,14 @@ cx_exit - exit the current context. When exiting the top context this will exit 
 ### User parameter configuration json files
 When first launched the program will create _param_conf.json files for various contexts (for example Synth_param_conf.json).
 Also when a plugin is added it will create the _param_conf.json file for that type of plugin.
-Inside it is possible to change "display_name", "default_val", "increment" keys and the order of the parameters (just move around the parameter blocks).
+
+Some json parameter configuration files exist in the EXTRA/Param_Presets directory for plugins that I use the most. To try them out, copy them into the build directory.
+
+In the parameter files it is possible to change "display_name", "default_val", "increment" keys and the order of the parameters (just move around the parameter blocks).
 
 Display_name is the name that will be shown on the screen, can be duplicates.
 Default_val - value that will be set for the parameter on the first load, if a save file for this context does not exist.
-Increment - is by how much the parameter increases or decreases (very useful when the parameter is integer but the developer didnt specify that on the parameter itself).
+Increment - is by how much the parameter increases or decreases (very useful when the parameter is integer but the developer does not specify that on the parameter itself).
 
 User can also add parameter containers in the config files. If you have this:
 
