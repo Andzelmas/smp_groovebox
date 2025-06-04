@@ -549,9 +549,15 @@ static void clap_plug_ext_params_rescan(const clap_host_t* host, clap_param_resc
 	//TODO not sure what clap api expects here, if the text needs to be rendered again it will do so automaticaly on the next ui cycle
     }
     if((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO){
-	context_sub_send_msg(plug_data->control_data, is_audio_thread, "Plugin %s requested CLAP_PARAM_RESCAN_INFO\n", plug->plug_path);
-	//TODO get if any parameter name changed, and set it with set_value Operation_NameChange on params
-	//though right now ui does nothing if a parameter name changes on the data side - need to overhaul app_intrf.c for these changes to take effect
+	//go through the params and change the ui_names
+	const clap_plugin_params_t* clap_params = plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
+	if(!clap_params)return;
+	uint32_t param_count = (uint32_t)param_return_num_params(plug->plug_params, 0);
+	for(uint32_t param_num = 0; param_num < param_count; param_num++){
+	    clap_param_info_t param_info;
+	    if(!clap_params->get_info(plug->plug_inst, param_num, &param_info))continue;
+	    param_set_value(plug->plug_params, param_num, 0.0, param_info.name, Operation_ChangeName, 0);
+	}
 	//TODO get if any parameter is hidden or not, and set with set_value Operation_ToggleHidden
     }
     if((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL){

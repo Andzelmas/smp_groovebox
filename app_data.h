@@ -60,6 +60,8 @@ int app_param_set_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, in
 PARAM_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id);
 //get value, the val_type returns what type of value for display purposes.
 PARAM_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id);
+//get the display name on the parameter
+int app_param_get_ui_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, char* name, uint32_t name_len);
 //get the parameter id given the context type, cx id and parameter id. Returns -1 if no such parameter is found
 int app_param_id_from_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, const char* param_name);
 //get the parameter value formated as ret_string to display to the ui

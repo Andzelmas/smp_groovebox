@@ -357,6 +357,16 @@ PARAM_T app_param_get_increment(APP_INFO* app_data, unsigned char cx_type, int c
     return param_get_increment(param_cont, param_id, 0);
 }
 
+int app_param_get_ui_name(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id, char* name, uint32_t name_len){
+    if(!app_data)return -1;
+    PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);
+    if(!param_cont)return -1;
+    if(param_ui_name_changed(param_cont, param_id, 0) == 1){
+	return param_get_ui_name(param_cont, param_id, name, name_len);
+    }
+    return 0;
+}
+
 PARAM_T app_param_get_value(APP_INFO* app_data, unsigned char cx_type, int cx_id, int param_id){
     if(!app_data)return -1;
     PRM_CONTAIN* param_cont = app_get_context_param_container(app_data, cx_type, cx_id);

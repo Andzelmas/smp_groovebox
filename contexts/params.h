@@ -58,10 +58,11 @@ int param_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int 
 int param_get_if_any_changed(PRM_CONTAIN* param_container, unsigned int rt_params);
 //get if parameter is hidden or not
 unsigned int param_is_hidden(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
-//return if parameter name just changed, and set the parameter name_just_changed to 0 after that
-unsigned int param_name_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
-//get the parameter name, and snprintf it to ret_name, returns 1 if succesful, also sets name_just_changed to 0
-//should be used on [main-thread]
+//return if parameter ui_name just changed
+unsigned int param_ui_name_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params);
+//get the parameter display name and change ui_name_just_changed to 0 if its 1
+unsigned int param_get_ui_name(PRM_CONTAIN* param_container, int val_id, char* ret_name, uint32_t name_len);
+//get the parameter name, and snprintf it to ret_name, returns 1 if succesful should be used on [main-thread]
 unsigned int param_get_name(PRM_CONTAIN* param_container, int val_id, char* ret_name, uint32_t name_len);
 //return id of parameter given its name, will return -1 if name was not found
 int param_find_name(PRM_CONTAIN* param_container, const char* param_name, unsigned int rt_params);

@@ -31,9 +31,12 @@ typedef struct _params_param{
     unsigned char val_type;
     //if this is 1 the parameter was just changed, this will change to 0 when get_value will be invoked
     unsigned int just_changed;
-    //if the name of parameter just changed this will be 1, and will become a 0 if param_name_get_if_changed is called
-    unsigned int name_just_changed;
+    //if the ui_name of parameter just changed this will be 1, and will become a 0 if param_ui_name_changed is called
+    unsigned int ui_name_just_changed;
+    //name will not change during the lifetime of parameter
     char name[MAX_PARAM_NAME_LENGTH];
+    //ui_name is the display name for the user. This can change during the lifetime of the program
+    char ui_name[MAX_PARAM_NAME_LENGTH];
     //sometimes we might want to get an interpolated version of the parameter, so it does not change so quickly,
     //for example to avoid a click when changing amplitude of a synth oscillator
     PRM_INTERP_VAL* interp_val;
@@ -185,8 +188,10 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
 	const char* param_name = param_names[i];
 	snprintf(rt_params->name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
 	snprintf(ui_params->name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
-	rt_params->name_just_changed = 1;
-	ui_params->name_just_changed = 1;
+	snprintf(rt_params->ui_name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
+	snprintf(ui_params->ui_name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
+	rt_params->ui_name_just_changed = 0;
+	ui_params->ui_name_just_changed = 0;
 
 	if(user_data_per_param){
 	    rt_params->user_data = user_data_per_param[i];
@@ -239,8 +244,8 @@ static void param_set_value_directly(PRM_PARAM* cur_param, PARAM_T set_to, const
 	break;
     case Operation_ChangeName:
 	if(in_string){
-	    snprintf(cur_param->name, MAX_PARAM_NAME_LENGTH, "%s", in_string);
-	    cur_param->name_just_changed = 1;
+	    snprintf(cur_param->ui_name, MAX_PARAM_NAME_LENGTH, "%s", in_string);
+	    cur_param->ui_name_just_changed = 1;
 	}
 	break;
     case Operation_ToggleHidden:
@@ -305,11 +310,12 @@ int param_set_value(PRM_CONTAIN* param_container, int val_id, PARAM_T set_to, co
     PRM_PARAM* cur_param = &(param_array[val_id]);
     param_set_value_directly(cur_param, set_to, set_string_to, param_op);
     //only send the change to the other thread if the parameter actually changed its value
-    if(param_get_if_changed(param_container, val_id, rt_params) == 1){
+    if(param_get_if_changed(param_container, val_id, rt_params) == 1 || param_ui_name_changed(param_container, val_id, rt_params) == 1){
 	PARAM_RING_DATA_BIT send_bit;
 	send_bit.param_id = val_id;
 	send_bit.param_op = param_op;
-	snprintf(send_bit.param_string, MAX_PARAM_NAME_LENGTH, "%s", set_string_to);
+	if(set_string_to)
+	    snprintf(send_bit.param_string, MAX_PARAM_NAME_LENGTH, "%s", set_string_to);
 	send_bit.param_value = set_to;
 	ring_buffer_write(ring_buffer, &send_bit, sizeof(send_bit));
     }
@@ -579,7 +585,7 @@ unsigned int param_is_hidden(PRM_CONTAIN* param_container, int val_id, unsigned 
     return cur_param.is_hidden;
 }
 
-unsigned int param_name_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
+unsigned int param_ui_name_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
     if(!param_container)return 0;
     PRM_PARAM* param_array = NULL;
     int num_of_params = -1;
@@ -594,9 +600,21 @@ unsigned int param_name_get_if_changed(PRM_CONTAIN* param_container, int val_id,
     if(!param_array)return 0;
     if(val_id >= num_of_params)return 0;
     PRM_PARAM* cur_param = &(param_array[val_id]);
-    unsigned int just_changed = cur_param->name_just_changed;
-    cur_param->name_just_changed = 0;
+    unsigned int just_changed = cur_param->ui_name_just_changed;
     return just_changed;
+}
+
+unsigned int param_get_ui_name(PRM_CONTAIN* param_container, int val_id, char* ret_name, uint32_t name_len){
+    if(!param_container)return 0;
+    PRM_PARAM* param_array = param_container->ui_params;
+    int num_of_params = param_container->num_of_params_ui;
+    
+    if(val_id >= num_of_params)return 0;
+
+    PRM_PARAM* cur_param = &(param_array[val_id]);
+    snprintf(ret_name, name_len, "%s", cur_param->ui_name);
+    cur_param->ui_name_just_changed = 0;
+    return 1;
 }
 
 unsigned int param_get_name(PRM_CONTAIN* param_container, int val_id, char* ret_name, uint32_t name_len){
@@ -608,7 +626,6 @@ unsigned int param_get_name(PRM_CONTAIN* param_container, int val_id, char* ret_
 
     PRM_PARAM* cur_param = &(param_array[val_id]);
     snprintf(ret_name, name_len, "%s", cur_param->name);
-    cur_param->name_just_changed = 0;
     return 1;
 }
 

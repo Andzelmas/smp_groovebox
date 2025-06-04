@@ -690,7 +690,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
         CX_VAL *cx_val = (CX_VAL*)malloc(sizeof(CX_VAL));
         if(!cx_val)return NULL;
 	cx_val->val_name = NULL;
-	cx_val->val_display_name = NULL; //this name is not saved and only != NULL if user sets it in the parameter conf file
+	cx_val->val_display_name = NULL; //this name is not saved and only != NULL if user sets it in the parameter conf file or app_data changes the name
 	cx_val->val_id = -1;
 	cx_val->float_val = -1000;
 	cx_val->cx_type = 0;
@@ -1825,6 +1825,15 @@ const char* nav_get_cx_name(APP_INTRF* app_intrf, CX* select_cx){
     if(select_cx->type == Val_cx_e){
 	CX_VAL* cx_val = (CX_VAL*)select_cx;
 	if(!cx_val)return ret_string;
+	//TODO first update the display name from app_data if the ui_name changed on the parameter
+	char temp_name[MAX_PARAM_NAME_LENGTH];
+	if(app_param_get_ui_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, temp_name, MAX_PARAM_NAME_LENGTH)==1){
+	    if(cx_val->val_display_name)free(cx_val->val_display_name);
+	    cx_val->val_display_name = (char*)malloc(sizeof(char) * (strlen(temp_name)+1));
+	    if(!cx_val->val_display_name)
+		return ret_string;
+	    snprintf(cx_val->val_display_name, strlen(temp_name)+1, "%s", temp_name);
+	}
 	if(cx_val->val_display_name){
 	    ret_string = cx_val->val_display_name;
 	}

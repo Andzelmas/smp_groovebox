@@ -1549,9 +1549,18 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	if(nav_get_cx_value_as_string(app_intrf, win->cx_obj, win->display_text, MAX_VALUE_TEXT)!=1){
 	    win->display_text = NULL;
 	}
+	const char* temp_name = nav_get_cx_name(app_intrf, win->cx_obj);
 	win->has_text = 1;
     }
-
+    //also get the name of the parameter on refresh, since it can change from the data size, without this, the user would have to exit this context and enter again to see the new parameter name
+    //TODO name name refresh is a bit hacky now, will change with app_intrf redo
+    if(win->cx_obj && win->win_type==(Param_win_type | Param_name_win_type)){
+	const char* temp_name = nav_get_cx_name(app_intrf, win->cx_obj);
+	if(temp_name){
+	    snprintf(win->display_text, MAX_DISPLAY_TEXT, "%s", temp_name);
+	    win->has_text = 1;
+	}
+    }
     if(win->has_text && win->display_text){
 	//display the text but if it does not fit scroll it with the tick
 	int max_width = getmaxx(win->nc_win)-2;
