@@ -35,8 +35,8 @@ clean_build:
 	(cd build && rm -r *)
 make_dir:
 	mkdir -p build/
-	cp smp_conf.json build/
-	cp ui_conf.json build/
+	cp EXTRA/Configs/smp_conf.json build/
+	cp EXTRA/Configs/ui_conf.json build/
 
 .PHONY: rsync_src
 pi_build: rsync_src

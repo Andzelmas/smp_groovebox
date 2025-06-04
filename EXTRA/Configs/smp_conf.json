@@ -1,0 +1,35 @@
+{
+  "last_song":"song-01\/song.json",
+  "default_song_name":"song-01\/song.json",
+  "shared_dir_structure":{
+    "root_dir":"_song",
+    "sampler_presets":"_song\/sampler",
+    "samples_dir":"_song\/samples",
+    "drum_samples_dir":"_song\/samples\/drums",
+    "plugins_presets":"_song\/plugins",
+    "synth_presets":"_song\/synth",
+    "trk_presets":"_song\/trk"
+  },
+  "song_default_structure":{
+    "song":{
+      "type":"0101",
+      "path":"song-01\/song.json",
+      "sampler<__>song":{
+        "type":"0102",
+        "path":"_song\/sampler\/sampler-01.json"
+      },
+      "plugins<__>song":{
+        "type":"0103",
+        "path":"_song\/plugins\/plugins-01.json"
+      },
+      "synth<__>song":{
+        "type":"0105",
+        "path":"_song\/synth\/synth-01.json"
+      },
+      "trk<__>song":{
+        "type":"0104",
+        "path":"_song\/trk\/trk-01.json"
+      }
+    }
+  }
+}
