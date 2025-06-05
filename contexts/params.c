@@ -238,9 +238,11 @@ static void param_set_value_directly(PRM_PARAM* cur_param, PARAM_T set_to, const
 	break;
     case Operation_SetIncr:
 	cur_param->inc_am = set_to;
+	cur_param->just_changed = 1;
 	break;
     case Operation_SetDefValue:
 	cur_param->def_val = set_to;
+	cur_param->just_changed = 1;
 	break;
     case Operation_ChangeName:
 	if(in_string){
@@ -251,6 +253,7 @@ static void param_set_value_directly(PRM_PARAM* cur_param, PARAM_T set_to, const
     case Operation_ToggleHidden:
 	if(set_to <= 0)cur_param->is_hidden = 0;
 	if(set_to >= 1)cur_param->is_hidden = 1;
+	cur_param->just_changed = 1;
 	break;
     default:
 	cur_param->val = cur_param->val;

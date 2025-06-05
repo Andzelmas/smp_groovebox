@@ -1,0 +1,4847 @@
+{
+    "Bypass Surge XT":{
+	"type":"0500",
+	"display_name":"Bypass Surge XT",
+	"default_val":"0",
+	"increment":"1.0"
+    },
+    "SEND RETURNS":{
+	"type":"0501",
+	"Send FX 1 Return":{
+	    "type":"0500",
+	    "display_name":"SFX1 Ret",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"Send FX 2 Return":{
+	    "type":"0500",
+	    "display_name":"SFX2 Ret",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"Send FX 3 Return":{
+	    "type":"0500",
+	    "display_name":"SFX3 Ret",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"Send FX 4 Return":{
+	    "type":"0500",
+	    "display_name":"SFX4 Ret",
+	    "default_val":"1",
+	    "increment":"0.01"
+	}
+    },
+    "GLOBAL":{
+	"type":"0501",
+	"Global Volume":{
+	    "type":"0500",
+	    "display_name":"Volume",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"Active Scene":{
+	    "type":"0500",
+	    "display_name":"Active Scene",
+	    "default_val":"0",
+	    "increment":"1.0"
+	},
+	"Scene Mode":{
+	    "type":"0500",
+	    "display_name":"Scene Mode",
+	    "default_val":"0",
+	    "increment":"0.33"
+	},
+	"Split Point":{
+	    "type":"0500",
+	    "display_name":"Split Point",
+	    "default_val":"0.4",
+	    "increment":"0.005"
+	},
+	"FX Disable":{
+	    "type":"0500",
+	    "display_name":"FX Disable",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"Polyphony Limit":{
+	    "type":"0500",
+	    "display_name":"Poly Limit",
+	    "default_val":"0",
+	    "increment":"0.015"
+	},
+	"FX Chain Bypass":{
+	    "type":"0500",
+	    "display_name":"FX Chain Bypass",
+	    "default_val":"0",
+	    "increment":"0.33"
+	},
+	"Character":{
+	    "type":"0500",
+	    "display_name":"Character",
+	    "default_val":"0",
+	    "increment":"0.45"
+	}
+    },
+    "A MAIN":{
+	"type":"0501",
+	"A Volume":{
+	    "type":"0500",
+	    "display_name":"Volume",
+	    "default_val":"0.8",
+	    "increment":"0.01"
+	},
+	"A Pan":{
+	    "type":"0500",
+	    "display_name":"Pan",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"A Width":{
+	    "type":"0500",
+	    "display_name":"Width",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"A Send FX 1 Level":{
+	    "type":"0500",
+	    "display_name":"SFX1 Lvl",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Send FX 2 Level":{
+	    "type":"0500",
+	    "display_name":"SFX2 Lvl",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Send FX 3 Level":{
+	    "type":"0500",
+	    "display_name":"SFX3 Lvl",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Send FX 4 Level":{
+	    "type":"0500",
+	    "display_name":"SFX4 Lvl",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Play Mode":{
+	    "type":"0500",
+	    "display_name":"Play Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Pitch Bend Up Range":{
+	    "type":"0500",
+	    "display_name":"Pitch Bend Up Range",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Pitch Bend Down Range":{
+	    "type":"0500",
+	    "display_name":"Pitch Bend Down Range",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc Drift":{
+	    "type":"0500",
+	    "display_name":"Osc Drift",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Noise Color":{
+	    "type":"0500",
+	    "display_name":"Noise Color",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Octave":{
+	    "type":"0500",
+	    "display_name":"Octave",
+	    "default_val":"0.5",
+	    "increment":"0.1"
+	},
+	"A Pitch":{
+	    "type":"0500",
+	    "display_name":"Pitch",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"A Portamento":{
+	    "type":"0500",
+	    "display_name":"Portamento",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A FM":{
+	"type":"0501",
+	"A FM Routing":{
+	    "type":"0500",
+	    "display_name":"FM Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A FM Depth":{
+	    "type":"0500",
+	    "display_name":"FM Depth",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A OSC1":{
+	"type":"0501",
+	"A Osc 1 Type":{
+	    "type":"0500",
+	    "display_name":"Osc1 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Keytrack":{
+	    "type":"0500",
+	    "display_name":"Osc1 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Retrigger":{
+	    "type":"0500",
+	    "display_name":"Osc1 Retrigger",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Octave":{
+	    "type":"0500",
+	    "display_name":"Osc1 Octave",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Pitch":{
+	    "type":"0500",
+	    "display_name":"Osc1 Pitch",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Shape":{
+	    "type":"0500",
+	    "display_name":"Osc1 Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Width 1":{
+	    "type":"0500",
+	    "display_name":"Osc1 Width1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Width 2":{
+	    "type":"0500",
+	    "display_name":"Osc1 Width2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Sub Mix":{
+	    "type":"0500",
+	    "display_name":"Osc1 Sub Mix",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Sync":{
+	    "type":"0500",
+	    "display_name":"Osc1 Sync",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Unison Detune":{
+	    "type":"0500",
+	    "display_name":"Osc1 Unison Detune",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Unison Voices":{
+	    "type":"0500",
+	    "display_name":"Osc1 Unison Voices",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A OSC2":{
+	"type":"0501",
+	"A Osc 2 Type":{
+	    "type":"0500",
+	    "display_name":"Osc2 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Keytrack":{
+	    "type":"0500",
+	    "display_name":"Osc2 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Retrigger":{
+	    "type":"0500",
+	    "display_name":"Osc2 Retrigger",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Octave":{
+	    "type":"0500",
+	    "display_name":"Osc2 Octave",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Pitch":{
+	    "type":"0500",
+	    "display_name":"Osc2 Pitch",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Shape":{
+	    "type":"0500",
+	    "display_name":"Osc2 Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Width 1":{
+	    "type":"0500",
+	    "display_name":"Osc2 Width1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Width 2":{
+	    "type":"0500",
+	    "display_name":"Osc2 Width2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Sub Mix":{
+	    "type":"0500",
+	    "display_name":"Osc2 Sub Mix",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Sync":{
+	    "type":"0500",
+	    "display_name":"Osc2 Sync",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Unison Detune":{
+	    "type":"0500",
+	    "display_name":"Osc2 Unison Detune",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Unison Voices":{
+	    "type":"0500",
+	    "display_name":"Osc2 Unison Voices",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A OSC3":{
+	"type":"0501",
+	"A Osc 3 Type":{
+	    "type":"0500",
+	    "display_name":"Osc3 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Keytrack":{
+	    "type":"0500",
+	    "display_name":"Osc3 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Retrigger":{
+	    "type":"0500",
+	    "display_name":"Osc3 Retrigger",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Octave":{
+	    "type":"0500",
+	    "display_name":"Osc3 Octave",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Pitch":{
+	    "type":"0500",
+	    "display_name":"Osc3 Pitch",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Shape":{
+	    "type":"0500",
+	    "display_name":"Osc3 Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Width 1":{
+	    "type":"0500",
+	    "display_name":"Osc3 Width1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Width 2":{
+	    "type":"0500",
+	    "display_name":"Osc3 Width2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Sub Mix":{
+	    "type":"0500",
+	    "display_name":"Osc3 Sub Mix",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Sync":{
+	    "type":"0500",
+	    "display_name":"Osc3 Sync",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Unison Detune":{
+	    "type":"0500",
+	    "display_name":"Osc3 Unison Detune",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Unison Voices":{
+	    "type":"0500",
+	    "display_name":"Osc3 Unison Voices",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A MIXER":{
+	"type":"0501",
+	"A Osc 1 Volume":{
+	    "type":"0500",
+	    "display_name":"Osc1 Volume",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Mute":{
+	    "type":"0500",
+	    "display_name":"Osc1 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Solo":{
+	    "type":"0500",
+	    "display_name":"Osc1 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 1 Route":{
+	    "type":"0500",
+	    "display_name":"Osc1 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Volume":{
+	    "type":"0500",
+	    "display_name":"Osc2 Volume",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Mute":{
+	    "type":"0500",
+	    "display_name":"Osc2 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Solo":{
+	    "type":"0500",
+	    "display_name":"Osc2 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 2 Route":{
+	    "type":"0500",
+	    "display_name":"Osc2 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Volume":{
+	    "type":"0500",
+	    "display_name":"Osc3 Volume",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Mute":{
+	    "type":"0500",
+	    "display_name":"Osc3 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Solo":{
+	    "type":"0500",
+	    "display_name":"Osc3 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Osc 3 Route":{
+	    "type":"0500",
+	    "display_name":"Osc3 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Ring Modulation 1x2 Volume":{
+	    "type":"0500",
+	    "display_name":"Ring Mod 1x2 Vol",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Ring Modulation 1x2 Mute":{
+	    "type":"0500",
+	    "display_name":"Ring Mod 1x2 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Ring Modulation 1x2 Solo":{
+	    "type":"0500",
+	    "display_name":"Ring Mod 1x2 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Ring Modulation 1x2 Route":{
+	    "type":"0500",
+	    "display_name":"Ring Mod 1x2 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Ring Modulation 2x3 Volume":{
+	    "type":"0500",
+	    "display_name":"Ring Mod 2x3 Vol",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Ring Modulation 2x3 Mute":{
+	    "type":"0500",
+	    "display_name":"Ring Mod 2x3 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Ring Modulation 2x3 Solo":{
+	    "type":"0500",
+	    "display_name":"Ring Mod 2x3 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Ring Modulation 2x3 Route":{
+	    "type":"0500",
+	    "display_name":"Ring Mod 2x3 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Noise Volume":{
+	    "type":"0500",
+	    "display_name":"Noise Vol",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Noise Mute":{
+	    "type":"0500",
+	    "display_name":"Noise Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Noise Solo":{
+	    "type":"0500",
+	    "display_name":"Noise Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Noise Route":{
+	    "type":"0500",
+	    "display_name":"Noise Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Pre-Filter Gain":{
+	    "type":"0500",
+	    "display_name":"Pre-Filter Gain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A FILTER GENERAL":{
+	"type":"0501",
+	"A Filter Configuration":{
+	    "type":"0500",
+	    "display_name":"Filter Config",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Feedback":{
+	    "type":"0500",
+	    "display_name":"Feedback",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter Balance":{
+	    "type":"0500",
+	    "display_name":"Filter Balance",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Keytrack Root Key":{
+	    "type":"0500",
+	    "display_name":"Keytrack Root Key",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Highpass":{
+	    "type":"0500",
+	    "display_name":"Highpass",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Waveshaper Type":{
+	    "type":"0500",
+	    "display_name":"Waveshaper Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Waveshaper Drive":{
+	    "type":"0500",
+	    "display_name":"Waveshaper Drive",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 2 Offset Mode":{
+	    "type":"0500",
+	    "display_name":"Filter 2 Offset Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Link Resonance":{
+	    "type":"0500",
+	    "display_name":"Link Res",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A FILTER1":{
+	"type":"0501",
+	"A Filter 1 Type":{
+	    "type":"0500",
+	    "display_name":"Filter1 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 1 Subtype":{
+	    "type":"0500",
+	    "display_name":"Filter1 Subtype",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 1 Cutoff":{
+	    "type":"0500",
+	    "display_name":"Filter1 Cutoff",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 1 Resonance":{
+	    "type":"0500",
+	    "display_name":"Filter1 Res",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 1 FEG Mod Amount":{
+	    "type":"0500",
+	    "display_name":"Filter1 FEG Mod Amount",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 1 Keytrack":{
+	    "type":"0500",
+	    "display_name":"Filter1 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A FILTER2":{
+	"type":"0501",	
+	"A Filter 2 Type":{
+	    "type":"0500",
+	    "display_name":"Filter2 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 2 Subtype":{
+	    "type":"0500",
+	    "display_name":"Filter2 Subtype",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 2 Cutoff":{
+	    "type":"0500",
+	    "display_name":"Filter2 Cutoff",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 2 Resonance":{
+	    "type":"0500",
+	    "display_name":"Filter2 Res",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 2 FEG Mod Amount":{
+	    "type":"0500",
+	    "display_name":"Filter2 FEG Mod Amount",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter 2 Keytrack":{
+	    "type":"0500",
+	    "display_name":"Filter2 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A AMP EG":{
+	"type":"0501",
+	"A VCA Gain":{
+	    "type":"0500",
+	    "display_name":"VCA Gain",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"A Velocity > VCA Gain":{
+	    "type":"0500",
+	    "display_name":"Velocity > VCA Gain",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"A Amp EG Attack":{
+	    "type":"0500",
+	    "display_name":"Amp EG Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Amp EG Attack Shape":{
+	    "type":"0500",
+	    "display_name":"Amp EG Attack Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Amp EG Decay":{
+	    "type":"0500",
+	    "display_name":"Amp EG Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Amp EG Decay Shape":{
+	    "type":"0500",
+	    "display_name":"Amp EG Decay Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Amp EG Sustain":{
+	    "type":"0500",
+	    "display_name":"Amp EG Sustain",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"A Amp EG Release":{
+	    "type":"0500",
+	    "display_name":"Amp EG Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Amp EG Release Shape":{
+	    "type":"0500",
+	    "display_name":"Amp EG Release Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Amp EG Envelope Mode":{
+	    "type":"0500",
+	    "display_name":"Amp EG Envelope Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A FILTER EG":{
+	"type":"0501",
+	"A Filter EG Attack":{
+	    "type":"0500",
+	    "display_name":"Filter EG Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter EG Attack Shape":{
+	    "type":"0500",
+	    "display_name":"Filter EG Attack Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter EG Decay":{
+	    "type":"0500",
+	    "display_name":"Filter EG Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter EG Decay Shape":{
+	    "type":"0500",
+	    "display_name":"Filter EG Decay Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter EG Sustain":{
+	    "type":"0500",
+	    "display_name":"Filter EG Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter EG Release":{
+	    "type":"0500",
+	    "display_name":"Filter EG Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter EG Release Shape":{
+	    "type":"0500",
+	    "display_name":"Filter EG Release Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Filter EG Envelope Mode":{
+	    "type":"0500",
+	    "display_name":"Filter EG Envelope Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A LFO1":{
+	"type":"0501",
+	"A LFO 1 Type":{
+	    "type":"0500",
+	    "display_name":"LFO1 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Rate":{
+	    "type":"0500",
+	    "display_name":"LFO1 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Phase":{
+	    "type":"0500",
+	    "display_name":"LFO1 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Amplitude":{
+	    "type":"0500",
+	    "display_name":"LFO1 Amp",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Deform":{
+	    "type":"0500",
+	    "display_name":"LFO1 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"LFO1 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Unipolar":{
+	    "type":"0500",
+	    "display_name":"LFO1 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Delay":{
+	    "type":"0500",
+	    "display_name":"LFO1 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Attack":{
+	    "type":"0500",
+	    "display_name":"LFO1 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Hold":{
+	    "type":"0500",
+	    "display_name":"LFO1 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Decay":{
+	    "type":"0500",
+	    "display_name":"LFO1 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Sustain":{
+	    "type":"0500",
+	    "display_name":"LFO1 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 1 Release":{
+	    "type":"0500",
+	    "display_name":"LFO1 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A LFO2":{
+	"type":"0501",
+	"A LFO 2 Type":{
+	    "type":"0500",
+	    "display_name":"LFO2 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Rate":{
+	    "type":"0500",
+	    "display_name":"LFO2 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Phase":{
+	    "type":"0500",
+	    "display_name":"LFO2 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Amplitude":{
+	    "type":"0500",
+	    "display_name":"LFO2 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Deform":{
+	    "type":"0500",
+	    "display_name":"LFO2 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"LFO2 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Unipolar":{
+	    "type":"0500",
+	    "display_name":"LFO2 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Delay":{
+	    "type":"0500",
+	    "display_name":"LFO2 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Attack":{
+	    "type":"0500",
+	    "display_name":"LFO2 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Hold":{
+	    "type":"0500",
+	    "display_name":"LFO2 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Decay":{
+	    "type":"0500",
+	    "display_name":"LFO2 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Sustain":{
+	    "type":"0500",
+	    "display_name":"LFO2 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 2 Release":{
+	    "type":"0500",
+	    "display_name":"LFO2 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A LFO3":{
+	"type":"0501",
+	"A LFO 3 Type":{
+	    "type":"0500",
+	    "display_name":"LFO3 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Rate":{
+	    "type":"0500",
+	    "display_name":"LFO3 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Phase":{
+	    "type":"0500",
+	    "display_name":"LFO3 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Amplitude":{
+	    "type":"0500",
+	    "display_name":"LFO3 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Deform":{
+	    "type":"0500",
+	    "display_name":"LFO3 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"LFO3 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Unipolar":{
+	    "type":"0500",
+	    "display_name":"LFO3 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Delay":{
+	    "type":"0500",
+	    "display_name":"LFO3 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Attack":{
+	    "type":"0500",
+	    "display_name":"LFO3 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Hold":{
+	    "type":"0500",
+	    "display_name":"LFO3 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Decay":{
+	    "type":"0500",
+	    "display_name":"LFO3 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Sustain":{
+	    "type":"0500",
+	    "display_name":"LFO3 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 3 Release":{
+	    "type":"0500",
+	    "display_name":"LFO3 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}	
+    },
+    "A LFO4":{
+	"type":"0501",
+	"A LFO 4 Type":{
+	    "type":"0500",
+	    "display_name":"LFO4 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Rate":{
+	    "type":"0500",
+	    "display_name":"LFO4 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Phase":{
+	    "type":"0500",
+	    "display_name":"LFO4 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Amplitude":{
+	    "type":"0500",
+	    "display_name":"LFO4 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Deform":{
+	    "type":"0500",
+	    "display_name":"LFO4 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"LFO4 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Unipolar":{
+	    "type":"0500",
+	    "display_name":"LFO4 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Delay":{
+	    "type":"0500",
+	    "display_name":"LFO4 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Attack":{
+	    "type":"0500",
+	    "display_name":"LFO4 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Hold":{
+	    "type":"0500",
+	    "display_name":"LFO4 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Decay":{
+	    "type":"0500",
+	    "display_name":"LFO4 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Sustain":{
+	    "type":"0500",
+	    "display_name":"LFO4 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 4 Release":{
+	    "type":"0500",
+	    "display_name":"LFO4 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A LFO5":{
+	"type":"0501",
+	"A LFO 5 Type":{
+	    "type":"0500",
+	    "display_name":"LFO5 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Rate":{
+	    "type":"0500",
+	    "display_name":"LFO5 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Phase":{
+	    "type":"0500",
+	    "display_name":"LFO5 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Amplitude":{
+	    "type":"0500",
+	    "display_name":"LFO5 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Deform":{
+	    "type":"0500",
+	    "display_name":"LFO5 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"LFO5 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Unipolar":{
+	    "type":"0500",
+	    "display_name":"LFO5 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Delay":{
+	    "type":"0500",
+	    "display_name":"LFO5 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Attack":{
+	    "type":"0500",
+	    "display_name":"LFO5 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Hold":{
+	    "type":"0500",
+	    "display_name":"LFO5 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Decay":{
+	    "type":"0500",
+	    "display_name":"LFO5 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Sustain":{
+	    "type":"0500",
+	    "display_name":"LFO5 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 5 Release":{
+	    "type":"0500",
+	    "display_name":"LFO5 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+    },
+    "A LFO6":{
+	"type":"0501",
+	"A LFO 6 Type":{
+	    "type":"0500",
+	    "display_name":"LFO6 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Rate":{
+	    "type":"0500",
+	    "display_name":"LFO6 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Phase":{
+	    "type":"0500",
+	    "display_name":"LFO6 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Amplitude":{
+	    "type":"0500",
+	    "display_name":"LFO6 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Deform":{
+	    "type":"0500",
+	    "display_name":"LFO6 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"LFO6 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Unipolar":{
+	    "type":"0500",
+	    "display_name":"LFO6 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Delay":{
+	    "type":"0500",
+	    "display_name":"LFO6 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Attack":{
+	    "type":"0500",
+	    "display_name":"LFO6 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Hold":{
+	    "type":"0500",
+	    "display_name":"LFO6 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Decay":{
+	    "type":"0500",
+	    "display_name":"LFO6 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Sustain":{
+	    "type":"0500",
+	    "display_name":"LFO6 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A LFO 6 Release":{
+	    "type":"0500",
+	    "display_name":"LFO6 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A SCENE LFO1":{
+	"type":"0501",
+	"A Scene LFO 1 Type":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Rate":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Phase":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Amplitude":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Deform":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Unipolar":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Delay":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Attack":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Hold":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Decay":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Sustain":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 1 Release":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 1 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A SCENE LFO2":{
+	"type":"0501",
+	"A Scene LFO 2 Type":{
+	    "type":"0500",
+	    "display_name":"Scene LFO 2 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Rate":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Phase":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Amplitude":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Deform":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Unipolar":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Delay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Attack":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Hold":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Decay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Sustain":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 2 Release":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 2 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A SCENE LFO3":{
+	"type":"0501",
+	"A Scene LFO 3 Type":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Rate":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Phase":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Amplitude":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Deform":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Unipolar":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Delay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Attack":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Hold":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Decay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Sustain":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 3 Release":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 3 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A SCENE LFO4":{
+	"type":"0501",
+	"A Scene LFO 4 Type":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Rate":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Phase":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Amplitude":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Deform":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Unipolar":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Delay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Attack":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Hold":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Decay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Sustain":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 4 Release":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 4 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A SCENE LFO5":{
+	"type":"0501",
+	"A Scene LFO 5 Type":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Rate":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Phase":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Amplitude":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Deform":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Unipolar":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Delay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Attack":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Hold":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Decay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Sustain":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 5 Release":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 5 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "A SCENE LFO6":{
+	"type":"0501",
+	"A Scene LFO 6 Type":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Rate":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Phase":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Amplitude":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Deform":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Unipolar":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Delay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Attack":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Hold":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Decay":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Sustain":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"A Scene LFO 6 Release":{
+	    "type":"0500",
+	    "display_name":"A Scene LFO 6 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B MAIN":{
+	"type":"0501",
+	"B Volume":{
+	    "type":"0500",
+	    "display_name":"B Volume",
+	    "default_val":"0.8",
+	    "increment":"0.01"
+	},
+	"B Pan":{
+	    "type":"0500",
+	    "display_name":"B Pan",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"B Width":{
+	    "type":"0500",
+	    "display_name":"B Width",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"B Send FX 1 Level":{
+	    "type":"0500",
+	    "display_name":"B Send FX 1 Level",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Send FX 2 Level":{
+	    "type":"0500",
+	    "display_name":"B Send FX 2 Level",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Send FX 3 Level":{
+	    "type":"0500",
+	    "display_name":"B Send FX 3 Level",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Send FX 4 Level":{
+	    "type":"0500",
+	    "display_name":"B Send FX 4 Level",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Play Mode":{
+	    "type":"0500",
+	    "display_name":"B Play Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Pitch Bend Up Range":{
+	    "type":"0500",
+	    "display_name":"B Pitch Bend Up Range",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Pitch Bend Down Range":{
+	    "type":"0500",
+	    "display_name":"B Pitch Bend Down Range",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc Drift":{
+	    "type":"0500",
+	    "display_name":"B Osc Drift",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Noise Color":{
+	    "type":"0500",
+	    "display_name":"B Noise Color",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Octave":{
+	    "type":"0500",
+	    "display_name":"B Octave",
+	    "default_val":"0.5",
+	    "increment":"0.1"
+	},
+	"B Pitch":{
+	    "type":"0500",
+	    "display_name":"B Pitch",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"B Portamento":{
+	    "type":"0500",
+	    "display_name":"B Portamento",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B FM":{
+	"type":"0501",
+	"B FM Routing":{
+	    "type":"0500",
+	    "display_name":"B FM Routing",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B FM Depth":{
+	    "type":"0500",
+	    "display_name":"B FM Depth",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B OSC1":{
+	"type":"0501",
+	"B Osc 1 Type":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Keytrack":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Retrigger":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Retrigger",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Octave":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Octave",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Pitch":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Pitch",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Shape":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Width 1":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Width 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Width 2":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Width 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Sub Mix":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Sub Mix",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Sync":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Sync",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Unison Detune":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Unison Detune",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Unison Voices":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Unison Voices",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B OSC2":{
+	"type":"0501",
+	"B Osc 2 Type":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Keytrack":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Retrigger":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Retrigger",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Octave":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Octave",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Pitch":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Pitch",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Shape":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Width 1":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Width 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Width 2":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Width 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Sub Mix":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Sub Mix",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Sync":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Sync",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Unison Detune":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Unison Detune",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Unison Voices":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Unison Voices",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B OSC3":{
+	"type":"0501",
+	"B Osc 3 Type":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Keytrack":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Retrigger":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Retrigger",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Octave":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Octave",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Pitch":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Pitch",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Shape":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Width 1":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Width 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Width 2":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Width 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Sub Mix":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Sub Mix",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Sync":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Sync",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Unison Detune":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Unison Detune",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Unison Voices":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Unison Voices",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B MIXER":{
+	"type":"0501",
+	"B Osc 1 Volume":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Volume",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Mute":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Solo":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 1 Route":{
+	    "type":"0500",
+	    "display_name":"B Osc 1 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Volume":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Volume",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Mute":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Solo":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 2 Route":{
+	    "type":"0500",
+	    "display_name":"B Osc 2 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Volume":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Volume",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Mute":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Solo":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Osc 3 Route":{
+	    "type":"0500",
+	    "display_name":"B Osc 3 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Ring Modulation 1x2 Volume":{
+	    "type":"0500",
+	    "display_name":"B Ring Modulation 1x2 Volume",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Ring Modulation 1x2 Mute":{
+	    "type":"0500",
+	    "display_name":"B Ring Modulation 1x2 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Ring Modulation 1x2 Solo":{
+	    "type":"0500",
+	    "display_name":"B Ring Modulation 1x2 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Ring Modulation 1x2 Route":{
+	    "type":"0500",
+	    "display_name":"B Ring Modulation 1x2 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Ring Modulation 2x3 Volume":{
+	    "type":"0500",
+	    "display_name":"B Ring Modulation 2x3 Volume",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Ring Modulation 2x3 Mute":{
+	    "type":"0500",
+	    "display_name":"B Ring Modulation 2x3 Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Ring Modulation 2x3 Solo":{
+	    "type":"0500",
+	    "display_name":"B Ring Modulation 2x3 Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Ring Modulation 2x3 Route":{
+	    "type":"0500",
+	    "display_name":"B Ring Modulation 2x3 Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Noise Volume":{
+	    "type":"0500",
+	    "display_name":"B Noise Volume",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Noise Mute":{
+	    "type":"0500",
+	    "display_name":"B Noise Mute",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Noise Solo":{
+	    "type":"0500",
+	    "display_name":"B Noise Solo",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Noise Route":{
+	    "type":"0500",
+	    "display_name":"B Noise Route",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Pre-Filter Gain":{
+	    "type":"0500",
+	    "display_name":"B Pre-Filter Gain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B FILTER GENERAL":{
+	"type":"0501",
+	"B Filter Configuration":{
+	    "type":"0500",
+	    "display_name":"B Filter Configuration",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Feedback":{
+	    "type":"0500",
+	    "display_name":"B Feedback",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter Balance":{
+	    "type":"0500",
+	    "display_name":"B Filter Balance",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Keytrack Root Key":{
+	    "type":"0500",
+	    "display_name":"B Keytrack Root Key",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Highpass":{
+	    "type":"0500",
+	    "display_name":"B Highpass",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Waveshaper Type":{
+	    "type":"0500",
+	    "display_name":"B Waveshaper Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Waveshaper Drive":{
+	    "type":"0500",
+	    "display_name":"B Waveshaper Drive",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 2 Offset Mode":{
+	    "type":"0500",
+	    "display_name":"B Filter 2 Offset Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Link Resonance":{
+	    "type":"0500",
+	    "display_name":"B Link Resonance",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B FILTER1":{
+	"type":"0501",
+	"B Filter 1 Type":{
+	    "type":"0500",
+	    "display_name":"B Filter 1 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 1 Subtype":{
+	    "type":"0500",
+	    "display_name":"B Filter 1 Subtype",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 1 Cutoff":{
+	    "type":"0500",
+	    "display_name":"B Filter 1 Cutoff",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 1 Resonance":{
+	    "type":"0500",
+	    "display_name":"B Filter 1 Resonance",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 1 FEG Mod Amount":{
+	    "type":"0500",
+	    "display_name":"B Filter 1 FEG Mod Amount",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 1 Keytrack":{
+	    "type":"0500",
+	    "display_name":"B Filter 1 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B FILTER2":{
+	"type":"0501",
+	"B Filter 2 Type":{
+	    "type":"0500",
+	    "display_name":"B Filter 2 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 2 Subtype":{
+	    "type":"0500",
+	    "display_name":"B Filter 2 Subtype",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 2 Cutoff":{
+	    "type":"0500",
+	    "display_name":"B Filter 2 Cutoff",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 2 Resonance":{
+	    "type":"0500",
+	    "display_name":"B Filter 2 Resonance",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 2 FEG Mod Amount":{
+	    "type":"0500",
+	    "display_name":"B Filter 2 FEG Mod Amount",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter 2 Keytrack":{
+	    "type":"0500",
+	    "display_name":"B Filter 2 Keytrack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}	
+    },
+    "B AMP EG":{
+	"type":"0501",
+	"B VCA Gain":{
+	    "type":"0500",
+	    "display_name":"B VCA Gain",
+	    "default_val":"0.5",
+	    "increment":"0.01"
+	},
+	"B Velocity > VCA Gain":{
+	    "type":"0500",
+	    "display_name":"B Velocity > VCA Gain",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"B Amp EG Attack":{
+	    "type":"0500",
+	    "display_name":"B Amp EG Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Amp EG Attack Shape":{
+	    "type":"0500",
+	    "display_name":"B Amp EG Attack Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Amp EG Decay":{
+	    "type":"0500",
+	    "display_name":"B Amp EG Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Amp EG Decay Shape":{
+	    "type":"0500",
+	    "display_name":"B Amp EG Decay Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Amp EG Sustain":{
+	    "type":"0500",
+	    "display_name":"B Amp EG Sustain",
+	    "default_val":"1",
+	    "increment":"0.01"
+	},
+	"B Amp EG Release":{
+	    "type":"0500",
+	    "display_name":"B Amp EG Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Amp EG Release Shape":{
+	    "type":"0500",
+	    "display_name":"B Amp EG Release Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Amp EG Envelope Mode":{
+	    "type":"0500",
+	    "display_name":"B Amp EG Envelope Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B FILTER EG":{
+	"type":"0501",
+	"B Filter EG Attack":{
+	    "type":"0500",
+	    "display_name":"B Filter EG Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter EG Attack Shape":{
+	    "type":"0500",
+	    "display_name":"B Filter EG Attack Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter EG Decay":{
+	    "type":"0500",
+	    "display_name":"B Filter EG Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter EG Decay Shape":{
+	    "type":"0500",
+	    "display_name":"B Filter EG Decay Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter EG Sustain":{
+	    "type":"0500",
+	    "display_name":"B Filter EG Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter EG Release":{
+	    "type":"0500",
+	    "display_name":"B Filter EG Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter EG Release Shape":{
+	    "type":"0500",
+	    "display_name":"B Filter EG Release Shape",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Filter EG Envelope Mode":{
+	    "type":"0500",
+	    "display_name":"B Filter EG Envelope Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B LFO1":{
+	"type":"0501",
+	"B LFO 1 Type":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Rate":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Phase":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Deform":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Delay":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Attack":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Hold":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Decay":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Sustain":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 1 Release":{
+	    "type":"0500",
+	    "display_name":"B LFO 1 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B LFO2":{
+	"type":"0501",
+	"B LFO 2 Type":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Rate":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Phase":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Deform":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Delay":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Attack":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Hold":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Decay":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Sustain":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 2 Release":{
+	    "type":"0500",
+	    "display_name":"B LFO 2 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B LFO3":{
+	"type":"0501",
+	"B LFO 3 Type":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Rate":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Phase":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Deform":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Delay":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Attack":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Hold":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Decay":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Sustain":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 3 Release":{
+	    "type":"0500",
+	    "display_name":"B LFO 3 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B LFO4":{
+	"type":"0501",
+	"B LFO 4 Type":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Rate":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Phase":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Deform":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Delay":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Attack":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Hold":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Decay":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Sustain":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 4 Release":{
+	    "type":"0500",
+	    "display_name":"B LFO 4 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B LFO5":{
+	"type":"0501",
+	"B LFO 5 Type":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Rate":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Phase":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Deform":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Delay":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Attack":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Hold":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Decay":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Sustain":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 5 Release":{
+	    "type":"0500",
+	    "display_name":"B LFO 5 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B LFO6":{
+	"type":"0501",
+	"B LFO 6 Type":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Rate":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Phase":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Deform":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Delay":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Attack":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Hold":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Decay":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Sustain":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B LFO 6 Release":{
+	    "type":"0500",
+	    "display_name":"B LFO 6 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B SCENE LFO1":{
+	"type":"0501",
+	"B Scene LFO 1 Type":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Rate":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Phase":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Deform":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Delay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Attack":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Hold":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Decay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Sustain":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 1 Release":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 1 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B SCENE LFO2":{
+	"type":"0501",
+	"B Scene LFO 2 Type":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Rate":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Phase":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Deform":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Delay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Attack":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Hold":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Decay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Sustain":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 2 Release":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 2 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B SCENE LFO3":{
+	"type":"0501",
+	"B Scene LFO 3 Type":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Rate":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Phase":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Deform":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Delay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Attack":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Hold":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Decay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Sustain":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 3 Release":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 3 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B SCENE LFO4":{
+	"type":"0501",
+	"B Scene LFO 4 Type":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Rate":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Phase":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Deform":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Delay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Attack":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Hold":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Decay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Sustain":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 4 Release":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 4 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B SCENE LFO5":{
+	"type":"0501",
+	"B Scene LFO 5 Type":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Rate":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Phase":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Deform":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Delay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Attack":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Hold":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Decay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Sustain":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 5 Release":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 5 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "B SCENE LFO6":{
+	"type":"0501",
+	"B Scene LFO 6 Type":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Rate":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Rate",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Phase":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Phase",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Amplitude":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Amplitude",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Deform":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Deform",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Trigger Mode":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Trigger Mode",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Unipolar":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Unipolar",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Delay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Delay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Attack":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Attack",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Hold":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Hold",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Decay":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Decay",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Sustain":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Sustain",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"B Scene LFO 6 Release":{
+	    "type":"0500",
+	    "display_name":"B Scene LFO 6 Release",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "MACROS":{
+	"type":"0501",
+	"M1: -":{
+	    "type":"0500",
+	    "display_name":"M1: -",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"M2: -":{
+	    "type":"0500",
+	    "display_name":"M2: -",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"M3: -":{
+	    "type":"0500",
+	    "display_name":"M3: -",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"M4: -":{
+	    "type":"0500",
+	    "display_name":"M4: -",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"M5: -":{
+	    "type":"0500",
+	    "display_name":"M5: -",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"M6: -":{
+	    "type":"0500",
+	    "display_name":"M6: -",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"M7: -":{
+	    "type":"0500",
+	    "display_name":"M7: -",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"M8: -":{
+	    "type":"0500",
+	    "display_name":"M8: -",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX A1":{
+	"type":"0501",
+	"FX A1 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX A1 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A1 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX A1 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX A2":{
+	"type":"0501",
+	"FX A2 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX A2 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A2 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX A2 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+       "FX A3":{
+	"type":"0501",
+	"FX A3 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX A3 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A3 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX A3 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX A4":{
+	"type":"0501",
+	"FX A4 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX A4 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX A4 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX A4 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX B1":{
+	"type":"0501",
+	"FX B1 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX B1 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B1 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX B1 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX B2":{
+	"type":"0501",
+	"FX B2 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX B2 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B2 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX B2 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX B3":{
+	"type":"0501",
+	"FX B3 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX B3 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B3 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX B3 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX B4":{
+	"type":"0501",
+	"FX B4 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX B4 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX B4 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX B4 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX SENDS 1":{
+	"type":"0501",
+	"FX S1 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX S1 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S1 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX S1 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX SENDS 2":{
+	"type":"0501",
+	"FX S2 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX S2 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S2 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX S2 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX SENDS 3":{
+	"type":"0501",
+	"FX S3 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX S3 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S3 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX S3 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX SENDS 4":{
+	"type":"0501",
+	"FX S4 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX S4 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX S4 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX S4 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX G1":{
+	"type":"0501",
+	"FX G1 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX G1 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G1 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX G1 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX G2":{
+	"type":"0501",
+	"FX G2 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX G2 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G2 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX G2 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX G3":{
+	"type":"0501",
+	"FX G3 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX G3 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G3 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX G3 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    },
+    "FX G4":{
+	"type":"0501",
+	"FX G4 FX Type":{
+	    "type":"0500",
+	    "display_name":"FX G4 FX Type",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 1":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 1",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 2":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 2",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 3":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 3",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 4":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 4",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 5":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 5",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 6":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 6",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 7":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 7",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 8":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 8",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 9":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 9",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 10":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 10",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 11":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 11",
+	    "default_val":"0",
+	    "increment":"0.01"
+	},
+	"FX G4 Param 12":{
+	    "type":"0500",
+	    "display_name":"FX G4 Param 12",
+	    "default_val":"0",
+	    "increment":"0.01"
+	}
+    }
+}

@@ -26,7 +26,7 @@
 #define MAX_DISPLAY_TEXT 100
 //maximum string length for the display of the parameter values,
 //should be short, because its hard to read values when they scroll, so better to fit in a window
-#define MAX_VALUE_TEXT 8
+#define MAX_VALUE_TEXT 16
 
 //max windows that can fit in a window, after that scroll
 //can change the amount in UI_CONF file
