@@ -26,8 +26,20 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate, plug_status_t* 
 char* plug_return_plugin_name(PLUG_INFO* plug_data, int plug_id);
 //get the list of the plugins in a string array format, user needs to free that array
 char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size);
-//get the list of presets belonging to the plugin
-char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx, unsigned int* total_presets);
+
+//presets functions --------------------------------------------------
+//get the preset struct for the plugin (right now it is simply a char* of the path)
+void* plug_plugin_presets_iterate(PLUG_INFO* plug_data, unsigned int idx, uint32_t iter);
+//clean the preset struct
+void plug_plugin_preset_clean(PLUG_INFO* plug_data, void* preset_info);
+//get the short name of the preset (for now it is simply the path of the file)
+int plug_plugin_preset_short_name(PLUG_INFO* plug_data, void* preset_info, char* return_name, uint32_t name_len);
+//get the path of the preset, when this is fed to the plug_load_preset the preset will be loaded
+int plug_plugin_preset_path(PLUG_INFO* plug_data, void* preset_info, char* return_path, uint32_t path_len);
+//load a plugin preset
+int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* preset_name);
+//--------------------------------------------------
+
 //read the main-thread audio-thread comm messages and launch apropriate functions (stop, start processes etc.)
 int plug_read_rt_to_ui_messages(PLUG_INFO* plug_data);
 int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data);
@@ -35,8 +47,6 @@ int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data);
 //if id is not -1 a plugin will be created in that plugin index, if that index is already occupied, the previous
 //plugin will be cleared
 int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const int id);
-//load a plugin preset
-int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* preset_name);
 //a callback to send to lilv_state_restore to set the control ports directly without circle buffer
 static void plug_set_value_direct(const char* port_symbol,
 				  void* data,

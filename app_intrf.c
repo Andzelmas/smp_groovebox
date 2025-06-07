@@ -1305,29 +1305,6 @@ static void cx_enter_item_callback(APP_INTRF* app_intrf, CX* self){
 	    cx_init_cx_type(app_intrf, self->parent->parent->name, "Plug", plug_type,
 			    (const char*[2]){f_path, "1"}, (const char*[2]){"plug_path", "init"}, 2);
 	}
-	/*
-	if(cx_addList->uchar_val == Load_plugin_preset_purp){
-	    //load the plugin preset
-	    if(self->parent->parent){
-		if((self->parent->parent->type & 0xff00) == Plugin_cx_e){
-		    CX_PLUGIN* cx_plug = (CX_PLUGIN*)self->parent->parent;
-		    unsigned int plugin_type = Context_type_Plugins;
-		    if(self->parent->parent->type == (Plugin_cx_e | Plugin_Clap_cx_st))
-			plugin_type = Context_type_Clap_Plugins;
-		    int load_preset = app_plug_load_preset(app_intrf->app_data, f_path, plugin_type, cx_plug->id);
-		    if(load_preset == 1){
-			//copy the preset name to preset_path of the plugin
-			if(cx_plug->preset_path)free(cx_plug->preset_path);
-			cx_plug->preset_path = (char*)malloc(sizeof(char)*(strlen(f_path)+1));
-			if(cx_plug->preset_path){
-			    strcpy(cx_plug->preset_path, f_path);
-			}
-			log_append_logfile("Loaded plugin %s preset\n", cx_plug->preset_path);
-		    }
-		}
-	    }
-	}
-	*/
 	//if its a button to load a song or a preset
 	if(cx_addList->uchar_val == Load_purp){
 	    if((self->parent->parent->type & 0xff00) == Main_cx_e){
@@ -1391,6 +1368,40 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 	//if list plugin strings
 	if(cx_addList->uchar_val == addPlugin_purp){
 	    names = app_plug_get_plugin_names(app_intrf->app_data, &plug_name_size, &plug_types);
+	    if(names){
+		for(int name_iter = 0; name_iter < plug_name_size; name_iter++){
+		    char* cur_name = names[name_iter];
+		    if(!cur_name)goto next_name;
+		    if(cx_find_with_str_val(cur_name, self->child, 1))goto next_name;
+		    char* disp_name = str_return_file_from_path(cur_name);
+		    //disp_name_with_iter is here so that the display name for the plugin or its preset item in the list is unique
+		    //this does not influence the actual name of the plugin, the name and what to load will be determined from cur_name
+		    char* disp_name_with_iter = NULL;
+		    //+10 next to disp_name because there can be a lot of plugins
+		    if(disp_name)disp_name_with_iter = (char*)malloc(sizeof(char)*(strlen(disp_name)+10));
+		    if(disp_name_with_iter){
+			sprintf(disp_name_with_iter, "%.1d_", name_iter);
+			strcat(disp_name_with_iter, disp_name);
+			if(disp_name)free(disp_name);		    
+		    }
+		    char plug_type[20];
+		    unsigned char plug_type_hex = 0;
+		    if(plug_types){
+			plug_type_hex = plug_types[name_iter];
+		    }
+		    snprintf(plug_type, 20, "%2x", plug_type_hex);
+		    if(disp_name_with_iter)cx_init_cx_type(app_intrf, self->name, disp_name_with_iter, (Button_cx_e | Item_cx_st),
+							   (const char*[2]){cur_name, plug_type}, (const char*[2]){"str_val", "uchar_val"}, 2);
+		    if(!disp_name_with_iter)cx_init_cx_type(app_intrf, self->name, cur_name, (Button_cx_e | Item_cx_st),
+							    (const char*[2]){cur_name, plug_type}, (const char*[2]){"str_val", "uchar_val"}, 2);
+		    if(disp_name_with_iter)free(disp_name_with_iter);
+		
+		next_name:
+		    if(cur_name)free(cur_name);		
+		}
+		free(names);
+		if(plug_types)free(plug_types);
+	    }    
 	}
 	//if list plugin preset names
 	else if(cx_addList->uchar_val == Load_plugin_preset_purp){
@@ -1400,7 +1411,6 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 		    unsigned int plug_id = plugin->id;
 		    unsigned char cx_type = Context_type_Plugins;
 		    if(self->parent->type == (Plugin_cx_e | Plugin_Clap_cx_st))cx_type = Context_type_Clap_Plugins;
-		    names = app_plug_presets_get(app_intrf->app_data, cx_type, plug_id, &plug_name_size);
 		    //create preset lists only if this list is empty, user will have to press cancel button and refresh the list again if it has been filled
 		    if(!self->child->sib){
 			uint32_t iter = 0;
@@ -1452,40 +1462,6 @@ static void cx_enter_AddList_callback(APP_INTRF *app_intrf, CX* self){
 		}
 	    }
 	}
-	if(names){
-	    for(int name_iter = 0; name_iter < plug_name_size; name_iter++){
-		char* cur_name = names[name_iter];
-		if(!cur_name)goto next_name;
-		if(cx_find_with_str_val(cur_name, self->child, 1))goto next_name;
-		char* disp_name = str_return_file_from_path(cur_name);
-		//disp_name_with_iter is here so that the display name for the plugin or its preset item in the list is unique
-		//this does not influence the actual name of the plugin, the name and what to load will be determined from cur_name
-		char* disp_name_with_iter = NULL;
-		//+10 next to disp_name because there can be a lot of plugins
-		if(disp_name)disp_name_with_iter = (char*)malloc(sizeof(char)*(strlen(disp_name)+10));
-		if(disp_name_with_iter){
-		    sprintf(disp_name_with_iter, "%.1d_", name_iter);
-		    strcat(disp_name_with_iter, disp_name);
-		    if(disp_name)free(disp_name);		    
-		}
-		char plug_type[20];
-		unsigned char plug_type_hex = 0;
-		if(plug_types){
-		    plug_type_hex = plug_types[name_iter];
-		}
-		snprintf(plug_type, 20, "%2x", plug_type_hex);
-		if(disp_name_with_iter)cx_init_cx_type(app_intrf, self->name, disp_name_with_iter, (Button_cx_e | Item_cx_st),
-						       (const char*[2]){cur_name, plug_type}, (const char*[2]){"str_val", "uchar_val"}, 2);
-		if(!disp_name_with_iter)cx_init_cx_type(app_intrf, self->name, cur_name, (Button_cx_e | Item_cx_st),
-						       (const char*[2]){cur_name, plug_type}, (const char*[2]){"str_val", "uchar_val"}, 2);
-		if(disp_name_with_iter)free(disp_name_with_iter);
-		
-	    next_name:
-		if(cur_name)free(cur_name);		
-	    }
-	    free(names);
-	    if(plug_types)free(plug_types);
-	}    
     }
     //If this AddList is a container for ports, create ports that are not yet created
     //and remove ports that are no longer on the audio client

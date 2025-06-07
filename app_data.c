@@ -232,32 +232,20 @@ fail_clean:
     if(clap_names)free(clap_names);
     return NULL;
 }
-//TODO this function should be used instead of the app_plug_presets_get
 void* app_plug_presets_iterate(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, uint32_t iter){
     if(!app_data)return NULL;
     if(cx_type == Context_type_Plugins)
-	return NULL;
+	return plug_plugin_presets_iterate(app_data->plug_data, idx, iter);
     if(cx_type == Context_type_Clap_Plugins){
 	return clap_plug_presets_iterate(app_data->clap_plug_data, idx, iter);
     }
-
     return NULL;
 }
-//TODO this function should not be used at all, app_plug_presets_iterate should be used
-char** app_plug_presets_get(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets){
-    if(!app_data)return NULL;
-    if(cx_type == Context_type_Plugins)
-	return plug_return_plugin_presets_names(app_data->plug_data, indx, total_presets);
-    if(cx_type == Context_type_Clap_Plugins){
-	return NULL;
-    }
 
-    return NULL;
-}
 int app_plug_plugin_presets_get_short_name(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* return_name, uint32_t name_len){
     if(!app_data)return -1;
     if(cx_type == Context_type_Plugins)
-	return -1;
+	return plug_plugin_preset_short_name(app_data->plug_data, preset_info, return_name, name_len);
     if(cx_type == Context_type_Clap_Plugins){
 	return clap_plug_presets_name_return(app_data->clap_plug_data, preset_info, return_name, name_len);
     }
@@ -267,7 +255,7 @@ int app_plug_plugin_presets_get_short_name(APP_INFO* app_data, unsigned char cx_
 int app_plug_plugin_presets_get_full_path(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* return_path, uint32_t path_len){
     if(!app_data)return -1;
     if(cx_type == Context_type_Plugins)
-	return -1;
+	return plug_plugin_preset_path(app_data->plug_data, preset_info, return_path, path_len);
     if(cx_type == Context_type_Clap_Plugins){
 	return clap_plug_presets_path_return(app_data->clap_plug_data, preset_info, return_path, path_len);
     }
@@ -277,6 +265,7 @@ int app_plug_plugin_presets_get_full_path(APP_INFO* app_data, unsigned char cx_t
 int app_plug_plugin_presets_categories_iterate(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* cur_category, uint32_t cat_len, uint32_t iter){
     if(!app_data)return -1;
     if(cx_type == Context_type_Plugins)
+	//TODO for now lv2 presets do not have categories
 	return -1;
     if(cx_type == Context_type_Clap_Plugins){
 	return clap_plug_presets_categories_iterate(app_data->clap_plug_data, preset_info, cur_category, cat_len, iter);
@@ -286,22 +275,15 @@ int app_plug_plugin_presets_categories_iterate(APP_INFO* app_data, unsigned char
 }
 void app_plug_presets_clean(APP_INFO* app_data, unsigned char cx_type, void* preset_info){
     if(!app_data)return;
-    if(cx_type == Context_type_Plugins)
+    if(cx_type == Context_type_Plugins){
+	plug_plugin_preset_clean(app_data->plug_data, preset_info);
 	return;
+    }
     if(cx_type == Context_type_Clap_Plugins){
 	clap_plug_presets_clean_preset(app_data->clap_plug_data, preset_info);
 	return;
     }
 }
-int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id){
-    if(!plugin_uri)return -1;
-    if(cx_type == Context_type_Plugins)
-	return plug_load_and_activate(app_data->plug_data, plugin_uri, id);
-    if(cx_type == Context_type_Clap_Plugins)
-	return clap_plug_load_and_activate(app_data->clap_plug_data, plugin_uri, id);
-    return -1;
-}
-
 int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, unsigned int cx_type, const int plug_id){
     if(!app_data)return -1;
     if(!preset_uri)return -1;
@@ -313,6 +295,15 @@ int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, unsigned in
 	return_val = clap_plug_preset_load_from_path(app_data->clap_plug_data, plug_id, preset_uri);
     
     return return_val;
+}
+
+int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id){
+    if(!plugin_uri)return -1;
+    if(cx_type == Context_type_Plugins)
+	return plug_load_and_activate(app_data->plug_data, plugin_uri, id);
+    if(cx_type == Context_type_Clap_Plugins)
+	return clap_plug_load_and_activate(app_data->clap_plug_data, plugin_uri, id);
+    return -1;
 }
 
 int app_smp_sample_init(APP_INFO* app_data, const char* samp_path, int in_id){

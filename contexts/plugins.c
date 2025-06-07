@@ -801,41 +801,122 @@ char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size){
     return name_array;
 }
 
-char** plug_return_plugin_presets_names(PLUG_INFO* plug_data, unsigned int indx, unsigned int* total_presets){
+void* plug_plugin_presets_iterate(PLUG_INFO* plug_data, unsigned int idx, uint32_t iter){
     if(!plug_data)return NULL;
-    if(!plug_data->plugins)return NULL;
-    PLUG_PLUG* plug = &(plug_data->plugins[indx]);
+    if(idx >= MAX_INSTANCES)return NULL;
+    PLUG_PLUG* plug = &(plug_data->plugins[idx]);
     if(!plug->plug)return NULL;
     LilvNodes* presets = lilv_plugin_get_related(plug->plug, plug_data->nodes.pset_Preset);
     if(!presets)return NULL;
     LilvIter* preset_iter = lilv_nodes_begin(presets);
-    char** preset_name_array = NULL;
-    unsigned int name_size = lilv_nodes_size(presets)+1;
-    if(name_size<=0)return NULL;
-    preset_name_array = (char**)malloc(sizeof(char*)*(name_size));
-    if(!preset_name_array)return NULL;
-    for(int i = 0; i<name_size; i++){
-	preset_name_array[i] = NULL;
-    }
 
-    unsigned int iter = 0;
+    void* ret_struct = NULL;
+    unsigned int loc_iter = 0;
     while(!lilv_nodes_is_end(presets, preset_iter)){
+	if(iter != loc_iter){
+	    loc_iter += 1;
+	    preset_iter = lilv_nodes_next(presets, preset_iter);
+	    continue;
+	}
 	const LilvNode* cur_node = lilv_nodes_get(presets, preset_iter);
 	const char* cur_name = lilv_node_as_string(cur_node);
 	if(cur_name){
 	    char* save_name = (char*)malloc(sizeof(char)*(strlen(cur_name)+1));
 	    if(save_name){
 		strcpy(save_name, cur_name);
-		preset_name_array[iter] = save_name;
+		ret_struct = (void*)save_name;
 	    }
 	}
-	
-	preset_iter = lilv_nodes_next(presets, preset_iter);
-	iter+=1;
+	break;
     }
-    *total_presets = iter;
-    lilv_nodes_free(presets);
-    return preset_name_array;
+    lilv_nodes_free(presets);       
+    return ret_struct;
+}
+void plug_plugin_preset_clean(PLUG_INFO* plug_data, void* preset_info){
+    if(!plug_data)return;
+    if(!preset_info)return;
+
+    char* cur_preset = (char*)preset_info;
+    if(!cur_preset)return;
+    free(cur_preset);
+}
+
+int plug_plugin_preset_short_name(PLUG_INFO* plug_data, void* preset_info, char* return_name, uint32_t name_len){
+    if(!plug_data)return -1;
+    if(!preset_info)return -1;
+    char* cur_preset = (char*)preset_info;
+    if(!cur_preset)return -1;
+    if(!return_name)return -1;
+    char* only_file_name = str_return_file_from_path(cur_preset);
+    if(!only_file_name){
+	snprintf(return_name, name_len, "%s", cur_preset);
+    }
+    if(only_file_name){
+	snprintf(return_name, name_len, "%s", only_file_name);
+	free(only_file_name);
+    }
+    return 0;
+}
+int plug_plugin_preset_path(PLUG_INFO* plug_data, void* preset_info, char* path_name, uint32_t path_len){
+    if(!plug_data)return -1;
+    if(!preset_info)return -1;
+    char* cur_preset = (char*)preset_info;
+    if(!cur_preset)return -1;
+    if(!path_name)return -1;
+
+    snprintf(path_name, path_len, "%s", cur_preset);
+    return 0;
+}
+
+int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* preset_name){
+    if(!plug_data)return -1;
+    if(!plug_data->plugins)return -1;
+    if(!preset_name)return -1;
+    
+    context_sub_wait_for_stop(plug_data->control_data, plug_id);
+    
+    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+    if(!plug->plug_instance)return -1;
+    if(plug->preset){
+	const LilvNode* old_preset = lilv_state_get_uri(plug->preset);
+	if(old_preset){
+	    lilv_world_unload_resource(plug_data->lv_world, old_preset);
+	}
+	lilv_state_free(plug->preset);
+	plug->preset = NULL;
+    }
+    LilvNode* new_preset = lilv_new_uri(plug_data->lv_world, preset_name);
+    int load_err = lilv_world_load_resource(plug_data->lv_world, new_preset);
+    if(load_err<0){
+	if(new_preset)free(new_preset);
+	return -1;
+    }
+    plug->preset = lilv_state_new_from_world(plug_data->lv_world, &(plug->map), new_preset);
+
+    //TODO we could check here if the plugin allows safe_restore, if yes we would not need to pause
+    //the rt process.
+    const LV2_Feature* state_features[9] = {
+	&(plug->features.map_feature),
+	&(plug->features.unmap_feature),
+	&(plug->features.make_path_feature),
+	&(plug->features.state_sched_feature),
+	&(plug->features.safe_restore_feature),
+	&(plug->features.log_feature),
+	&(plug->features.options_feature),
+	NULL};
+
+    //TODO here depending if the plug has safe_restore or does not we send different set port values functions
+    //one sets the values directly (if there is no safe_restore, and the rt process is paused), the other uses
+    //circle buffers and is the general function to set values on the plugin
+    //TODO for some reason plugin preset loading crashes when sending features to the livl_state_restore
+    //to find out which feature is not loaded correctly and crashes
+    lilv_state_restore(plug->preset, plug->plug_instance, plug_set_value_direct, plug, 0, NULL);
+    
+    if(new_preset)lilv_node_free(new_preset);
+    plug->request_update = true;
+    //launch the plugin again
+    context_sub_wait_for_start(plug_data->control_data, plug_id);
+    return 1;
 }
 
 int plug_read_ui_to_rt_messages(PLUG_INFO* plug_data){
@@ -1083,57 +1164,6 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     //wait for the plugin to start processing
     context_sub_wait_for_start(plug_data->control_data, plug->id);
     return return_val;
-}
-
-int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* preset_name){
-    if(!plug_data)return -1;
-    if(!plug_data->plugins)return -1;
-    if(!preset_name)return -1;
-    
-    context_sub_wait_for_stop(plug_data->control_data, plug_id);
-    
-    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
-    if(!plug->plug_instance)return -1;
-    if(plug->preset){
-	const LilvNode* old_preset = lilv_state_get_uri(plug->preset);
-	if(old_preset){
-	    lilv_world_unload_resource(plug_data->lv_world, old_preset);
-	}
-	lilv_state_free(plug->preset);
-	plug->preset = NULL;
-    }
-    LilvNode* new_preset = lilv_new_uri(plug_data->lv_world, preset_name);
-    int load_err = lilv_world_load_resource(plug_data->lv_world, new_preset);
-    if(load_err<0){
-	if(new_preset)free(new_preset);
-	return -1;
-    }
-    plug->preset = lilv_state_new_from_world(plug_data->lv_world, &(plug->map), new_preset);
-
-    //TODO we could check here if the plugin allows safe_restore, if yes we would not need to pause
-    //the rt process.
-    const LV2_Feature* state_features[9] = {
-	&(plug->features.map_feature),
-	&(plug->features.unmap_feature),
-	&(plug->features.make_path_feature),
-	&(plug->features.state_sched_feature),
-	&(plug->features.safe_restore_feature),
-	&(plug->features.log_feature),
-	&(plug->features.options_feature),
-	NULL};
-
-    //TODO here depending if the plug has safe_restore or does not we send different set port values functions
-    //one sets the values directly (if there is no safe_restore, and the rt process is paused), the other uses
-    //circle buffers and is the general function to set values on the plugin
-    //TODO for some reason plugin preset loading crashes when sending features to the livl_state_restore
-    //to find out which feature is not loaded correctly and crashes
-    lilv_state_restore(plug->preset, plug->plug_instance, plug_set_value_direct, plug, 0, NULL);
-    
-    if(new_preset)lilv_node_free(new_preset);
-    plug->request_update = true;
-    //launch the plugin again
-    context_sub_wait_for_start(plug_data->control_data, plug_id);
-    return 1;
 }
 
 static void plug_set_value_direct(const char* port_symbol,

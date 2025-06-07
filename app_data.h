@@ -36,6 +36,8 @@ typedef struct _app_info APP_INFO;
 APP_INFO* app_init(app_status_t *app_status);
 //return the available names for plugins on the system
 char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types);
+
+//plugin preset functions --------------------------------------------------
 //get the preset struct depending on the cx_type. This can be used to return the preset short name, path etc.
 void* app_plug_presets_iterate(APP_INFO* app_data, unsigned char cx_type, unsigned int idx, uint32_t iter);
 //return the preset short name
@@ -46,12 +48,12 @@ int app_plug_plugin_presets_get_full_path(APP_INFO* app_data, unsigned char cx_t
 int app_plug_plugin_presets_categories_iterate(APP_INFO* app_data, unsigned char cx_type, void* preset_info, char* cur_category, uint32_t cat_len, uint32_t iter);
 //clean the struct returned by the app_plug_presets_iterate function
 void app_plug_presets_clean(APP_INFO* app_data, unsigned char cx_type, void* preset_info);
-//return the available names of the presets available for the plugin
-char** app_plug_presets_get(APP_INFO* app_data, unsigned char cx_type, unsigned int indx, unsigned int* total_presets);
-//initialize a plugin on the plug_data context
-int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id);
 //load a new preset for the plugin
 int app_plug_load_preset(APP_INFO* app_data, const char* preset_uri, unsigned int cx_type, const int plug_id);
+//--------------------------------------------------
+
+//initialize a plugin on the plug_data context
+int app_plug_init_plugin(APP_INFO* app_data, const char* plugin_uri, unsigned char cx_type, const int id);
 //initialize a sample on sampler context
 int app_smp_sample_init(APP_INFO* app_data, const char* samp_path, int in_id);
 //call appropriate cx_type context function to set parameter value
