@@ -45,10 +45,16 @@ int main(){
                 break;
             }
 	    sel_cx = nav_ret_select_cx(app_intrf);
-	    printf("In %s\n", nav_get_cx_name(app_intrf, sel_cx));
+	    char name[MAX_DISPLAY_TEXT];
+	    int err = nav_get_cx_name(app_intrf, sel_cx, name, MAX_DISPLAY_TEXT);
+	    if(err == 1)
+		printf("In %s\n", name);
         }
         if(q=='e'){
-	    printf("->%s\n", nav_get_cx_name(app_intrf, sel_cx));
+	    char name[MAX_DISPLAY_TEXT];
+	    int err = nav_get_cx_name(app_intrf, sel_cx, name, MAX_DISPLAY_TEXT);
+	    if(err == 1)
+		printf("->%s\n", name);
 	    //invoke can destroy cx that is why we get a new selected cx from that
 	    int changed = 0;
 	    CX* new_select = nav_invoke_cx(app_intrf, sel_cx, &changed);
@@ -58,12 +64,18 @@ int main(){
         if(q=='d'){
             nav_next_context(app_intrf);
 	    sel_cx = nav_ret_select_cx(app_intrf);
-	    printf("%s\n", nav_get_cx_name(app_intrf, sel_cx));
+	    char name[MAX_DISPLAY_TEXT];
+	    int err = nav_get_cx_name(app_intrf, sel_cx, name, MAX_DISPLAY_TEXT);
+	    if(err == 1)
+		printf("%s\n", name);
         }
         if(q=='a'){
             nav_prev_context(app_intrf);
 	    sel_cx = nav_ret_select_cx(app_intrf);
-	    printf("%s\n", nav_get_cx_name(app_intrf, sel_cx));	    
+	    char name[MAX_DISPLAY_TEXT];
+	    int err = nav_get_cx_name(app_intrf, sel_cx, name, MAX_DISPLAY_TEXT);
+	    if(err == 1)
+		printf("%s\n", name);
         }
 	if(q=='r'){
 	    //set the value of the sel_cx to increase
