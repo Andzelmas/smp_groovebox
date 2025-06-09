@@ -51,8 +51,11 @@ Some json parameter configuration files exist in the EXTRA/Param_Presets directo
 
 In the parameter files it is possible to change "display_name", "default_val", "increment" keys and the order of the parameters (just move around the parameter blocks).
 
-Display_name is the name that will be shown on the screen, can be duplicates.
+Display_name is the name that will be shown on the screen, can be duplicates. Delete the display_name line if you want the display name of the parameter to be updated from the parameter data.
+This is useful if the plugin can change its parameter names during runtime - for example Surge can change the effects parameter names, depending on what effect type is chosen.
+
 Default_val - value that will be set for the parameter on the first load, if a save file for this context does not exist.
+
 Increment - is by how much the parameter increases or decreases (very useful when the parameter is integer but the developer does not specify that on the parameter itself).
 
 User can also add parameter containers in the config files. If you have this:
