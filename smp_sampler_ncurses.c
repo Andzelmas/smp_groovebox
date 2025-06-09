@@ -494,8 +494,14 @@ int curr_screen_load_win_arrays(APP_INTRF* app_intrf, CURR_SCREEN* curr_src){
 	win_free(curr_src->title_lr_win[0]);
 	curr_src->title_lr_win[0] = (WIN*)malloc(sizeof(WIN));
 	if(!curr_src->title_lr_win[0])return -1;
-	const char* curr_cx_name = nav_get_cx_name(app_intrf, curr_cx);
-	win_create(app_intrf, curr_src->title_lr_win[0], 3, 20, 0, 0, 0, curr_cx_name, curr_cx, 0);
+	char curr_cx_name[MAX_DISPLAY_TEXT];
+	int name_err = nav_get_cx_name(app_intrf, curr_cx, curr_cx_name, MAX_DISPLAY_TEXT);
+	if(name_err == 1){
+	    win_create(app_intrf, curr_src->title_lr_win[0], 3, 20, 0, 0, 0, curr_cx_name, curr_cx, 0);
+	}
+	else{
+	    win_create(app_intrf, curr_src->title_lr_win[0], 3, 20, 0, 0, 0, NULL, curr_cx, 0);
+	}
     }
     if(curr_src->title_lr_win[0]){
 	//write type for the title window
@@ -1366,7 +1372,9 @@ WIN** win_init_win_array(APP_INTRF* app_intrf,  WIN* parent_win, unsigned int si
 	if(!name_from_cx)add_name_from_cx = 0;
 	else add_name_from_cx = name_from_cx[i];
 	if(cur_cx && add_name_from_cx==1){
-	    const char* cx_name = nav_get_cx_name(app_intrf, cur_cx);
+	    char cx_name[MAX_DISPLAY_TEXT];
+	    snprintf(cx_name, MAX_DISPLAY_TEXT, "NAME ERROR");
+	    nav_get_cx_name(app_intrf, cur_cx, cx_name, MAX_DISPLAY_TEXT);
 	    unsigned int new_width = cur_width;
 	    if(name_widths>0){
 		unsigned int name_len = strlen(cx_name)+1;
@@ -1375,7 +1383,7 @@ WIN** win_init_win_array(APP_INTRF* app_intrf,  WIN* parent_win, unsigned int si
 		    if(name_len>name_widths)new_width = name_widths;
 		}
 	    }
-	    win_create(app_intrf, cur_win, cur_height, new_width, 0, 0, 0, cx_name, cur_cx, create_children);   
+	    win_create(app_intrf, cur_win, cur_height, new_width, 0, 0, 0, cx_name, cur_cx, create_children);
 	}
 	else{
 	    win_create(app_intrf, cur_win, cur_height, cur_width, 0, 0, 0, NULL, cur_cx, create_children);
@@ -1549,14 +1557,14 @@ void win_refresh(APP_INTRF* app_intrf, CURR_SCREEN* curr_scr, WIN* win, unsigned
 	if(nav_get_cx_value_as_string(app_intrf, win->cx_obj, win->display_text, MAX_VALUE_TEXT)!=1){
 	    win->display_text = NULL;
 	}
-	const char* temp_name = nav_get_cx_name(app_intrf, win->cx_obj);
 	win->has_text = 1;
     }
     //also get the name of the parameter on refresh, since it can change from the data size, without this, the user would have to exit this context and enter again to see the new parameter name
-    //TODO name name refresh is a bit hacky now, will change with app_intrf redo
+    //TODO name refresh is a bit hacky now, will change with app_intrf redo
     if(win->cx_obj && win->win_type==(Param_win_type | Param_name_win_type)){
-	const char* temp_name = nav_get_cx_name(app_intrf, win->cx_obj);
-	if(temp_name){
+	char temp_name[MAX_DISPLAY_TEXT];
+	int name_err = nav_get_cx_name(app_intrf, win->cx_obj, temp_name, MAX_DISPLAY_TEXT);
+	if(name_err == 1){
 	    snprintf(win->display_text, MAX_DISPLAY_TEXT, "%s", temp_name);
 	    win->has_text = 1;
 	}

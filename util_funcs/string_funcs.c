@@ -56,9 +56,9 @@ char* str_find_value_from_name(const char* attrib_names[], const char* attrib_va
     if(attrib_names==NULL || attrib_values==NULL)return ret_value;
     for(int i=0; i<attrib_size; i++){
 	const char* cur_string = attrib_names[i];
+	if(!cur_string)continue;
 	const char* cur_value = attrib_values[i];
-	if(cur_string==NULL)continue;
-	if(cur_value==NULL)continue;
+	if(!cur_value)continue;
 	if(strcmp(cur_string, find_name)==0){
 	    ret_value  = (char*)malloc((strlen(cur_value)+1)*sizeof(char));
 	    if(!ret_value)return NULL;

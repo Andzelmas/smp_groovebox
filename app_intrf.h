@@ -270,7 +270,8 @@ int nav_set_cx_value(APP_INTRF* app_intrf, CX* select_cx, int set_to);
 //update the parameter values for the ui, should be called regulery in a loop for example
 int nav_update_params(APP_INTRF* app_intrf);
 //get the cx name
-const char* nav_get_cx_name(APP_INTRF* app_intrf, CX* select_cx);
+//returns 1 on success, otherwise returns -1
+int nav_get_cx_name(APP_INTRF* app_intrf, CX* select_cx, char* ret_name, uint32_t name_len);
 //function that cleans all the allocated memory, closes the app
 static int app_intrf_close(APP_INTRF* app_intrf);
 /*HELPER FUNCTIONS FOR MUNDAIN CX MANIPULATION*/

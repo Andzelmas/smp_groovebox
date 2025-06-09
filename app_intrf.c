@@ -297,7 +297,7 @@ static void cx_process_params_from_file(void *arg,
     new_attrib_names[6] = "val_incr";
     new_attribs[6] = val_incr_str;
     
-    cx_init_cx_type(app_intrf, parent_cx->name, cx_name, type, new_attribs, new_attrib_names, 8);
+    cx_init_cx_type(app_intrf, parent_cx->name, cx_name, type, new_attribs, new_attrib_names, 7);
     
     if(val_display_name)free(val_display_name);
 }
@@ -690,7 +690,7 @@ static CX *cx_init_cx_type(APP_INTRF *app_intrf, const char* parent_string, cons
         CX_VAL *cx_val = (CX_VAL*)malloc(sizeof(CX_VAL));
         if(!cx_val)return NULL;
 	cx_val->val_name = NULL;
-	cx_val->val_display_name = NULL; //this name is not saved and only != NULL if user sets it in the parameter conf file or app_data changes the name
+	cx_val->val_display_name = NULL; //this name is not saved and only != NULL if user sets it in the parameter conf file
 	cx_val->val_id = -1;
 	cx_val->float_val = -1000;
 	cx_val->cx_type = 0;
@@ -1791,30 +1791,28 @@ int nav_update_params(APP_INTRF* app_intrf){
     return app_update_ui_params(app_intrf->app_data);
 }
 
-const char* nav_get_cx_name(APP_INTRF* app_intrf, CX* select_cx){
-    const char* ret_string = NULL;
-    if(!select_cx)return NULL;
-    if(!select_cx->short_name)return NULL;
-    ret_string = select_cx->short_name;
+int nav_get_cx_name(APP_INTRF* app_intrf, CX* select_cx, char* ret_name, uint32_t name_len){
+    if(!select_cx)return -1;
+    if(!select_cx->short_name)return -1;
     //if this is a parameter user potentialy can set its name in parameter configuration file
-    //in that case val_display_name != NULL, so return this name to show on the ui
     if(select_cx->type == Val_cx_e){
 	CX_VAL* cx_val = (CX_VAL*)select_cx;
-	if(!cx_val)return ret_string;
-	//TODO first update the display name from app_data if the ui_name changed on the parameter
-	char temp_name[MAX_PARAM_NAME_LENGTH];
-	if(app_param_get_ui_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, temp_name, MAX_PARAM_NAME_LENGTH)==1){
-	    if(cx_val->val_display_name)free(cx_val->val_display_name);
-	    cx_val->val_display_name = (char*)malloc(sizeof(char) * (strlen(temp_name)+1));
-	    if(!cx_val->val_display_name)
-		return ret_string;
-	    snprintf(cx_val->val_display_name, strlen(temp_name)+1, "%s", temp_name);
+	if(!cx_val)return -1;
+	//if there is no display name try to get it from the parameter 
+	if(!cx_val->val_display_name){
+	    int ui_name_err =  app_param_get_ui_name(app_intrf->app_data, cx_val->cx_type, cx_val->cx_id, cx_val->val_id, ret_name, name_len);
+	    if(ui_name_err == 1)
+		return 1;
 	}
-	if(cx_val->val_display_name){
-	    ret_string = cx_val->val_display_name;
+	//otherwise get the name from the display name on the cx
+	else{
+	    snprintf(ret_name, name_len, "%s", cx_val->val_display_name);
+	    return 1;
 	}
     }
-    return ret_string;
+    //for regular cx or if there is no display name get the short name
+    snprintf(ret_name, name_len, "%s", select_cx->short_name);
+    return 1;
 }
 
 static int app_intrf_close(APP_INTRF *app_intrf){
