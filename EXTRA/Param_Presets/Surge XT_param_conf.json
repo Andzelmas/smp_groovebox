@@ -565,7 +565,7 @@
 	"A Pre-Filter Gain":{
 	    "type":"0500",
 	    "display_name":"Pre-Filter Gain",
-	    "default_val":"0.9",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	}
     },
@@ -2272,7 +2272,7 @@
 	"B Pre-Filter Gain":{
 	    "type":"0500",
 	    "display_name":"Pre-Filter Gain",
-	    "default_val":"0",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	}
     },
