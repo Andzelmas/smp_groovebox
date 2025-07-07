@@ -62,13 +62,13 @@ static int clean_memory(APP_INFO* app_data){
     
     return 0;
 }
-static int app_stop_process(void* user_data, int sub_id){
+static int app_stop_process(void* user_data){
     APP_INFO* app_data = (APP_INFO*)user_data;
     if(!app_data)return -1;
     app_data->is_processing = 0;
     return 0;
 }
-static int app_start_process(void* user_data, int sub_id){
+static int app_start_process(void* user_data){
     APP_INFO* app_data = (APP_INFO*)user_data;
     if(!app_data)return -1;
     app_data->is_processing = 1;
@@ -91,7 +91,7 @@ APP_INFO* app_init(app_status_t *app_status){
     rt_funcs_struct.subcx_start_process = app_start_process;
     rt_funcs_struct.subcx_stop_process = app_stop_process;
     ui_funcs_struct.send_msg = app_sys_msg;
-    app_data->control_data = context_sub_init((void*)app_data, rt_funcs_struct, ui_funcs_struct);
+    app_data->control_data = context_sub_init(rt_funcs_struct, ui_funcs_struct);
     if(!app_data->control_data){
 	free(app_data);
 	return NULL;
@@ -163,7 +163,7 @@ APP_INFO* app_init(app_status_t *app_status){
 	return NULL;
     }
     //now unpause the jack function again
-    context_sub_wait_for_start(app_data->control_data, 0);
+    context_sub_wait_for_start(app_data->control_data, (void*)app_data);
     return app_data;
 }
 
@@ -597,7 +597,7 @@ int app_subcontext_remove(APP_INFO* app_data, unsigned char cx_type, int id){
 
 int app_stop_and_clean(APP_INFO *app_data){
     if(!app_data)return -1;
-    context_sub_wait_for_stop(app_data->control_data, 0);
+    context_sub_wait_for_stop(app_data->control_data, (void*)app_data);
     
     clean_memory(app_data);
     

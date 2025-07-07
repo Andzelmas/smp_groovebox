@@ -13,12 +13,11 @@ typedef struct _cxcontrol_data{
     //semaphore when [main-thread] needs to wait for the [audio-thread] to change something (for example stop the plugin or start the plugin)
     //wait on [main-thread] post on [audio-thread], but only when [main-thread] requested - [audio-thread] can post the semaphore only in response to [main-thread] message    
     sem_t pause_for_rt;
-    void* user_data;
     CXCONTROL_RT_FUNCS rt_funcs_struct;
     CXCONTROL_UI_FUNCS ui_funcs_struct;
 }CXCONTROL;
 
-CXCONTROL* context_sub_init(void* user_data, CXCONTROL_RT_FUNCS rt_funcs_struct, CXCONTROL_UI_FUNCS ui_funcs_struct){
+CXCONTROL* context_sub_init(CXCONTROL_RT_FUNCS rt_funcs_struct, CXCONTROL_UI_FUNCS ui_funcs_struct){
     CXCONTROL* cxcontrol_data = (CXCONTROL*)malloc(sizeof(CXCONTROL));
     if(!cxcontrol_data)return NULL;
 
@@ -29,7 +28,6 @@ CXCONTROL* context_sub_init(void* user_data, CXCONTROL_RT_FUNCS rt_funcs_struct,
     //set the struct to zeroes
     cxcontrol_data->rt_to_ui_msgs = NULL;
     cxcontrol_data->ui_to_rt_msgs = NULL;
-    cxcontrol_data->user_data = NULL;
 
     cxcontrol_data->rt_funcs_struct = rt_funcs_struct;
     cxcontrol_data->ui_funcs_struct = ui_funcs_struct;
@@ -45,7 +43,6 @@ CXCONTROL* context_sub_init(void* user_data, CXCONTROL_RT_FUNCS rt_funcs_struct,
 	context_sub_clean(cxcontrol_data);
 	return NULL;
     }
-    cxcontrol_data->user_data = user_data;
     return cxcontrol_data;
 }
 int context_sub_process_ui(CXCONTROL* cxcontrol_data){
@@ -61,17 +58,17 @@ int context_sub_process_ui(CXCONTROL* cxcontrol_data){
 	if(read_buffer <= 0)continue;
 	
 	if(cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK){
-	    if(cxcontrol_data->ui_funcs_struct.subcx_callback)cxcontrol_data->ui_funcs_struct.subcx_callback(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->ui_funcs_struct.subcx_callback)cxcontrol_data->ui_funcs_struct.subcx_callback(cur_bit.user_data);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_ACTIVATE_PROCESS){
-	    if(cxcontrol_data->ui_funcs_struct.subcx_activate_start_process)cxcontrol_data->ui_funcs_struct.subcx_activate_start_process(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->ui_funcs_struct.subcx_activate_start_process)cxcontrol_data->ui_funcs_struct.subcx_activate_start_process(cur_bit.user_data);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_RESTART){
-	    if(cxcontrol_data->ui_funcs_struct.subcx_restart)cxcontrol_data->ui_funcs_struct.subcx_restart(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->ui_funcs_struct.subcx_restart)cxcontrol_data->ui_funcs_struct.subcx_restart(cur_bit.user_data);
 
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_SENT_STRING){
-	    if(cxcontrol_data->ui_funcs_struct.send_msg)cxcontrol_data->ui_funcs_struct.send_msg(cxcontrol_data->user_data, cur_bit.msg);
+	    if(cxcontrol_data->ui_funcs_struct.send_msg)cxcontrol_data->ui_funcs_struct.send_msg(cur_bit.user_data, cur_bit.msg);
 	}
     }
     return 0;
@@ -88,52 +85,52 @@ int context_sub_process_rt(CXCONTROL* cxcontrol_data){
 	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
 	if(read_buffer <= 0)continue;
 	if(cur_bit.msg_enum == MSG_PLUGIN_PROCESS){
-	    if(cxcontrol_data->rt_funcs_struct.subcx_start_process)cxcontrol_data->rt_funcs_struct.subcx_start_process(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->rt_funcs_struct.subcx_start_process)cxcontrol_data->rt_funcs_struct.subcx_start_process(cur_bit.user_data);
 	    //this messages will be sent from [main-thread] only with sam_wait, so error or no error, release the semaphore
 	    sem_post(&cxcontrol_data->pause_for_rt);
 	}
 	if(cur_bit.msg_enum == MSG_PLUGIN_STOP_PROCESS){
-	    if(cxcontrol_data->rt_funcs_struct.subcx_stop_process)cxcontrol_data->rt_funcs_struct.subcx_stop_process(cxcontrol_data->user_data, cur_bit.scx_id);
+	    if(cxcontrol_data->rt_funcs_struct.subcx_stop_process)cxcontrol_data->rt_funcs_struct.subcx_stop_process(cur_bit.user_data);
 	    //this messages will be sent from [main-thread] only with sam_wait, so error or no error, release the semaphore
 	    sem_post(&cxcontrol_data->pause_for_rt);
 	}
     }
     return 0;
 }
-int context_sub_wait_for_stop(CXCONTROL* cxcontrol_data, int subcx_id){
+int context_sub_wait_for_stop(CXCONTROL* cxcontrol_data, void* user_data){
     if(!cxcontrol_data)return -1;
     RING_SYS_MSG send_bit;
     send_bit.msg_enum = MSG_PLUGIN_STOP_PROCESS;
-    send_bit.scx_id = subcx_id;
+    send_bit.user_data = user_data;
     ring_buffer_write(cxcontrol_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
     //lock the [main-thread]
     sem_wait(&cxcontrol_data->pause_for_rt);
     return 0;
 }
-int context_sub_wait_for_start(CXCONTROL* cxcontrol_data, int subcx_id){
+int context_sub_wait_for_start(CXCONTROL* cxcontrol_data, void* user_data){
     if(!cxcontrol_data)return -1;
     RING_SYS_MSG send_bit;
     send_bit.msg_enum = MSG_PLUGIN_PROCESS;
-    send_bit.scx_id = subcx_id;
+    send_bit.user_data = user_data;
     ring_buffer_write(cxcontrol_data->ui_to_rt_msgs, &send_bit, sizeof(send_bit));
     //lock the [main-thread]
     sem_wait(&cxcontrol_data->pause_for_rt);
     return 0;
 }
-void context_sub_restart_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread){
+void context_sub_restart_msg(CXCONTROL* cxcontrol_data, void* user_data, bool is_audio_thread){
     if(!cxcontrol_data) return;
 
     if(is_audio_thread){
 	RING_SYS_MSG send_bit;
 	send_bit.msg_enum = MSG_PLUGIN_RESTART;
-	send_bit.scx_id = subcx_id;
+	send_bit.user_data = user_data;
 	ring_buffer_write(cxcontrol_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
 	return;
     }
 
-    if(cxcontrol_data->ui_funcs_struct.subcx_restart)cxcontrol_data->ui_funcs_struct.subcx_restart(cxcontrol_data->user_data, subcx_id);
+    if(cxcontrol_data->ui_funcs_struct.subcx_restart)cxcontrol_data->ui_funcs_struct.subcx_restart(user_data);
 }
-void context_sub_send_msg(CXCONTROL* cxcontrol_data, bool is_audio_thread, const char* msg, ...){
+void context_sub_send_msg(CXCONTROL* cxcontrol_data, void* user_data, bool is_audio_thread, const char* msg, ...){
     if(!cxcontrol_data)return;
     char send_msg[MAX_STRING_MSG_LENGTH];
     va_list args;
@@ -144,37 +141,38 @@ void context_sub_send_msg(CXCONTROL* cxcontrol_data, bool is_audio_thread, const
 	RING_SYS_MSG send_bit;
 	snprintf(send_bit.msg, MAX_STRING_MSG_LENGTH, "%s", send_msg);
 	send_bit.msg_enum = MSG_PLUGIN_SENT_STRING;
+	send_bit.user_data = user_data;
 	ring_buffer_write(cxcontrol_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
 	return;
     }
 
-    if(cxcontrol_data->ui_funcs_struct.send_msg)cxcontrol_data->ui_funcs_struct.send_msg(cxcontrol_data->user_data, send_msg);
+    if(cxcontrol_data->ui_funcs_struct.send_msg)cxcontrol_data->ui_funcs_struct.send_msg(user_data, send_msg);
 }
-void context_sub_activate_start_process_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread){
+void context_sub_activate_start_process_msg(CXCONTROL* cxcontrol_data, void* user_data, bool is_audio_thread){
     if(!cxcontrol_data) return;
 
     if(is_audio_thread){
 	RING_SYS_MSG send_bit;
 	send_bit.msg_enum = MSG_PLUGIN_ACTIVATE_PROCESS;
-	send_bit.scx_id = subcx_id;
+	send_bit.user_data = user_data;
 	ring_buffer_write(cxcontrol_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
 	return;
     }
 
-    if(cxcontrol_data->ui_funcs_struct.subcx_activate_start_process)cxcontrol_data->ui_funcs_struct.subcx_activate_start_process(cxcontrol_data->user_data, subcx_id);
+    if(cxcontrol_data->ui_funcs_struct.subcx_activate_start_process)cxcontrol_data->ui_funcs_struct.subcx_activate_start_process(user_data);
 }
-void context_sub_callback_msg(CXCONTROL* cxcontrol_data, int subcx_id, bool is_audio_thread){
+void context_sub_callback_msg(CXCONTROL* cxcontrol_data, void* user_data, bool is_audio_thread){
     if(!cxcontrol_data) return;
 
     if(is_audio_thread){
 	RING_SYS_MSG send_bit;
 	send_bit.msg_enum = MSG_PLUGIN_REQUEST_CALLBACK;
-	send_bit.scx_id = subcx_id;
+	send_bit.user_data = user_data;
 	ring_buffer_write(cxcontrol_data->rt_to_ui_msgs, &send_bit, sizeof(send_bit));
 	return;
     }
 
-    if(cxcontrol_data->ui_funcs_struct.subcx_callback)cxcontrol_data->ui_funcs_struct.subcx_callback(cxcontrol_data->user_data, subcx_id);
+    if(cxcontrol_data->ui_funcs_struct.subcx_callback)cxcontrol_data->ui_funcs_struct.subcx_callback(user_data);
 }
 
 int context_sub_clean(CXCONTROL* cxcontrol_data){

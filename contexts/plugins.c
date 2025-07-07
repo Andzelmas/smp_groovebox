@@ -597,7 +597,7 @@ static int plug_vprintf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, v
     int ret = -1;
     char send_msg[MAX_STRING_MSG_LENGTH];
     ret = vsnprintf(send_msg, MAX_STRING_MSG_LENGTH, fmt, ap);
-    context_sub_send_msg(plug_data->control_data, is_audio_thread, send_msg);
+    context_sub_send_msg(plug_data->control_data, (void*)plug_data, is_audio_thread, send_msg);
     return ret;
 }
 static int plug_printf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, ...){
@@ -609,26 +609,16 @@ static int plug_printf(LV2_Log_Handle handle, LV2_URID type, const char* fmt, ..
     return ret;
 }
 
-static int plug_plug_start_process(void* user_data, int plug_id){
-    PLUG_INFO* plug_data = (PLUG_INFO*)user_data;
-    if(!plug_data)return -1;
-
-    if(plug_id < 0)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-
-    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+static int plug_plug_start_process(void* user_data){
+    PLUG_PLUG* plug = (PLUG_PLUG*)user_data;
     if(!plug->plug_instance)return -1;
     
     plug->is_processing = 1;
     return 0;
 }
-static int plug_plug_stop_process(void* user_data, int plug_id){
-    PLUG_INFO* plug_data = (PLUG_INFO*)user_data;
-    if(!plug_data)return -1;
-    if(plug_id < 0)return -1;
-    if(plug_id >= MAX_INSTANCES)return -1;
-
-    PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+static int plug_plug_stop_process(void* user_data){
+    PLUG_PLUG* plug = (PLUG_PLUG*)user_data;
+    if(!plug)return -1;
     //TODO before stopping would be nice to clear midi events, and fadeout audio
     plug->is_processing = 0;
     return 0;
@@ -649,7 +639,7 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
     rt_funcs_struct.subcx_start_process = plug_plug_start_process;
     rt_funcs_struct.subcx_stop_process = plug_plug_stop_process;
     ui_funcs_struct.send_msg = plug_sys_send_msg;
-    plug_data->control_data = context_sub_init((void*)plug_data, rt_funcs_struct, ui_funcs_struct);
+    plug_data->control_data = context_sub_init(rt_funcs_struct, ui_funcs_struct);
     if(!plug_data->control_data){
 	free(plug_data);
 	*plug_errors = plug_failed_malloc;
@@ -872,10 +862,10 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
     if(!plug_data)return -1;
     if(!plug_data->plugins)return -1;
     if(!preset_name)return -1;
-    
-    context_sub_wait_for_stop(plug_data->control_data, plug_id);
-    
+    if(plug_id >= MAX_INSTANCES || plug_id < 0)return -1;  
     PLUG_PLUG* plug = &(plug_data->plugins[plug_id]);
+    context_sub_wait_for_stop(plug_data->control_data, (void*)plug);
+    
     if(!plug->plug_instance)return -1;
     if(plug->preset){
 	const LilvNode* old_preset = lilv_state_get_uri(plug->preset);
@@ -915,7 +905,7 @@ int plug_load_preset(PLUG_INFO* plug_data, unsigned int plug_id, const char* pre
     if(new_preset)lilv_node_free(new_preset);
     plug->request_update = true;
     //launch the plugin again
-    context_sub_wait_for_start(plug_data->control_data, plug_id);
+    context_sub_wait_for_start(plug_data->control_data, (void*)plug);
     return 1;
 }
 
@@ -1162,7 +1152,7 @@ int plug_load_and_activate(PLUG_INFO* plug_data, const char* plugin_uri, const i
     lilv_instance_activate(plug->plug_instance);
     plug->plug_instance_activated = 1;
     //wait for the plugin to start processing
-    context_sub_wait_for_start(plug_data->control_data, plug->id);
+    context_sub_wait_for_start(plug_data->control_data, (void*)plug);
     return return_val;
 }
 
@@ -1750,8 +1740,10 @@ static void plug_run_rt(PLUG_PLUG* plug, unsigned int nframes){
 }
 
 int plug_stop_and_remove_plug(PLUG_INFO* plug_data, int id){
+    if(id >= MAX_INSTANCES || id < 0)return -1;
+    PLUG_PLUG* plug = &(plug_data->plugins[id]);
     //first stop the plugin process
-    context_sub_wait_for_stop(plug_data->control_data, id);
+    context_sub_wait_for_stop(plug_data->control_data, (void*)plug);
     return plug_remove_plug(plug_data, id);
 }
 

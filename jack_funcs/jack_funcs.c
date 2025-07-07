@@ -59,7 +59,7 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
     ui_funcs_struct.send_msg = app_jack_sys_send_msg;
-    jack_data->control_data = context_sub_init((void*)jack_data, rt_funcs_struct, ui_funcs_struct);
+    jack_data->control_data = context_sub_init(rt_funcs_struct, ui_funcs_struct);
     if(!jack_data->control_data){
 	jack_clean_memory(jack_data);
 	return NULL;

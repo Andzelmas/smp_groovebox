@@ -91,24 +91,18 @@ static int smp_sys_msg(void* user_data, const char* msg){
     return 0;
 }
 
-static int smp_start_process(void* user_data, int smp_id){
-    SMP_INFO* smp_data = (SMP_INFO*)user_data;
-    if(!smp_data)return -1;
-    if(smp_id < 0)return -1;
-    if(smp_id >= MAX_SAMPLES)return -1;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
+static int smp_start_process(void* user_data){
+    SMP_SMP* smp = (SMP_SMP*)user_data;
+    if(!smp)return -1;
     if(smp->processing == 1)return 0;
     if(!smp->buffer)return -1;
     smp->processing = 1;
     return 0;
 }
 
-static int smp_stop_process(void* user_data, int smp_id){
-    SMP_INFO* smp_data = (SMP_INFO*)user_data;
-    if(!smp_data)return -1;
-    if(smp_id < 0)return -1;
-    if(smp_id >= MAX_SAMPLES)return -1;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
+static int smp_stop_process(void* user_data){
+    SMP_SMP* smp = (SMP_SMP*)user_data;
+    if(!smp)return -1;
     if(smp->processing == 0)return 0;
     //TODO could silence the sample before stopping it here
     smp->processing = 0;
@@ -181,7 +175,7 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
     rt_funcs_struct.subcx_start_process = smp_start_process;
     rt_funcs_struct.subcx_stop_process = smp_stop_process;
     ui_funcs_struct.send_msg = smp_sys_msg;
-    smp_data->control_data = context_sub_init((void*)smp_data, rt_funcs_struct, ui_funcs_struct);
+    smp_data->control_data = context_sub_init(rt_funcs_struct, ui_funcs_struct);
     if(!smp_data->control_data){
 	free(smp_data);
 	*status = smp_data_malloc_fail;
@@ -310,7 +304,7 @@ int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
 
     strcpy(cur_smp->file_path, samp_path);
     //now this sample can start processing
-    context_sub_wait_for_start(smp_data->control_data, smp_id);
+    context_sub_wait_for_start(smp_data->control_data, (void*)cur_smp);
     return smp_id;
 }
 
@@ -423,8 +417,10 @@ char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){
 }
 
 int smp_stop_and_remove_sample(SMP_INFO* smp_data, int idx){
+    if(idx >= MAX_SAMPLES || idx < 0)return -1;
+    SMP_SMP* cur_smp = &(smp_data->samples[idx]);
     //stop processing the sample
-    context_sub_wait_for_stop(smp_data->control_data, idx);
+    context_sub_wait_for_stop(smp_data->control_data, (void*)cur_smp);
     return smp_remove_sample(smp_data, idx);
 }
 

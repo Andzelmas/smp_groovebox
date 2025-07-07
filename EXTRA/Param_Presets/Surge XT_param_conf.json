@@ -202,7 +202,7 @@
 	"A Osc 1 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"A Osc 1 Retrigger":{
@@ -277,7 +277,7 @@
 	"A Osc 2 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"A Osc 2 Retrigger":{
@@ -352,7 +352,7 @@
 	"A Osc 3 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"A Osc 3 Retrigger":{
@@ -451,7 +451,7 @@
 	"A Osc 2 Mute":{
 	    "type":"0500",
 	    "display_name":"Osc2 Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"A Osc 2 Solo":{
@@ -475,7 +475,7 @@
 	"A Osc 3 Mute":{
 	    "type":"0500",
 	    "display_name":"Osc3 Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"A Osc 3 Solo":{
@@ -499,7 +499,7 @@
 	"A Ring Modulation 1x2 Mute":{
 	    "type":"0500",
 	    "display_name":"Ring Mod 1x2 Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"A Ring Modulation 1x2 Solo":{
@@ -523,7 +523,7 @@
 	"A Ring Modulation 2x3 Mute":{
 	    "type":"0500",
 	    "display_name":"Ring Mod 2x3 Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"A Ring Modulation 2x3 Solo":{
@@ -547,7 +547,7 @@
 	"A Noise Mute":{
 	    "type":"0500",
 	    "display_name":"Noise Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"A Noise Solo":{
@@ -655,13 +655,13 @@
 	"A Filter 1 FEG Mod Amount":{
 	    "type":"0500",
 	    "display_name":"FEG Mod Amount",
-	    "default_val":"0",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	},
 	"A Filter 1 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	}
     },
@@ -694,13 +694,13 @@
 	"A Filter 2 FEG Mod Amount":{
 	    "type":"0500",
 	    "display_name":"FEG Mod Amount",
-	    "default_val":"0",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	},
 	"A Filter 2 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	}
     },
@@ -1909,7 +1909,7 @@
 	"B Osc 1 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"B Osc 1 Retrigger":{
@@ -1984,7 +1984,7 @@
 	"B Osc 2 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"B Osc 2 Retrigger":{
@@ -2059,7 +2059,7 @@
 	"B Osc 3 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"B Osc 3 Retrigger":{
@@ -2158,7 +2158,7 @@
 	"B Osc 2 Mute":{
 	    "type":"0500",
 	    "display_name":"Osc 2 Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"B Osc 2 Solo":{
@@ -2182,7 +2182,7 @@
 	"B Osc 3 Mute":{
 	    "type":"0500",
 	    "display_name":"Osc 3 Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"B Osc 3 Solo":{
@@ -2206,7 +2206,7 @@
 	"B Ring Modulation 1x2 Mute":{
 	    "type":"0500",
 	    "display_name":"Ring Modulation 1x2 Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"B Ring Modulation 1x2 Solo":{
@@ -2230,7 +2230,7 @@
 	"B Ring Modulation 2x3 Mute":{
 	    "type":"0500",
 	    "display_name":"Ring Modulation 2x3 Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"B Ring Modulation 2x3 Solo":{
@@ -2254,7 +2254,7 @@
 	"B Noise Mute":{
 	    "type":"0500",
 	    "display_name":"Noise Mute",
-	    "default_val":"0",
+	    "default_val":"1",
 	    "increment":"0.01"
 	},
 	"B Noise Solo":{
@@ -2281,7 +2281,7 @@
 	"B Filter Configuration":{
 	    "type":"0500",
 	    "display_name":"Configuration",
-	    "default_val":"0.9",
+	    "default_val":"0",
 	    "increment":"0.01"
 	},
 	"B Feedback":{
@@ -2362,13 +2362,13 @@
 	"B Filter 1 FEG Mod Amount":{
 	    "type":"0500",
 	    "display_name":"FEG Mod Amount",
-	    "default_val":"0",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	},
 	"B Filter 1 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	}
     },
@@ -2401,13 +2401,13 @@
 	"B Filter 2 FEG Mod Amount":{
 	    "type":"0500",
 	    "display_name":"FEG Mod Amount",
-	    "default_val":"0",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	},
 	"B Filter 2 Keytrack":{
 	    "type":"0500",
 	    "display_name":"Keytrack",
-	    "default_val":"0",
+	    "default_val":"0.5",
 	    "increment":"0.01"
 	}	
     },

@@ -96,11 +96,11 @@ enum MsgFromRT{
     MSG_STOP_ALL = 7, //stop the whole context processing, usually done when cleaning memory
     MSG_START_ALL = 8 //start the whole context again, usually done after stopping before init of contexts
 };
-//this holds the subcontext id (plugin for example) and the enum (from MSGfromRT) to tell what to do with the subcontext
+//this holds the subcontext data address (user_data) and the enum (from MSGfromRT) to tell what to do with the subcontext
 typedef struct _ring_sys_msg{
     unsigned int msg_enum; //what to do with the plugin
     char msg[MAX_STRING_MSG_LENGTH];
-    int scx_id; //subcontext id on the context array that needs to be changed somehow
+    void* user_data; //user data for the function that gets called depending on the msg. This can be a plugin address or a sample address and etc.
 }RING_SYS_MSG;
 
 //Parameter ring data struct. A message to manipulate the parameter

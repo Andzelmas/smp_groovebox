@@ -212,7 +212,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
     ui_funcs_struct.send_msg = synth_sys_msg;
-    synth_data->control_data = context_sub_init((void*)synth_data, rt_funcs_struct, ui_funcs_struct);
+    synth_data->control_data = context_sub_init(rt_funcs_struct, ui_funcs_struct);
     if(!synth_data->control_data){
 	free(synth_data);
 	return NULL;
