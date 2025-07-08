@@ -17,13 +17,17 @@
 
 enum userDataTypes{
     USER_DATA_T_ROOT = 1, //the root data, void* user_data casts to APP_INFO* struct
+    
     USER_DATA_T_PLUGINS = 2, //data that contains plugins, both lv2 and clap
     USER_DATA_T_PLUG_LV2 = 3, //lv2 plugin data type
     USER_DATA_T_PLUG_CLAP = 4,//clap plugin data type
+    
     USER_DATA_T_SAMPLER = 5, //sampler data type, contains samples
     USER_DATA_T_SAMPLE = 6, //single sample
+    
     USER_DATA_T_SYNTH = 7, //built in synth
     USER_DATA_T_OSC = 8, //single oscillator in the synth
+    
     USER_DATA_T_JACK = 9 //audio, jack now, that has tempo info, ports etc.
 };
 
