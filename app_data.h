@@ -9,17 +9,6 @@
 #include "contexts/clap_plugins.h"
 #include "contexts/synth.h"
 
-//enum for app init failures
-enum AppStatus{
-    app_failed_malloc = -1,
-    smp_data_init_failed = -2,
-    smp_jack_init_failed = -3,
-    trk_jack_init_failed = -4,
-    plug_data_init_failed = -5,
-    plug_jack_init_failed = -6,
-    synth_data_init_failed = -7,
-    clap_plug_data_init_failed = -8
-};
 enum AppPluginType{
     //lv2 plugin
     LV2_plugin_type = 0x01,
@@ -30,10 +19,15 @@ typedef enum AppStatus app_status_t;
 
 //this is the struct for the data on the whole app
 typedef struct _app_info APP_INFO;
-//initialize the app_data
-//sample_paths - paths to the sample files that should be loaded on the app init
-//samples_num - how many samples we have
-APP_INFO* app_init(app_status_t *app_status);
+
+//initialize the app_data, user_data_type returns USER_DATA_T_ROOT type
+//the function returns APP_INFO* cast to void*
+void* app_init(uint16_t* user_data_type);
+//get the idx child of the parent_data, if idx is out of bounds return NULL
+void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* return_type, unsigned int idx);
+//get the short_name for the user_data, depending on the user_data_type
+const char* app_data_short_name_get(void* user_data, uint16_t user_data_type);
+
 //return the available names for plugins on the system
 char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types);
 
@@ -96,4 +90,4 @@ int plug_audio_process_rt(NFRAMES_T nframes, void *arg);
 //remove subcontext, plugin, clap plugin or sample
 int app_subcontext_remove(APP_INFO* app_data, unsigned char cx_type, int id);
 //pause the [audio-thread] processing with a mutex and clean memory of the app_data
-int app_stop_and_clean(APP_INFO *app_data);
+void app_stop_and_clean(void* user_data, uint16_t type);

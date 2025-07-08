@@ -80,12 +80,10 @@ static int app_sys_msg(void* user_data, const char* msg){
     log_append_logfile("%s", msg);
     return 0;
 }
-APP_INFO* app_init(app_status_t *app_status){
+void* app_init(uint16_t* user_data_type){
     APP_INFO *app_data = (APP_INFO*) malloc(sizeof(APP_INFO));
-    if(!app_data){
-        *app_status = app_failed_malloc;
-        return NULL;
-    }
+    if(!app_data) return NULL;
+    
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
     rt_funcs_struct.subcx_start_process = app_start_process;
@@ -109,7 +107,6 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->trk_jack = jack_initialize(app_data, client_name, 0, 0, 0, NULL, trk_audio_process_rt, 0);
     if(!app_data->trk_jack){
 	clean_memory(app_data);
-	*app_status = trk_jack_init_failed;
 	return NULL;
     }
 
@@ -124,7 +121,6 @@ APP_INFO* app_init(app_status_t *app_status){
     //but app_data->is_processing == 0, so the contexts will not be processed, only app_data sys messages (to start the processes for example)
     if(app_jack_activate(app_data->trk_jack) != 0){
 	clean_memory(app_data);
-	*app_status = trk_jack_init_failed;
 	return NULL;	
     }
     /*initiate the sampler it will be empty initialy*/
@@ -134,7 +130,6 @@ APP_INFO* app_init(app_status_t *app_status){
     if(!app_data->smp_data){
         //clean app_data
         clean_memory(app_data);
-        *app_status = smp_data_init_failed;
         return NULL;
     } 
     /*--------------------------------------------------*/
@@ -143,7 +138,6 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->plug_data = plug_init(buffer_size, samplerate, &plug_errors, app_data->trk_jack);
     if(!app_data->plug_data){
 	clean_memory(app_data);
-	*app_status = plug_data_init_failed;
 	return NULL;
     }
     
@@ -151,7 +145,6 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->clap_plug_data = clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors, app_data->trk_jack);
     if(!(app_data->clap_plug_data)){
 	clean_memory(app_data);
-	*app_status = clap_plug_data_init_failed;
 	return NULL;
     }
     
@@ -159,12 +152,64 @@ APP_INFO* app_init(app_status_t *app_status){
     app_data->synth_data = synth_init((unsigned int)buffer_size, samplerate, "Synth", 1, app_data->trk_jack);
     if(!app_data->synth_data){
 	clean_memory(app_data);
-	*app_status = synth_data_init_failed;
 	return NULL;
     }
     //now unpause the jack function again
     context_sub_wait_for_start(app_data->control_data, (void*)app_data);
-    return app_data;
+    *user_data_type = USER_DATA_T_ROOT;
+    return (void*)app_data;
+}
+
+void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* return_type, unsigned int idx){
+    if(!parent_data)return NULL;
+    if(parent_type == USER_DATA_T_ROOT){
+	APP_INFO* app_data = (APP_INFO*)parent_data;
+	switch(idx){
+	case 0:
+	    *return_type = USER_DATA_T_SAMPLER;
+	    return (void*)app_data->smp_data;
+	case 1:
+	    //TODO should return user_data that could be used for clap and for lv2 plugins
+	    *return_type = USER_DATA_T_PLUGINS;
+	    return (void*)app_data->plug_data;
+	case 2:
+	    *return_type = USER_DATA_T_SYNTH;
+	    return (void*)app_data->synth_data;
+	case 3:
+	    *return_type = USER_DATA_T_JACK;
+	    return (void*)app_data->trk_jack;
+	}
+    }
+
+    return NULL;
+}
+
+const char* app_data_short_name_get(void* user_data, uint16_t user_data_type){
+    if(user_data_type == USER_DATA_T_ROOT){
+	return client_name;
+    }
+    if(user_data_type == USER_DATA_T_PLUGINS){
+	return "Plugins";
+    }
+    if(user_data_type == USER_DATA_T_PLUG_LV2){
+    }
+    if(user_data_type == USER_DATA_T_PLUG_CLAP){
+    }
+    if(user_data_type == USER_DATA_T_SAMPLER){
+	return "Sampler";
+    }
+    if(user_data_type == USER_DATA_T_SAMPLE){
+    }
+    if(user_data_type == USER_DATA_T_SYNTH){
+	return "Synth";
+    }
+    if(user_data_type == USER_DATA_T_OSC){
+    }
+    if(user_data_type == USER_DATA_T_JACK){
+	return "Trk";
+    }
+    
+    return NULL;
 }
 
 char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types){
@@ -595,11 +640,11 @@ int app_subcontext_remove(APP_INFO* app_data, unsigned char cx_type, int id){
     return 0;
 }
 
-int app_stop_and_clean(APP_INFO *app_data){
-    if(!app_data)return -1;
-    context_sub_wait_for_stop(app_data->control_data, (void*)app_data);
+void app_stop_and_clean(void* user_data, uint16_t type){
+    if(type != USER_DATA_T_ROOT)return;
+    if(!user_data)return;
+    APP_INFO* app_data = (APP_INFO*)user_data;
+    context_sub_wait_for_stop(app_data->control_data, user_data);
     
     clean_memory(app_data);
-    
-    return 0;
 }
