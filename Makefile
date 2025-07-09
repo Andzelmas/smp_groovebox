@@ -23,7 +23,7 @@ SRC = $(UTIL_FUNCS) contexts/sampler.c contexts/plugins.c contexts/clap_plugins.
 PI_DIR = ~/Audio/Source/smp_groovebox/
 
 MAIN_SRC = smp_groovebox_ui.c
-MAIN_CLI_SRC = smp_sampler.c
+MAIN_CLI_SRC = smp_groovebox_ui_cli.c
 
 create_smp_sampler: make_dir
 	$(CC) -g -x c -o $(FILE) $(MAIN_SRC) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)

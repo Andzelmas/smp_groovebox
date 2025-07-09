@@ -167,17 +167,16 @@ void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* r
 	switch(idx){
 	case 0:
 	    *return_type = USER_DATA_T_SAMPLER;
-	    return (void*)app_data->smp_data;
+	    return (void*)app_data;
 	case 1:
-	    //TODO should return user_data that could be used for clap and for lv2 plugins
 	    *return_type = USER_DATA_T_PLUGINS;
-	    return (void*)app_data->plug_data;
+	    return (void*)app_data;
 	case 2:
 	    *return_type = USER_DATA_T_SYNTH;
-	    return (void*)app_data->synth_data;
+	    return (void*)app_data;
 	case 3:
 	    *return_type = USER_DATA_T_JACK;
-	    return (void*)app_data->trk_jack;
+	    return (void*)app_data;
 	}
     }
 
