@@ -1,5 +1,12 @@
 #pragma once
 #include "structs.h"
+
+#define APP_NAME "smp_groovebox"
+#define PLUGINS_NAME "Plugins"
+#define SAMPLER_NAME "Sampler"
+#define SYNTH_NAME "Synth"
+#define TRK_NAME "Trk"
+
 #define MAX_STRING_MSG_LENGTH 128 //max string size for sys messages
 #define MAX_PARAM_NAME_LENGTH 100 //the max length for param names
 #define MAX_SYS_BUFFER_ARRAY_SIZE 256 //max size for ring buffer arrays in sys messages between threads

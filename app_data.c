@@ -16,9 +16,6 @@
 #include <threads.h>
 static thread_local bool is_audio_thread = false;
 
-//the client name that will be shown in the audio client and added next to the port names
-const char* client_name = "smp_grvbox";
-
 typedef struct _app_info{
     //the smapler data
     SMP_INFO* smp_data;
@@ -104,7 +101,7 @@ void* app_init(uint16_t* user_data_type){
     
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
-    app_data->trk_jack = jack_initialize(app_data, client_name, 0, 0, 0, NULL, trk_audio_process_rt, 0);
+    app_data->trk_jack = jack_initialize(app_data, APP_NAME, 0, 0, 0, NULL, trk_audio_process_rt, 0);
     if(!app_data->trk_jack){
 	clean_memory(app_data);
 	return NULL;
@@ -185,27 +182,27 @@ void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* r
 
 const char* app_data_short_name_get(void* user_data, uint16_t user_data_type){
     if(user_data_type == USER_DATA_T_ROOT){
-	return client_name;
+	return APP_NAME;
     }
     if(user_data_type == USER_DATA_T_PLUGINS){
-	return "Plugins";
+	return PLUGINS_NAME;
     }
     if(user_data_type == USER_DATA_T_PLUG_LV2){
     }
     if(user_data_type == USER_DATA_T_PLUG_CLAP){
     }
     if(user_data_type == USER_DATA_T_SAMPLER){
-	return "Sampler";
+	return SAMPLER_NAME;
     }
     if(user_data_type == USER_DATA_T_SAMPLE){
     }
     if(user_data_type == USER_DATA_T_SYNTH){
-	return "Synth";
+	return SYNTH_NAME;
     }
     if(user_data_type == USER_DATA_T_OSC){
     }
     if(user_data_type == USER_DATA_T_JACK){
-	return "Trk";
+	return TRK_NAME;
     }
     
     return NULL;
@@ -540,7 +537,7 @@ const char** app_return_ports(APP_INFO* app_data, const char* name_pattern, unsi
 char* app_return_short_port(APP_INFO* app_data, const char* full_port_name){
     if(!app_data)return NULL;
     char* ret_name = NULL;
-    char* temp = str_split_string_delim(full_port_name, client_name, &ret_name);
+    char* temp = str_split_string_delim(full_port_name, APP_NAME, &ret_name);
     if(temp)free(temp);
     return ret_name;
 }

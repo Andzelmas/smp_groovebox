@@ -7,7 +7,7 @@ FILE=build/smp_sampler
 INCDIR = -I$(PORTSDIR)/include
 
 #additional libs
-LIBS = -lm -ljack -lsndfile -ljson-c -llilv-0 -lncurses
+LIBS = -lm -ljack -lsndfile -ljson-c -llilv-0
 
 #jalv source code
 JALV_C = util_funcs/jalv/symap.c util_funcs/jalv/worker.c util_funcs/jalv/zix/allocator.c util_funcs/jalv/zix/allocator.h util_funcs/jalv/zix/attributes.h util_funcs/jalv/zix/ring.c
@@ -22,7 +22,7 @@ SRC = $(UTIL_FUNCS) contexts/sampler.c contexts/plugins.c contexts/clap_plugins.
 #Remote dir for the source code
 PI_DIR = ~/Audio/Source/smp_groovebox/
 
-MAIN_SRC = smp_groovebox_ui.c
+MAIN_SRC = smp_groovebox_ui_cli.c
 MAIN_CLI_SRC = smp_groovebox_ui_cli.c
 
 create_smp_sampler: make_dir

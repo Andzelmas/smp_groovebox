@@ -5,6 +5,9 @@
 
 #include <stdio.h>
 
+//TODO params, plugins and sampler will need to be modified so that even the Parameter; Plugin or Sample has the param_container; plug_data; and smp_data in it.
+//TODO need to be consistant - data functions uses void* user_data without any indices AND use structs already allocated on the contexts - modify them if they do not fit this concept.
+
 typedef struct _cx{
     char unique_name[MAX_PATH_STRING];
     char short_name[MAX_PARAM_NAME_LENGTH]; //this is used for UI as display_name. If DYN_DISPLAY_NAME flag is set, update short_name with a data function, when it gets dirty
