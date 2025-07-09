@@ -1,7 +1,7 @@
 #pragma once
 #include "structs.h"
 
-#define APP_NAME "smp_groovebox"
+#define APP_NAME "smp_grvbx"
 #define PLUGINS_NAME "Plugins"
 #define SAMPLER_NAME "Sampler"
 #define SYNTH_NAME "Synth"
