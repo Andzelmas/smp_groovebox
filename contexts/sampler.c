@@ -196,19 +196,19 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
     for(int i = 0; i< smp_data->num_ports; i++){
 	smp_data->ports[i].id = i;
 	if(i==0){
-	    smp_data->ports[i].port_flow = FLOW_INPUT;
-	    smp_data->ports[i].port_type = TYPE_MIDI;
+	    smp_data->ports[i].port_flow = PORT_FLOW_INPUT;
+	    smp_data->ports[i].port_type = PORT_TYPE_MIDI;
 	    smp_data->ports[i].port_name = "sampler|midi_in";
 	   
 	}
 	if(i==1){
-	    smp_data->ports[i].port_flow = FLOW_OUTPUT;
-	    smp_data->ports[i].port_type = TYPE_AUDIO;
+	    smp_data->ports[i].port_flow = PORT_FLOW_OUTPUT;
+	    smp_data->ports[i].port_type = PORT_TYPE_AUDIO;
 	    smp_data->ports[i].port_name = "sampler|out_L";	    
 	}
 	if(i==2){
-	    smp_data->ports[i].port_flow = FLOW_OUTPUT;
-	    smp_data->ports[i].port_type = TYPE_AUDIO;
+	    smp_data->ports[i].port_flow = PORT_FLOW_OUTPUT;
+	    smp_data->ports[i].port_type = PORT_TYPE_AUDIO;
 	    smp_data->ports[i].port_name = "sampler|out_R";	    
 	}	
     }

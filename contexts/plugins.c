@@ -1403,8 +1403,8 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	cur_port->index = i;
 	cur_port->param_index = -1;
 	cur_port->control = 0.0f;
-	cur_port->flow = FLOW_UNKNOWN;
-	cur_port->type = TYPE_UNKNOWN;
+	cur_port->flow = PORT_FLOW_UNKNOWN;
+	cur_port->type = PORT_TYPE_UNKNOWN;
 	cur_port->port_type_urid = 0;
 	const LilvNode* sym = lilv_port_get_symbol(plug->plug, cur_port->lilv_port);
 	const unsigned int optional = lilv_port_has_property(plug->plug, cur_port->lilv_port,
@@ -1418,14 +1418,14 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	snprintf(full_port_name, port_name_size, "%.2d_%s_|%s", plug->id, lilv_node_as_string(plug_name_node), lilv_node_as_string(sym));
 	lilv_node_free(plug_name_node);
 	//--------------------------------------------------
-	unsigned int port_io = 0x2;	
+	unsigned int port_io = PORT_FLOW_OUTPUT;	
 	//set if the port is input or output
 	if(lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.lv2_InputPort)){
-	    cur_port->flow = FLOW_INPUT;
-	    port_io = 0x1;	    
+	    cur_port->flow = PORT_FLOW_INPUT;
+	    port_io = PORT_FLOW_INPUT;	    
 	}
 	else if(lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.lv2_OutputPort)){
-	    cur_port->flow = FLOW_OUTPUT;
+	    cur_port->flow = PORT_FLOW_OUTPUT;
 	}
 	else if(!optional){
 	    return -1;
@@ -1433,7 +1433,7 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	//Set port types
 	//control port
 	if(lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.lv2_ControlPort)){
-	    cur_port->type = TYPE_CONTROL;
+	    cur_port->type = PORT_TYPE_CONTROL;
 	    cur_port->control = isnan(default_values[i]) ? 0.0f : default_values[i];
 	    //connect the port to its value
 	    lilv_instance_connect_port(plug->plug_instance, i, &(cur_port->control));
@@ -1449,18 +1449,18 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	    }
 	}
 	else if (lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.lv2_AudioPort)){
-	    cur_port->type = TYPE_AUDIO;
-	    cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_AUDIO, port_io, full_port_name);
+	    cur_port->type = PORT_TYPE_AUDIO;
+	    cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, PORT_TYPE_AUDIO, port_io, full_port_name);
 	}
 	else if(lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.lv2_CVPort)){
-	    cur_port->type = TYPE_CV;
-	    cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_AUDIO, port_io, full_port_name);
+	    cur_port->type = PORT_TYPE_CV;
+	    cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, PORT_TYPE_AUDIO, port_io, full_port_name);
 	}
 	else if(lilv_port_is_a(plug->plug, cur_port->lilv_port, plug_data->nodes.atom_AtomPort)){
-	    cur_port->type = TYPE_EVENT;
+	    cur_port->type = PORT_TYPE_EVENT;
 	    if(lilv_port_supports_event(plug->plug, cur_port->lilv_port, plug_data->nodes.midi_MidiEvent)) {
 		cur_port->port_type_urid = plug_data->urids.midi_MidiEvent;
-		cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_MIDI, port_io, full_port_name);
+		cur_port->sys_port = app_jack_create_port_on_client(plug_data->audio_backend, PORT_TYPE_MIDI, port_io, full_port_name);
 	    }
 	    //ready the evbuf for the events
 	    //--------------------
@@ -1469,7 +1469,7 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	    cur_port->evbuf = plug_evbuf_new(size, atom_Chunk, atom_Sequence);
 	    lilv_instance_connect_port(plug->plug_instance, i, plug_evbuf_get_buffer(cur_port->evbuf));
 	    unsigned int is_input = 0;
-	    if(cur_port->flow == FLOW_INPUT)is_input = 1;
+	    if(cur_port->flow == PORT_FLOW_INPUT)is_input = 1;
 	    plug_evbuf_reset(cur_port->evbuf, is_input);
 	    //--------------------	    
 	}
@@ -1478,7 +1478,7 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 	    return -1;	    
 	}
 	//if the type is unknown connect to null
-	if(cur_port->type == FLOW_UNKNOWN || cur_port->type == TYPE_UNKNOWN){
+	if(cur_port->type == PORT_FLOW_UNKNOWN || cur_port->type == PORT_TYPE_UNKNOWN){
 	    lilv_instance_connect_port(plug->plug_instance, i, NULL);
 	}	
 	//set the port buffer size
@@ -1494,7 +1494,7 @@ int plug_activate_backend_ports(PLUG_INFO* plug_data, PLUG_PLUG* plug){
 									plug_data->nodes.lv2_control);
     if(control_input){
 	const uint32_t index = lilv_port_get_index(plug->plug, control_input);
-	if(plug->ports[index].type == TYPE_EVENT){
+	if(plug->ports[index].type == PORT_TYPE_EVENT){
 	    plug->control_in = index;
 	}
     }
@@ -1535,13 +1535,13 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		a_buffer = app_jack_get_buffer_rt(cur_port->sys_port, nframes);
 		app_jack_midi_cont_reset(plug->midi_cont);
 	    }
-	    if(cur_port->type == TYPE_AUDIO){
+	    if(cur_port->type == PORT_TYPE_AUDIO){
 		lilv_instance_connect_port(plug->plug_instance, i, a_buffer);
 	    }
-	    if(cur_port->type == TYPE_CV){
+	    if(cur_port->type == PORT_TYPE_CV){
 		lilv_instance_connect_port(plug->plug_instance, i, a_buffer);	    
 	    }
-	    if(cur_port->type == TYPE_EVENT && cur_port->flow == FLOW_INPUT){
+	    if(cur_port->type == PORT_TYPE_EVENT && cur_port->flow == PORT_FLOW_INPUT){
 		//clean the evbuf
 		plug_evbuf_reset(cur_port->evbuf, 1);
 		PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_begin(cur_port->evbuf);
@@ -1608,7 +1608,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    plug_data->isPlaying = tr_playing;
 		}
 	    }
-	    if(cur_port->type == TYPE_EVENT && cur_port->flow == FLOW_OUTPUT){
+	    if(cur_port->type == PORT_TYPE_EVENT && cur_port->flow == PORT_FLOW_OUTPUT){
 		plug_evbuf_reset(cur_port->evbuf, 0);
 	    }
 	}
@@ -1674,15 +1674,15 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 	//now update the output ports and any output controls (ui)
 	for(uint32_t i = 0; i< plug->num_ports; i++){
 	    PLUG_PORT* const cur_port = &(plug->ports[i]);
-	    if(cur_port->flow!=FLOW_OUTPUT)continue;
-	    if(cur_port->type == TYPE_AUDIO){
+	    if(cur_port->flow!=PORT_FLOW_OUTPUT)continue;
+	    if(cur_port->type == PORT_TYPE_AUDIO){
 
 	    }
-	    if(cur_port->type == TYPE_CV){
+	    if(cur_port->type == PORT_TYPE_CV){
    
 	    }
 	    //update the output parameters (these should be sent to ui for display)
-	    if(cur_port->type == TYPE_CONTROL){
+	    if(cur_port->type == PORT_TYPE_CONTROL){
 		//set param but not too often to not swamp the rt_to_ui ring buffer.
 		//it does not matter that the [audio-thread] parameter will be set at the same speed, since it output parameter
 		if(plug_data->rt_tick == 0){
@@ -1694,7 +1694,7 @@ void plug_process_data_rt(PLUG_INFO* plug_data, unsigned int nframes){
 		    PARAM_T param_value = param_get_value(plug->plug_params, cur_port->param_index, 0, 0, 1);
 		}
 	    }
-	    if(cur_port->type == TYPE_EVENT){
+	    if(cur_port->type == PORT_TYPE_EVENT){
 		void* buf = NULL;
 		if(cur_port->sys_port){
 		    //clean the buffer

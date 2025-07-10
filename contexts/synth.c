@@ -360,8 +360,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	    
 	    cur_port->id = j;
 	    if(j==0){
-		cur_port->port_flow = FLOW_INPUT;
-		cur_port->port_type = TYPE_MIDI;
+		cur_port->port_flow = PORT_FLOW_INPUT;
+		cur_port->port_type = PORT_TYPE_MIDI;
 		name_len += 10;
 		cur_port->port_name = malloc(sizeof(char) * name_len);
 		if(!cur_port->port_name){
@@ -371,8 +371,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 		sprintf(cur_port->port_name, "%s|%s|midi_in", cx_name, cur_osc->name, i);
 	    }
 	    if(j==1){
-		cur_port->port_flow = FLOW_OUTPUT;
-		cur_port->port_type = TYPE_AUDIO;
+		cur_port->port_flow = PORT_FLOW_OUTPUT;
+		cur_port->port_type = PORT_TYPE_AUDIO;
 		name_len += 8;
 		cur_port->port_name = malloc(sizeof(char) * name_len);
 		if(!cur_port->port_name){
@@ -382,8 +382,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 		sprintf(cur_port->port_name, "%s|%s|out_L", cx_name, cur_osc->name, i);
 	    }
 	    if(j==2){
-		cur_port->port_flow = FLOW_OUTPUT;
-		cur_port->port_type = TYPE_AUDIO;
+		cur_port->port_flow = PORT_FLOW_OUTPUT;
+		cur_port->port_type = PORT_TYPE_AUDIO;
 		name_len += 8;
 		cur_port->port_name = malloc(sizeof(char) * name_len);
 		if(!cur_port->port_name){
@@ -419,8 +419,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 		unsigned int name_len = strlen(cx_name);
 		name_len += strlen(cur_osc->name);		
 		if(j==0){
-		    cur_port->port_flow = FLOW_OUTPUT;
-		    cur_port->port_type = TYPE_AUDIO;
+		    cur_port->port_flow = PORT_FLOW_OUTPUT;
+		    cur_port->port_type = PORT_TYPE_AUDIO;
 		    name_len += 8;
 		    cur_port->port_name = malloc(sizeof(char) * name_len);
 		    if(!cur_port->port_name){
@@ -430,8 +430,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 		    sprintf(cur_port->port_name, "%s|%s|out_L", cx_name, cur_osc->name);
 		}
 		if(j==1){
-		    cur_port->port_flow = FLOW_OUTPUT;
-		    cur_port->port_type = TYPE_AUDIO;
+		    cur_port->port_flow = PORT_FLOW_OUTPUT;
+		    cur_port->port_type = PORT_TYPE_AUDIO;
 		    name_len += 8;
 		    cur_port->port_name = malloc(sizeof(char) * name_len);
 		    if(!cur_port->port_name){

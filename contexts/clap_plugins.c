@@ -262,9 +262,9 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO* plug_data, int id, CLAP_PLUG_P
 		cur_sys_port->sys_ports[chan] = NULL;
 		char full_port_name[port_name_size];
 		if(clap_plug_port_name_create(port_name_size, full_port_name, id, plug->plug_inst->desc->name, port_info.name, chan) != 0)continue;
-		unsigned int io_flow = 0x2;
-		if(input_ports == 1)io_flow = 0x1;
-		cur_sys_port->sys_ports[chan] = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_AUDIO, io_flow, full_port_name);
+		unsigned int io_flow = PORT_FLOW_OUTPUT;
+		if(input_ports == 1)io_flow = PORT_FLOW_INPUT;
+		cur_sys_port->sys_ports[chan] = app_jack_create_port_on_client(plug_data->audio_backend, PORT_TYPE_AUDIO, io_flow, full_port_name);
 		if(!cur_sys_port->sys_ports[chan])continue;
 	    }
 	    cur_sys_port->channel_count = channels;
@@ -382,9 +382,9 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO* plug_data, int id, bool i
 	if(!clap_plug_note_ports->get(plug->plug_inst, i, input_ports, &note_port_info))continue;
 	char full_port_name[port_name_size];
 	if(clap_plug_port_name_create(port_name_size, full_port_name, id, plug->plug_inst->desc->name, note_port_info.name, -1) != 0)continue;
-	unsigned int io_flow = 0x2;
-	if(input_ports == 1)io_flow = 0x1;
-	note_port->sys_ports[i] = app_jack_create_port_on_client(plug_data->audio_backend, TYPE_MIDI, io_flow, full_port_name);
+	unsigned int io_flow = PORT_FLOW_OUTPUT;
+	if(input_ports == 1)io_flow = PORT_FLOW_INPUT;
+	note_port->sys_ports[i] = app_jack_create_port_on_client(plug_data->audio_backend, PORT_TYPE_MIDI, io_flow, full_port_name);
 	note_port->ids[i] = note_port_info.id;
 	note_port->preferred_dialects[i] = note_port_info.preferred_dialect;
 	note_port->supported_dialects[i] = note_port_info.supported_dialects;

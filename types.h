@@ -93,26 +93,20 @@ enum paramRealtimeType{
     UI_TO_RT_RING_E = 0,
     RT_TO_UI_RING_E = 1
 };
-//stream flow directions
-/*
+
 enum FlowType{
-    FLOW_INPUT = 0x1,
-    FLOW_OUTPUT = 0x2
-};
-*/
-enum FlowType{
-    FLOW_UNKNOWN,
-    FLOW_INPUT,
-    FLOW_OUTPUT
+    PORT_FLOW_UNKNOWN,
+    PORT_FLOW_INPUT,
+    PORT_FLOW_OUTPUT
 };
 //the port type for the audio client
 enum PortType{
-    TYPE_UNKNOWN,
-    TYPE_CONTROL,
-    TYPE_AUDIO,
-    TYPE_EVENT,
-    TYPE_MIDI,
-    TYPE_CV
+    PORT_TYPE_UNKNOWN,
+    PORT_TYPE_CONTROL,
+    PORT_TYPE_AUDIO,
+    PORT_TYPE_EVENT,
+    PORT_TYPE_MIDI,
+    PORT_TYPE_CV
 };    
 
 enum MsgFromRT{

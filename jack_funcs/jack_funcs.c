@@ -251,10 +251,10 @@ void* app_jack_create_port_on_client(void* client_in, unsigned int port_type, un
     if(!client)return NULL;
     const char* type = NULL;
     switch(port_type){
-    case TYPE_AUDIO:
+    case PORT_TYPE_AUDIO:
 	type = JACK_DEFAULT_AUDIO_TYPE;
 	break;
-    case TYPE_MIDI:
+    case PORT_TYPE_MIDI:
 	type = JACK_DEFAULT_MIDI_TYPE;
 	break;
     default:
@@ -401,10 +401,10 @@ const char** app_jack_port_names(JACK_INFO *jack_data, const char* port_name_pat
 
     const char* type = NULL;
     switch(type_pattern){
-    case TYPE_AUDIO:
+    case PORT_TYPE_AUDIO:
 	type = JACK_DEFAULT_AUDIO_TYPE;
 	break;
-    case TYPE_MIDI:
+    case PORT_TYPE_MIDI:
 	type = JACK_DEFAULT_MIDI_TYPE;
 	break;
     default:
