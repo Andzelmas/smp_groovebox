@@ -17,8 +17,6 @@ static thread_local bool is_audio_thread = false;
 
 //jack main struct
 typedef struct _jack_info{
-    //jack input, midi, output ports
-    jack_port_t **ports;
     int port_size;
     //the jack client 
     jack_client_t *client;
@@ -45,9 +43,7 @@ static int app_jack_sys_send_msg(void* user_data, const char* msg){
 }
 
 JACK_INFO* jack_initialize(void *arg, const char *client_name,
-			   int ports_num, unsigned int* ports_types, unsigned int *io_types,
-			   const char** ports_names,
-                           int(*process)(jack_nframes_t, void*), unsigned int create_ports){
+                           int(*process)(jack_nframes_t, void*)){
     
     JACK_INFO *jack_data = (JACK_INFO*)malloc(sizeof(JACK_INFO));
     if(!jack_data){
@@ -87,14 +83,7 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
         free(jack_data);
         return NULL; 
     }
-    jack_data->ports = NULL;
-    if(create_ports == 1){
-	int port_err = init_jack_ports(jack_data, ports_num, ports_types, io_types, ports_names);
-	if(port_err!=0){
-	    jack_clean_memory(jack_data);
-	    return NULL;
-	}
-    }
+
     //what the process function is
     jack_set_process_callback(jack_data->client, process, arg);
     
@@ -245,40 +234,6 @@ void app_jack_midi_cont_reset(JACK_MIDI_CONT* midi_cont){
     memset(midi_cont->vel_trig, 0, size * sizeof(MIDI_DATA_T));
 }
 
-static int init_jack_ports(JACK_INFO *jack_data, int ports_num, unsigned int *ports_types,
-		    unsigned int *io_types, const char** ports_names){
-    //init ports
-    jack_port_t **ports = NULL;
-    ports = (jack_port_t**)malloc(sizeof(jack_port_t*)*ports_num);
-    if(!ports){
-	jack_clean_memory(jack_data);
-	return -1;
-    }
-    if(ports_num>0 && ports_names!=NULL){
-	for(int i=0; i<ports_num; i++){
-	    const char* type = NULL;
-	    switch(ports_types[i]){
-	    case 0:
-		type = JACK_DEFAULT_AUDIO_TYPE;
-		break;
-	    case 1:
-		type = JACK_DEFAULT_MIDI_TYPE;
-		break;
-	    default:
-		type = JACK_DEFAULT_AUDIO_TYPE;
-	    }
-	    
-	    jack_port_t *cur_port = jack_port_register(jack_data->client, ports_names[i],
-						       type, io_types[i], 0);
-	    ports[i] = cur_port;
-	}
-	jack_data->ports = ports;
-	jack_data->port_size = ports_num;
-    }
-
-    return 0;
-}
-
 int app_jack_port_rename(void* client_in, void* port, const char* new_port_name){
     if(!new_port_name)return -1;
     JACK_INFO* jack_data = (JACK_INFO*)client_in;
@@ -328,30 +283,6 @@ int app_jack_activate(JACK_INFO* jack_data){
         return -1;
     }
     return 0;
-}
-
-void* app_jack_get_buffer_from_name(JACK_INFO *jack_data, jack_nframes_t nframes,
-				       const char* name, unsigned int* event_num){
-    void* out = NULL;
-    if(jack_data->ports!=NULL){
-	for(int i = 0; i<jack_data->port_size;i++){
-	    jack_port_t *cur_port = jack_data->ports[i];
-	    if(cur_port!=NULL){
-		//TODO this is not rt safe!
-		const char* cur_name = jack_port_short_name(cur_port);
-		if(strcmp(name, cur_name)==0){
-		    out = jack_port_get_buffer(cur_port, nframes);
-		    //if this is midi return the number of events played
-		    if(event_num)
-			*event_num = jack_midi_get_event_count(out);		    
-		    goto finish;
-		}
-	    }
-	}
-    }
-    
-finish:
-    return out;
 }
 
 int app_jack_port_name_size(){
@@ -508,9 +439,6 @@ void jack_clean_memory(void* jack_data_in){
     if(!jack_data)return;   
     //close the jack client
     if(jack_data->client!=NULL)jack_client_close(jack_data->client);
-    //clear the jack_data itself
-    //first the port array
-    if(jack_data->ports!=NULL)free(jack_data->ports);
     //clean the general parameters
     if(jack_data->trk_params)param_clean_param_container(jack_data->trk_params);
 

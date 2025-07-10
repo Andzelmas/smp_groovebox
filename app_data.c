@@ -28,7 +28,7 @@ typedef struct _app_info{
     //built in synth data
     SYNTH_DATA* synth_data;
     
-     //ports for trk_jack
+     //main ports for the app
     void* main_in_L;
     void* main_in_R;
     void* main_out_L;
@@ -101,7 +101,7 @@ void* app_init(uint16_t* user_data_type){
     
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/   
-    app_data->trk_jack = jack_initialize(app_data, APP_NAME, 0, 0, 0, NULL, trk_audio_process_rt, 0);
+    app_data->trk_jack = jack_initialize(app_data, APP_NAME, trk_audio_process_rt);
     if(!app_data->trk_jack){
 	clean_memory(app_data);
 	return NULL;
@@ -605,8 +605,10 @@ int trk_audio_process_rt(NFRAMES_T nframes, void *arg){
     return 0;
 }
 
-int app_update_ui_params(APP_INFO* app_data){
-    if(!app_data)return -1;
+void app_data_update(void* user_data, uint16_t user_data_type){
+    if(user_data_type != USER_DATA_T_ROOT)return;
+    if(!user_data)return;
+    APP_INFO* app_data = (APP_INFO*)user_data;
     //read app_data messages from [audio-thread] on the [main-thread]
     context_sub_process_ui(app_data->control_data);
     //read messages for jack from rt thread on [main-thread]
@@ -619,7 +621,6 @@ int app_update_ui_params(APP_INFO* app_data){
     smp_read_rt_to_ui_messages(app_data->smp_data);
     //read messages from the rt thread on the [main-thread] for the synth context
     synth_read_rt_to_ui_messages(app_data->synth_data);
-    return 0;
 }
 
 int app_subcontext_remove(APP_INFO* app_data, unsigned char cx_type, int id){

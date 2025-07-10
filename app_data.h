@@ -84,7 +84,8 @@ char* app_return_short_port(APP_INFO* app_data, const char* full_port_name);
 //realtime callback for the track context, as usual has to use only _rt functions
 int trk_audio_process_rt(jack_nframes_t nframes, void *arg);
 //Reads the rt_to_ui buffer and saves any context param values to their ui_params arrays.
-int app_update_ui_params(APP_INFO* app_data);
+//Might do some additional updating
+void app_data_update(void* user_data, uint16_t user_data_type);
 //realtime callback for the plugin host data, as always only _rt functions inside
 int plug_audio_process_rt(NFRAMES_T nframes, void *arg);
 //remove subcontext, plugin, clap plugin or sample

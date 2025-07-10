@@ -12,7 +12,7 @@
 
 typedef struct _cx{
     char unique_name[MAX_PATH_STRING];
-    char short_name[MAX_PARAM_NAME_LENGTH]; //this is used for UI as display_name. If DYN_DISPLAY_NAME flag is set, update short_name with a data function, when it gets dirty
+    char short_name[MAX_PARAM_NAME_LENGTH]; //this is used for UI as display_name. If DISPLAY_NAME_DYN flag is set, update short_name with a data function
     int idx; //index number of this CX in the cx_parent cx_children array
     uint16_t user_data_type;
     void* user_data; //user_data for this cx, that the data layer uses. IT IS FORBIDDEN TO FREE OR MODIFY THIS IN ANY OTHER WAY
@@ -29,6 +29,7 @@ typedef struct _app_intrf{
     void* (*data_child_return)(void* parent_user_data, uint16_t parent_type, uint16_t* return_type, unsigned int idx); //return the idx child for the parent_user_data. Will NULL if idx is out of bounds
     uint32_t (*data_flags_get)(void* user_data, uint16_t type); //get the flags for this cx from the data layer
     const char* (*data_short_name_get)(void* user_data, uint16_t type); //return the short name of the data
+    void (*data_update)(void* main_user_data, uint16_t main_user_data_type); //data function that updates its internal structures every cycle, should be called first before any navigation
     void (*data_destroy)(void* user_data, uint16_t type); //destroy the whole data, user_data is the data from the cx_root CX. Used when closing the app
 }APP_INTRF;
 
@@ -176,6 +177,7 @@ static CX* app_intrf_cx_create(APP_INTRF* app_intrf, CX* parent_cx, void* user_d
 	    child_data = app_intrf->data_child_return(new_cx->user_data, new_cx->user_data_type, &child_type, iter);
 	}
     }
+    //TODO if the context was created succesfully check the flags and do additional work as needed
     
     return new_cx;
 }
@@ -185,9 +187,16 @@ APP_INTRF* app_intrf_init(){
     if(!app_intrf)return NULL;
     
     //initiate the app_intrf functions for data manipulation
+    //--------------------------------------------------
     app_intrf->data_child_return = app_data_child_return;
     app_intrf->data_short_name_get = app_data_short_name_get;
+    app_intrf->data_update = app_data_update;
     app_intrf->data_destroy = app_stop_and_clean;
+
+    if(!app_intrf->data_child_return || !app_intrf->data_short_name_get){
+	app_intrf_destroy(app_intrf);
+	return NULL;
+    }
     //--------------------------------------------------
     
     app_intrf->main_user_data = app_init(&(app_intrf->main_user_data_type));
@@ -220,6 +229,13 @@ void app_intrf_destroy(APP_INTRF* app_intrf){
 
 
 //NAVIGATION functions
+void nav_update(APP_INTRF* app_intrf){
+    if(!app_intrf)return;
+    if(app_intrf->data_update)
+	app_intrf->data_update(app_intrf->main_user_data, app_intrf->main_user_data_type);
+    //TODO go through the contexts to check if any are dirty.
+    //TODO if a cx is dirty remove its children and create them again
+}
 CX* nav_cx_root_return(APP_INTRF* app_intrf){
     if(!app_intrf)return NULL;
     return app_intrf->cx_root;

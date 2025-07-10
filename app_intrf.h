@@ -7,6 +7,8 @@ APP_INTRF* app_intrf_init();
 void app_intrf_destroy(APP_INTRF* app_intrf);
 
 //NAVIGATION functions that UI can use to explore the interface
+//call data_update() and check if any contexts are dirty, if yes recreate their children
+void nav_update(APP_INTRF* app_intrf);
 //return the cx_root of the app_intrf - the very top context of the interface
 CX* nav_cx_root_return(APP_INTRF* app_intrf);
 //return the child in the parent->cx_children array at the child_idx index

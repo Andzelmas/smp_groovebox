@@ -11,6 +11,8 @@ int main(){
 	log_append_logfile("Could not start the app_intrf\n");
         exit(1);
     }
+    //update the interface, of course should be in a loop
+    nav_update(app_intrf);
     
     //NAVIGATING interface
     CX* root_cx = nav_cx_root_return(app_intrf);

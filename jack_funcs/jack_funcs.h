@@ -29,9 +29,7 @@ typedef struct _jack_info JACK_INFO;
 
 //function that initializes the client
 JACK_INFO* jack_initialize(void *arg, const char *client_name,
-			   int ports_num, unsigned int* ports_types,
-			   unsigned int *io_types, const char** ports_names,
-                           int(*process)(jack_nframes_t, void*), unsigned int create_ports);
+                           int(*process)(jack_nframes_t, void*));
 //read messages from ui on [audio-thread]
 //update parameters, pause jack process
 int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data);
@@ -63,9 +61,6 @@ float app_jack_return_samplerate(JACK_INFO* jack_data);
 int app_jack_return_buffer_size(JACK_INFO* jack_data);
 //activate the jack client
 int app_jack_activate(JACK_INFO *jack_data);
-//return buffer from a jack port name
-void* app_jack_get_buffer_from_name(JACK_INFO *jack_data, jack_nframes_t nframes,
-				       const char* name, unsigned int* event_num);
 //get buffer from a jack port 
 void* app_jack_get_buffer_rt(void* port, jack_nframes_t nframes);
 //clear the buffer of midi out buffer

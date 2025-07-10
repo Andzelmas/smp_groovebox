@@ -38,6 +38,13 @@ enum userDataTypes{
     USER_DATA_T_JACK = 9 //audio backend data, user_data casts to APP_INFO*
 };
 
+enum intrfFlags{
+    INTRF_FLAG_CONTAINER = 1 << 0, //context that contains other contexts, this will be the most common context
+    INTRF_FLAG_ROOT = 1 << 1, //the parent of all contexts on the app, exiting this context closes the app
+    INTRF_FLAG_DISPLAY_NAME_DYN = 1 << 2, //name of this context should be returned by a data_short_name_get() every time when the context is displayed, because it might change at anytime
+    
+};
+
 //enum for context types
 enum appContextTypes{
     Context_type_Sampler = 0x01,
