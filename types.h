@@ -41,7 +41,7 @@ enum userDataTypes{
 enum intrfFlags{
     INTRF_FLAG_CONTAINER = 1 << 0, //context that contains other contexts, this will be the most common context
     INTRF_FLAG_ROOT = 1 << 1, //the parent of all contexts on the app, exiting this context closes the app
-    INTRF_FLAG_PERMANENT = 1 << 2, //guaranteed to stay throughout the live of the app. Safe to always display to the user. When removing contexts in case of DIRTY, this cx and its children will be left alone.
+    INTRF_FLAG_CANT_DIRTY = 1 << 2, //if this context parent becomes dirty, dont remove this children. This context will be recreated only if the parent is removed.
     INTRF_FLAG_INTERACT = 1 << 3, //the user can interact with the context not only to see its children, but to for example press a button
     INTRF_FLAG_DISPLAY_NAME_DYN = 1 << 4, //name of this context should be returned by a data_short_name_get() every time when the context is displayed, because it might change at anytime
     INTRF_FLAG_LIST = 1 << 5, //this context is a list - it has _LIST_ITEM or _LIST children in it (among others)

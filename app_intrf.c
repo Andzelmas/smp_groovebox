@@ -7,10 +7,13 @@
 
 //TODO params, plugins and sampler will need to be modified so that even the Parameter; Plugin or Sample has the param_container; plug_data; and smp_data in it.
 //TODO need to be consistent - data functions uses void* user_data without any indices AND use structs already allocated on the contexts - modify them if they do not fit this concept.
-//TODO implement "DIRTY" concept for the data structures. If for example a plugin is added to the Plugins structure (plug_data) will be marked as DIRTY by plugins.c
-//TODO app_intrf will check contexts for DIRTY (data will return that) and if the context is dirty will remove all of its children and create them again.
-//TODO NEED TO FIGURE OUT what to do with lists and DIRTY - for example preset list with categories and presets, also a button to "refresh" the list. When preset is selected the plugin will be marked DIRTY
-//TODO but to delete all of the context children of the plugin would delete the list itself. If before deleting would jump to the plugin context, user would have to keep coming back to the list, not convenient.
+//TODO implement "DIRTY" concept for the data structures. If for example a plugin is added, the Plugins structure (plug_data) will be marked as DIRTY by plugins.c
+//TODO When app_intrf checks contexts and finds a cx dirty, will need a special function to remove and create the cx children again:
+//go through each child with for loop and check their flags if they are eligible for recreation: children with INTRF_FLAG_CANT_DIRTY will not be removed.
+//remove the children recursively. So even if childrens children will have a flag INTRF_FLAG_CANT_DIRTY they will be removed, since their parent is removed and there would be a memory leak.
+//in this way if for example structure is Plugins->plug_01->load_preset->preset categories and presets, when a preset is loaded the plug_01 will be marked as dirty.
+//all of the plug_01 children will be removed (parameters etc.), but load_preset has INTRF_FLAG_CANT_DIRTY and remove will leave it and its children, so the user can continue loading the presets.
+//on the other hand if a new plugin plug_02 is created Plugins will be marked dirty. Since load_preset is Plugins childrens children it will be removed this time and created again.
 //TODO when implementing clay or other ui, test mouse clicking; scrolling(would be nice to able to scroll any element with contents that do not fit) and selecting as soon as possible.
 //TODO (selecting - on the ui side or app_intrf side?)
 
