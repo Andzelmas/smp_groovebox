@@ -24,6 +24,8 @@ typedef struct _cx{
 
 typedef struct _app_intrf{
     CX* cx_root;
+    CX* cx_curr; //current context that is entered right now
+    CX* cx_selected; //the selected or last interacted context, when entering a context will be the first child
     uint16_t main_user_data_type; //type for the main user_data sturct, the same type is in cx_root->user_data_type
     void* main_user_data; //main user_data struct for convenience, the same struct is in cx_root->user_data
     void* (*data_child_return)(void* parent_user_data, uint16_t parent_type, uint16_t* return_type, unsigned int idx); //return the idx child for the parent_user_data. Will NULL if idx is out of bounds
@@ -210,6 +212,11 @@ APP_INTRF* app_intrf_init(){
 	app_intrf_destroy(app_intrf);
 	return NULL;
     }
+
+    app_intrf->cx_curr = app_intrf->cx_root;
+    app_intrf->cx_selected = app_intrf->cx_curr;
+    if(app_intrf->cx_curr->cx_children_count > 0)
+	app_intrf->cx_selected = app_intrf->cx_curr->cx_children[0];
     
     return app_intrf;
 }
