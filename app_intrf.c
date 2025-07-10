@@ -6,7 +6,11 @@
 #include <stdio.h>
 
 //TODO params, plugins and sampler will need to be modified so that even the Parameter; Plugin or Sample has the param_container; plug_data; and smp_data in it.
-//TODO need to be consistant - data functions uses void* user_data without any indices AND use structs already allocated on the contexts - modify them if they do not fit this concept.
+//TODO need to be consistent - data functions uses void* user_data without any indices AND use structs already allocated on the contexts - modify them if they do not fit this concept.
+//TODO implement "DIRTY" concept for the data structures. If for example a plugin is added to the Plugins structure (plug_data) will be marked as DIRTY by plugins.c
+//TODO app_intrf will check contexts for DIRTY (data will return that) and if the context is dirty will remove all of its children and create them again.
+//TODO NEED TO FIGURE OUT what to do with lists and DIRTY - for example preset list with categories and presets, also a button to "refresh" the list. When preset is selected the plugin will be marked DIRTY
+//TODO but to delete all of the context children of the plugin would delete the list itself. If before deleting would jump to the plugin context, user would have to keep coming back to the list, not convenient.
 //TODO when implementing clay or other ui, test mouse clicking; scrolling(would be nice to able to scroll any element with contents that do not fit) and selecting as soon as possible.
 //TODO (selecting - on the ui side or app_intrf side?)
 
@@ -32,6 +36,7 @@ typedef struct _app_intrf{
     uint32_t (*data_flags_get)(void* user_data, uint16_t type); //get the flags for this cx from the data layer
     const char* (*data_short_name_get)(void* user_data, uint16_t type); //return the short name of the data
     void (*data_update)(void* main_user_data, uint16_t main_user_data_type); //data function that updates its internal structures every cycle, should be called first before any navigation
+    bool (*data_is_dirty)(void* user_data, uint16_t type); //check this user_data for dirty, if it is dirty, need to remove all of its children cx and create them again.
     void (*data_destroy)(void* user_data, uint16_t type); //destroy the whole data, user_data is the data from the cx_root CX. Used when closing the app
 }APP_INTRF;
 
