@@ -41,11 +41,20 @@ enum userDataTypes{
 enum intrfFlags{
     INTRF_FLAG_CONTAINER = 1 << 0, //context that contains other contexts, this will be the most common context
     INTRF_FLAG_ROOT = 1 << 1, //the parent of all contexts on the app, exiting this context closes the app
-    INTRF_FLAG_DISPLAY_NAME_DYN = 1 << 2, //name of this context should be returned by a data_short_name_get() every time when the context is displayed, because it might change at anytime
-    
+    INTRF_FLAG_INTERACT = 1 << 2, //the user can interact with the context not only to see its children, but to for example press a button
+    INTRF_FLAG_DISPLAY_NAME_DYN = 1 << 3, //name of this context should be returned by a data_short_name_get() every time when the context is displayed, because it might change at anytime
+    INTRF_FLAG_LIST = 1 << 4, //this context is a list - it has _LIST_ITEM or _LIST children in it (among others)
+    INTRF_FLAG_LIST_ITEM = 1 << 5, //this context is a list item
+    INTRF_FLAG_ON_TOP = 1 << 6, //this context should be reachable for the user, even when navigating this context children. For example a "delete" button when browsing files
+    INTRF_FLAG_INV_POPULATE = 1 << 7, //only create this context children if entered through the invoke function. Useful for lists that take long to populate, so user has to wait only when pressing on the context
+    INTRF_FLAG_INV_FROM_FILE_NEW = 1 << 8, //whatever the data is doing with this user_data on invoke it needs a file name from the user. Data will try to create this file
+    INTRF_FLAG_INV_FROM_FILE_EXISTING = 1 << 9, //whatever the data is doing with this user_data on invoke it needs an existing file name already present on disk
+    INTRF_FLAG_UPDATE_CHILDREN = 1 << 10, //after creating all the children for this context a data_update_children() function needs to be called, so data can update this structure (possibly from a user config file)
+    INTRF_FLAG_VAL = 1 << 11 //this context is some kind of a parameter and its values can be changed with data_val_change()
 };
 
 //enum for context types
+//TODO userDataTypes replaces these, will need to delete
 enum appContextTypes{
     Context_type_Sampler = 0x01,
     Context_type_Plugins = 0x02,
