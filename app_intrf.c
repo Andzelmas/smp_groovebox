@@ -69,6 +69,7 @@ static void app_intrf_cx_children_pop(APP_INTRF* app_intrf, int child_idx, CX* p
     if(!parent)return;
     if(!parent->cx_children)return;
     if(child_idx >= parent->cx_children_count)return;
+    if(child_idx < 0)return;
     parent->cx_children[child_idx] = NULL;
     
     unsigned int new_child_count = parent->cx_children_count - 1;
@@ -91,8 +92,8 @@ static void app_intrf_cx_children_pop(APP_INTRF* app_intrf, int child_idx, CX* p
     parent->cx_children_count = new_child_count;
     free(parent->cx_children);
     parent->cx_children = new_child_array;
-
 }
+
 //remove the cx and its children recursively.
 static void app_intrf_cx_remove(APP_INTRF* app_intrf, CX* remove_cx){
     if(!app_intrf)return;
@@ -145,7 +146,8 @@ static CX* app_intrf_cx_create(APP_INTRF* app_intrf, CX* parent_cx, void* user_d
     new_cx->cx_parent = parent_cx;
     new_cx->user_data = user_data;
     new_cx->user_data_type = user_data_type;
-
+    new_cx->idx = -1;
+    
     if(!short_name && !user_data){
 	app_intrf_cx_remove(app_intrf, new_cx);
 	return NULL;
@@ -168,7 +170,7 @@ static CX* app_intrf_cx_create(APP_INTRF* app_intrf, CX* parent_cx, void* user_d
 	    app_intrf_cx_remove(app_intrf, new_cx);
 	    return NULL;
 	}
-	//create unique name with the parent short name and the idx in the parent children cx array
+	//create unique name with the parent short name and this cx short name
 	snprintf(new_cx->unique_name, MAX_PATH_STRING, "%s_<__>_%s", parent_cx->short_name, new_cx->short_name);
     }
 
@@ -251,9 +253,9 @@ void nav_update(APP_INTRF* app_intrf){
     //TODO go through the contexts to check if any are dirty.
     //TODO if a cx is dirty remove its children and create them again
 }
-CX* nav_cx_root_return(APP_INTRF* app_intrf){
+CX* nav_cx_curr_return(APP_INTRF* app_intrf){
     if(!app_intrf)return NULL;
-    return app_intrf->cx_root;
+    return app_intrf->cx_curr;
 }
 CX* nav_cx_child_return(APP_INTRF* app_intrf, CX* parent, unsigned int child_idx){
     if(!app_intrf)return NULL;

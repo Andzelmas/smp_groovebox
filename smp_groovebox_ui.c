@@ -11,24 +11,26 @@ int main(){
 	log_append_logfile("Could not start the app_intrf\n");
         exit(1);
     }
+    //update the interface, of course should be in a loop
+    nav_update(app_intrf);
     
     //NAVIGATING interface
-    CX* root_cx = nav_cx_root_return(app_intrf);
-    if(root_cx){
+    CX* cx_curr = nav_cx_curr_return(app_intrf);
+    if(cx_curr){
 	char display_name[MAX_PARAM_NAME_LENGTH];
-	if(nav_cx_display_name_return(app_intrf, root_cx, display_name, MAX_PARAM_NAME_LENGTH) == 1){
-	    printf("root_cx_name: %s\n", display_name);
+	if(nav_cx_display_name_return(app_intrf, cx_curr, display_name, MAX_PARAM_NAME_LENGTH) == 1){
+	    printf("cx_curr: %s\n", display_name);
 	}
 
-	CX* child_cx = nav_cx_child_return(app_intrf, root_cx, 0);
+	CX* cx_child = nav_cx_child_return(app_intrf, cx_curr, 0);
 	unsigned int child_idx = 0;
-	while(child_cx){
+	while(cx_child){
 	    printf("   |");
-	    if(nav_cx_display_name_return(app_intrf, child_cx, display_name, MAX_PARAM_NAME_LENGTH) == 1){
-		printf("-- cx_name: %s\n", display_name);
+	    if(nav_cx_display_name_return(app_intrf, cx_child, display_name, MAX_PARAM_NAME_LENGTH) == 1){
+		printf("--> %s\n", display_name);
 	    }
 	    child_idx += 1;
-	    child_cx = nav_cx_child_return(app_intrf, root_cx, child_idx);
+	    cx_child = nav_cx_child_return(app_intrf, cx_curr, child_idx);
 	}
     }
     //----------------------------------------------------------------------------------------------------
@@ -38,3 +40,4 @@ int main(){
     log_append_logfile("Cleaned everything, closing the app \n");
     return 0;
 }
+
