@@ -121,6 +121,16 @@ static void app_intrf_cx_remove(APP_INTRF* app_intrf, CX* remove_cx){
     }
     //if there where problems of children popping from remove_cx cx_children array, free the cx_children array
     if(remove_cx->cx_children)free(remove_cx->cx_children);
+    
+    //if cx_curr or cx_selected is the same as remove_cx, change them
+    if(app_intrf->cx_curr == remove_cx && remove_cx->cx_parent){
+	app_intrf->cx_curr = remove_cx->cx_parent;
+	app_intrf->cx_selected = remove_cx->cx_parent->cx_children[0];
+    }
+    if(app_intrf->cx_selected == remove_cx){
+	app_intrf->cx_selected = app_intrf->cx_curr;
+    }
+    
     free(remove_cx);
 }
 //create a new cx and return it.
