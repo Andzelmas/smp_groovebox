@@ -15,7 +15,9 @@
 //all of the plug_01 children will be removed (parameters etc.), but load_preset has INTRF_FLAG_CANT_DIRTY and remove will leave it and its children, so the user can continue loading the presets.
 //on the other hand if a new plugin plug_02 is created Plugins will be marked dirty. Since load_preset is Plugins childrens children it will be removed this time and created again.
 //TODO when implementing clay or other ui, test mouse clicking; scrolling(would be nice to able to scroll any element with contents that do not fit) and selecting as soon as possible.
-//TODO (selecting - on the ui side or app_intrf side?)
+//TODO cx with flag _ON_TOP should be in a special cx array on app_intrf. If a cx in that array becomes a child of the cx_curr, pop it from that array.
+//If a cx in that array is being removed also pop it from that array
+//This way user can always show the _ON_TOP contexts, without fear that they lead to undefined behaviour. And UI can sort them by flags (for example buttons on one row, containers on other).
 
 typedef struct _cx{
     char unique_name[MAX_PATH_STRING];
