@@ -288,7 +288,6 @@ APP_INTRF* app_intrf_init(){
 
 void app_intrf_destroy(APP_INTRF* app_intrf){
     if(!app_intrf)return;
-    
     //clean the data 
     if(app_intrf->data_destroy)
 	app_intrf->data_destroy(app_intrf->main_user_data, app_intrf->main_user_data_type);
@@ -319,19 +318,19 @@ CX* nav_cx_selected_return(APP_INTRF* app_intrf){
     if(!app_intrf)return NULL;
     return app_intrf->cx_selected;
 }
-CX* nav_cx_child_return(APP_INTRF* app_intrf, CX* parent, unsigned int child_idx){
+CX** nav_cx_children_return(APP_INTRF* app_intrf, CX* parent, unsigned int* count){
     if(!app_intrf)return NULL;
     if(!parent)return NULL;
-    if(child_idx >= parent->cx_children_count)return NULL;
 
-    return parent->cx_children[child_idx];
+    *count = parent->cx_children_count;
+    return parent->cx_children;
 }
-CX* nav_cx_top_child_return(APP_INTRF* app_intrf, unsigned int child_idx){
+CX** nav_cx_top_children_return(APP_INTRF* app_intrf, unsigned int* count){
     if(!app_intrf)return NULL;
-    if(child_idx >= app_intrf->cx_top_count)return NULL;
     if(!app_intrf->cx_top)return NULL;
-
-    return app_intrf->cx_top[child_idx];
+    
+    *count = app_intrf->cx_top_count;
+    return app_intrf->cx_top;
 }
 int nav_cx_display_name_return(APP_INTRF* app_intrf, CX* cx, char* return_name, unsigned int name_len){
     if(!app_intrf)return -1;

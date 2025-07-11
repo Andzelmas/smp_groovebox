@@ -13,11 +13,11 @@ void nav_update(APP_INTRF* app_intrf);
 CX* nav_cx_curr_return(APP_INTRF* app_intrf);
 //returrn the currently selected context (this can be a context that user invoked last)
 CX* nav_cx_selected_return(APP_INTRF* app_intrf);
-//return the child in the parent->cx_children array at the child_idx index
-//return NULL if the child does not exist
-CX* nav_cx_child_return(APP_INTRF* app_intrf, CX* parent, unsigned int child_idx);
-//return the cx from the top array, returns NULL if this cx does not exist
-CX* nav_cx_top_child_return(APP_INTRF* app_intrf, unsigned int child_idx);
+//return the children in the parent->cx_children array
+//count is how many there are
+CX** nav_cx_children_return(APP_INTRF* app_intrf, CX* parent, unsigned int* count);
+//return the cx top array, count is how many there are
+CX** nav_cx_top_children_return(APP_INTRF* app_intrf, unsigned int* count);
 //return the name of the cx for UI
 int nav_cx_display_name_return(APP_INTRF* app_intrf, CX* cx, char* return_name, unsigned int name_len);
 //----------------------------------------------------------------------------------------------------

@@ -12,7 +12,6 @@ int main(){
 	log_append_logfile("Could not start the app_intrf\n");
         exit(1);
     }
-    //TODO first get user input
     
     //update the interface, of course should be in a loop
     nav_update(app_intrf);
@@ -24,10 +23,11 @@ int main(){
 	if(nav_cx_display_name_return(app_intrf, cx_curr, display_name, MAX_PARAM_NAME_LENGTH) == 1){
 	    printf("---> %s\n", display_name);
 	}
+	unsigned int count = 0;
+	CX** cx_children = nav_cx_children_return(app_intrf, cx_curr, &count);
 
-	CX* cx_child = nav_cx_child_return(app_intrf, cx_curr, 0);
-	unsigned int child_idx = 0;
-	while(cx_child){
+	for(unsigned int i = 0; i < count; i++){
+	    CX* cx_child = cx_children[i];
 	    //highlight the selected context
 	    CX* selected_cx = nav_cx_selected_return(app_intrf);
 	    if(selected_cx){
@@ -40,24 +40,20 @@ int main(){
 	    //show the name of the context
 	    if(nav_cx_display_name_return(app_intrf, cx_child, display_name, MAX_PARAM_NAME_LENGTH) == 1){
 		printf("--> %s", display_name);
-	    }
-	    child_idx += 1;
-	    cx_child = nav_cx_child_return(app_intrf, cx_curr, child_idx);
-	    
+	    }	    
 	    //reset highlighting
 	    printf("\n\033[0m");
 	}
 
 	//print the top array
-	CX* top_cx = nav_cx_top_child_return(app_intrf, 0);
-	child_idx = 0;
+	count = 0;
+	CX** top_cx_array = nav_cx_top_children_return(app_intrf, &count);
 	printf("--------------------------------------------------\n");
-	while(top_cx){
+	for(unsigned int i = 0; i < count; i++){
+	    CX* top_cx = top_cx_array[i];
 	    if(nav_cx_display_name_return(app_intrf, top_cx, display_name, MAX_PARAM_NAME_LENGTH) == 1){
 		printf("%s | ", display_name);
 	    }
-	    child_idx += 1;
-	    top_cx = nav_cx_top_child_return(app_intrf, child_idx);
 	}
 	printf("\n--------------------------------------------------\n");
     }
