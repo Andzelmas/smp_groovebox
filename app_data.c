@@ -180,6 +180,35 @@ void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* r
     return NULL;
 }
 
+uint32_t app_data_flags_get(void* user_data, uint16_t user_data_type){
+    uint32_t flags = 0;
+    if(user_data_type == USER_DATA_T_ROOT){
+	flags = (flags | INTRF_FLAG_ROOT | INTRF_FLAG_CONTAINER);
+    }
+    if(user_data_type == USER_DATA_T_PLUGINS){
+	flags = (flags | INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
+    }
+    if(user_data_type == USER_DATA_T_PLUG_LV2){
+    }
+    if(user_data_type == USER_DATA_T_PLUG_CLAP){
+    }
+    if(user_data_type == USER_DATA_T_SAMPLER){
+	flags = (flags | INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
+    }
+    if(user_data_type == USER_DATA_T_SAMPLE){
+    }
+    if(user_data_type == USER_DATA_T_SYNTH){
+	flags = (flags | INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
+    }
+    if(user_data_type == USER_DATA_T_OSC){
+    }
+    if(user_data_type == USER_DATA_T_JACK){
+	flags = (flags | INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
+    }
+
+    return flags;
+}
+
 const char* app_data_short_name_get(void* user_data, uint16_t user_data_type){
     if(user_data_type == USER_DATA_T_ROOT){
 	return APP_NAME;

@@ -35,6 +35,8 @@ typedef struct _app_intrf{
     CX* cx_root;
     CX* cx_curr; //current context that is entered right now
     CX* cx_selected; //the selected or last interacted context, when entering a context will be the first child
+    unsigned int cx_top_count; //how many CX* in the top array
+    CX** cx_top; //array for contexts flagged as _ON_TOP. These can be retrieved safely like the cx_curr context and shown to the user at any time.
     uint16_t main_user_data_type; //type for the main user_data sturct, the same type is in cx_root->user_data_type
     void* main_user_data; //main user_data struct for convenience, the same struct is in cx_root->user_data
     void* (*data_child_return)(void* parent_user_data, uint16_t parent_type, uint16_t* return_type, unsigned int idx); //return the idx child for the parent_user_data. Will NULL if idx is out of bounds
@@ -45,26 +47,64 @@ typedef struct _app_intrf{
     void (*data_destroy)(void* user_data, uint16_t type); //destroy the whole data, user_data is the data from the cx_root CX. Used when closing the app
 }APP_INTRF;
 
-//add child to the parent cx_children array
-static int app_intrf_cx_children_add(APP_INTRF* app_intrf, CX* child, CX* parent){
-    if(!app_intrf)return -1;
-    if(!child)return -1;
-    if(!parent)return -1;
-    
-    CX** temp_child_array = NULL;
-    if(!parent->cx_children)
-	temp_child_array = (CX**)calloc(1, sizeof(CX*));
+//append CX* to the old_array. Since the array is realloced or calloced send &(CX**) array
+static int app_intrf_cx_array_append(CX*** old_array, unsigned int* array_count, CX* add_cx){
+    CX** temp_array = NULL;
+    if(!old_array)
+	temp_array = (CX**)calloc(1, sizeof(CX*));
     else
-	temp_child_array = (CX**)realloc(parent->cx_children, sizeof(CX*) * (parent->cx_children_count+1));	    
-    if(!temp_child_array){
+	temp_array = (CX**)realloc(*old_array, sizeof(CX*) * (*array_count + 1));
+    if(!temp_array)
 	return -1;
-    }
-    parent->cx_children = temp_child_array;
-    parent->cx_children[parent->cx_children_count] = child;
-    parent->cx_children_count += 1;
-    child->idx = parent->cx_children_count - 1;
+
+    *old_array = temp_array;
+    (*old_array)[*array_count] = add_cx;
+    *array_count += 1;
+
     return 1;
 }
+
+//add child to the end of the parent cx_children array
+static int app_intrf_cx_children_add(APP_INTRF* app_intrf, CX* child){
+    if(!app_intrf)return -1;
+    if(!child)return -1;
+    if(!child->cx_parent)return -1;
+    
+    if(app_intrf_cx_array_append(&(child->cx_parent->cx_children), &(child->cx_parent->cx_children_count), child) != 1)
+	return -1;
+    child->idx = child->cx_parent->cx_children_count - 1;
+    return 1;
+}
+
+static int app_intrf_cx_array_pop(CX*** old_array, unsigned int* array_count, int pop_idx){
+    if(!*old_array)return -1;
+    if(*array_count == 0)return -1;
+    if(pop_idx < 0) return -1;
+    if(pop_idx >= *array_count)return -1;
+
+    unsigned int new_count = *array_count - 1;
+    if(new_count == 0){
+	free(*old_array);
+	*old_array = NULL;
+	*array_count = 0;
+	return 1;
+    }
+    //move everything to the left
+    for(unsigned int i = pop_idx; i < new_count; i++){
+	(*old_array)[i] = (*old_array)[i+1];
+    }
+
+    CX** temp_array;
+    temp_array = (CX**)realloc(*old_array, sizeof(CX*) * new_count);
+    if(!temp_array)
+	return -1;
+
+    *old_array = temp_array;
+    *array_count = new_count;
+    
+    return 1;
+}
+
 //pop the child from parent cx_children array and realloc the array
 static void app_intrf_cx_children_pop(APP_INTRF* app_intrf, int child_idx, CX* parent){
     if(!app_intrf)return;
@@ -72,28 +112,15 @@ static void app_intrf_cx_children_pop(APP_INTRF* app_intrf, int child_idx, CX* p
     if(!parent->cx_children)return;
     if(child_idx >= parent->cx_children_count)return;
     if(child_idx < 0)return;
-    parent->cx_children[child_idx] = NULL;
+
+    if(app_intrf_cx_array_pop(&(parent->cx_children), &(parent->cx_children_count), child_idx) != 1)return;
     
-    unsigned int new_child_count = parent->cx_children_count - 1;
-    if(new_child_count == 0){
-	free(parent->cx_children);
-	parent->cx_children = NULL;
-	parent->cx_children_count = 0;
-	return;
-    }
-    CX** new_child_array = (CX**)malloc(sizeof(CX*) * new_child_count);
-    if(!new_child_array)return;
-    int iter = 0;
+    //change the parent children indices
     for(unsigned int i = 0; i < parent->cx_children_count; i++){
-	if(i == child_idx)continue;
-	new_child_array[iter] = parent->cx_children[i];
-	new_child_array[iter]->idx = iter;
-	
-	iter += 1;
+	CX* curr_cx = parent->cx_children[i];
+	if(curr_cx->idx <= child_idx)continue;
+	curr_cx->idx -= 1;
     }
-    parent->cx_children_count = new_child_count;
-    free(parent->cx_children);
-    parent->cx_children = new_child_array;
 }
 
 //remove the cx and its children recursively.
@@ -132,6 +159,14 @@ static void app_intrf_cx_remove(APP_INTRF* app_intrf, CX* remove_cx){
     if(app_intrf->cx_selected == remove_cx){
 	app_intrf->cx_selected = app_intrf->cx_curr;
     }
+    //if the remove_cx is in the top cx array, pop it from there
+    for(unsigned int i = 0; i < app_intrf->cx_top_count; i++){
+	CX* curr_cx = app_intrf->cx_top[i];
+	if(curr_cx != remove_cx)continue;
+	app_intrf_cx_array_pop(&(app_intrf->cx_top), &(app_intrf->cx_top_count), i);
+    }
+    if(app_intrf->cx_top_count == 0)app_intrf->cx_top = NULL;
+
     
     free(remove_cx);
 }
@@ -152,7 +187,7 @@ static CX* app_intrf_cx_create(APP_INTRF* app_intrf, CX* parent_cx, void* user_d
     }
     new_cx->flags = flags;
     if(flags == 0){
-	//TODO if flags==0 use data function to return the flags variable from the data layer for this cx
+	new_cx->flags = app_intrf->data_flags_get(user_data, user_data_type);
     }
    
     new_cx->cx_parent = parent_cx;
@@ -176,9 +211,9 @@ static CX* app_intrf_cx_create(APP_INTRF* app_intrf, CX* parent_cx, void* user_d
 	snprintf(new_cx->short_name, MAX_PARAM_NAME_LENGTH, "%s", data_short_name);
     }
 
-    if(parent_cx){
+    if(new_cx->cx_parent){
 	//add this cx to the parent cx array
-	if(app_intrf_cx_children_add(app_intrf, new_cx, parent_cx) != 1){
+	if(app_intrf_cx_children_add(app_intrf, new_cx) != 1){
 	    app_intrf_cx_remove(app_intrf, new_cx);
 	    return NULL;
 	}
@@ -201,8 +236,15 @@ static CX* app_intrf_cx_create(APP_INTRF* app_intrf, CX* parent_cx, void* user_d
 	    child_data = app_intrf->data_child_return(new_cx->user_data, new_cx->user_data_type, &child_type, iter);
 	}
     }
-    //TODO if the context was created succesfully check the flags and do additional work as needed
     
+    //if the context was created succesfully check the flags and do additional work as needed
+    //----------------------------------------------------------------------------------------------------
+    //these contexts should be in the top array
+    if((new_cx->flags & INTRF_FLAG_ON_TOP)){
+	app_intrf_cx_array_append(&(app_intrf->cx_top), &(app_intrf->cx_top_count), new_cx);
+    }
+
+    //----------------------------------------------------------------------------------------------------
     return new_cx;
 }
 
@@ -213,6 +255,7 @@ APP_INTRF* app_intrf_init(){
     //initiate the app_intrf functions for data manipulation
     //--------------------------------------------------
     app_intrf->data_child_return = app_data_child_return;
+    app_intrf->data_flags_get = app_data_flags_get;
     app_intrf->data_short_name_get = app_data_short_name_get;
     app_intrf->data_update = app_data_update;
     app_intrf->data_destroy = app_stop_and_clean;
@@ -264,10 +307,17 @@ void nav_update(APP_INTRF* app_intrf){
 	app_intrf->data_update(app_intrf->main_user_data, app_intrf->main_user_data_type);
     //TODO go through the contexts to check if any are dirty.
     //TODO if a cx is dirty remove its children and create them again
+
+    //TODO check if there is a need to pop or add the top array
+    //ON_TOP contexts should not be in the top_array if the cx_curr is its parent
 }
 CX* nav_cx_curr_return(APP_INTRF* app_intrf){
     if(!app_intrf)return NULL;
     return app_intrf->cx_curr;
+}
+CX* nav_cx_selected_return(APP_INTRF* app_intrf){
+    if(!app_intrf)return NULL;
+    return app_intrf->cx_selected;
 }
 CX* nav_cx_child_return(APP_INTRF* app_intrf, CX* parent, unsigned int child_idx){
     if(!app_intrf)return NULL;
@@ -275,6 +325,13 @@ CX* nav_cx_child_return(APP_INTRF* app_intrf, CX* parent, unsigned int child_idx
     if(child_idx >= parent->cx_children_count)return NULL;
 
     return parent->cx_children[child_idx];
+}
+CX* nav_cx_top_child_return(APP_INTRF* app_intrf, unsigned int child_idx){
+    if(!app_intrf)return NULL;
+    if(child_idx >= app_intrf->cx_top_count)return NULL;
+    if(!app_intrf->cx_top)return NULL;
+
+    return app_intrf->cx_top[child_idx];
 }
 int nav_cx_display_name_return(APP_INTRF* app_intrf, CX* cx, char* return_name, unsigned int name_len){
     if(!app_intrf)return -1;
