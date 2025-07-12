@@ -1,4 +1,12 @@
 #pragma once
+
+//Interface for building the data layer structure.
+//This structure can be safely presented to the user
+//IMPORTANT: the returned CX* structs should not be saved - each UI cycle, after the nav_update(), the various CX* that are possible to get should be get a new.
+//This way UI is safe to traverse the returned CX*, knowing none of these will disappear while traversing - the nav_functions do not remove or add CX*.
+//CX* are added or removed in the nav_update() call.
+
+
 typedef struct _cx CX;
 typedef struct _app_intrf APP_INTRF;
 //init and return the app_intrf struct
