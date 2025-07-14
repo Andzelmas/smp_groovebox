@@ -27,6 +27,15 @@ char* plug_return_plugin_name(PLUG_INFO* plug_data, int plug_id);
 //get the list of the plugins in a string array format, user needs to free that array
 char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size);
 
+//TODO implement these
+//create a list of available plugins on the plug_data. If it already exists free it and create it again
+int plug_plugin_list_init(PLUG_INFO* plug_data);
+//return an item from the the plugin list, it can be used to load a plugin
+void* plug_plugin_list_item_return(PLUG_INFO* plug_data, unsigned int idx);
+//return the name of the plugin from the plugin list
+int plug_plugin_list_item_name(PLUG_INFO* plug_data, void* plug_list_item, char* return_name, unsigned int return_name_len);
+
+//TODO should be a similar system to the plugin list (the array should be on the PLUG_PLUG*, user can get the struct of the preset list item and get name from it)
 //presets functions --------------------------------------------------
 //get the preset struct for the plugin (right now it is simply a char* of the path)
 void* plug_plugin_presets_iterate(PLUG_INFO* plug_data, unsigned int idx, uint32_t iter);
