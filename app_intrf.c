@@ -5,6 +5,8 @@
 
 #include <stdio.h>
 
+//TODO when writting invoke data functions, dont forget to think how all of the data will be saved, might be tricky for contexts like ports
+//will need structs on Trk contexts for ports and to what they are connected
 //TODO params, plugins and sampler will need to be modified so that even the Parameter; Plugin or Sample has the param_container; plug_data; and smp_data in it.
 //TODO need to be consistent - data functions uses void* user_data without any indices AND use structs already allocated on the contexts - modify them if they do not fit this concept.
 //TODO implement "DIRTY" concept for the data structures. If for example a plugin is added, the Plugins structure (plug_data) will be marked as DIRTY by plugins.c
