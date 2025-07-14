@@ -6,6 +6,8 @@
 #define SAMPLER_NAME "Sampler"
 #define SYNTH_NAME "Synth"
 #define TRK_NAME "Trk"
+#define NAME_ADD_NEW "add_new"
+#define NAME_REFRESH_LIST "refresh"
 
 #define MAX_STRING_MSG_LENGTH 128 //max string size for sys messages
 #define MAX_PARAM_NAME_LENGTH 100 //the max length for param names
@@ -26,16 +28,18 @@ enum userDataTypes{
     USER_DATA_T_ROOT = 1, //the root data, void* user_data casts to APP_INFO* struct
     //the Plugins context
     USER_DATA_T_PLUGINS = 2, //data that contains plugins, user_data casts to APP_INFO*
-    USER_DATA_T_PLUG_LV2 = 3, //lv2 plugin data type
-    USER_DATA_T_PLUG_CLAP = 4,//clap plugin data type
+    USER_DATA_T_PLUGINS_NEW = 3, //data that contains a list to create new plugins, user_data casts to APP_INFO*
+    USER_DATA_T_PLUGINS_LIST_REFRESH = 4, //data that is used to recreate the plugin list available on this machine for the user
+    USER_DATA_T_PLUG_LV2 = 5, //lv2 plugin data type
+    USER_DATA_T_PLUG_CLAP = 6,//clap plugin data type
     //the Sampler context
-    USER_DATA_T_SAMPLER = 5, //sampler data type, user_data casts to APP_INFO*
-    USER_DATA_T_SAMPLE = 6, //single sample
+    USER_DATA_T_SAMPLER = 7, //sampler data type, user_data casts to APP_INFO*
+    USER_DATA_T_SAMPLE = 8, //single sample
     //the Synth context
-    USER_DATA_T_SYNTH = 7, //built in synth, user_data casts to APP_INFO*
-    USER_DATA_T_OSC = 8, //single oscillator in the synth
+    USER_DATA_T_SYNTH = 9, //built in synth, user_data casts to APP_INFO*
+    USER_DATA_T_OSC = 10, //single oscillator in the synth
     //the Trk, audio backend context
-    USER_DATA_T_JACK = 9 //audio backend data, user_data casts to APP_INFO*
+    USER_DATA_T_JACK = 11 //audio backend data, user_data casts to APP_INFO*
 };
 
 enum intrfFlags{
@@ -47,11 +51,10 @@ enum intrfFlags{
     INTRF_FLAG_LIST = 1 << 5, //this context is a list - it has _LIST_ITEM or _LIST children in it (among others)
     INTRF_FLAG_LIST_ITEM = 1 << 6, //this context is a list item
     INTRF_FLAG_ON_TOP = 1 << 7, //this context should be reachable for the user, even when navigating this contexts parents other children. For example a "delete" button when browsing files
-    INTRF_FLAG_INV_POPULATE = 1 << 8, //only create this context children if entered through the invoke function. Useful for lists that take long to populate, so user has to wait only when pressing on the context
-    INTRF_FLAG_INV_FROM_FILE_NEW = 1 << 9, //whatever the data is doing with this user_data on invoke it needs a file name from the user. Data will try to create this file
-    INTRF_FLAG_INV_FROM_FILE_EXISTING = 1 << 10, //whatever the data is doing with this user_data on invoke it needs an existing file name already present on disk
-    INTRF_FLAG_UPDATE_CHILDREN = 1 << 11, //after creating all the children for this context a data_update_children() function needs to be called, so data can update this structure (possibly from a user config file)
-    INTRF_FLAG_VAL = 1 << 12 //this context is some kind of a parameter and its values can be changed with data_val_change()
+    INTRF_FLAG_INV_FROM_FILE_NEW = 1 << 8, //whatever the data is doing with this user_data on invoke it needs a file name from the user. Data will try to create this file
+    INTRF_FLAG_INV_FROM_FILE_EXISTING = 1 << 9, //whatever the data is doing with this user_data on invoke it needs an existing file name already present on disk
+    INTRF_FLAG_UPDATE_CHILDREN = 1 << 10, //after creating all the children for this context a data_update_children() function needs to be called, so data can update this structure (possibly from a user config file)
+    INTRF_FLAG_VAL = 1 << 11 //this context is some kind of a parameter and its values can be changed with data_val_change()
 };
 
 //enum for context types

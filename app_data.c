@@ -77,7 +77,7 @@ static int app_sys_msg(void* user_data, const char* msg){
     log_append_logfile("%s", msg);
     return 0;
 }
-void* app_init(uint16_t* user_data_type){
+void* app_init(uint16_t* user_data_type, uint32_t* return_flags){
     APP_INFO *app_data = (APP_INFO*) malloc(sizeof(APP_INFO));
     if(!app_data) return NULL;
     
@@ -154,72 +154,81 @@ void* app_init(uint16_t* user_data_type){
     //now unpause the jack function again
     context_sub_wait_for_start(app_data->control_data, (void*)app_data);
     *user_data_type = USER_DATA_T_ROOT;
+    *return_flags = (INTRF_FLAG_ROOT | INTRF_FLAG_CONTAINER);
     return (void*)app_data;
 }
 
-void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* return_type, unsigned int idx){
+void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* return_type, uint32_t* return_flags, unsigned int idx){
     if(!parent_data)return NULL;
     if(parent_type == USER_DATA_T_ROOT){
 	APP_INFO* app_data = (APP_INFO*)parent_data;
 	switch(idx){
 	case 0:
 	    *return_type = USER_DATA_T_SAMPLER;
+	    *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
 	    return (void*)app_data;
 	case 1:
 	    *return_type = USER_DATA_T_PLUGINS;
+	    *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
 	    return (void*)app_data;
 	case 2:
 	    *return_type = USER_DATA_T_SYNTH;
+	    *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
 	    return (void*)app_data;
 	case 3:
 	    *return_type = USER_DATA_T_JACK;
+	    *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
 	    return (void*)app_data;
 	}
     }
-
+    //PLUGINS context
+    //----------------------------------------------------------------------------------------------------
+    if(parent_type == USER_DATA_T_PLUGINS){
+	APP_INFO* app_data = (APP_INFO*)parent_data;
+	//This context is to create new plugins
+	if(idx == 0){
+	    *return_type = USER_DATA_T_PLUGINS_NEW;
+	    *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_INTERACT | INTRF_FLAG_LIST | INTRF_FLAG_CANT_DIRTY);
+	    return (void*)app_data;
+	}
+	//TODO idx > 0 go through loaded plugins
+    }
+    if(parent_type == USER_DATA_T_PLUGINS_NEW){
+	APP_INFO* app_data = (APP_INFO*)parent_data;
+	//This context is to recreate the plugin list, that the user can choose from
+	if(idx == 0){
+	    *return_type = USER_DATA_T_PLUGINS_LIST_REFRESH;
+	    *return_flags = (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP);
+	    return (void*)app_data;
+	}
+	//TODO idx > 0 go through the lv2 and clap plugins on this machine and return the list to the user
+	//TODO Only go through the list if it exists. If it is NULL the list will be created when the user invokes the USER_DATA_T_PLUGINS_NEW context
+    }
+    //----------------------------------------------------------------------------------------------------
+    
     return NULL;
-}
-
-uint32_t app_data_flags_get(void* user_data, uint16_t user_data_type){
-    uint32_t flags = 0;
-    if(user_data_type == USER_DATA_T_ROOT){
-	flags = (flags | INTRF_FLAG_ROOT | INTRF_FLAG_CONTAINER);
-    }
-    if(user_data_type == USER_DATA_T_PLUGINS){
-	flags = (flags | INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
-    }
-    if(user_data_type == USER_DATA_T_PLUG_LV2){
-    }
-    if(user_data_type == USER_DATA_T_PLUG_CLAP){
-    }
-    if(user_data_type == USER_DATA_T_SAMPLER){
-	flags = (flags | INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
-    }
-    if(user_data_type == USER_DATA_T_SAMPLE){
-    }
-    if(user_data_type == USER_DATA_T_SYNTH){
-	flags = (flags | INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
-    }
-    if(user_data_type == USER_DATA_T_OSC){
-    }
-    if(user_data_type == USER_DATA_T_JACK){
-	flags = (flags | INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
-    }
-
-    return flags;
 }
 
 const char* app_data_short_name_get(void* user_data, uint16_t user_data_type){
     if(user_data_type == USER_DATA_T_ROOT){
 	return APP_NAME;
     }
+    //PLUGINS context
+    //----------------------------------------------------------------------------------------------------
     if(user_data_type == USER_DATA_T_PLUGINS){
 	return PLUGINS_NAME;
+    }
+    if(user_data_type == USER_DATA_T_PLUGINS_NEW){
+	return NAME_ADD_NEW;
+    }
+    if(user_data_type == USER_DATA_T_PLUGINS_LIST_REFRESH){
+	return NAME_REFRESH_LIST;
     }
     if(user_data_type == USER_DATA_T_PLUG_LV2){
     }
     if(user_data_type == USER_DATA_T_PLUG_CLAP){
     }
+    //----------------------------------------------------------------------------------------------------
     if(user_data_type == USER_DATA_T_SAMPLER){
 	return SAMPLER_NAME;
     }
@@ -235,6 +244,20 @@ const char* app_data_short_name_get(void* user_data, uint16_t user_data_type){
     }
     
     return NULL;
+}
+
+void app_data_invoke(void* user_data, uint16_t user_data_type, const char* file){
+    if(!user_data)return;
+    //PLUGINS context
+    //----------------------------------------------------------------------------------------------------
+    if(user_data_type == USER_DATA_T_PLUGINS_NEW){
+	APP_INFO* app_data = (APP_INFO*)app_data;
+	//TODO create the available plugins lists if they are not created and mark the USER_DATA_T_PLUGINS_NEW context as dirty, so the list is presented to the UI after the next data_update()
+
+	return;
+    }
+    //----------------------------------------------------------------------------------------------------
+	
 }
 
 char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types){

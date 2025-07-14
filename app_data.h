@@ -20,15 +20,16 @@ typedef enum AppStatus app_status_t;
 //this is the struct for the data on the whole app
 typedef struct _app_info APP_INFO;
 
-//initialize the app_data, user_data_type returns USER_DATA_T_ROOT type
+//initialize the app_data, user_data_type returns USER_DATA_T_ROOT type, flags are the root/main context flags
 //the function returns APP_INFO* cast to void*
-void* app_init(uint16_t* user_data_type);
+void* app_init(uint16_t* user_data_type, uint32_t* return_flags);
 //get the idx child of the parent_data, if idx is out of bounds return NULL
-void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* return_type, unsigned int idx);
-//depending on the context return the appropriate bitwise flags
-uint32_t app_data_flags_get(void* user_data, uint16_t user_data_type);
+//return_type is the type of the returned user_data, to know what to cast void* user_data to, flags are for the UI side of things
+void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* return_type, uint32_t* return_flags, unsigned int idx);
 //get the short_name for the user_data, depending on the user_data_type
 const char* app_data_short_name_get(void* user_data, uint16_t user_data_type);
+//invoke the user_data, this is a callback for "buttons" 
+void app_data_invoke(void* user_data, uint16_t user_data_type, const char* file);
 
 //return the available names for plugins on the system
 char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types);
