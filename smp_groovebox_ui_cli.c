@@ -2,12 +2,25 @@
 #include "util_funcs/log_funcs.h"
 #include "types.h"
 #include <stdlib.h>
+#include <termios.h>
 #include <stdio.h>
+#include <unistd.h>
+
+struct termios orig_termios;
+
+static void disableRawMode() {
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+}
+static void enableRawMode() {
+  tcgetattr(STDIN_FILENO, &orig_termios);
+  atexit(disableRawMode);
+  struct termios raw = orig_termios;
+  raw.c_lflag &= ~(ECHO | ICANON);
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
 
 int main(){
-    //erase the terminal
-    printf("\033[2J\033[H");
-    
+    enableRawMode();
     log_clear_logfile();
     APP_INTRF *app_intrf = app_intrf_init();
     //if app_intrf failed to initialize analyze the error write it and exit
@@ -17,6 +30,8 @@ int main(){
     }
 
     while(1){
+	//erase the terminal
+	printf("\033[2J\033[H");
 	//update the interface, of course should be in a loop
 	nav_update(app_intrf);
     
@@ -65,28 +80,32 @@ int main(){
 	//----------------------------------------------------------------------------------------------------
 
 	//get user inputs
-	char input;
-	scanf("%c", &input);
-	if(input == 'd'){
+	char input = getchar();
+	unsigned int exit = 0;
+	switch(input){
+	case 'd':
 	    nav_cx_selected_next(app_intrf);
-	}
-	if(input == 'a'){
+	    break;
+	case 'a':
 	    nav_cx_selected_prev(app_intrf);
-	}
-	if(input == 'e'){
+	    break;
+	case 'e':
 	    if(nav_cx_selected_invoke(app_intrf) == -1)
-		break;
-	}
-	if(input == 'q'){
+		exit = 1;
+	    break;
+	case 'q':
 	    if(nav_cx_curr_exit(app_intrf) == -1)
-		break;
+	       exit = 1;
+	    break;
 	}
-	//erase the terminal
-	printf("\033[2J\033[H");
+	
+	if(exit == 1)
+	    break;
     }
     
     app_intrf_destroy(app_intrf);
 
     log_append_logfile("Cleaned everything, closing the app \n");
+    disableRawMode();
     return 0;
 }

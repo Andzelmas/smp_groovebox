@@ -7,20 +7,16 @@
 
 //TODO when writting invoke data functions, dont forget to think how all of the data will be saved, might be tricky for contexts like ports
 //will need structs on Trk contexts for ports and to what they are connected
-//TODO params, plugins and sampler will need to be modified so that even the Parameter; Plugin or Sample has the param_container; plug_data; and smp_data in it.
-//TODO need to be consistent - data functions uses void* user_data without any indices AND use structs already allocated on the contexts - modify them if they do not fit this concept.
-//TODO implement "DIRTY" concept for the data structures. If for example a plugin is added, the Plugins structure (plug_data) will be marked as DIRTY by plugins.c
 //TODO When app_intrf checks contexts and finds a cx dirty, will need a special function to remove and create the cx children again:
 //go through each child with for loop and check their flags if they are eligible for recreation: children with INTRF_FLAG_CANT_DIRTY will not be removed.
 //remove the children recursively. So even if childrens children will have a flag INTRF_FLAG_CANT_DIRTY they will be removed, since their parent is removed and there would be a memory leak.
 //in this way if for example structure is Plugins->plug_01->load_preset->preset categories and presets, when a preset is loaded the plug_01 will be marked as dirty.
 //all of the plug_01 children will be removed (parameters etc.), but load_preset has INTRF_FLAG_CANT_DIRTY and remove will leave it and its children, so the user can continue loading the presets.
 //on the other hand if a new plugin plug_02 is created Plugins will be marked dirty. Since load_preset is Plugins childrens children it will be removed this time and created again.
-//BUT what to do to not create contexts with _CANT_DIRTY again when recreating the contexts.
 //TODO when implementing clay or other ui, test mouse clicking; scrolling(would be nice to able to scroll any element with contents that do not fit) and selecting as soon as possible.
 
 typedef struct _cx{
-    char unique_name[MAX_PATH_STRING];
+    char unique_name[MAX_UNIQUE_ID_STRING];
     char short_name[MAX_PARAM_NAME_LENGTH]; //this is used for UI as display_name. If DISPLAY_NAME_DYN flag is set, update short_name with a data function
     int idx; //index number of this CX in the cx_parent cx_children array
     uint16_t user_data_type;
@@ -220,35 +216,39 @@ static CX* app_intrf_cx_create(APP_INTRF* app_intrf, CX* parent_cx, void* user_d
 	    return NULL;
 	}
 	//create unique name with the parent short name and this cx short name
-	snprintf(new_cx->unique_name, MAX_PATH_STRING, "%s_<__>_%s", parent_cx->short_name, new_cx->short_name);
+	snprintf(new_cx->unique_name, MAX_UNIQUE_ID_STRING, "%s_<__>_%s", parent_cx->short_name, new_cx->short_name);
     }
 
     if(!parent_cx){
-	snprintf(new_cx->unique_name, MAX_PATH_STRING, "%s", new_cx->short_name);
+	snprintf(new_cx->unique_name, MAX_UNIQUE_ID_STRING, "%s", new_cx->short_name);
     }
-
-    //IF user_data exists, get all children recursively for this cx from the data layer
-    if(user_data){
-	unsigned int iter = 0;
-	uint16_t child_type = 0;
-	uint32_t child_flags = 0;
-	void* child_data = app_intrf->data_child_return(new_cx->user_data, new_cx->user_data_type, &child_type, &child_flags, iter);
-	while(child_data){
-	    app_intrf_cx_create(app_intrf, new_cx, child_data, child_type, child_flags, NULL);
-	    iter += 1;
-	    child_data = app_intrf->data_child_return(new_cx->user_data, new_cx->user_data_type, &child_type, &child_flags, iter);
-	}
-    }
-    
+ 
     //if the context was created succesfully check the flags and do additional work as needed
     //----------------------------------------------------------------------------------------------------
 
 
     //----------------------------------------------------------------------------------------------------
-    
     return new_cx;
 }
+//create children for the parent CX* recursively
+static void app_intrf_cx_children_create(APP_INTRF* app_intrf, CX* parent_cx){
+    if(!app_intrf)return;
+    if(!parent_cx)return;
+    unsigned int iter = 0;
+    uint16_t child_type = 0;
+    uint32_t child_flags = 0;
+    void* child_data = app_intrf->data_child_return(parent_cx->user_data, parent_cx->user_data_type, &child_type, &child_flags, iter);
+    while(child_data){
+	app_intrf_cx_create(app_intrf, parent_cx, child_data, child_type, child_flags, NULL);
+	iter += 1;
+	child_data = app_intrf->data_child_return(parent_cx->user_data, parent_cx->user_data_type, &child_type, &child_flags, iter);
+    }
 
+    for(unsigned int i = 0; i < parent_cx->cx_children_count; i++){
+	CX* cur_child = parent_cx->cx_children[i];
+	app_intrf_cx_children_create(app_intrf, cur_child);
+    }
+}
 APP_INTRF* app_intrf_init(){
     APP_INTRF* app_intrf = calloc(1, sizeof(APP_INTRF));
     if(!app_intrf)return NULL;
@@ -259,7 +259,7 @@ APP_INTRF* app_intrf_init(){
     app_intrf->data_short_name_get = app_data_short_name_get;
     app_intrf->data_update = app_data_update;
     app_intrf->data_invoke = app_data_invoke;
-    app_intrf->data_is_dirty = NULL;
+    app_intrf->data_is_dirty = app_data_is_dirty;
     app_intrf->data_destroy = app_stop_and_clean;
 
     if(!app_intrf->data_child_return || !app_intrf->data_short_name_get){
@@ -273,13 +273,15 @@ APP_INTRF* app_intrf_init(){
 	app_intrf_destroy(app_intrf);
 	return NULL;
     }
-
+    //create the cx_root
     app_intrf->cx_root = app_intrf_cx_create(app_intrf, NULL, app_intrf->main_user_data, app_intrf->main_user_data_type, root_flags, NULL);
     if(!app_intrf->cx_root){
 	app_intrf_destroy(app_intrf);
 	return NULL;
     }
-
+    //and create the cx_root children recursively
+    app_intrf_cx_children_create(app_intrf, app_intrf->cx_root);
+    
     app_intrf->cx_curr = app_intrf->cx_root;
     app_intrf->cx_selected = app_intrf->cx_curr;
     if(app_intrf->cx_curr->cx_children_count > 0)
@@ -300,15 +302,41 @@ void app_intrf_destroy(APP_INTRF* app_intrf){
     free(app_intrf);
 }
 
+static void app_intrf_cx_check_dirty(APP_INTRF* app_intrf, CX* cur_cx){
+    if(!app_intrf)return;
+    if(!cur_cx)return;
+    //printf("checking %s for dirty\n", cur_cx->short_name);
+    //check if the context is dirty
+    if(!app_intrf->data_is_dirty(cur_cx->user_data, cur_cx->user_data_type))return;
 
+    //if it is remove all children recursively
+    for(unsigned int i = 0; i < cur_cx->cx_children_count; i++){
+	//TODO should not remove immidiate children with flag _CANT_DIRTY
+	CX* cur_child = cur_cx->cx_children[i];
+	//app_intrf_cx_remove(app_intrf, cur_child);
+    }
+    //recreate the children
+    //TODO children that are already created (because of the _CANT_DIRTY flag) should not be created again
+    app_intrf_cx_children_create(app_intrf, cur_cx);
+}
+//iterate from root_cx through the children recursively and call the void user function
+static void app_intrf_cx_children_iterate(APP_INTRF* app_intrf, CX* root_cx, void (callback_func)(APP_INTRF* app_intrf, CX* cur_cx)){
+    if(!root_cx)return;
+    callback_func(app_intrf, root_cx);
+    if(!root_cx->cx_children || root_cx->cx_children_count == 0)return;
+
+    for(unsigned int i = 0; i < root_cx->cx_children_count; i++){
+	CX* cur_cx = root_cx->cx_children[i];
+	app_intrf_cx_children_iterate(app_intrf, cur_cx, callback_func);
+    }
+}
 //NAVIGATION functions
 void nav_update(APP_INTRF* app_intrf){
     if(!app_intrf)return;
     if(app_intrf->data_update)
 	app_intrf->data_update(app_intrf->main_user_data, app_intrf->main_user_data_type);
-    //TODO go through the contexts to check if any are dirty.
-    //TODO if a cx is dirty remove its children and create them again
-    
+    //iterate the whole structure and check if any CX are dirty
+    app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root, app_intrf_cx_check_dirty);
     //CX_TOP array recreate
     //----------------------------------------------------------------------------------------------------
     //remove all top contexts

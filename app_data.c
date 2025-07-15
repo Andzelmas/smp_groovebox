@@ -128,7 +128,7 @@ void* app_init(uint16_t* user_data_type, uint32_t* return_flags){
         //clean app_data
         clean_memory(app_data);
         return NULL;
-    } 
+    }
     /*--------------------------------------------------*/
     //Init the plugin data object, it will not run any plugins yet
     plug_status_t plug_errors = 0;
@@ -137,7 +137,7 @@ void* app_init(uint16_t* user_data_type, uint32_t* return_flags){
 	clean_memory(app_data);
 	return NULL;
     }
-    
+
     clap_plug_status_t clap_plug_errors = 0;
     app_data->clap_plug_data = clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors, app_data->trk_jack);
     if(!(app_data->clap_plug_data)){
@@ -270,14 +270,26 @@ void app_data_invoke(void* user_data, uint16_t user_data_type, const char* file)
     //----------------------------------------------------------------------------------------------------
     if(user_data_type == USER_DATA_T_PLUGINS_NEW){
 	APP_INFO* app_data = (APP_INFO*)user_data;
-	//create the available plugins lists if they are not created and mark the USER_DATA_T_PLUGINS_NEW context as dirty
+	//create the available plugins lists
 	plug_plugin_list_init(app_data->plug_data, 0);
-	//TODO mark the USER_DATA_T_PLUGINS_NEW dirty
 	return;
     }
     //----------------------------------------------------------------------------------------------------
 	
 }
+bool app_data_is_dirty(void* user_data, uint16_t user_data_type){
+    if(!user_data)return false;
+    //PLUGINS context
+    //----------------------------------------------------------------------------------------------------
+    if(user_data_type == USER_DATA_T_PLUGINS_NEW){
+	APP_INFO* app_data = (APP_INFO*)user_data;
+	//TODO need to check the clap plugin list dirty too.
+	return plug_plugin_list_is_dirty(app_data->plug_data);
+    }
+    //----------------------------------------------------------------------------------------------------
+    return false;
+}
+
 
 char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types){
     if(!app_data)return NULL;

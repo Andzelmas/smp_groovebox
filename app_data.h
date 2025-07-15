@@ -30,6 +30,8 @@ void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* r
 int app_data_short_name_get(void* user_data, uint16_t user_data_type, char* return_name, unsigned int return_name_len);
 //invoke the user_data, this is a callback for "buttons" 
 void app_data_invoke(void* user_data, uint16_t user_data_type, const char* file);
+//check if the user_data is dirty and the context needs to be recreated
+bool app_data_is_dirty(void* user_data, uint16_t user_data_type);
 
 //return the available names for plugins on the system
 char** app_plug_get_plugin_names(APP_INFO* app_data, unsigned int* names_size, unsigned char** return_plug_types);

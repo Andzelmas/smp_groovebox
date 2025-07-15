@@ -12,12 +12,12 @@
 #define MAX_STRING_MSG_LENGTH 128 //max string size for sys messages
 #define MAX_PARAM_NAME_LENGTH 100 //the max length for param names
 #define MAX_SYS_BUFFER_ARRAY_SIZE 256 //max size for ring buffer arrays in sys messages between threads
-#define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 2048 //max size for the parameter ring buffer messaging arrays
+#define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 1024 //max size for the parameter ring buffer messaging arrays
 #define RT_CYCLES 25 //in what interval the rt thread should give info to the ui thread to not overwhelm it.
 #define MAX_MIDI_CONT_ITEMS 50 //how many midi events there can be in the jack midi container struct
 #define MAX_UNIQUE_ID_STRING 128 //max length for unique ids that use char* (for example the clap unique id for plugins)
 #define MAX_FILETYPE_STRING 20 //max length for the char* that has a filetype ("txt", "json" etc)
-#define MAX_PATH_STRING 2048 //max length for a filepath
+#define MAX_PATH_STRING 1024 //max length for a filepath
 #define HEX_TYPES_CHAR_LENGTH 5 //length for a string that contains the hex representation of a number 
 #define INT_TYPES_CHAR_LENGTH 20 //length for a string that contains the int representation of a number
 
