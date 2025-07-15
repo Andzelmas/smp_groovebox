@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#define SELECTED_DIST 10 //how many items from the selected context this context should be, further away contexts will not be displayed
 struct termios orig_termios;
 
 static void disableRawMode() {
@@ -38,22 +39,64 @@ int main(){
 	//Get the context interface
 	//----------------------------------------------------------------------------------------------------
 	CX* cx_curr = nav_cx_curr_return(app_intrf);
-	if(cx_curr){
+	CX* selected_cx = nav_cx_selected_return(app_intrf);
+	if(cx_curr && selected_cx){
+	    //highlight the cx_curr context if it is the same as the selected_cx (can happen if app_intrf removes all of cx_curr children)
+	    if(selected_cx == cx_curr){
+		printf("\033[0;30;47m");
+	    }
 	    char display_name[MAX_PARAM_NAME_LENGTH];
 	    if(nav_cx_display_name_return(app_intrf, cx_curr, display_name, MAX_PARAM_NAME_LENGTH) == 1){
 		printf("---> %s\n", display_name);
 	    }
+	    //reset highlighting
+	    printf("\033[0m");
 	    
 	    unsigned int count = 0;
 	    CX** cx_children = nav_cx_children_return(app_intrf, cx_curr, &count);
+	    //first find the selected cx iteration
+	    int selected_iter = -1;
 	    for(unsigned int i = 0; i < count; i++){
 		CX* cx_child = cx_children[i];
+		if(cx_child == selected_cx){
+		    selected_iter = i;
+		    break;
+		}
+	    }
+	    //calc the min and max cx to show
+	    int min_cx = selected_iter - SELECTED_DIST;
+	    int p_max = 0;
+	    if(min_cx < 0)
+		p_max = abs(min_cx);
+
+	    int max_cx = selected_iter + SELECTED_DIST;
+	    int p_min = 0;
+	    if(max_cx > (count - 1))
+		p_min = (max_cx - (count-1));
+	    
+	    min_cx -= p_min;
+	    if(min_cx < 0)min_cx = 0;
+	    max_cx += p_max;
+	    if(max_cx > (count-1))
+		max_cx = count - 1;
+	    
+	    for(unsigned int i = 0; i < count; i++){
+		if(selected_iter == -1)break;
+		CX* cx_child = cx_children[i];
+		//if a cx is too far away from the selected_cx dont show it
+		if(i < min_cx){
+		    if((min_cx - i) == 1)
+			printf("     ...\n");
+		    continue;
+		}
+		if(i > max_cx){
+		    if((i - max_cx) == 1)
+			printf("     ...\n");
+		    break;
+		}
 		//highlight the selected context
-		CX* selected_cx = nav_cx_selected_return(app_intrf);
-		if(selected_cx){
-		    if(selected_cx == cx_child){
-			printf("\033[0;30;47m");
-		    }
+		if(selected_cx == cx_child){
+		    printf("\033[0;30;47m");
 		}
 		printf("     |");
 
@@ -62,7 +105,9 @@ int main(){
 		    printf("--> %s", display_name);
 		}	    
 		//reset highlighting
-		printf("\n\033[0m");
+		if(selected_cx == cx_child)
+		    printf("\033[0m");
+		printf("\n");
 	    }
 
 	    //print the top array

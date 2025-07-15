@@ -305,7 +305,7 @@ void app_intrf_destroy(APP_INTRF* app_intrf){
 static void app_intrf_cx_check_dirty(APP_INTRF* app_intrf, CX* cur_cx){
     if(!app_intrf)return;
     if(!cur_cx)return;
-    //printf("checking %s for dirty\n", cur_cx->short_name);
+
     //check if the context is dirty
     if(!app_intrf->data_is_dirty(cur_cx->user_data, cur_cx->user_data_type))return;
 
@@ -313,11 +313,15 @@ static void app_intrf_cx_check_dirty(APP_INTRF* app_intrf, CX* cur_cx){
     for(unsigned int i = 0; i < cur_cx->cx_children_count; i++){
 	//TODO should not remove immidiate children with flag _CANT_DIRTY
 	CX* cur_child = cur_cx->cx_children[i];
-	//app_intrf_cx_remove(app_intrf, cur_child);
+	app_intrf_cx_remove(app_intrf, cur_child);
     }
     //recreate the children
     //TODO children that are already created (because of the _CANT_DIRTY flag) should not be created again
     app_intrf_cx_children_create(app_intrf, cur_cx);
+
+    //select a CX if there is no CX selected
+    if(app_intrf->cx_curr == app_intrf->cx_selected && cur_cx->cx_children_count > 0)
+	app_intrf->cx_selected = cur_cx->cx_children[0];
 }
 //iterate from root_cx through the children recursively and call the void user function
 static void app_intrf_cx_children_iterate(APP_INTRF* app_intrf, CX* root_cx, void (callback_func)(APP_INTRF* app_intrf, CX* cur_cx)){
