@@ -16,6 +16,7 @@
 //in this way if for example structure is Plugins->plug_01->load_preset->preset categories and presets, when a preset is loaded the plug_01 will be marked as dirty.
 //all of the plug_01 children will be removed (parameters etc.), but load_preset has INTRF_FLAG_CANT_DIRTY and remove will leave it and its children, so the user can continue loading the presets.
 //on the other hand if a new plugin plug_02 is created Plugins will be marked dirty. Since load_preset is Plugins childrens children it will be removed this time and created again.
+//BUT what to do to not create contexts with _CANT_DIRTY again when recreating the contexts.
 //TODO when implementing clay or other ui, test mouse clicking; scrolling(would be nice to able to scroll any element with contents that do not fit) and selecting as soon as possible.
 
 typedef struct _cx{
@@ -43,7 +44,7 @@ typedef struct _app_intrf{
     //flags returns the flags for this context from the data
     void* (*data_child_return)(void* parent_user_data, uint16_t parent_type, uint16_t* return_type, uint32_t* flags, unsigned int idx);
     //return the short name of the data
-    const char* (*data_short_name_get)(void* user_data, uint16_t type);
+    int (*data_short_name_get)(void* user_data, uint16_t type, char* return_name, unsigned int return_name_len);
     //data function that updates its internal structures every cycle, should be called first before any navigation
     void (*data_update)(void* main_user_data, uint16_t main_user_data_type);
     //do something with the user_data, this is a "button" callback
@@ -206,12 +207,10 @@ static CX* app_intrf_cx_create(APP_INTRF* app_intrf, CX* parent_cx, void* user_d
 	snprintf(new_cx->short_name, MAX_PARAM_NAME_LENGTH, "%s", short_name);
     }
     if(!short_name){
-	const char* data_short_name = app_intrf->data_short_name_get(new_cx->user_data, new_cx->user_data_type);
-	if(!data_short_name){
+	if(app_intrf->data_short_name_get(new_cx->user_data, new_cx->user_data_type, new_cx->short_name, MAX_PARAM_NAME_LENGTH) != 1){
 	    app_intrf_cx_remove(app_intrf, new_cx);
 	    return NULL;
 	}
-	snprintf(new_cx->short_name, MAX_PARAM_NAME_LENGTH, "%s", data_short_name);
     }
 
     if(new_cx->cx_parent){

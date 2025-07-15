@@ -57,6 +57,13 @@
 
 static thread_local bool is_audio_thread = false; //can be used to check what thread this is, useful for thread safe functions
 
+//plugin list item - to show the user available plugins on the system
+typedef struct _plugin_list_item{
+    char plugin_path[MAX_PATH_STRING];
+    char plugin_short_name[MAX_PARAM_NAME_LENGTH];
+    PLUG_INFO* plug_data;
+}PLUGIN_LIST_ITEM;
+
 //lilv nodes for more convinient coding, when for ex we need to tell port class by providing a livnode
 typedef struct _plug_nodes{
     LilvNode* atom_AtomPort;
@@ -275,6 +282,9 @@ typedef struct _plug_info{
     PLUG_NODES nodes;
     //the address to the audio client
     void* audio_backend;
+    //the available plugins list, while plug_plugin_list_init() function not called will be NULL
+    unsigned int plugin_list_count;
+    PLUGIN_LIST_ITEM* plugin_list;
     //transport information, mainly to compare if position info changed and if there is a need to send new position info to the plugin
     //SHOULD only be touched by the [audio-thread]
     unsigned int isPlaying; // is the tranport playing
@@ -655,6 +665,8 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_data->posFrame = 0;
     plug_data->bpm = 120.0f;
     plug_data->isPlaying = 0;
+    plug_data->plugin_list_count = 0;
+    plug_data->plugin_list = NULL;
     
     lilv_world_load_all(plug_data->lv_world);    
     plug_data->symap = symap_new();
@@ -740,6 +752,55 @@ PLUG_INFO* plug_init(uint32_t block_length, SAMPLE_T samplerate,
     }
     
     return plug_data;
+}
+
+int plug_plugin_list_init(PLUG_INFO* plug_data, unsigned int recreate){
+    if(!plug_data)return -1;
+    if(recreate == 0 && plug_data->plugin_list && plug_data->plugin_list_count > 0)return 0;
+   
+    if(plug_data->plugin_list)free(plug_data->plugin_list);
+    plug_data->plugin_list_count = 0;
+    
+    const LilvPlugins* plugins = lilv_world_get_all_plugins(plug_data->lv_world);
+    if(!plugins)return -1;
+    LilvIter* plug_iter = lilv_plugins_begin(plugins);
+    unsigned int plugins_list_size = lilv_plugins_size(plugins);
+    if(plugins_list_size <= 0)return -1;
+    plug_data->plugin_list = (PLUGIN_LIST_ITEM*)calloc(plugins_list_size, sizeof(PLUGIN_LIST_ITEM));
+    if(!plug_data->plugin_list)return -1;
+
+    int iter = 0;
+    while(!lilv_plugins_is_end(plugins, plug_iter)){
+	const LilvPlugin* cur_plug = lilv_plugins_get(plugins, plug_iter);
+	const LilvNode* cur_path = lilv_plugin_get_uri(cur_plug);
+	LilvNode* cur_name = lilv_plugin_get_name(cur_plug);
+	const char* path_string = lilv_node_as_string(cur_path);
+	const char* name_string = lilv_node_as_string(cur_name);
+	PLUGIN_LIST_ITEM list_item;
+	snprintf(list_item.plugin_path, MAX_PATH_STRING, "%s", path_string);
+	snprintf(list_item.plugin_short_name, MAX_PARAM_NAME_LENGTH, "%s", name_string);
+	lilv_node_free(cur_name);
+	list_item.plug_data = plug_data;
+	plug_data->plugin_list[iter] = list_item;
+	
+	plug_iter = lilv_plugins_next(plugins, plug_iter);
+	iter+=1;
+    }
+    plug_data->plugin_list_count = plugins_list_size;
+    return 1;
+}
+void* plug_plugin_list_item_get(PLUG_INFO* plug_data, unsigned int idx){
+    if(!plug_data)return NULL;
+    if(idx >= plug_data->plugin_list_count)return NULL;
+    PLUGIN_LIST_ITEM* cur_plug_list_item = &(plug_data->plugin_list[idx]);
+    return (void*)cur_plug_list_item;
+}
+int plug_plugin_list_item_name(void* plug_list_item, char* return_name, unsigned int return_name_len){
+    if(!plug_list_item)return -1;
+    PLUGIN_LIST_ITEM* cur_plug_list_item = (PLUGIN_LIST_ITEM*)plug_list_item;
+    if(!cur_plug_list_item->plug_data)return -1;
+    snprintf(return_name, return_name_len, "%s", cur_plug_list_item->plugin_short_name);
+    return 1;
 }
 
 char* plug_return_plugin_name(PLUG_INFO* plug_data, int plug_id){
@@ -1761,6 +1822,9 @@ void plug_clean_memory(PLUG_INFO* plug_data){
     if(plug_data->lv_world)lilv_world_free(plug_data->lv_world);
 
     context_sub_clean(plug_data->control_data);
+
+    if(plug_data->plugin_list)free(plug_data->plugin_list);
+    plug_data->plugin_list_count = 0;
     free(plug_data);
 }
 

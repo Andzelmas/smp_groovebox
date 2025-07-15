@@ -201,28 +201,43 @@ void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* r
 	    *return_flags = (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP);
 	    return (void*)app_data;
 	}
-	//TODO idx > 0 go through the lv2 and clap plugins on this machine and return the list to the user
-	//TODO Only go through the list if it exists. If it is NULL the list will be created when the user invokes the USER_DATA_T_PLUGINS_NEW context
+	if(idx > 0){
+	    unsigned int iter = idx - 1;
+	    void* plugins_list_item_user_data = plug_plugin_list_item_get(app_data->plug_data, iter);
+	    if(plugins_list_item_user_data){
+		*return_type = USER_DATA_T_PLUGINS_LV2_LIST_ITEM;
+		*return_flags = (INTRF_FLAG_INTERACT | INTRF_FLAG_LIST_ITEM);
+		return plugins_list_item_user_data;
+	    }
+	}
     }
     //----------------------------------------------------------------------------------------------------
     
     return NULL;
 }
 
-const char* app_data_short_name_get(void* user_data, uint16_t user_data_type){
+int app_data_short_name_get(void* user_data, uint16_t user_data_type, char* return_name, unsigned int return_name_len){
     if(user_data_type == USER_DATA_T_ROOT){
-	return APP_NAME;
+	snprintf(return_name, return_name_len, "%s", APP_NAME);
+	return 1;
     }
     //PLUGINS context
     //----------------------------------------------------------------------------------------------------
     if(user_data_type == USER_DATA_T_PLUGINS){
-	return PLUGINS_NAME;
+	snprintf(return_name, return_name_len, "%s", PLUGINS_NAME);
+	return 1;
     }
     if(user_data_type == USER_DATA_T_PLUGINS_NEW){
-	return NAME_ADD_NEW;
+	snprintf(return_name, return_name_len, "%s", NAME_ADD_NEW);
+	return 1;
     }
     if(user_data_type == USER_DATA_T_PLUGINS_LIST_REFRESH){
-	return NAME_REFRESH_LIST;
+	snprintf(return_name, return_name_len, "%s", NAME_REFRESH_LIST);
+	return 1;
+    }
+    if(user_data_type == USER_DATA_T_PLUGINS_LV2_LIST_ITEM){
+	if(!user_data)return -1;
+	return plug_plugin_list_item_name(user_data, return_name, return_name_len);
     }
     if(user_data_type == USER_DATA_T_PLUG_LV2){
     }
@@ -230,20 +245,23 @@ const char* app_data_short_name_get(void* user_data, uint16_t user_data_type){
     }
     //----------------------------------------------------------------------------------------------------
     if(user_data_type == USER_DATA_T_SAMPLER){
-	return SAMPLER_NAME;
+	snprintf(return_name, return_name_len, "%s", SAMPLER_NAME);
+	return 1;
     }
     if(user_data_type == USER_DATA_T_SAMPLE){
     }
     if(user_data_type == USER_DATA_T_SYNTH){
-	return SYNTH_NAME;
+	snprintf(return_name, return_name_len, "%s", SYNTH_NAME);
+	return 1;
     }
     if(user_data_type == USER_DATA_T_OSC){
     }
     if(user_data_type == USER_DATA_T_JACK){
-	return TRK_NAME;
+	snprintf(return_name, return_name_len, "%s", TRK_NAME);
+	return 1;
     }
     
-    return NULL;
+    return 0;
 }
 
 void app_data_invoke(void* user_data, uint16_t user_data_type, const char* file){
@@ -251,9 +269,10 @@ void app_data_invoke(void* user_data, uint16_t user_data_type, const char* file)
     //PLUGINS context
     //----------------------------------------------------------------------------------------------------
     if(user_data_type == USER_DATA_T_PLUGINS_NEW){
-	APP_INFO* app_data = (APP_INFO*)app_data;
-	//TODO create the available plugins lists if they are not created and mark the USER_DATA_T_PLUGINS_NEW context as dirty, so the list is presented to the UI after the next data_update()
-
+	APP_INFO* app_data = (APP_INFO*)user_data;
+	//create the available plugins lists if they are not created and mark the USER_DATA_T_PLUGINS_NEW context as dirty
+	plug_plugin_list_init(app_data->plug_data, 0);
+	//TODO mark the USER_DATA_T_PLUGINS_NEW dirty
 	return;
     }
     //----------------------------------------------------------------------------------------------------

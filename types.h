@@ -30,16 +30,17 @@ enum userDataTypes{
     USER_DATA_T_PLUGINS = 2, //data that contains plugins, user_data casts to APP_INFO*
     USER_DATA_T_PLUGINS_NEW = 3, //data that contains a list to create new plugins, user_data casts to APP_INFO*
     USER_DATA_T_PLUGINS_LIST_REFRESH = 4, //data that is used to recreate the plugin list available on this machine for the user
-    USER_DATA_T_PLUG_LV2 = 5, //lv2 plugin data type
-    USER_DATA_T_PLUG_CLAP = 6,//clap plugin data type
+    USER_DATA_T_PLUGINS_LV2_LIST_ITEM = 5, //data representing the lv2 plugin item that is available to load on the system
+    USER_DATA_T_PLUG_LV2 = 6, //lv2 plugin data type
+    USER_DATA_T_PLUG_CLAP = 7,//clap plugin data type
     //the Sampler context
-    USER_DATA_T_SAMPLER = 7, //sampler data type, user_data casts to APP_INFO*
-    USER_DATA_T_SAMPLE = 8, //single sample
+    USER_DATA_T_SAMPLER = 8, //sampler data type, user_data casts to APP_INFO*
+    USER_DATA_T_SAMPLE = 9, //single sample
     //the Synth context
-    USER_DATA_T_SYNTH = 9, //built in synth, user_data casts to APP_INFO*
-    USER_DATA_T_OSC = 10, //single oscillator in the synth
+    USER_DATA_T_SYNTH = 10, //built in synth, user_data casts to APP_INFO*
+    USER_DATA_T_OSC = 11, //single oscillator in the synth
     //the Trk, audio backend context
-    USER_DATA_T_JACK = 11 //audio backend data, user_data casts to APP_INFO*
+    USER_DATA_T_JACK = 12 //audio backend data, user_data casts to APP_INFO*
 };
 
 enum intrfFlags{

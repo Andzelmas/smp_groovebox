@@ -27,7 +27,7 @@ void* app_init(uint16_t* user_data_type, uint32_t* return_flags);
 //return_type is the type of the returned user_data, to know what to cast void* user_data to, flags are for the UI side of things
 void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* return_type, uint32_t* return_flags, unsigned int idx);
 //get the short_name for the user_data, depending on the user_data_type
-const char* app_data_short_name_get(void* user_data, uint16_t user_data_type);
+int app_data_short_name_get(void* user_data, uint16_t user_data_type, char* return_name, unsigned int return_name_len);
 //invoke the user_data, this is a callback for "buttons" 
 void app_data_invoke(void* user_data, uint16_t user_data_type, const char* file);
 
