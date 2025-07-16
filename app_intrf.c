@@ -5,6 +5,8 @@
 
 #include <stdio.h>
 
+//TODO think about the select system. Might be good idea to redo so no cx_selected and have ui_flags on CX*, to use for selected.
+//Try to implement several different areas for contexts on ui to test out selecting not only cx_curr children.
 //TODO when writting invoke data functions, dont forget to think how all of the data will be saved, might be tricky for contexts like ports
 //will need structs on Trk contexts for ports and to what they are connected
 //TODO When app_intrf checks contexts and finds a cx dirty, will need a special function to remove and create the cx children again:
