@@ -812,8 +812,9 @@ int plug_plugin_list_item_name(void* plug_list_item, char* return_name, unsigned
 }
 bool plug_plugin_list_is_dirty(PLUG_INFO* plug_data){
     if(!plug_data)return false;
-    bool is_dirty = plug_data->plugin_list.dirty;
-    plug_data->plugin_list.dirty = false;
+    PLUGIN_LIST *list = &(plug_data->plugin_list);
+    bool is_dirty = list->dirty;
+    list->dirty = false;
     return is_dirty;
 }
 
