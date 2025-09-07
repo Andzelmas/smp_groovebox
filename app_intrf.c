@@ -6,8 +6,10 @@
 #include <stdio.h>
 
 //TODO no TOP array. INSTEAD:
-//Groups (for example 10 total) each with cx_curr, cx_selected. nav_ function should have an argument of group number, where to go next or prev or where to enter  the cx.
+//Groups (for example 10 total) each with cx_curr, cx_selected.
 //When removing cx, check each group if the cx being removed is  not in cx_curr or  cx_selected.
+//For nav_ functions that invoke, exits etc. the cx, there should be arguments in what group to do this operation and on what group to update the cx_curr and cx_selected.
+//This way ui can invoke cx and enter it in one group but update the cx_curr on another group and show the children in a different window for example.
 //TODO when writting invoke data functions, dont forget to think how all of the data will be saved, might be tricky for contexts like ports
 //will need structs on Trk contexts for ports and to what they are connected
 //TODO When app_intrf checks contexts and finds a cx dirty, will need a special function to remove and create the cx children again:
