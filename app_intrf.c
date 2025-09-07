@@ -11,8 +11,11 @@
 //Nav_ functions that exits cx_curr or invokes  cx_selected should exit and invoke cx given as arguments and apply the results to the group given as an argument.
 //OR these functions should have arguments of groups where to exit cx_curr and invoke cx_selected and to what group apply the result.
 //This way ui can invoke cx and enter it in one group but update the cx_curr on another group and show the children in a different window for example.
-//TODO when writting invoke data functions, dont forget to think how all of the data will be saved, might be tricky for contexts like ports
-//will need structs on Trk contexts for ports and to what they are connected
+//TODO SAVING should be on the app_data layer.
+//app_intrf calls function with the filename  where to save  and app_data saves there the structs as bites.
+//when a file is loaded the app_data creates its structure from the file (creates the structs in memory) and marks the root as dirty so app_intrf recreates its structure.
+//saving and loading separate contexts (plugins, trk and similar) should work the same.
+//user should be able to set a file to load on startup.
 //TODO When app_intrf checks contexts and finds a cx dirty, will need a special function to remove and create the cx children again:
 //go through each child with for loop and check their flags if they are eligible for recreation: children with INTRF_FLAG_CANT_DIRTY will not be removed.
 //remove the children recursively. So even if childrens children will have a flag INTRF_FLAG_CANT_DIRTY they will be removed, since their parent is removed and there would be a memory leak.
