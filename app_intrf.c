@@ -8,7 +8,7 @@
 //TODO no TOP array. INSTEAD:
 //Groups (for example 10 total) each with cx_curr, cx_selected.
 //When removing cx, check each group if the cx being removed is  not in cx_curr or  cx_selected.
-//Nav_ functions that exits cx_curr or invokes  cx_selected should exit and invoke cx given as arguments.
+//Nav_ functions that exits cx_curr or invokes  cx_selected should exit and invoke cx given as arguments and apply the results to the group given as an argument.
 //OR these functions should have arguments of groups where to exit cx_curr and invoke cx_selected and to what group apply the result.
 //This way ui can invoke cx and enter it in one group but update the cx_curr on another group and show the children in a different window for example.
 //TODO when writting invoke data functions, dont forget to think how all of the data will be saved, might be tricky for contexts like ports
