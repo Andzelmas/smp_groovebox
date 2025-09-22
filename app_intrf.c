@@ -375,7 +375,7 @@ int nav_cx_display_name_return(APP_INTRF* app_intrf, CX* cx, char* return_name, 
     if(!cx)return -1;
     if(!return_name)return -1;
 
-    snprintf(return_name, name_len, "%s", cx->unique_name);
+    snprintf(return_name, name_len, "%s", cx->short_name);
     return 1;
 }
 
