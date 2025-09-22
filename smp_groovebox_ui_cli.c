@@ -116,17 +116,17 @@ int main(){
 	char input = getchar();
 	unsigned int exit = 0;
 	switch(input){
-	case 'd':
+	case 'j':
 	    nav_cx_selected_next(app_intrf);
 	    break;
-	case 'a':
+	case 'k':
 	    nav_cx_selected_prev(app_intrf);
 	    break;
-	case 'e':
+	case 'l':
 	    if(nav_cx_selected_invoke(app_intrf) == -1)
 		exit = 1;
 	    break;
-	case 'q':
+	case 'h':
 	    if(nav_cx_curr_exit(app_intrf) == -1)
 	       exit = 1;
 	    break;
