@@ -26,8 +26,6 @@ CX* nav_cx_selected_return(APP_INTRF* app_intrf);
 //return the children in the parent->cx_children array
 //count is how many there are
 CX** nav_cx_children_return(APP_INTRF* app_intrf, CX* parent, unsigned int* count);
-//return the cx top array, count is how many there are
-CX** nav_cx_top_children_return(APP_INTRF* app_intrf, unsigned int* count);
 //return the name of the cx for UI
 int nav_cx_display_name_return(APP_INTRF* app_intrf, CX* cx, char* return_name, unsigned int name_len);
 

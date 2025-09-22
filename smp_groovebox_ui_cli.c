@@ -109,18 +109,6 @@ int main(){
 		    printf("\033[0m");
 		printf("\n");
 	    }
-
-	    //print the top array
-	    count = 0;
-	    CX** top_cx_array = nav_cx_top_children_return(app_intrf, &count);
-	    printf("--------------------------------------------------\n");
-	    for(unsigned int i = 0; i < count; i++){
-		CX* top_cx = top_cx_array[i];
-		if(nav_cx_display_name_return(app_intrf, top_cx, display_name, MAX_PARAM_NAME_LENGTH) == 1){
-		    printf("%s | ", display_name);
-		}
-	    }
-	    printf("\n--------------------------------------------------\n");
 	}
 	//----------------------------------------------------------------------------------------------------
 

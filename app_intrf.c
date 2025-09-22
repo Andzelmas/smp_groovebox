@@ -41,8 +41,6 @@ typedef struct _app_intrf{
     CX* cx_root;
     CX* cx_curr; //current context that is entered right now
     CX* cx_selected; //the selected or last interacted context, when entering a context will be the first child
-    unsigned int cx_top_count; //how many CX* in the top array
-    CX** cx_top; //array for contexts flagged as _ON_TOP. These can be retrieved safely like the cx_curr context and shown to the user at any time.
     uint16_t main_user_data_type; //type for the main user_data sturct, the same type is in cx_root->user_data_type
     void* main_user_data; //main user_data struct for convenience, the same struct is in cx_root->user_data
     //return the idx child for the parent_user_data. Will return NULL if idx is out of bounds
@@ -172,14 +170,7 @@ static void app_intrf_cx_remove(APP_INTRF* app_intrf, CX* remove_cx){
     if(app_intrf->cx_selected == remove_cx){
 	app_intrf->cx_selected = app_intrf->cx_curr;
     }
-    //if the remove_cx is in the top cx array, pop it from there
-    for(unsigned int i = 0; i < app_intrf->cx_top_count; i++){
-	CX* curr_cx = app_intrf->cx_top[i];
-	if(curr_cx != remove_cx)continue;
-	app_intrf_cx_array_pop(&(app_intrf->cx_top), &(app_intrf->cx_top_count), i);
-    }
-    if(app_intrf->cx_top_count == 0)app_intrf->cx_top = NULL;
-
+    //TODO if the remove_cx is in any group pop from there 
     
     free(remove_cx);
 }
@@ -350,42 +341,23 @@ void nav_update(APP_INTRF* app_intrf){
 	app_intrf->data_update(app_intrf->main_user_data, app_intrf->main_user_data_type);
     //iterate the whole structure and check if any CX are dirty
     app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root, app_intrf_cx_check_dirty);
-    //CX_TOP array recreate
-    //----------------------------------------------------------------------------------------------------
-    //remove all top contexts
-    while(app_intrf->cx_top_count > 0){
-	if(app_intrf_cx_array_pop(&(app_intrf->cx_top), &(app_intrf->cx_top_count), 0) != 1)
-	    break;
-    }
-    //create the top contexts again
-    //check if parent or one of its children has a _ON_TOP flag and add it to the cx_top array
-    //go up the hierarchy from the cx_curr till the parent is NULL
-    CX* this_cx = app_intrf->cx_curr;
-    while(this_cx){
-	CX* this_parent = this_cx->cx_parent;
-	if(!this_parent)break;
-	for(unsigned int i = 0; i < this_parent->cx_children_count; i++){
-	    CX* child_cx = this_parent->cx_children[i];
-	    if((child_cx->flags & INTRF_FLAG_ON_TOP))
-		app_intrf_cx_array_append(&(app_intrf->cx_top), &(app_intrf->cx_top_count), child_cx);
-	}
-
-	this_cx = this_parent;
-    }
-    //----------------------------------------------------------------------------------------------------
 }
+
 CX* nav_cx_root_return(APP_INTRF* app_intrf){
     if(!app_intrf)return NULL;
     return app_intrf->cx_root;
 }
+
 CX* nav_cx_curr_return(APP_INTRF* app_intrf){
     if(!app_intrf)return NULL;
     return app_intrf->cx_curr;
 }
+
 CX* nav_cx_selected_return(APP_INTRF* app_intrf){
     if(!app_intrf)return NULL;
     return app_intrf->cx_selected;
 }
+
 CX** nav_cx_children_return(APP_INTRF* app_intrf, CX* parent, unsigned int* count){
     if(!app_intrf)return NULL;
     if(!parent)return NULL;
@@ -393,13 +365,7 @@ CX** nav_cx_children_return(APP_INTRF* app_intrf, CX* parent, unsigned int* coun
     *count = parent->cx_children_count;
     return parent->cx_children;
 }
-CX** nav_cx_top_children_return(APP_INTRF* app_intrf, unsigned int* count){
-    if(!app_intrf)return NULL;
-    if(!app_intrf->cx_top)return NULL;
-    
-    *count = app_intrf->cx_top_count;
-    return app_intrf->cx_top;
-}
+
 int nav_cx_display_name_return(APP_INTRF* app_intrf, CX* cx, char* return_name, unsigned int name_len){
     if(!app_intrf)return -1;
     if(!cx)return -1;
