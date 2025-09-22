@@ -215,6 +215,11 @@ static CX* app_intrf_cx_create(APP_INTRF* app_intrf, CX* parent_cx, void* user_d
 	    return NULL;
 	}
 	//create unique name with the parent short name and this cx short name
+	//TODO need to check if there is a cx with a same unique name in this parent_cx,
+	//if yes add a numeric value to this cx unique name,
+	//then check if there is a cx with a same unique name in the parent_cx again
+	//if yes increase the numeric value by one
+	//run this while loop until the name is truly unique among the parent_cx children
 	snprintf(new_cx->unique_name, MAX_UNIQUE_ID_STRING, "%s_<__>_%s", parent_cx->short_name, new_cx->short_name);
     }
 
@@ -370,7 +375,7 @@ int nav_cx_display_name_return(APP_INTRF* app_intrf, CX* cx, char* return_name, 
     if(!cx)return -1;
     if(!return_name)return -1;
 
-    snprintf(return_name, name_len, "%s", cx->short_name);
+    snprintf(return_name, name_len, "%s", cx->unique_name);
     return 1;
 }
 
