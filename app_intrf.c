@@ -5,8 +5,7 @@
 
 #include <stdio.h>
 
-//TODO no TOP array. INSTEAD:
-//Groups (for example 10 total) each with cx_curr, cx_selected.
+//TODO Groups (for example 10 total) each with cx_curr, cx_selected.
 //When removing cx, check each group if the cx being removed is  not in cx_curr or  cx_selected.
 //Nav_ functions that exits cx_curr or invokes  cx_selected should exit and invoke cx given as arguments and apply the results to the group given as an argument.
 //OR these functions should have arguments of groups where to exit cx_curr and invoke cx_selected and to what group apply the result.
