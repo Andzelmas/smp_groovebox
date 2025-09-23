@@ -48,7 +48,9 @@ enum intrfFlags{
     INTRF_FLAG_ROOT = 1 << 1, //the parent of all contexts on the app, exiting this context closes the app
     INTRF_FLAG_CANT_DIRTY = 1 << 2, //if this context parent becomes dirty, dont remove this children. This context will be recreated only if the parent is removed.
     INTRF_FLAG_INTERACT = 1 << 3, //the user can interact with the context not only to see its children, but to for example press a button
-    INTRF_FLAG_DISPLAY_NAME_DYN = 1 << 4, //name of this context should be returned by a data_short_name_get() every time when the context is displayed, because it might change at anytime
+    INTRF_FLAG_DISPLAY_NAME_DYN = 1 << 4, //Name of this context is dynamic (for example a parameter name)
+										  //It should be returned not from cx->short_name but with a 
+										  //special data function
     INTRF_FLAG_LIST = 1 << 5, //this context is a list - it has _LIST_ITEM or _LIST children in it (among others)
     INTRF_FLAG_LIST_ITEM = 1 << 6, //this context is a list item
     INTRF_FLAG_ON_TOP = 1 << 7, //this context should be reachable for the user, even when navigating this contexts parents other children. For example a "delete" button when browsing files

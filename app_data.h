@@ -15,19 +15,18 @@ enum AppPluginType{
     CLAP_plugin_type = 0x02
 };
 
-typedef enum AppStatus app_status_t;
-
 //this is the struct for the data on the whole app
 typedef struct _app_info APP_INFO;
 
 //initialize the app_data, user_data_type returns USER_DATA_T_ROOT type, flags are the root/main context flags
 //the function returns APP_INFO* cast to void*
-void* app_init(uint16_t* user_data_type, uint32_t* return_flags);
+void* app_init(uint16_t* user_data_type, uint32_t* return_flags, char* root_name, int root_name_len);
+
 //get the idx child of the parent_data, if idx is out of bounds return NULL
 //return_type is the type of the returned user_data, to know what to cast void* user_data to, flags are for the UI side of things
-void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* return_type, uint32_t* return_flags, unsigned int idx);
-//get the short_name for the user_data, depending on the user_data_type
-int app_data_short_name_get(void* user_data, uint16_t user_data_type, char* return_name, unsigned int return_name_len);
+//return_name will be unique, but only among the children in parent_data
+void* app_data_child_return(void* parent_data, uint16_t parent_type, uint16_t* return_type, uint32_t* return_flags, char* return_name, int return_name_len, unsigned int idx);
+
 //invoke the user_data, this is a callback for "buttons" 
 void app_data_invoke(void* user_data, uint16_t user_data_type, const char* file);
 //check if the user_data is dirty and the context needs to be recreated
