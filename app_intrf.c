@@ -4,6 +4,10 @@
 #include "util_funcs/log_funcs.h"
 
 #include <stdio.h>
+// The INTRF layer is for creating the app_data structure
+// Also, it allows UI to communicate with app_data
+// For this reason no temporary cx's should be created - 
+// for on screen keyboards, info dialogs and similar the UI is responsible
 
 // TODO Groups (for example 10 total) each with cx_curr, cx_selected.
 // When removing cx, check each group if the cx being removed is  not in cx_curr
@@ -238,6 +242,8 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
                                uint32_t flags, const char *short_name) {
   if (!app_intrf)
     return NULL;
+  if (!user_data)
+	return NULL;
   if (flags == 0)
     return NULL;
   if (!short_name) {
@@ -452,7 +458,7 @@ int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
     return -1;
   if (!return_name)
     return -1;
-//Should check the flag _DISPLAY_NAME_DYN
+//TODO Should check the flag _DISPLAY_NAME_DYN
 //for this flag should call special data function for returning dynamic names
 //this is needed for parameters and similar contexts
   snprintf(return_name, name_len, "%s", cx->short_name);
@@ -504,6 +510,8 @@ int nav_cx_curr_exit(APP_INTRF *app_intrf) {
   app_intrf->cx_curr = app_intrf->cx_curr->cx_parent;
   app_intrf->cx_selected = app_intrf->cx_curr;
   // new cx_selected context
+  // TODO maybe this could be in a separate function - 
+  // other functions use this snippet too (like the nav_cx_selected_invoke function)
   if (app_intrf->cx_curr->cx_children_count > 0) {
     app_intrf->cx_selected = app_intrf->cx_curr->cx_children[0];
     if (app_intrf->cx_curr->cx_children_last_selected <
@@ -525,6 +533,9 @@ int nav_cx_selected_invoke(APP_INTRF *app_intrf) {
   if (app_intrf->data_invoke)
     // TODO check flags if a filename or some other string needs to be presented
     // to the data
+	// If data needs a file string, or after invoke the user needs to do another action
+	// the UI should be informed.
+	// This could be done through flags on cx or this function can return codes what needs to be done
     app_intrf->data_invoke(selected->user_data, selected->user_data_type, NULL);
 
   // if this context has children enter inside
