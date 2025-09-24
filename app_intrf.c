@@ -4,10 +4,12 @@
 #include "util_funcs/log_funcs.h"
 
 #include <stdio.h>
-// The INTRF layer is for creating the app_data structure
-// Also, it allows UI to communicate with app_data
-// For this reason no temporary cx's should be created -
-// for on screen keyboards, info dialogs and similar the UI is responsible
+/*
+ The INTRF layer is for creating the app_data structure
+ Also, it allows UI to communicate with app_data
+ For this reason no temporary cx's should be created -
+ for on screen keyboards, info dialogs and similar the UI is responsible
+*/
 
 // TODO Groups (for example 10 total) each with cx_curr, cx_selected.
 // When removing cx, check each group if the cx being removed is  not in
