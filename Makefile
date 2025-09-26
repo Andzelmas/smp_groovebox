@@ -4,7 +4,8 @@ CC=gcc
 FILE=build/smp_sampler
 
 #include dirs
-INCDIR = -I$(PORTSDIR)/include
+#INCDIR = -I$(PORTSDIR)/include
+INCDIR = -I/usr/include
 
 #additional libs
 LIBS = -lm -ljack -lsndfile -ljson-c -llilv-0
