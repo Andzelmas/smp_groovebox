@@ -5,10 +5,23 @@
 
 #include <stdio.h>
 /*
- The INTRF layer is for creating the app_data structure
- Also, it allows UI to communicate with app_data
- For this reason no temporary cx's should be created -
- for on screen keyboards, info dialogs and similar the UI is responsible
+    The INTRF layer is for creating the app_data structure
+    Also, it allows UI to communicate with app_data
+    For this reason no temporary cx's should be created -
+    for on screen keyboards, info dialogs, lists of files when choosing a sample
+    and similar the UI is responsible.
+*/
+
+/*
+    Contexts should be added or removed only on initialization or when a
+    context becomes dirty.
+    App_data should only add or remove anything on initialization or
+    if the user specificaly wants to do that - when he/she interacts with
+    "buttons". These contexts are with the flag INTRF_FLAG_INTERACT and should
+    make the context dirty after manipulating the data. For example: Data
+    functions that populate/create a plugin list should only be called when the
+    user interacts with a "refresh" or similar button. Or when the app is
+    initialized, but NOT when the user is navigating.
 */
 
 // TODO PRIORITY! think how to properly remove the contexts recursively - now

@@ -169,8 +169,6 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
         clean_memory(app_data);
         return NULL;
     }
-    // Init the lv2 plugin list
-    plug_plugin_list_init(app_data->plug_data);
 
     clap_plug_status_t clap_plug_errors = 0;
     app_data->clap_plug_data =
@@ -277,10 +275,12 @@ void app_data_invoke(void *user_data, uint16_t user_data_type,
     // PLUGINS context
     //----------------------------------------------------------------------------------------------------
     if (user_data_type == USER_DATA_T_PLUGINS_LIST_REFRESH){
-        //TODO call plug_plugin_list_init() function to repopulate the plugin list
+        APP_INFO* app_data = (APP_INFO*)user_data;
+        plug_plugin_list_init(app_data->plug_data);
     }
     //----------------------------------------------------------------------------------------------------
 }
+
 bool app_data_is_dirty(void *user_data, uint16_t user_data_type) {
     if (!user_data)
         return false;

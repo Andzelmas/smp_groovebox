@@ -27,6 +27,10 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
 // return_type is the type of the returned user_data, to know what to cast void*
 // user_data to, flags are for the UI side of things return_name will be unique,
 // but only among the children in parent_data
+// ALL DATA THAT THIS FUNCTION GETS SHOULD BE CREATED on initialization or in app_data_invoke()
+// For example plugin lists, preset lists and the like should be created in plugin contexts,
+// when initializing the plugin context or a specific plugin or when the
+// user asks to "refresh" these lists.
 void *app_data_child_return(void *parent_data, uint16_t parent_type,
                             uint16_t *return_type, uint32_t *return_flags,
                             char *return_name, int return_name_len,

@@ -803,6 +803,8 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
         // init atom forge
         lv2_atom_forge_init(&(plug->forge), &(plug->map));
     }
+    // Initialize the list of the available plugins on the system
+    plug_plugin_list_init(plug_data);
 
     return plug_data;
 }
