@@ -25,7 +25,12 @@
 */
 
 // TODO PRIORITY! think how to properly remove the contexts recursively - now
-// the system is flawed. It is evident when using the _is_dirty() function:
+// the system is flawed. 
+// app_intrf_cx_remove() should be the only function that removes contexts.
+// It should also accept a filter what to leave (but only for the root_cx children).
+// Remove the while loop with the safety: before removing a cx check if it still has children.
+// If yes, dont remove the cx (it means that removing a child has failed).
+// It is evident when using the _is_dirty() function:
 // since the cur_cx children count is changing when the contexts are deleted
 // the i++ iterator becomes incorrect, it gets bigger than children count
 // and not all of the contexts are deleted as a consequence
