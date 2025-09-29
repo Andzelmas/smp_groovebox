@@ -807,13 +807,10 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     return plug_data;
 }
 
-int plug_plugin_list_init(PLUG_INFO *plug_data, unsigned int recreate) {
+int plug_plugin_list_init(PLUG_INFO *plug_data) {
     if (!plug_data)
         return -1;
     PLUGIN_LIST *return_plugin_list = &(plug_data->plugin_list);
-    if (recreate == 0 && return_plugin_list->plugin_list &&
-        return_plugin_list->plugin_list_count > 0)
-        return 0;
     if (return_plugin_list->plugin_list)
         free(return_plugin_list->plugin_list);
     return_plugin_list->plugin_list_count = 0;

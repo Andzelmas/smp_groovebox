@@ -11,6 +11,12 @@
  for on screen keyboards, info dialogs and similar the UI is responsible
 */
 
+// TODO PRIORITY! think how to properly remove the contexts recursively - now
+// the system is flawed. It is evident when using the _is_dirty() function:
+// since the cur_cx children count is changing when the contexts are deleted
+// the i++ iterator becomes incorrect, it gets bigger than children count
+// and not all of the contexts are deleted as a consequence
+
 // TODO Groups (for example 10 total) each with cx_curr, cx_selected.
 // When removing cx, check each group if the cx being removed is  not in
 // cx_curr or  cx_selected. Nav_ functions that exits cx_curr or invokes
@@ -382,13 +388,13 @@ static void app_intrf_cx_check_dirty(APP_INTRF *app_intrf, CX *cur_cx) {
     // check if the context is dirty
     if (!app_intrf->data_is_dirty(cur_cx->user_data, cur_cx->user_data_type))
         return;
-
+    log_append_logfile("%s is dirty, children num %d\n", cur_cx->short_name, cur_cx->cx_children_count);
     // if it is remove all children recursively
     for (unsigned int i = 0; i < cur_cx->cx_children_count; i++) {
         CX *cur_child = cur_cx->cx_children[i];
         //Dont remove immidiate children with _CANT_DIRTY flag
         if((cur_child->flags & INTRF_FLAG_CANT_DIRTY))
-            return;
+            continue;
         app_intrf_cx_remove(app_intrf, cur_child);
     }
     // recreate the children

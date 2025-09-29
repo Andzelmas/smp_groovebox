@@ -169,6 +169,8 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
         clean_memory(app_data);
         return NULL;
     }
+    // Init the lv2 plugin list
+    plug_plugin_list_init(app_data->plug_data);
 
     clap_plug_status_t clap_plug_errors = 0;
     app_data->clap_plug_data =
@@ -234,8 +236,8 @@ void *app_data_child_return(void *parent_data, uint16_t parent_type,
             // clap plugins
             *return_type = USER_DATA_T_PLUGINS_NEW;
             snprintf(return_name, return_name_len, "%s", NAME_ADD_NEW);
-            *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_INTERACT |
-                             INTRF_FLAG_LIST | INTRF_FLAG_CANT_DIRTY);
+            *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_LIST |
+                             INTRF_FLAG_CANT_DIRTY);
             return (void *)app_data;
         }
         // TODO idx > 0 go through loaded plugins
@@ -274,11 +276,8 @@ void app_data_invoke(void *user_data, uint16_t user_data_type,
         return;
     // PLUGINS context
     //----------------------------------------------------------------------------------------------------
-    if (user_data_type == USER_DATA_T_PLUGINS_NEW) {
-        APP_INFO *app_data = (APP_INFO *)user_data;
-        // create the available plugins lists
-        plug_plugin_list_init(app_data->plug_data, 0);
-        return;
+    if (user_data_type == USER_DATA_T_PLUGINS_LIST_REFRESH){
+        //TODO call plug_plugin_list_init() function to repopulate the plugin list
     }
     //----------------------------------------------------------------------------------------------------
 }
