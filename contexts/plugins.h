@@ -27,9 +27,7 @@ char* plug_return_plugin_name(PLUG_INFO* plug_data, int plug_id);
 //get the list of the plugins in a string array format, user needs to free that array
 char** plug_return_plugin_names(PLUG_INFO* plug_data, unsigned int* size);
 
-//TODO implement these
-//create a list of available plugins on the plug_data. If it already exists free it and create it again
-//returns the PLUGIN_LIST* as void*
+//Creates a list of available plugins on the plug_data. If it already exists free it and create it again
 //if recreate == 1 will remove the existing plugin_list and populate it again, otherwise if plugin_list exists returns 0
 int plug_plugin_list_init(PLUG_INFO* plug_data, unsigned int recreate);
 //return an item from the the plugin list, it can be used to load a plugin

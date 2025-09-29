@@ -385,8 +385,10 @@ static void app_intrf_cx_check_dirty(APP_INTRF *app_intrf, CX *cur_cx) {
 
     // if it is remove all children recursively
     for (unsigned int i = 0; i < cur_cx->cx_children_count; i++) {
-        // TODO should not remove immidiate children with flag _CANT_DIRTY
         CX *cur_child = cur_cx->cx_children[i];
+        //Dont remove immidiate children with _CANT_DIRTY flag
+        if((cur_child->flags & INTRF_FLAG_CANT_DIRTY))
+            return;
         app_intrf_cx_remove(app_intrf, cur_child);
     }
     // recreate the children
