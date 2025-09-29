@@ -29,6 +29,12 @@
 // since the cur_cx children count is changing when the contexts are deleted
 // the i++ iterator becomes incorrect, it gets bigger than children count
 // and not all of the contexts are deleted as a consequence
+// THEN check when creating cx if a cx with a same short name exists among
+// the parent children. If yes, don't add the cx.
+// Maybe: cx_children arrays should be freed only when removing the cx.
+// So cx_children array if empty will have one NULL member.
+// Use not cx_children_count but last array member NULL? 
+// Function that deletes cx recursively could also accept filter what not to delete?
 
 // TODO Groups (for example 10 total) each with cx_curr, cx_selected.
 // When removing cx, check each group if the cx being removed is  not in
