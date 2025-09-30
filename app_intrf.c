@@ -206,6 +206,10 @@ static void app_intrf_cx_remove(APP_INTRF *app_intrf, CX *remove_cx) {
         unsigned int iter = 0;
         while(cur_child && iter < remove_cx->cx_children.count){
             app_intrf_cx_remove(app_intrf, cur_child);
+            // TODO with current system cur_child will never be equal to
+            // last_child cur_child will always be deleted but if there is an
+            // error in app_intrf_cx_children_pop it will be undifined behaviour
+            // here since cx_children.contexts[iter] will be freed
             cur_child = remove_cx->cx_children.contexts[iter];
             if(cur_child == last_child)iter += 1;
             last_child = cur_child;
