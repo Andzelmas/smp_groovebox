@@ -18,6 +18,7 @@ APP_INTRF *app_intrf_init();
 void app_intrf_destroy(APP_INTRF *app_intrf);
 
 // NAVIGATION functions that UI can use to explore the interface
+
 // call data_update() and check if any contexts are dirty, if yes recreate their
 // children
 void nav_update(APP_INTRF *app_intrf);
