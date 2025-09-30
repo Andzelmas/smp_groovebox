@@ -47,6 +47,10 @@
 // be double and audio buffers will use 64bits
 #define SAMPLE_T_AS_DOUBLE 0
 
+//Initial number of members for a malloced array of pointers
+//This can be realloced later
+#define PTR_ARRAY_COUNT 25
+
 enum userDataTypes {
     // the root data, void* user_data casts to APP_INFO* struct
     // the Plugins context

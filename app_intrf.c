@@ -2,8 +2,9 @@
 #include "app_data.h"
 #include "types.h"
 #include "util_funcs/log_funcs.h"
-
 #include <stdio.h>
+#include <stdlib.h>
+
 /*
     The INTRF layer is for creating the app_data structure
     Also, it allows UI to communicate with app_data
@@ -75,6 +76,16 @@
 // scrolling(would be nice to able to scroll any element with contents that do
 // not fit) and selecting as soon as possible.
 
+typedef struct _cx_array{
+    // the cx that was last interacted with, convenient to know for lists,
+    // so user can continue from last place
+    unsigned int last_selected;
+    unsigned int count;
+    unsigned int count_max;
+    struct _cx **contexts;
+} CX_ARRAY;
+
+// Struct for a single context
 typedef struct _cx {
     // name of the cx, data must make sure this is unique in the context,
     // otherwise the cx will not be created
@@ -84,12 +95,10 @@ typedef struct _cx {
     void *user_data; // user_data for this cx, that the data layer uses. IT IS
                      // FORBIDDEN TO FREE OR MODIFY THIS IN ANY OTHER WAY
     struct _cx *cx_parent;
-    unsigned int cx_children_last_selected; // the child in cx_children that
-                                            // was last selected (address put
-                                            // in app_intrf->cx_selected)
-    unsigned int cx_children_count;
-    struct _cx **cx_children;
     uint32_t flags;
+
+    //contexts array of children
+    struct _cx_array cx_children;
 } CX;
 
 typedef struct _app_intrf {
@@ -124,26 +133,6 @@ typedef struct _app_intrf {
     void (*data_destroy)(void *user_data, uint16_t type);
 } APP_INTRF;
 
-// append CX* to the old_array. Since the array is realloced or calloced send
-// &(CX**) array
-static int app_intrf_cx_array_append(CX ***old_array, unsigned int *array_count,
-                                     CX *add_cx) {
-    CX **temp_array = NULL;
-    if (!old_array)
-        temp_array = (CX **)calloc(1, sizeof(CX *));
-    else
-        temp_array =
-            (CX **)realloc(*old_array, sizeof(CX *) * (*array_count + 1));
-    if (!temp_array)
-        return -1;
-
-    *old_array = temp_array;
-    (*old_array)[*array_count] = add_cx;
-    *array_count += 1;
-
-    return 1;
-}
-
 // add child to the end of the parent cx_children array
 static int app_intrf_cx_children_add(APP_INTRF *app_intrf, CX *child) {
     if (!app_intrf)
@@ -153,71 +142,61 @@ static int app_intrf_cx_children_add(APP_INTRF *app_intrf, CX *child) {
     if (!child->cx_parent)
         return -1;
 
-    if (app_intrf_cx_array_append(&(child->cx_parent->cx_children),
-                                  &(child->cx_parent->cx_children_count),
-                                  child) != 1)
-        return -1;
-    child->idx = child->cx_parent->cx_children_count - 1;
+    CX* parent = child->cx_parent;
+    unsigned int nmemb = parent->cx_children.count + 1; 
+    //will need to realloc 
+    if (nmemb >= parent->cx_children.count_max){
+        unsigned int new_count_max = parent->cx_children.count_max * 2;
+        CX **temp_array =
+            realloc(parent->cx_children.contexts, sizeof(CX *) * new_count_max);
+        if(!temp_array)
+            return -1;
+        parent->cx_children.contexts = temp_array;
+        parent->cx_children.count_max = new_count_max;
+    }
+    parent->cx_children.count = nmemb;
+
+    child->idx = parent->cx_children.count - 1; 
+    parent->cx_children.contexts[child->idx] = child;
+    parent->cx_children.contexts[child->idx + 1] = NULL;
+
     return 1;
 }
 
-static int app_intrf_cx_array_pop(CX ***old_array, unsigned int *array_count,
-                                  int pop_idx) {
-    if (!*old_array)
-        return -1;
-    if (*array_count == 0)
-        return -1;
-    if (pop_idx < 0)
-        return -1;
-    if (pop_idx >= *array_count)
-        return -1;
-
-    unsigned int new_count = (*array_count) - 1;
-    if (new_count == 0) {
-        free(*old_array);
-        *old_array = NULL;
-        *array_count = 0;
-        return 1;
-    }
-    // move everything to the left
-    for (unsigned int i = pop_idx; i < new_count; i++) {
-        (*old_array)[i] = (*old_array)[i + 1];
-    }
-
-    CX **temp_array;
-    temp_array = (CX **)realloc(*old_array, sizeof(CX *) * new_count);
-    if (!temp_array)
-        return -1;
-
-    *old_array = temp_array;
-    *array_count = new_count;
-    return 1;
-}
-
-// pop the child from parent cx_children array and realloc the array
+// pop the child from parent cx_children array
 static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, int child_idx,
                                       CX *parent) {
     if (!app_intrf)
         return;
     if (!parent)
         return;
-    if (!parent->cx_children)
+    if (!parent->cx_children.contexts)
         return;
-    if (child_idx >= parent->cx_children_count)
+    if (child_idx >= parent->cx_children.count)
         return;
     if (child_idx < 0)
         return;
 
-    if (app_intrf_cx_array_pop(&(parent->cx_children),
-                               &(parent->cx_children_count), child_idx) != 1)
-        return;
+    // Remove the child_idx cx from the parent cx_children array
+    unsigned int nmemb = parent->cx_children.count - 1;
+    for (int i = child_idx; i < nmemb; i++){
+        parent->cx_children.contexts[i] = parent->cx_children.contexts[i+1];
+    }
+    parent->cx_children.count = nmemb;
+    //last member of the cx_children array has to be a NULL
+    parent->cx_children.contexts[nmemb] = NULL;
 
     // change the parent children indices
-    for (unsigned int i = 0; i < parent->cx_children_count; i++) {
-        CX *curr_cx = parent->cx_children[i];
+    for (unsigned int i = 0; i < parent->cx_children.count; i++) {
+        CX *curr_cx = parent->cx_children.contexts[i];
         if (curr_cx->idx <= child_idx)
             continue;
         curr_cx->idx -= 1;
+    }
+    // change the last selected cx in the parent cx_children array
+    if (parent->cx_children.last_selected >= child_idx &&
+        parent->cx_children.last_selected > 0) {
+        parent->cx_children.last_selected -= 1;
     }
 }
 
@@ -229,49 +208,42 @@ static void app_intrf_cx_remove(APP_INTRF *app_intrf, CX *remove_cx) {
         return;
 
     // remove cx_children
-    unsigned int safety = remove_cx->cx_children_count;
-    unsigned int init_children_count = remove_cx->cx_children_count;
-    unsigned int remove_child_idx = 0;
-    while (remove_cx->cx_children_count > 0 && safety > 0) {
-        safety -= 1;
-        CX *cur_child = remove_cx->cx_children[remove_child_idx];
-        app_intrf_cx_remove(app_intrf, cur_child);
-        // the child was not popped from the remove_cx cx_children array
-        // so next remove the next child in the array, this error will
-        // leave cx_children array not popped and with NULLs in some
-        // indices, better then memory leak
-        if (init_children_count == remove_cx->cx_children_count) {
-            remove_child_idx += 1;
+    if(remove_cx->cx_children.count > 0){
+        CX* cur_child = remove_cx->cx_children.contexts[0];
+        while(cur_child){
+            app_intrf_cx_remove(app_intrf, cur_child);
+            cur_child = remove_cx->cx_children.contexts[0];
         }
-        init_children_count = remove_cx->cx_children_count;
     }
 
+    CX* parent = remove_cx->cx_parent;
     // if remove_cx has a parent pop remove_cx from its cx_children array
-    if (remove_cx->cx_parent) {
+    if (parent) {
         app_intrf_cx_children_pop(app_intrf, remove_cx->idx,
                                   remove_cx->cx_parent);
     }
-    // if there where problems of children popping from remove_cx cx_children
-    // array, free the cx_children array
-    if (remove_cx->cx_children)
-        free(remove_cx->cx_children);
 
     // if cx_curr or cx_selected is the same as remove_cx, change them
-    if (app_intrf->cx_curr == remove_cx && remove_cx->cx_parent) {
-        app_intrf->cx_curr = remove_cx->cx_parent;
-        app_intrf->cx_selected = remove_cx->cx_parent->cx_children[0];
+    if (app_intrf->cx_curr == remove_cx) {
+        app_intrf->cx_curr = parent;
+        app_intrf->cx_selected = app_intrf->cx_curr;
+        if (parent && parent->cx_children.count > 0)
+            app_intrf->cx_selected = parent->cx_children.contexts[0];
     }
+    //TODO  should select a child still left, 
+    // what if only the parent is left without children,
+    // what to select then?
     if (app_intrf->cx_selected == remove_cx) {
         app_intrf->cx_selected = app_intrf->cx_curr;
     }
     // TODO if the remove_cx is in any group pop from there
 
+    free(remove_cx->cx_children.contexts);
     free(remove_cx);
 }
 
 // create a new cx and return it.
 // will be added to the parent_cx child array if parent_cx is given.
-// if short_name==NULL will get the short_name from the data layer
 static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
                                void *user_data, uint16_t user_data_type,
                                uint32_t flags, const char *short_name) {
@@ -292,6 +264,22 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
         return NULL;
 
     new_cx->flags = flags;
+    new_cx->cx_children.contexts = NULL;
+    new_cx->cx_children.count = 0;
+    new_cx->cx_children.count_max = PTR_ARRAY_COUNT;
+
+    //if the context is not a container it will not have any children
+    //if it is a container create the children array
+    if ((new_cx->flags & INTRF_FLAG_CONTAINER)) {
+        new_cx->cx_children.contexts =
+            calloc(new_cx->cx_children.count_max, sizeof(CX *));
+
+        if (!new_cx->cx_children.contexts) {
+            app_intrf_cx_remove(app_intrf, new_cx);
+            return NULL;
+        }
+    }
+
     new_cx->cx_parent = parent_cx;
     new_cx->user_data = user_data;
     new_cx->user_data_type = user_data_type;
@@ -321,6 +309,8 @@ static void app_intrf_cx_children_create(APP_INTRF *app_intrf, CX *parent_cx) {
         return;
     if (!parent_cx)
         return;
+
+    // create children
     unsigned int iter = 0;
     uint16_t child_type = 0;
     uint32_t child_flags = 0;
@@ -328,6 +318,7 @@ static void app_intrf_cx_children_create(APP_INTRF *app_intrf, CX *parent_cx) {
     void *child_data = app_intrf->data_child_return(
         parent_cx->user_data, parent_cx->user_data_type, &child_type,
         &child_flags, child_name, MAX_PARAM_NAME_LENGTH, iter);
+
     while (child_data) {
         app_intrf_cx_create(app_intrf, parent_cx, child_data, child_type,
                             child_flags, child_name);
@@ -336,9 +327,9 @@ static void app_intrf_cx_children_create(APP_INTRF *app_intrf, CX *parent_cx) {
             parent_cx->user_data, parent_cx->user_data_type, &child_type,
             &child_flags, child_name, MAX_PARAM_NAME_LENGTH, iter);
     }
-
-    for (unsigned int i = 0; i < parent_cx->cx_children_count; i++) {
-        CX *cur_child = parent_cx->cx_children[i];
+    // create children for parent_cx children
+    for (unsigned int i = 0; i < parent_cx->cx_children.count; i++) {
+        CX *cur_child = parent_cx->cx_children.contexts[i];
         app_intrf_cx_children_create(app_intrf, cur_child);
     }
 }
@@ -383,8 +374,8 @@ APP_INTRF *app_intrf_init() {
 
     app_intrf->cx_curr = app_intrf->cx_root;
     app_intrf->cx_selected = app_intrf->cx_curr;
-    if (app_intrf->cx_curr->cx_children_count > 0)
-        app_intrf->cx_selected = app_intrf->cx_curr->cx_children[0];
+    if (app_intrf->cx_curr->cx_children.count > 0)
+        app_intrf->cx_selected = app_intrf->cx_curr->cx_children.contexts[0];
 
     return app_intrf;
 }
@@ -408,29 +399,18 @@ static void app_intrf_cx_check_dirty(APP_INTRF *app_intrf, CX *cur_cx) {
         return;
     if (!cur_cx)
         return;
-
     // check if the context is dirty
     if (!app_intrf->data_is_dirty(cur_cx->user_data, cur_cx->user_data_type))
         return;
-    log_append_logfile("%s is dirty, children num %d\n", cur_cx->short_name, cur_cx->cx_children_count);
+
     // if it is remove all children recursively
-    for (unsigned int i = 0; i < cur_cx->cx_children_count; i++) {
-        CX *cur_child = cur_cx->cx_children[i];
-        //Dont remove immidiate children with _CANT_DIRTY flag
-        if((cur_child->flags & INTRF_FLAG_CANT_DIRTY))
-            continue;
-        app_intrf_cx_remove(app_intrf, cur_child);
-    }
+    // TODO need to think of a way to remove cur_cx children recursively
+    // ALSO need to leave children with flags _CANT_DIRTY (only immidiate children)
     // recreate the children
     // since app_intrf_cx_children_create() checks for cx duplicates in the
     // parent_cx cx that are not remove if they have _CANT_DIRTY flag will not
     // be duplicated
     app_intrf_cx_children_create(app_intrf, cur_cx);
-
-    // select a CX if there is no CX selected
-    if (app_intrf->cx_curr == app_intrf->cx_selected &&
-        cur_cx->cx_children_count > 0)
-        app_intrf->cx_selected = cur_cx->cx_children[0];
 }
 
 // iterate from root_cx through the children recursively and call the void user
@@ -441,11 +421,11 @@ static void app_intrf_cx_children_iterate(
     if (!root_cx)
         return;
     callback_func(app_intrf, root_cx);
-    if (!root_cx->cx_children || root_cx->cx_children_count == 0)
+    if (!root_cx->cx_children.contexts || root_cx->cx_children.count == 0)
         return;
 
-    for (unsigned int i = 0; i < root_cx->cx_children_count; i++) {
-        CX *cur_cx = root_cx->cx_children[i];
+    for (unsigned int i = 0; i < root_cx->cx_children.count; i++) {
+        CX *cur_cx = root_cx->cx_children.contexts[i];
         app_intrf_cx_children_iterate(app_intrf, cur_cx, callback_func);
     }
 }
@@ -487,8 +467,8 @@ CX **nav_cx_children_return(APP_INTRF *app_intrf, CX *parent,
     if (!parent)
         return NULL;
 
-    *count = parent->cx_children_count;
-    return parent->cx_children;
+    *count = parent->cx_children.count;
+    return parent->cx_children.contexts;
 }
 
 int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
@@ -518,10 +498,10 @@ void nav_cx_selected_next(APP_INTRF *app_intrf) {
         return;
 
     int new_idx = selected_cx->idx + 1;
-    if (new_idx >= selected_cx->cx_parent->cx_children_count)
+    if (new_idx >= selected_cx->cx_parent->cx_children.count)
         new_idx = 0;
-    selected_cx->cx_parent->cx_children_last_selected = (unsigned int)new_idx;
-    app_intrf->cx_selected = selected_cx->cx_parent->cx_children[new_idx];
+    selected_cx->cx_parent->cx_children.last_selected = (unsigned int)new_idx;
+    app_intrf->cx_selected = selected_cx->cx_parent->cx_children.contexts[new_idx];
 }
 
 void nav_cx_selected_prev(APP_INTRF *app_intrf) {
@@ -537,9 +517,9 @@ void nav_cx_selected_prev(APP_INTRF *app_intrf) {
 
     int new_idx = selected_cx->idx - 1;
     if (new_idx < 0)
-        new_idx = selected_cx->cx_parent->cx_children_count - 1;
-    selected_cx->cx_parent->cx_children_last_selected = (unsigned int)new_idx;
-    app_intrf->cx_selected = selected_cx->cx_parent->cx_children[new_idx];
+        new_idx = selected_cx->cx_parent->cx_children.count - 1;
+    selected_cx->cx_parent->cx_children.last_selected = (unsigned int)new_idx;
+    app_intrf->cx_selected = selected_cx->cx_parent->cx_children.contexts[new_idx];
 }
 
 int nav_cx_curr_exit(APP_INTRF *app_intrf) {
@@ -556,13 +536,13 @@ int nav_cx_curr_exit(APP_INTRF *app_intrf) {
     // TODO maybe this could be in a separate function -
     // other functions use this snippet too (like the nav_cx_selected_invoke
     // function)
-    if (app_intrf->cx_curr->cx_children_count > 0) {
-        app_intrf->cx_selected = app_intrf->cx_curr->cx_children[0];
-        if (app_intrf->cx_curr->cx_children_last_selected <
-            app_intrf->cx_curr->cx_children_count)
+    unsigned int last_selected = app_intrf->cx_curr->cx_children.last_selected;
+    CX *cx_curr = app_intrf->cx_curr;
+    if (cx_curr->cx_children.count > 0) {
+        app_intrf->cx_selected = cx_curr->cx_children.contexts[0];
+        if (last_selected < cx_curr->cx_children.count)
             app_intrf->cx_selected =
-                app_intrf->cx_curr->cx_children
-                    [app_intrf->cx_curr->cx_children_last_selected];
+                cx_curr->cx_children.contexts[last_selected];
     }
 
     return 1;
@@ -587,19 +567,19 @@ int nav_cx_selected_invoke(APP_INTRF *app_intrf) {
     // if this context has children enter inside
     if (!(selected->flags & INTRF_FLAG_CONTAINER))
         return 1;
-    if (selected->cx_children_count == 0)
+    if (selected->cx_children.count == 0)
         return 1;
 
     app_intrf->cx_curr = selected;
     app_intrf->cx_selected = app_intrf->cx_curr;
     // new cx_selected context
-    if (app_intrf->cx_curr->cx_children_count > 0) {
-        app_intrf->cx_selected = app_intrf->cx_curr->cx_children[0];
-        if (app_intrf->cx_curr->cx_children_last_selected <
-            app_intrf->cx_curr->cx_children_count)
+    unsigned int last_selected = app_intrf->cx_curr->cx_children.last_selected;
+    CX *cx_curr = app_intrf->cx_curr;
+    if (cx_curr->cx_children.count > 0) {
+        app_intrf->cx_selected = cx_curr->cx_children.contexts[0];
+        if (last_selected < cx_curr->cx_children.count)
             app_intrf->cx_selected =
-                app_intrf->cx_curr->cx_children
-                    [app_intrf->cx_curr->cx_children_last_selected];
+                cx_curr->cx_children.contexts[last_selected];
     }
 
     return 1;
