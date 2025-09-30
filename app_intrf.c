@@ -210,6 +210,14 @@ static void app_intrf_cx_remove(APP_INTRF *app_intrf, CX *remove_cx) {
         //them. Maybe clear the nulls later or not, think about this.
         //CONSIDER traveling from the parent and removing it's children but not itself
         //then, maybe, wont be a need for the _pop function
+        //OR instead of _pop function a function that removes a single CX*
+        //it has CX* as argument, goes through parent->cx_children.contexts
+        //if cx in context is the same as cx* remove it, then move array to left,
+        //then free the CX* itself. 
+        //If this would work there would be no need for this function,
+        //instead the new cx_remove function could be a callback for the traverse function
+        //But the traverse function would have to travel in reverse - from leafs.
+        //As added bonus, when there is a need to remove just one CX* it would be easy to do
         while(cur_child && iter < remove_cx->cx_children.count){
             app_intrf_cx_remove(app_intrf, cur_child);
             // TODO with current system cur_child will never be equal to
