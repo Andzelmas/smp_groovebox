@@ -204,6 +204,10 @@ static void app_intrf_cx_remove(APP_INTRF *app_intrf, CX *remove_cx) {
         CX* cur_child = remove_cx->cx_children.contexts[0];
         CX* last_child = cur_child;
         unsigned int iter = 0;
+        //TODO try to remove children without a while loop
+        //get rid of the app_intrf_cx_children_pop and while going through
+        //children remove them and fill cx_children.contexts will nulls instead of
+        //them. Maybe clear the nulls later or not, think about this.
         while(cur_child && iter < remove_cx->cx_children.count){
             app_intrf_cx_remove(app_intrf, cur_child);
             // TODO with current system cur_child will never be equal to
