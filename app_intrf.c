@@ -26,22 +26,8 @@
     initialized, but NOT when the user is navigating.
 */
 
-// TODO PRIORITY! think how to properly remove the contexts recursively - now
-// the system is flawed. 
-// app_intrf_cx_remove() should be the only function that removes contexts.
-// It should also accept a filter what to leave (but only for the root_cx children).
-// Remove the while loop with the safety: before removing a cx check if it still has children.
-// If yes, dont remove the cx (it means that removing a child has failed).
-// It is evident when using the _is_dirty() function:
-// since the cur_cx children count is changing when the contexts are deleted
-// the i++ iterator becomes incorrect, it gets bigger than children count
-// and not all of the contexts are deleted as a consequence
-// THEN check when creating cx if a cx with a same short name exists among
-// the parent children. If yes, don't add the cx.
-// Maybe: cx_children arrays should be freed only when removing the cx.
-// So cx_children array if empty will have one NULL member.
-// Use not cx_children_count but last array member NULL? 
-// Function that deletes cx recursively could also accept filter what not to delete?
+// TODO PRIORITY.
+// Clap plugin lists; Lv2 and Clap plugin loading.
 
 // TODO Groups (for example 10 total) each with cx_curr, cx_selected.
 // When removing cx, check each group if the cx being removed is  not in
@@ -59,20 +45,6 @@
 // root as dirty so app_intrf recreates its structure. saving and loading
 // separate contexts (plugins, trk and similar) should work the same. user
 // should be able to set a file to load on startup.
-// TODO When app_intrf checks contexts and finds a cx dirty, will need a
-// special function to remove and create the cx children again: go through each
-// child with for loop and check their flags if they are eligible for
-// recreation: children with INTRF_FLAG_CANT_DIRTY will not be removed. remove
-// the children recursively. So even if childrens children will have a flag
-// INTRF_FLAG_CANT_DIRTY they will be removed, since their parent is removed
-// and there would be a memory leak. in this way if for example structure is
-// Plugins->plug_01->load_preset->preset categories and presets, when a preset
-// is loaded the plug_01 will be marked as dirty. all of the plug_01 children
-// will be removed (parameters etc.), but load_preset has INTRF_FLAG_CANT_DIRTY
-// and remove will leave it and its children, so the user can continue loading
-// the presets. on the other hand if a new plugin plug_02 is created Plugins
-// will be marked dirty. Since load_preset is Plugins childrens children it
-// will be removed this time and created again.
 // TODO when implementing clay or other ui, test mouse clicking;
 // scrolling(would be nice to able to scroll any element with contents that do
 // not fit) and selecting as soon as possible.
@@ -155,95 +127,60 @@ static void app_intrf_cx_selected_restate(APP_INTRF *app_intrf){
     }
 }
 
-// pop the child from parent cx_children array
-static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, int child_idx,
-                                      CX *parent) {
+// pop the child from the context structure 
+static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
     if (!app_intrf)
         return;
-    if (!parent)
-        return;
-    if (!parent->cx_children.contexts)
-        return;
-    if (child_idx >= parent->cx_children.count)
-        return;
-    if (child_idx < 0)
-        return;
+    CX* parent = cx_rem->cx_parent;
+    if (parent){
+        if (parent->cx_children.count > 0) {
+            int child_idx = -1;
+            //find the cx_rem in its parent children array
+            for (int i = 0; i < parent->cx_children.count; i++){
+                CX* curr_cx = parent->cx_children.contexts[i];
+                if(curr_cx == cx_rem){
+                    child_idx = i;
+                    break;
+                }
+            }
+            if (child_idx != -1) {
+                // Remove the child_idx cx from the parent cx_children array
+                unsigned int nmemb = parent->cx_children.count - 1;
+                for (int i = child_idx; i < nmemb; i++) {
+                    parent->cx_children.contexts[i] =
+                        parent->cx_children.contexts[i + 1];
+                }
+                parent->cx_children.count = nmemb;
+                // last member of the cx_children array has to be a NULL
+                parent->cx_children.contexts[nmemb] = NULL;
 
-    // Remove the child_idx cx from the parent cx_children array
-    unsigned int nmemb = parent->cx_children.count - 1;
-    for (int i = child_idx; i < nmemb; i++){
-        parent->cx_children.contexts[i] = parent->cx_children.contexts[i+1];
-    }
-    parent->cx_children.count = nmemb;
-    //last member of the cx_children array has to be a NULL
-    parent->cx_children.contexts[nmemb] = NULL;
-
-    // change the parent children indices
-    for (unsigned int i = 0; i < parent->cx_children.count; i++) {
-        CX *curr_cx = parent->cx_children.contexts[i];
-        if (curr_cx->idx <= child_idx)
-            continue;
-        curr_cx->idx -= 1;
-    }
-    // change the last selected cx in the parent cx_children array
-    if (parent->cx_children.last_selected >= child_idx &&
-        parent->cx_children.last_selected > 0) {
-        parent->cx_children.last_selected -= 1;
-    }
-}
-
-// remove the cx and its children recursively.
-static void app_intrf_cx_remove(APP_INTRF *app_intrf, CX *remove_cx) {
-    if (!app_intrf)
-        return;
-    if (!remove_cx)
-        return;
-
-    // remove cx_children
-    if(remove_cx->cx_children.count > 0){
-        CX* cur_child = remove_cx->cx_children.contexts[0];
-        CX* last_child = cur_child;
-        unsigned int iter = 0;
-        //TODO try to remove children without a while loop
-        //get rid of the app_intrf_cx_children_pop and while going through
-        //children remove them and fill cx_children.contexts will nulls instead of
-        //them. Maybe clear the nulls later or not, think about this.
-        //CONSIDER traveling from the parent and removing it's children but not itself
-        //then, maybe, wont be a need for the _pop function
-        //OR instead of _pop function a function that removes a single CX*
-        //it has CX* as argument, goes through parent->cx_children.contexts
-        //if cx in context is the same as cx* remove it, then move array to left,
-        //then free the CX* itself. 
-        //If this would work there would be no need for this function,
-        //instead the new cx_remove function could be a callback for the traverse function
-        //But the traverse function would have to travel in reverse - from leafs.
-        //As added bonus, when there is a need to remove just one CX* it would be easy to do
-        while(cur_child && iter < remove_cx->cx_children.count){
-            app_intrf_cx_remove(app_intrf, cur_child);
-            // TODO with current system cur_child will never be equal to
-            // last_child cur_child will always be deleted but if there is an
-            // error in app_intrf_cx_children_pop it will be undifined behaviour
-            // here since cx_children.contexts[iter] will be freed
-            cur_child = remove_cx->cx_children.contexts[iter];
-            if(cur_child == last_child)iter += 1;
-            last_child = cur_child;
+                // change the parent children indices
+                for (unsigned int i = 0; i < parent->cx_children.count; i++) {
+                    CX *curr_cx = parent->cx_children.contexts[i];
+                    if (curr_cx->idx <= child_idx)
+                        continue;
+                    curr_cx->idx -= 1;
+                }
+                // change the last selected cx in the parent cx_children array
+                if (parent->cx_children.last_selected >= child_idx &&
+                    parent->cx_children.last_selected > 0) {
+                    parent->cx_children.last_selected -= 1;
+                }
+            }
         }
     }
 
-    CX* parent = remove_cx->cx_parent;
-
     // if cx_curr is the same as remove_cx, change it to parent
-    if (app_intrf->cx_curr == remove_cx) {
+    if (app_intrf->cx_curr == cx_rem) {
         app_intrf->cx_curr = parent;
     }
+
     //change cx_selected context just in case the remove_cx was that cx
     app_intrf_cx_selected_restate(app_intrf);
 
-    // if remove_cx has a parent, pop remove_cx from its cx_children array
-    app_intrf_cx_children_pop(app_intrf, remove_cx->idx, remove_cx->cx_parent);
-
-    if(remove_cx->cx_children.contexts)free(remove_cx->cx_children.contexts);
-    free(remove_cx);
+    //remove the cx_rem
+    if(cx_rem->cx_children.contexts)free(cx_rem->cx_children.contexts);
+    free(cx_rem);
 }
 
 // add child to the end of the parent cx_children array
@@ -273,6 +210,9 @@ static int app_intrf_cx_children_push(APP_INTRF *app_intrf, CX *child) {
     parent->cx_children.contexts[child->idx] = child;
     parent->cx_children.contexts[child->idx + 1] = NULL;
 
+    //change cx_selected for cases when cx_selected==cx_curr and 
+    //a new cx is created inside cx_curr
+    app_intrf_cx_selected_restate(app_intrf);
     return 1;
 }
 
@@ -290,8 +230,14 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     if (!short_name) {
         return NULL;
     }
-    // TODO check here if there is another cx with the same short_name
-    // if so remove this cx and return NULL
+    //two CX with same short_name under the same parent_cx cant exist
+    if(parent_cx){
+        for(unsigned int i = 0; i < parent_cx->cx_children.count; i++){
+            CX* nb_cx = parent_cx->cx_children.contexts[i];
+            if(strcmp(nb_cx->short_name, short_name)==0)
+                return NULL;
+        }
+    }
 
     CX *new_cx = calloc(1, sizeof(CX));
     if (!new_cx)
@@ -312,9 +258,8 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     if ((new_cx->flags & INTRF_FLAG_CONTAINER)) {
         new_cx->cx_children.contexts =
            calloc(new_cx->cx_children.count_max, sizeof(CX *));
-
         if (!new_cx->cx_children.contexts) {
-            app_intrf_cx_remove(app_intrf, new_cx);
+            app_intrf_cx_children_pop(app_intrf, new_cx);
             return NULL;
         }
     }
@@ -324,7 +269,7 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     if (new_cx->cx_parent) {
         // add this cx to the parent cx array
         if (app_intrf_cx_children_push(app_intrf, new_cx) != 1) {
-            app_intrf_cx_remove(app_intrf, new_cx);
+            app_intrf_cx_children_pop(app_intrf, new_cx);
             return NULL;
         }
     }
@@ -388,6 +333,7 @@ APP_INTRF *app_intrf_init() {
     //--------------------------------------------------
     uint32_t root_flags = 0;
     char root_name[MAX_PARAM_NAME_LENGTH];
+
     app_intrf->main_user_data =
         app_init(&(app_intrf->main_user_data_type), &root_flags, root_name,
                  MAX_PARAM_NAME_LENGTH);
@@ -412,6 +358,57 @@ APP_INTRF *app_intrf_init() {
     return app_intrf;
 }
 
+// iterate from root_cx through the children recursively and call the void user
+// function
+// root_cx - the cx from which to start iterating
+// top_cx - should be same as root_cx, so iterating func knows the top cx
+// leave_top - if 1, do not call callback_func for the top level cx
+// filter_flags - for cx with these flags the callback function will not be
+// called filter_only_top - filter_flags are only checked for the top level cx
+// children, after that filter_flags are ignored
+static void app_intrf_cx_children_iterate(
+    APP_INTRF *app_intrf, CX *root_cx, CX *top_cx, unsigned int leave_top,
+    enum intrfFlags filter_flags, unsigned int filter_only_top,
+    void(callback_func)(APP_INTRF *app_intrf, CX *cur_cx)) {
+
+    if (!root_cx)
+        return;
+    //init_count is necessary in case the callback_func changes the cx_children.count
+    //for example when the cx are being removed with the callback_func
+    unsigned int init_count = root_cx->cx_children.count;
+    unsigned int iter = 0;
+    while(iter < root_cx->cx_children.count){
+        CX *cur_cx = root_cx->cx_children.contexts[iter];
+        unsigned int go_inside = 1;
+
+        if (filter_flags != 0) {
+            // dont go inside if the exclude flags coincide
+            if ((cur_cx->flags & filter_flags) && filter_only_top == 0)
+                go_inside = 0;
+            // dont go inside if the exclude flags coincide for the top level
+            // children
+            if ((cur_cx->flags & filter_flags) && filter_only_top == 1 &&
+                root_cx == top_cx)
+                go_inside = 0;
+        }
+        if (go_inside == 1)
+            app_intrf_cx_children_iterate(app_intrf, cur_cx, top_cx, leave_top,
+                                          filter_flags, filter_only_top,
+                                          callback_func);
+
+        iter += 1;
+        if(init_count != root_cx->cx_children.count){
+            iter = 0;
+            init_count = root_cx->cx_children.count;
+        }
+    }
+    
+    // dont run the callback_func on the top cx
+    if(leave_top == 1 && root_cx == top_cx)
+        return;
+    callback_func(app_intrf, root_cx);
+}
+
 void app_intrf_destroy(APP_INTRF *app_intrf) {
     if (!app_intrf)
         return;
@@ -421,7 +418,9 @@ void app_intrf_destroy(APP_INTRF *app_intrf) {
                                 app_intrf->main_user_data_type);
 
     // remove the cx structure
-    app_intrf_cx_remove(app_intrf, app_intrf->cx_root);
+    app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root,
+                                  app_intrf->cx_root, 0, 0, 0,
+                                  app_intrf_cx_children_pop);
 
     free(app_intrf);
 }
@@ -435,32 +434,14 @@ static void app_intrf_cx_check_dirty(APP_INTRF *app_intrf, CX *cur_cx) {
     // check if the context is dirty
     if (!app_intrf->data_is_dirty(cur_cx->user_data, cur_cx->user_data_type))
         return;
-
     // if it is remove all children recursively
-    // TODO need to think of a way to remove cur_cx children recursively
-    // ALSO need to leave children with flags _CANT_DIRTY (only immidiate children)
-    // recreate the children
-    // since app_intrf_cx_children_create() checks for cx duplicates in the
-    // parent_cx cx that are not remove if they have _CANT_DIRTY flag will not
-    // be duplicated
+    // but leave the cur_cx context and do not remove any of the cur_cx children
+    // that has the _CANT_DIRTY flag
+    app_intrf_cx_children_iterate(app_intrf, cur_cx, cur_cx, 1,
+                                  INTRF_FLAG_CANT_DIRTY, 1,
+                                  app_intrf_cx_children_pop);
+    //create the children inside cur_cx again
     app_intrf_cx_children_create(app_intrf, cur_cx);
-}
-
-// iterate from root_cx through the children recursively and call the void user
-// function
-static void app_intrf_cx_children_iterate(
-    APP_INTRF *app_intrf, CX *root_cx,
-    void(callback_func)(APP_INTRF *app_intrf, CX *cur_cx)) {
-    if (!root_cx)
-        return;
-    callback_func(app_intrf, root_cx);
-    if (!root_cx->cx_children.contexts || root_cx->cx_children.count == 0)
-        return;
-
-    for (unsigned int i = 0; i < root_cx->cx_children.count; i++) {
-        CX *cur_cx = root_cx->cx_children.contexts[i];
-        app_intrf_cx_children_iterate(app_intrf, cur_cx, callback_func);
-    }
 }
 
 void nav_update(APP_INTRF *app_intrf) {
@@ -471,6 +452,7 @@ void nav_update(APP_INTRF *app_intrf) {
                                app_intrf->main_user_data_type);
     // iterate the whole structure and check if any CX are dirty
     app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root,
+                                  app_intrf->cx_root, 0, 0, 0,
                                   app_intrf_cx_check_dirty);
 }
 
