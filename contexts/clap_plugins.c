@@ -1730,6 +1730,8 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
 // return the clap_plug_plug with plugin entry (initiated), plug_path and
 // plug_inst_id from the plugins name, checks if  the same entry is already
 // loaded or not first
+// TODO too many mallocs - use big predefines for the string sizes,
+// no need to malloc them
 static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO *plug_data,
                                            const char *plug_name, int plug_id) {
     if (!plug_data)
