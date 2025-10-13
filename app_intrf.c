@@ -359,7 +359,7 @@ APP_INTRF *app_intrf_init() {
 }
 
 // iterate from root_cx through the children recursively and call the void user
-// function
+// ok to use callback to remove cx but not to create (untested)
 // root_cx - the cx from which to start iterating
 // top_cx - should be same as root_cx, so iterating func knows the top cx
 // leave_top - if 1, do not call callback_func for the top level cx
