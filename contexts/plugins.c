@@ -60,12 +60,13 @@ static thread_local bool is_audio_thread =
     false; // can be used to check what thread this is, useful for thread safe
            // functions
 
-// plugin list item - to show the user available plugins on the system
+// plugin list item - from this struct a lv2 plugin can be loaded
 typedef struct _plugin_list_item {
     char plugin_path[MAX_PATH_STRING];
     char plugin_short_name[MAX_PARAM_NAME_LENGTH];
     PLUG_INFO *plug_data;
 } PLUGIN_LIST_ITEM;
+
 // the plugin list containing the plugin list items
 typedef struct _plugin_list {
     bool dirty; // if dirty == 0 it means the plugin_list was recreated
@@ -283,10 +284,9 @@ typedef struct _plug_info {
     // lilv world object
     LilvWorld *lv_world;
     // array of plugins
-    struct _plug_plug
-        plugins[MAX_INSTANCES +
-                1]; // create one more plugin, the last one is a NULL shell to
-                    // check if there are not too many plugins
+    // create one more plugin, the last one is a NULL shell to
+    // check if there are not too many plugins
+    struct _plug_plug plugins[MAX_INSTANCES + 1];
     // sample_rate
     float sample_rate;
     // block_length
@@ -852,6 +852,7 @@ int plug_plugin_list_init(PLUG_INFO *plug_data) {
     return_plugin_list->dirty = true;
     return 1;
 }
+
 void *plug_plugin_list_item_get(PLUG_INFO *plug_data, unsigned int idx) {
     if (!plug_data)
         return NULL;
@@ -861,6 +862,7 @@ void *plug_plugin_list_item_get(PLUG_INFO *plug_data, unsigned int idx) {
     PLUGIN_LIST_ITEM *cur_plug_list_item = &(cur_plugin_list.plugin_list[idx]);
     return (void *)cur_plug_list_item;
 }
+
 int plug_plugin_list_item_name(void *plug_list_item, char *return_name,
                                unsigned int return_name_len) {
     if (!plug_list_item)
@@ -1030,8 +1032,6 @@ int plug_plugin_preset_path(PLUG_INFO *plug_data, void *preset_info,
 int plug_load_preset(PLUG_INFO *plug_data, unsigned int plug_id,
                      const char *preset_name) {
     if (!plug_data)
-        return -1;
-    if (!plug_data->plugins)
         return -1;
     if (!preset_name)
         return -1;
@@ -1295,8 +1295,8 @@ int plug_load_and_activate(PLUG_INFO *plug_data, const char *plugin_uri,
                 continue;
             }
             // decide how big the increment of the parameter will be
-            PARAM_T total_range =
-                abs(param_maxs[ct_iter] - param_mins[ct_iter]);
+            PARAM_T total_range = param_maxs[ct_iter] - param_mins[ct_iter];
+            if(total_range < 0)total_range *= -1;
             PARAM_T cur_inc = 1;
             if (val_t == Float_type) {
                 cur_inc = total_range * 0.01;
@@ -1620,9 +1620,8 @@ static void plug_create_properties(PLUG_INFO *plug_data, PLUG_PLUG *plug,
 
 void plug_set_samplerate(PLUG_INFO *plug_data, float new_sample_rate) {
     if (!plug_data)
-        goto finish;
+        return;
     plug_data->sample_rate = new_sample_rate;
-finish:
 }
 
 void plug_set_block_length(PLUG_INFO *plug_data, uint32_t new_block_length) {
@@ -1760,7 +1759,7 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
             return -1;
         }
         // if the type is unknown connect to null
-        if (cur_port->type == PORT_FLOW_UNKNOWN ||
+        if (cur_port->flow == PORT_FLOW_UNKNOWN ||
             cur_port->type == PORT_TYPE_UNKNOWN) {
             lilv_instance_connect_port(plug->plug_instance, i, NULL);
         }
@@ -1803,9 +1802,6 @@ PRM_CONTAIN *plug_param_return_param_container(PLUG_INFO *plug_data,
 
 void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
     if (!plug_data) {
-        return;
-    }
-    if (!plug_data->plugins) {
         return;
     }
     for (int id = 0; id < MAX_INSTANCES; id++) {

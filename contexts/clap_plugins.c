@@ -31,6 +31,24 @@
 
 static thread_local bool is_audio_thread = false;
 
+// plugin list item - from this struct a clap plugin can be loaded
+typedef struct _plugin_list_item {
+    char path[MAX_PATH_STRING];
+    char short_name[MAX_PARAM_NAME_LENGTH];
+    CLAP_PLUG_INFO *plug_data;
+} PLUGIN_LIST_ITEM;
+
+// struct that holds the PLUGIN_LIST_ITEMS
+typedef struct _plugin_list {
+    bool dirty;
+    // maximum size of the plugin_list that is currently allocated -
+    // before a realloc is needed
+    unsigned int size_max;
+    // current size of the plugin_list array
+    unsigned int size_curr;
+    PLUGIN_LIST_ITEM *plugin_list;
+} PLUGIN_LIST;
+
 // struct that has the plugin preset info
 typedef struct _clap_plug_preset_info {
     char short_name[MAX_PARAM_NAME_LENGTH]; // the short name, without any
@@ -168,6 +186,7 @@ clap_plug_return_plug_id_with_same_plug_entry(CLAP_PLUG_INFO *plug_data,
 
     return return_id;
 }
+
 static int clap_plug_destroy_sys_ports(CLAP_PLUG_INFO *plug_data,
                                        CLAP_PLUG_PORT_SYS *ports_sys,
                                        uint32_t port_count) {
@@ -192,6 +211,7 @@ static int clap_plug_destroy_sys_ports(CLAP_PLUG_INFO *plug_data,
     free(ports_sys);
     return 0;
 }
+
 static int clap_plug_destroy_audio_ports(clap_audio_buffer_t *ports_audio,
                                          uint32_t port_count) {
     if (!ports_audio)
@@ -218,6 +238,7 @@ static int clap_plug_destroy_audio_ports(clap_audio_buffer_t *ports_audio,
     free(ports_audio);
     return 0;
 }
+
 static int clap_plug_destroy_ports(CLAP_PLUG_INFO *plug_data,
                                    CLAP_PLUG_PORT *port) {
     if (!plug_data)
@@ -253,6 +274,7 @@ static int clap_plug_port_name_create(int name_size, char *full_name,
              port_name, chan_num);
     return 0;
 }
+
 static int clap_plug_ports_rename(CLAP_PLUG_INFO *plug_data,
                                   CLAP_PLUG_PLUG *plug, CLAP_PLUG_PORT *ports,
                                   int input_ports) {
@@ -300,6 +322,7 @@ static int clap_plug_ports_rename(CLAP_PLUG_INFO *plug_data,
     }
     return 0;
 }
+
 static int clap_plug_create_ports(CLAP_PLUG_INFO *plug_data, int id,
                                   CLAP_PLUG_PORT *port, int input_ports) {
     if (!plug_data)
@@ -403,6 +426,7 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO *plug_data, int id,
     port->ports_count = clap_ports_count;
     return 0;
 }
+
 // rename the note ports
 static int clap_plug_note_ports_rename(CLAP_PLUG_INFO *plug_data,
                                        CLAP_PLUG_PLUG *plug, bool input_ports) {
@@ -448,6 +472,7 @@ static int clap_plug_note_ports_rename(CLAP_PLUG_INFO *plug_data,
     }
     return 0;
 }
+
 // clear note_port memory
 static int clap_plug_note_ports_destroy(CLAP_PLUG_INFO *plug_data,
                                         CLAP_PLUG_NOTE_PORT *note_port) {
@@ -481,6 +506,7 @@ static int clap_plug_note_ports_destroy(CLAP_PLUG_INFO *plug_data,
     }
     return 0;
 }
+
 // create note_ports
 static int clap_plug_note_ports_create(CLAP_PLUG_INFO *plug_data, int id,
                                        bool input_ports) {
@@ -561,6 +587,7 @@ static int clap_plug_params_destroy(CLAP_PLUG_INFO *plug_data, int id) {
 
     return 0;
 }
+
 // function that uses the value_to_text function on the param extension. use on
 // [main-thread] this function is on param_container and will be used when the
 // function param_get_value_as_string is called in params.c
@@ -592,6 +619,7 @@ static unsigned int clap_plug_params_value_to_text(const void *user_data,
     }
     return convert_err;
 }
+
 // create parameters on the id plugin, the plugin should not be processing
 static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     if (!plug_data)
@@ -658,7 +686,8 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
         param_mins[param_id] = param_info.min_value;
         param_maxs[param_id] = param_info.max_value;
         // calculate the increment
-        PARAM_T param_range = abs(param_maxs[param_id] - param_mins[param_id]);
+        PARAM_T param_range = param_maxs[param_id] - param_mins[param_id];
+        if(param_range < 0)param_range *= -1;
         param_incs[param_id] = param_range / 100.0;
 
         user_data_array[param_id].data = param_info.cookie;
@@ -708,6 +737,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     free(user_data_array);
     return 0;
 }
+
 PRM_CONTAIN *clap_plug_param_return_param_container(CLAP_PLUG_INFO *plug_data,
                                                     int plug_id) {
     if (!plug_data)
@@ -720,6 +750,7 @@ PRM_CONTAIN *clap_plug_param_return_param_container(CLAP_PLUG_INFO *plug_data,
 
     return plug->plug_params;
 }
+
 static void clap_plug_ext_params_rescan(const clap_host_t *host,
                                         clap_param_rescan_flags flags) {
     if (is_audio_thread)
@@ -793,6 +824,7 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
         */
     }
 }
+
 // clear param of automation and modulation, since it is not implemented yet,
 // does nothing
 static void clap_plug_ext_params_clear(const clap_host_t *host,
@@ -800,6 +832,7 @@ static void clap_plug_ext_params_clear(const clap_host_t *host,
                                        clap_param_clear_flags flags) {
     return;
 }
+
 static void clap_plug_ext_params_request_flush(const clap_host_t *host) {
     if (is_audio_thread)
         return;
@@ -878,6 +911,7 @@ static void clap_plug_ext_audio_ports_rescan(const clap_host_t *host,
     clap_plug_create_ports(plug_data, plug->id, &(plug->output_ports), 0);
     clap_plug_create_ports(plug_data, plug->id, &(plug->input_ports), 1);
 }
+
 // for note-ports extension return what note dialects are supported by this host
 static uint32_t
 clap_plug_ext_note_ports_supported_dialects(const clap_host_t *host) {
@@ -891,6 +925,7 @@ clap_plug_ext_note_ports_supported_dialects(const clap_host_t *host) {
     // supported = supported | CLAP_NOTE_DIALECT_MIDI_MPE;
     return supported;
 }
+
 // for note-ports extension rescan the note ports and get what is changed
 // (create the ports again)
 static void clap_plug_ext_note_ports_rescan(const clap_host_t *host,
@@ -935,6 +970,7 @@ clap_plug_ext_events_size(const struct clap_input_events *list) {
         return 0;
     return ub_size(ub_ev);
 }
+
 static const clap_event_header_t *
 clap_plug_ext_events_get(const struct clap_input_events *list, uint32_t index) {
     if (!list)
@@ -946,6 +982,7 @@ clap_plug_ext_events_get(const struct clap_input_events *list, uint32_t index) {
         (clap_event_header_t *)ub_item_get(ub_ev, index);
     return header;
 }
+
 static bool clap_plug_ext_events_try_push(const struct clap_output_events *list,
                                           const clap_event_header_t *event) {
     if (!list)
@@ -974,6 +1011,7 @@ static void clap_ext_preset_load_on_load(const clap_host_t *host,
                                          const char *load_key) {
     return;
 }
+
 // clean the single plugin struct
 // before calling this the plug_inst_processing should be == 0
 static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
@@ -1046,14 +1084,17 @@ int clap_plug_plug_stop_and_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
 
 // return if this is audio_thread or not
 static bool clap_plug_return_is_audio_thread() { return is_audio_thread; }
+
 // extension functions for thread-check.h to return is this audio or main thread
 // for the clap_host_thread_t extension
 static bool clap_plug_ext_is_audio_thread(const clap_host_t *host) {
     return clap_plug_return_is_audio_thread();
 }
+
 static bool clap_plug_ext_is_main_thread(const clap_host_t *host) {
     return !(clap_plug_return_is_audio_thread());
 }
+
 static int clap_sys_msg(void *user_data, const char *msg) {
     CLAP_PLUG_INFO *plug_data = (CLAP_PLUG_INFO *)user_data;
     // if(!plug_data)return -1;
@@ -1109,6 +1150,7 @@ const void *get_extension(const clap_host_t *host, const char *ex_id) {
 
     return NULL;
 }
+
 static int clap_plug_activate_start_processing(void *user_data) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)user_data;
     if (!plug)
@@ -1136,6 +1178,7 @@ static int clap_plug_activate_start_processing(void *user_data) {
 
     return 0;
 }
+
 static int clap_plug_restart(void *user_data) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)user_data;
     if (!plug)
@@ -1156,6 +1199,7 @@ static int clap_plug_restart(void *user_data) {
     // [audio-thread] to start processing it
     return clap_plug_activate_start_processing((void *)plug);
 }
+
 void request_restart(const clap_host_t *host) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
@@ -1190,6 +1234,7 @@ static int clap_plug_callback(void *user_data) {
     plug->plug_inst->on_main_thread(plug->plug_inst);
     return 0;
 }
+
 void request_callback(const clap_host_t *host) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
@@ -1222,6 +1267,7 @@ static int clap_plug_start_process(void *user_data) {
     plug->plug_inst_processing = 1;
     return 0;
 }
+
 static int clap_plug_stop_process(void *user_data) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)user_data;
     if (!plug)
@@ -1245,6 +1291,7 @@ static int clap_plug_stop_process(void *user_data) {
     plug->plug_inst_processing = 0;
     return 0;
 }
+
 int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data) {
     // this is a local thread var its false on [main-thread] and true on
     // [audio-thread]
@@ -1266,6 +1313,7 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data) {
     }
     return 0;
 }
+
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
     if (!plug_data)
         return -1;
@@ -1462,6 +1510,7 @@ char **clap_plug_return_plugin_names(CLAP_PLUG_INFO *plug_data,
     *size = total_names_found;
     return return_names;
 }
+
 void clap_plug_presets_clean_preset(CLAP_PLUG_INFO *plug_data,
                                     void *preset_info) {
     if (!plug_data)
@@ -1474,6 +1523,7 @@ void clap_plug_presets_clean_preset(CLAP_PLUG_INFO *plug_data,
 
     free(cur_preset);
 }
+
 int clap_plug_presets_name_return(CLAP_PLUG_INFO *plug_data, void *preset_info,
                                   char *name, uint32_t name_len) {
     if (!plug_data)
@@ -1483,11 +1533,10 @@ int clap_plug_presets_name_return(CLAP_PLUG_INFO *plug_data, void *preset_info,
     CLAP_PLUG_PRESET_INFO *cur_preset = (CLAP_PLUG_PRESET_INFO *)preset_info;
     if (!cur_preset)
         return -1;
-    if (!cur_preset->short_name)
-        return -1;
     snprintf(name, name_len, "%s", cur_preset->short_name);
     return 0;
 }
+
 int clap_plug_presets_path_return(CLAP_PLUG_INFO *plug_data, void *preset_info,
                                   char *path, uint32_t path_len) {
     if (!plug_data)
@@ -1497,11 +1546,10 @@ int clap_plug_presets_path_return(CLAP_PLUG_INFO *plug_data, void *preset_info,
     CLAP_PLUG_PRESET_INFO *cur_preset = (CLAP_PLUG_PRESET_INFO *)preset_info;
     if (!cur_preset)
         return -1;
-    if (!cur_preset->full_path)
-        return -1;
     snprintf(path, path_len, "%s", cur_preset->full_path);
     return 0;
 }
+
 int clap_plug_presets_categories_iterate(CLAP_PLUG_INFO *plug_data,
                                          void *preset_info, char *category,
                                          uint32_t category_len, uint32_t idx) {
@@ -1511,8 +1559,6 @@ int clap_plug_presets_categories_iterate(CLAP_PLUG_INFO *plug_data,
         return -1;
     CLAP_PLUG_PRESET_INFO *cur_preset = (CLAP_PLUG_PRESET_INFO *)preset_info;
     if (!cur_preset)
-        return -1;
-    if (!cur_preset->categories)
         return -1;
     uint32_t str_len = strlen(cur_preset->categories) + 1;
     char *ret_string = (char *)malloc(sizeof(char) * str_len);
@@ -1544,6 +1590,7 @@ int clap_plug_presets_categories_iterate(CLAP_PLUG_INFO *plug_data,
     free(ret_string);
     return -1;
 }
+
 void *clap_plug_presets_iterate(CLAP_PLUG_INFO *plug_data,
                                 unsigned int plug_idx, uint32_t iter) {
     if (!plug_data)
@@ -2052,6 +2099,7 @@ char *clap_plug_return_plugin_name(CLAP_PLUG_INFO *plug_data, int plug_id) {
     strcpy(ret_string, name_string);
     return ret_string;
 }
+
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
 static int clap_prepare_input_ports(CLAP_PLUG_INFO *plug_data,
@@ -2097,6 +2145,7 @@ static int clap_prepare_input_ports(CLAP_PLUG_INFO *plug_data,
 
     return not_quiet;
 }
+
 // process the output audio ports, by copying them to the system output ports
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
@@ -2150,6 +2199,7 @@ static int clap_prepare_output_ports(CLAP_PLUG_INFO *plug_data,
     }
     return not_quiet;
 }
+
 // TODO get events from parameters, midi etc. and use this data
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
@@ -2174,6 +2224,7 @@ static int clap_output_events_read(CLAP_PLUG_INFO *plug_data,
     }
     return not_quiet;
 }
+
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
 static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
@@ -2329,8 +2380,6 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
 
 void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes) {
     if (!plug_data)
-        return;
-    if (!plug_data->plugins)
         return;
     for (int id = 0; id < MAX_INSTANCES; id++) {
         CLAP_PLUG_PLUG *plug = &(plug_data->plugins[id]);
