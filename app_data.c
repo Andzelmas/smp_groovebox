@@ -421,6 +421,11 @@ bool app_data_is_dirty(void *user_data, uint16_t user_data_type) {
         APP_INFO *app_data = (APP_INFO *)user_data;
         return plug_plugin_list_is_dirty(app_data->plug_data);
     }
+    // check if the clap plugin list to add new plugins is dirty
+    if (user_data_type == USER_DATA_T_PLUGINS_CLAP_NEW){
+        APP_INFO* app_data = (APP_INFO*)user_data;
+        //TODO return if the clap plugin list is dirty
+    }
     //----------------------------------------------------------------------------------------------------
     return false;
 }
