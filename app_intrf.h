@@ -8,7 +8,10 @@
 // these will disappear while traversing - the nav_functions do not remove or
 // add CX*. CX* are added or removed in the nav_update() call.
 
+// single context struct, that has info like name, user data etc.
 typedef struct _cx CX;
+
+// struct the holds the whole app_intrf layer, with the main root_cx context
 typedef struct _app_intrf APP_INTRF;
 
 // init and return the app_intrf struct

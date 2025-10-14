@@ -55,6 +55,12 @@
 */
 
 /*
+   TODO one ui implementation to try is similar to cli programs:
+   couple commands to interact with interface, for example 'ls' to list context children
+   just to show that wildly different ui interfaces are possible
+*/
+
+/*
  TODO when implementing clay or other ui, test mouse clicking;
  scrolling(would be nice to able to scroll any element with contents that do
  not fit) and selecting as soon as possible.
@@ -69,7 +75,6 @@ typedef struct _cx_array{
     struct _cx **contexts;
 } CX_ARRAY;
 
-// Struct for a single context
 typedef struct _cx {
     // name of the cx, data must make sure this is unique in the context,
     // otherwise the cx will not be created
