@@ -33,8 +33,12 @@ static thread_local bool is_audio_thread = false;
 
 // plugin list item - from this struct a clap plugin can be loaded
 typedef struct _plugin_list_item {
+    // full plugin path with the directory and all
     char path[MAX_PATH_STRING];
+    // short name that is used in the clap descriptor
     char short_name[MAX_PARAM_NAME_LENGTH];
+    // the plugin instance id in the clap plugin descriptor
+    int plug_inst_id;
     CLAP_PLUG_INFO *plug_data;
 } PLUGIN_LIST_ITEM;
 
@@ -137,6 +141,8 @@ typedef struct _clap_plug_info {
     // sizes set as the same
     uint32_t min_buffer_size;
     uint32_t max_buffer_size;
+    // the list of plugins available on the system
+    PLUGIN_LIST clap_plugin_list;
     // placeholder for the host data that plugins send to the host, this has
     // clap_host_info.host_data = NULL, the clap_host_t has the CLAP_PLUG_PLUG*
     // plug in clap_host_info.host_data. This is just for convenience - to copy
@@ -1410,7 +1416,8 @@ static char **clap_plug_get_clap_files(const char *file_path,
     struct dirent *dir = NULL;
     d = opendir(file_path);
     if (d) {
-        ret_files = malloc(sizeof(char *));
+        int ret_files_max = PTR_ARRAY_COUNT;
+        ret_files = malloc(sizeof(char *)  * ret_files_max);
         unsigned int iter = 0;
         while ((dir = readdir(d)) != NULL) {
             if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
@@ -1434,10 +1441,15 @@ static char **clap_plug_get_clap_files(const char *file_path,
                 free(after_delim);
             if (before_delim)
                 free(before_delim);
-            char **temp_files = realloc(ret_files, sizeof(char *) * (iter + 1));
-            if (!temp_files)
-                continue;
-            ret_files = temp_files;
+            //the new array member will not fit need to realloc
+            if (iter >= ret_files_max) {
+                ret_files_max *= 2;
+                char **temp_files =
+                    realloc(ret_files, sizeof(char *) * ret_files_max);
+                if (!temp_files)
+                    continue;
+                ret_files = temp_files;
+            }
             ret_files[iter] = NULL;
             unsigned int cur_file_len = strlen(dir->d_name) + 1;
             char *cur_file = malloc(sizeof(char) * cur_file_len);
@@ -1452,63 +1464,6 @@ static char **clap_plug_get_clap_files(const char *file_path,
         *size = iter;
     }
     return ret_files;
-}
-
-// goes through the clap files stored on the clap_data struct and returns the
-// names of these plugins each clap file can have several different plugins
-// inside of it
-char **clap_plug_return_plugin_names(CLAP_PLUG_INFO *plug_data,
-                                     unsigned int *size) {
-    unsigned int total_files = 0;
-    char **clap_files = clap_plug_get_clap_files(CLAP_PATH, &total_files);
-    if (!clap_files)
-        return NULL;
-    char **return_names = malloc(sizeof(char *));
-    unsigned int total_names_found = 0;
-    for (int i = 0; i < total_files; i++) {
-        char *cur_file = clap_files[i];
-        if (!cur_file)
-            continue;
-        unsigned int total_file_name_size =
-            strlen(CLAP_PATH) + strlen(cur_file) + 1;
-        char *total_file_path = malloc(sizeof(char) * total_file_name_size);
-        if (!total_file_path) {
-            free(cur_file);
-            continue;
-        }
-        snprintf(total_file_path, total_file_name_size, "%s%s", CLAP_PATH,
-                 cur_file);
-
-        unsigned int plug_name_count = 0;
-        char **plug_names = clap_plug_get_plugin_names_from_file(
-            plug_data, total_file_path, &plug_name_count);
-        if (plug_names) {
-            for (int j = 0; j < plug_name_count; j++) {
-                char *cur_plug_name = plug_names[j];
-                if (!cur_plug_name)
-                    continue;
-                char **temp_return_names = realloc(
-                    return_names, sizeof(char *) * (total_names_found + 1));
-                if (!temp_return_names) {
-                    free(cur_plug_name);
-                    continue;
-                }
-                return_names = temp_return_names;
-                return_names[total_names_found] = cur_plug_name;
-                total_names_found += 1;
-            }
-            free(plug_names);
-        }
-        free(total_file_path);
-        free(cur_file);
-    }
-    free(clap_files);
-    if (total_names_found == 0) {
-        free(return_names);
-        return NULL;
-    }
-    *size = total_names_found;
-    return return_names;
 }
 
 void clap_plug_presets_clean_preset(CLAP_PLUG_INFO *plug_data,
@@ -1774,11 +1729,21 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     return plug_data;
 }
 
+int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
+
+    return 1;
+}
+
+// TODO instead of this function everything should be in the plugin_list_item 
+// load_and_activate function should get the item and load the plugin
+// This function should be separated into smaller helper functions:
+// the helper function will be used in the plugin_list_init function
+// function to check if there is a plugin with the same path
+// function to create an entry on the plugin if there is no plugin with same path
+// function to return the plugin_inst_id 
 // return the clap_plug_plug with plugin entry (initiated), plug_path and
 // plug_inst_id from the plugins name, checks if  the same entry is already
 // loaded or not first
-// TODO too many mallocs - use big predefines for the string sizes,
-// no need to malloc them
 static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO *plug_data,
                                            const char *plug_name, int plug_id) {
     if (!plug_data)
