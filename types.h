@@ -1,12 +1,14 @@
 #pragma once
 #include "structs.h"
 
+// names for the various contexts
 #define APP_NAME "smp_grvbx"
 #define PLUGINS_NAME "Plugins"
 #define SAMPLER_NAME "Sampler"
 #define SYNTH_NAME "Synth"
 #define TRK_NAME "Trk"
-#define NAME_ADD_NEW "add_new"
+#define NAME_LV2_ADD_NEW "add_lv2_plugin"
+#define NAME_CLAP_ADD_NEW "add_clap_plugin"
 #define NAME_REFRESH_LIST "refresh"
 
 #define MAX_STRING_MSG_LENGTH 128 // max string size for sys messages
@@ -55,34 +57,45 @@ enum userDataTypes {
     // the root data, void* user_data casts to APP_INFO* struct
     // the Plugins context
     USER_DATA_T_ROOT = 1,
+
     // data that contains plugins, user_data casts to APP_INFO*
     USER_DATA_T_PLUGINS = 2,
+
     // data that contains a list to create new
-    // plugins, user_data casts to APP_INFO*
-    USER_DATA_T_PLUGINS_NEW = 3,
-    // data that is used to recreate the plugin list available on this
+    // lv2 plugins, user_data casts to APP_INFO*
+    USER_DATA_T_PLUGINS_LV2_NEW = 3,
+    // data that is used to recreate the lv2 plugin list available on this
     // machine for the user
-    USER_DATA_T_PLUGINS_LIST_REFRESH = 4,
-    // data representing the lv2 plugin item that is available to load on
-    // the system
+    USER_DATA_T_PLUGINS_LV2_LIST_REFRESH = 4,
+    // data representing the lv2 plugin list item
+    // it is used to load a plugin 
     USER_DATA_T_PLUGINS_LV2_LIST_ITEM = 5,
     // lv2 plugin data type
     USER_DATA_T_PLUG_LV2 = 6,
+
     // clap plugin data type
     USER_DATA_T_PLUG_CLAP = 7,
+    // same contexts as for lv2 plugins
+    // used to load clap plugins from a list
+    USER_DATA_T_PLUGINS_CLAP_NEW = 8,
+    USER_DATA_T_PLUGINS_CLAP_LIST_REFRESH = 9,
+    USER_DATA_T_PLUGINS_CLAP_LIST_ITEM = 10,
+
     // the Sampler context
     // sampler data type, user_data casts to APP_INFO*
-    USER_DATA_T_SAMPLER = 8,
+    USER_DATA_T_SAMPLER = 11,
     // single sample
-    USER_DATA_T_SAMPLE = 9,
+    USER_DATA_T_SAMPLE = 12,
+
     // the Synth context
     // built in synth, user_data casts to APP_INFO*
-    USER_DATA_T_SYNTH = 10,
+    USER_DATA_T_SYNTH = 13,
     // single oscillator in the synth
-    USER_DATA_T_OSC = 11,
+    USER_DATA_T_OSC = 14,
+
     // the Trk, audio backend context
     // audio backend data, user_data casts to APP_INFO*
-    USER_DATA_T_JACK = 12
+    USER_DATA_T_JACK = 15
 };
 
 enum intrfFlags {

@@ -334,23 +334,29 @@ void *app_data_child_return(void *parent_data, uint16_t parent_type,
     if (parent_type == USER_DATA_T_PLUGINS) {
         APP_INFO *app_data = (APP_INFO *)parent_data;
         // This context is to create new plugins
+        // one context for lv2 lists and the other for clap plugin lists
         if (idx == 0) {
-            // TODO would be logical to make a separate button to add lv2 and
-            // clap plugins
-            *return_type = USER_DATA_T_PLUGINS_NEW;
-            snprintf(return_name, return_name_len, "%s", NAME_ADD_NEW);
+            *return_type = USER_DATA_T_PLUGINS_LV2_NEW;
+            snprintf(return_name, return_name_len, "%s", NAME_LV2_ADD_NEW);
             *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_LIST |
                              INTRF_FLAG_CANT_DIRTY);
             return (void *)app_data;
         }
-        // TODO idx > 0 go through loaded plugins
+        if (idx == 1){
+            *return_type = USER_DATA_T_PLUGINS_CLAP_NEW;
+            snprintf(return_name, return_name_len, "%s", NAME_CLAP_ADD_NEW);
+            *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_LIST |
+                             INTRF_FLAG_CANT_DIRTY);
+            return (void *)app_data;
+        }
+        // TODO idx > 1 go through loaded plugins
     }
-    if (parent_type == USER_DATA_T_PLUGINS_NEW) {
+    // Return children for the lv2 plugins list
+    if (parent_type == USER_DATA_T_PLUGINS_LV2_NEW) {
         APP_INFO *app_data = (APP_INFO *)parent_data;
-        // This context is to recreate the plugin list,
-        // that the user can choose from
         if (idx == 0) {
-            *return_type = USER_DATA_T_PLUGINS_LIST_REFRESH;
+            // button to recreate the lv2 plugin list
+            *return_type = USER_DATA_T_PLUGINS_LV2_LIST_REFRESH;
             snprintf(return_name, return_name_len, "%s", NAME_REFRESH_LIST);
             *return_flags = (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP);
             return (void *)app_data;
@@ -368,6 +374,19 @@ void *app_data_child_return(void *parent_data, uint16_t parent_type,
             }
         }
     }
+    // Return children for the clap plugins list
+    if (parent_type == USER_DATA_T_PLUGINS_CLAP_NEW) {
+        APP_INFO *app_data = (APP_INFO *)parent_data;
+        if (idx == 0) {
+            *return_type = USER_DATA_T_PLUGINS_CLAP_LIST_REFRESH;
+            snprintf(return_name, return_name_len, "%s", NAME_REFRESH_LIST);
+            *return_flags = (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP);
+            return (void *)app_data;
+        }
+        if (idx > 0) {
+            // TODO get a list of the clap plugins
+        }
+    }
     //----------------------------------------------------------------------------------------------------
 
     return NULL;
@@ -379,9 +398,15 @@ void app_data_invoke(void *user_data, uint16_t user_data_type,
         return;
     // PLUGINS context
     //----------------------------------------------------------------------------------------------------
-    if (user_data_type == USER_DATA_T_PLUGINS_LIST_REFRESH){
+    // user pressed on the button to recreate the lv2 plugin list
+    if (user_data_type == USER_DATA_T_PLUGINS_LV2_LIST_REFRESH){
         APP_INFO* app_data = (APP_INFO*)user_data;
         plug_plugin_list_init(app_data->plug_data);
+    }
+    // user pressed on the button to recreate the clap plugin list
+    if (user_data_type == USER_DATA_T_PLUGINS_CLAP_LIST_REFRESH){
+        APP_INFO* app_data = (APP_INFO*)user_data;
+        // TODO function to init the clap plugin list
     }
     //----------------------------------------------------------------------------------------------------
 }
@@ -391,9 +416,9 @@ bool app_data_is_dirty(void *user_data, uint16_t user_data_type) {
         return false;
     // PLUGINS context
     //----------------------------------------------------------------------------------------------------
-    if (user_data_type == USER_DATA_T_PLUGINS_NEW) {
+    // check if the lv2 plugin list to add new plugins is dirty
+    if (user_data_type == USER_DATA_T_PLUGINS_LV2_NEW) {
         APP_INFO *app_data = (APP_INFO *)user_data;
-        // TODO need to check the clap plugin list dirty too.
         return plug_plugin_list_is_dirty(app_data->plug_data);
     }
     //----------------------------------------------------------------------------------------------------

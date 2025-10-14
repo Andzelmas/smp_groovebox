@@ -6,7 +6,9 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define SELECTED_DIST 10 //how many items from the selected context this context should be, further away contexts will not be displayed
+#define SELECTED_DIST 10 // how many items from the selected context this context should be,
+       // further away contexts will not be displayed
+
 struct termios orig_termios;
 
 static void disableRawMode() {
@@ -121,6 +123,7 @@ int main(){
         char input = getchar();
         unsigned int exit = 0;
         switch (input) {
+        // TODO would be better to use json conf to set the keybindings
         case 'j':
           nav_cx_selected_next(app_intrf);
           break;
