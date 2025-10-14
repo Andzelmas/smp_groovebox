@@ -1,11 +1,3 @@
-#include "app_intrf.h"
-#include <string.h>
-#include "app_data.h"
-#include "types.h"
-#include "util_funcs/log_funcs.h"
-#include <stdio.h>
-#include <stdlib.h>
-
 /*
     The INTRF layer is for creating the app_data structure
     Also, it allows UI to communicate with app_data
@@ -20,38 +12,57 @@
     App_data should only add or remove anything on initialization or
     if the user specificaly wants to do that - when he/she interacts with
     "buttons". These contexts are with the flag INTRF_FLAG_INTERACT and should
-    make the context dirty after manipulating the data. For example: Data
-    functions that populate/create a plugin list should only be called when the
-    user interacts with a "refresh" or similar button. Or when the app is
-    initialized, but NOT when the user is navigating.
+    make the context dirty after manipulating the data.
+    For example: Data functions that populate/create a plugin list should only
+    be called when the user interacts with a "refresh" or similar button (when
+    data_invoke function is called). Or when the app is initialized, but NOT when
+    the user is navigating (not when data_child_return function is called).
 */
 
-// TODO PRIORITY.
-// Clap plugin lists; Lv2 and Clap plugin loading.
+#include "app_intrf.h"
+#include <string.h>
+#include "app_data.h"
+#include "types.h"
+#include "util_funcs/log_funcs.h"
+#include <stdio.h>
+#include <stdlib.h>
 
-// TODO Groups (for example 10 total) each with cx_curr, cx_selected.
-// When removing cx, check each group if the cx being removed is  not in
-// cx_curr or  cx_selected. Nav_ functions that exits cx_curr or invokes
-// cx_selected should exit and invoke cx given as arguments and apply the
-// results to the group given as an argument. OR these functions should have
-// arguments of groups where to exit cx_curr and invoke cx_selected and to what
-// group apply the result. This way ui can invoke cx and enter it in one group
-// but update the cx_curr on another group and show the children in a different
-// window for example.
-// TODO SAVING should be on the app_data layer.
-// app_intrf calls function with the filename  where to save  and app_data
-// saves there the structs as bites. when a file is loaded the app_data creates
-// its structure from the file (creates the structs in memory) and marks the
-// root as dirty so app_intrf recreates its structure. saving and loading
-// separate contexts (plugins, trk and similar) should work the same. user
-// should be able to set a file to load on startup.
-// TODO when implementing clay or other ui, test mouse clicking;
-// scrolling(would be nice to able to scroll any element with contents that do
-// not fit) and selecting as soon as possible.
+// TODO TODAY.
+// Clap plugin lists; Lv2 and Clap plugin loading.
+// TODO DAY AFTER.
+// Implement groups.
+
+/*
+ TODO Groups (for example 10 total) each with cx_curr, cx_selected.
+ When removing cx, check each group if the cx being removed is  not in
+ cx_curr or  cx_selected. Nav_ functions that exits cx_curr or invokes
+ cx_selected should exit and invoke cx given as arguments and apply the
+ results to the group given as an argument. OR these functions should have
+ arguments of groups where to exit cx_curr and invoke cx_selected and to what
+ group apply the result. This way ui can invoke cx and enter it in one group
+ but update the cx_curr on another group and show the children in a different
+ window for example.
+*/
+
+/*
+ TODO SAVING should be on the app_data layer.
+ app_intrf calls function with the filename  where to save  and app_data
+ saves there the structs as bites. when a file is loaded the app_data creates
+ its structure from the file (creates the structs in memory) and marks the
+ root as dirty so app_intrf recreates its structure. saving and loading
+ separate contexts (plugins, trk and similar) should work the same. user
+ should be able to set a file to load on startup.
+*/
+
+/*
+ TODO when implementing clay or other ui, test mouse clicking;
+ scrolling(would be nice to able to scroll any element with contents that do
+ not fit) and selecting as soon as possible.
+*/
 
 typedef struct _cx_array{
     // the cx that was last interacted with, convenient to know for lists,
-    // so user can continue from last place
+    // so user can continue from last place of visit
     unsigned int last_selected;
     unsigned int count;
     unsigned int count_max;
