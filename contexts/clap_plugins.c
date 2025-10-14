@@ -1736,6 +1736,9 @@ int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
 
 // TODO instead of this function everything should be in the plugin_list_item 
 // load_and_activate function should get the item and load the plugin
+// All path returns and plug list init should use as little of malloc as possible
+// Maybe the function that returns clap paths can return strings with know lengths
+// without any mallocs?
 // This function should be separated into smaller helper functions:
 // the helper function will be used in the plugin_list_init function
 // function to check if there is a plugin with the same path
