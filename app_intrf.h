@@ -21,6 +21,8 @@ APP_INTRF *app_intrf_init();
 void app_intrf_destroy(APP_INTRF *app_intrf);
 
 // NAVIGATION functions that UI can use to explore the interface
+// IMPORTANT - returned CX* cant be saved - they should be gotten
+// each cycle, after the nav_update() call.
 
 // call data_update() and check if any contexts are dirty, if yes recreate their
 // children
@@ -33,7 +35,7 @@ CX *nav_cx_root_return(APP_INTRF *app_intrf);
 // currently in
 CX *nav_cx_curr_return(APP_INTRF *app_intrf);
 
-// returrn the currently selected context (this can be a context that user
+// return the currently selected context (this can be a context that user
 // invoked last)
 CX *nav_cx_selected_return(APP_INTRF *app_intrf);
 
@@ -60,7 +62,6 @@ int nav_cx_curr_exit(APP_INTRF *app_intrf);
 // call the data function to invoke the user_data on the context (user
 // interaction callback in essence) during invoke the context structure will not
 // be changed, but it can be marked dirty, so the nav_update() function will
-// know to change the cx structure also cx_curr becomes the cx_selected and
-// cx_selected becomes the first cx_selected child.
+// change the context structure
 int nav_cx_selected_invoke(APP_INTRF *app_intrf);
 //----------------------------------------------------------------------------------------------------
