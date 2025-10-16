@@ -1737,7 +1737,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
 // TODO clap_plugin_list_init algorithm:
 // go through files (maybe the clap_plug_get_clap_files should not even exist)
 // per each file create plugin_list_item with the file path, name and the inst_id 
-// in load_and_activate check if the plugin with same path exists, get the entry is yes
+// in load_and_activate check if the plugin with same path exists, get the entry if yes
 // create the entry if no
 
 // search if another plugin has the same path as the plug->plug_path
