@@ -1729,24 +1729,101 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     return plug_data;
 }
 
-int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
-
-    return 1;
-}
-
 // TODO instead of this function everything should be in the plugin_list_item 
 // load_and_activate function should get the item and load the plugin
 // All path returns and plug list init should use as little of malloc as possible
 // Maybe the function that returns clap paths can return strings with know lengths
 // without any mallocs?
-// This function should be separated into smaller helper functions:
-// the helper function will be used in the plugin_list_init function
-// function to check if there is a plugin with the same path
-// function to create an entry on the plugin if there is no plugin with same path
-// function to return the plugin_inst_id 
-// return the clap_plug_plug with plugin entry (initiated), plug_path and
-// plug_inst_id from the plugins name, checks if  the same entry is already
-// loaded or not first
+// TODO clap_plugin_list_init algorithm:
+// go through files (maybe the clap_plug_get_clap_files should not even exist)
+// per each file create plugin_list_item with the file path, name and the inst_id 
+// in load_and_activate check if the plugin with same path exists, get the entry is yes
+// create the entry if no
+
+// search if another plugin has the same path as the plug->plug_path
+static int clap_plug_find_same_path(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug){
+    if (!plug_data)return -1;
+    if (!plug)return -1;
+
+    for (unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++) {
+        CLAP_PLUG_PLUG cur_plug = plug_data->plugins[plug_num];
+        if (!cur_plug.plug_path)
+            continue;
+        if (strcmp(plug->plug_path, cur_plug.plug_path) != 0)
+            continue;
+        if (!(cur_plug.plug_entry))
+            continue;
+        return cur_plug.id;
+    }
+
+    return -1;
+}
+
+// create the entry on the plug
+// plug has to have plug_path
+static int clap_plug_entry_create(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug){
+    if(!plug_data)return -1;
+    if(!plug)return -1;
+
+    void *handle;
+    int *iptr;
+    char total_file_path[MAX_PATH_STRING];
+    snprintf(total_file_path, MAX_PATH_STRING, "%s%s", CLAP_PATH, plug->plug_path);
+
+    handle = dlopen(total_file_path, RTLD_LOCAL | RTLD_LAZY);
+    if (!handle) return -1;
+
+    iptr = (int *)dlsym(handle, "clap_entry");
+    clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t *)iptr;
+
+    bool init_err = plug_entry->init(total_file_path);
+    if (!init_err) return -1;
+    plug->plug_entry = plug_entry;
+    return 1;
+}
+
+int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
+    if(!plug_data)return -1;
+    // TODO check if the list exists, if so free it and create again
+    DIR *d;
+    struct dirent *dir = NULL;
+    // TODO would be best to iterate through all possible clap paths
+    d = opendir(CLAP_PATH);
+    if (d) {
+        while ((dir = readdir(d)) != NULL) {
+            if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
+                continue;
+            // TODO no need for convoluted mallocs here
+            // either rewrite the str_split_string_delim function or
+            // do without a function here
+            char *after_delim = NULL;
+            char *before_delim =
+                str_split_string_delim(dir->d_name, ".", &after_delim);
+            if (!after_delim) {
+                if (before_delim)
+                    free(before_delim);
+                continue;
+            }
+            if (strcmp(after_delim, "clap") != 0) {
+                if (after_delim)
+                    free(after_delim);
+                if (before_delim)
+                    free(before_delim);
+                continue;
+            }
+            if (after_delim)
+                free(after_delim);
+            if (before_delim)
+                free(before_delim);
+            // TODO go through all the plugins in the dir->d_name path
+            // create plugin_list_item per plugin name, fill its variables
+        }
+        closedir(d);
+    }
+    // TODO after successfull creation of the plugin list dont forget to dirty it
+    return 1;
+}
+
 static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO *plug_data,
                                            const char *plug_name, int plug_id) {
     if (!plug_data)

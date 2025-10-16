@@ -60,7 +60,8 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
 PRM_CONTAIN *clap_plug_param_return_param_container(CLAP_PLUG_INFO *plug_data,
                                                     int plug_id);
 
-// initialize the plugin list that are available to the user on the system
+// initialize the plugin list
+// it contains all the plugins on the system available to the user
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data);
 
 // initiate and load plugin from its name

@@ -703,7 +703,7 @@ int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY *preset_fac,
                             continue;
                     }
 
-                    if (cur_dir->dir_path && categories) {
+                    if (categories) {
                         char *after_delim = NULL;
                         char *before_delim = str_split_string_delim(
                             cur_dir->dir_path, cur_loc->loc_location,
