@@ -34,6 +34,10 @@
 
 /*
  TODO Groups (for example 10 total) each with cx_curr, cx_selected.
+ CURRENTLY cx_selected (and even cx_curr) can become NULL.
+ If this does not change the user should check if CX* returned are not NULLs.
+ If this changes the nav_ functions should not return CX* at all.
+ Think how the cx_last_selected should be implemented with groups.
  When removing cx, check each group if the cx being removed is  not in
  cx_curr or  cx_selected. Nav_ functions that exits cx_curr or invokes
  cx_selected should exit and invoke cx given as arguments and apply the
@@ -75,6 +79,8 @@ typedef struct _cx_array{
     // have its cx_selected == to a CX that is not visible in that group
     // TODO to properly test cx_last_selected implementation will need
     // a temporary nav_ function to delete the cx_curr children
+    // TODO for cx_last_selected with groups could work an array
+    // one cx_last_selected per group
     struct _cx* cx_last_selected;
     unsigned int count;
     unsigned int count_max;

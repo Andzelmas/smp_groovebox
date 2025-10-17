@@ -44,12 +44,6 @@ int main() {
         CX *cx_curr = nav_cx_curr_return(app_intrf);
         CX *selected_cx = nav_cx_selected_return(app_intrf);
         if (cx_curr && selected_cx) {
-            // highlight the cx_curr context if it is the same as the
-            // selected_cx (can happen if app_intrf removes all of cx_curr
-            // children)
-            if (selected_cx == cx_curr) {
-                printf("\033[0;30;47m");
-            }
             char display_name[MAX_PARAM_NAME_LENGTH];
             if (nav_cx_display_name_return(app_intrf, cx_curr, display_name,
                                            MAX_PARAM_NAME_LENGTH) == 1) {
