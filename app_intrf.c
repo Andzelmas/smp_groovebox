@@ -73,6 +73,8 @@ typedef struct _cx_array{
     // if the same CX will be navigated in different groups the cx_last_selected
     // can change to a CX that one group filters out and that group will
     // have its cx_selected == to a CX that is not visible in that group
+    // TODO to properly test cx_last_selected implementation will need
+    // a temporary nav_ function to delete the cx_curr children
     struct _cx* cx_last_selected;
     unsigned int count;
     unsigned int count_max;
