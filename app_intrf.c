@@ -35,17 +35,17 @@
 /*
  TODO Groups (for example 10 total) each with cx_curr, cx_selected.
  CURRENTLY cx_selected (and even cx_curr) can become NULL.
- If this does not change the user should check if CX* returned are not NULLs.
- If this changes the nav_ functions should not return CX* at all.
- Think how the cx_last_selected should be implemented with groups.
- When removing cx, check each group if the cx being removed is  not in
- cx_curr or  cx_selected. Nav_ functions that exits cx_curr or invokes
- cx_selected should exit and invoke cx given as arguments and apply the
- results to the group given as an argument. OR these functions should have
- arguments of groups where to exit cx_curr and invoke cx_selected and to what
- group apply the result. This way ui can invoke cx and enter it in one group
- but update the cx_curr on another group and show the children in a different
- window for example.
+ If this would not happen nav_ functions would not be able to return CX*
+ Nav_ functions that return CX* should accept filters what to return
+ and what not to return. So UI can display only specific CX*, depending on the
+ group. Think how the cx_last_selected should be implemented with groups. When
+ removing cx, check each group if the cx being removed is  not in cx_curr or
+ cx_selected. Nav_ functions that exits cx_curr or invokes cx_selected should
+ exit and invoke cx given as arguments and apply the results to the group given
+ as an argument. OR these functions should have arguments of groups where to
+ exit cx_curr and invoke cx_selected and to what group apply the result. This
+ way ui can invoke cx and enter it in one group but update the cx_curr on
+ another group and show the children in a different window for example.
 */
 
 /*
