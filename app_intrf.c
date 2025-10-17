@@ -135,8 +135,7 @@ static void app_intrf_cx_selected_refresh(APP_INTRF *app_intrf){
     if(!app_intrf->cx_curr)return;
 
     // no need to change cx_selected if it exists
-    // or it is not equal to cx_curr
-    if (app_intrf->cx_selected && app_intrf->cx_selected != app_intrf->cx_curr)
+    if (app_intrf->cx_selected) 
         return;
 
     if(app_intrf->cx_curr->cx_children.count > 0){
