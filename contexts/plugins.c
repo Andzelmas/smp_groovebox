@@ -874,6 +874,7 @@ int plug_plugin_list_item_name(void *plug_list_item, char *return_name,
              cur_plug_list_item->plugin_short_name);
     return 1;
 }
+
 bool plug_plugin_list_is_dirty(PLUG_INFO *plug_data) {
     if (!plug_data)
         return false;

@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include "../structs.h"
 #include "params.h"
 
@@ -64,9 +65,18 @@ PRM_CONTAIN *clap_plug_param_return_param_container(CLAP_PLUG_INFO *plug_data,
 // it contains all the plugins on the system available to the user
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data);
 
-// initiate and load plugin from its name
-int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
-                                const char *plugin_name, int id);
+// get one item from the plugin_list
+void *clap_plug_plugin_list_item_get(CLAP_PLUG_INFO *plug_data, unsigned int idx);
+
+// get the short name of the plugin from the plugin_list
+int clap_plug_plugin_list_item_name(void *plugin_item, char *return_name,
+                                    unsigned int return_name_len); 
+
+// return if the plugin_list has been changed or not
+bool clap_plug_plugin_list_is_dirty(CLAP_PLUG_INFO* plug_data);
+
+// initiate and load plugin from the plugin_list_item 
+int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data, void* plugin_item);
 
 // return the name of the plugin, caller must free the char*
 char *clap_plug_return_plugin_name(CLAP_PLUG_INFO *plug_data, int plug_id);

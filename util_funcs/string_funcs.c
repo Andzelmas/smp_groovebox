@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include "string_funcs.h"
+#include "../types.h"
 
 void str_combine_str_int(char** string_in, int num){
     char* ret_string = NULL;
@@ -110,78 +111,36 @@ clean:
     return ret_val;
 }
 
-int str_return_next_after_string(const char* dir, const char* after_string, int preset){
-    //create the new song name
-    int song_num = -1;
-    if(!dir)return song_num;
-    for(int i = 1; i<100; i++){
-	//first iterate directories and find out what song number we can use
-	struct dirent **ep = NULL;
-	int n = scandir(dir, &ep, NULL, alphasort);
-	//if failed this means the dir does not exist, so we can use any number we want for the preset or song
-	//we just have to create the dir
-	if(n==-1){
-	    return 1;
-	}		
-	int this_num = -1;
-	while(n--){
-	    int do_proc = 0;
-	    if(preset==0 && ep[n]->d_type==DT_DIR)do_proc = 1;
-	    if(preset==1 && ep[n]->d_type==DT_REG)do_proc = 1;
-	    if(do_proc == 1){
-		if(strcmp(ep[n]->d_name,".")==0)goto next;
-		if(strcmp(ep[n]->d_name,"..")==0)goto next;
-		char dir_path[strlen(ep[n]->d_name)+1];
-		strcpy(dir_path, ep[n]->d_name);
-		char* after_delim = NULL;
-		char* before_delim = str_split_string_delim(dir_path, after_string, &after_delim);
-		if(before_delim)free(before_delim);
-		if(after_delim){
-		    int cur_num = strtol(after_delim, NULL, 10);
-		    if(after_delim)free(after_delim);
-		    if(i==cur_num)this_num = cur_num;
-		}
-	    }
-	next:
-	    free(ep[n]);
-	}
-	free(ep);
-
-	if(this_num==-1){
-	    song_num = i;
-	    break;
-	}
-    }
-    return song_num;
-}
-
 char* str_return_dir_without_file(const char* full_path){
-    char* ret_string = NULL;
-    if(!full_path)return NULL;
-    char temp_string[strlen(full_path)+1];
-    if(!temp_string)return NULL;
+    char *ret_string = NULL;
+    if (!full_path)
+        return NULL;
+
+    char temp_string[strlen(full_path) + 1];
     strcpy(temp_string, full_path);
-    char* last;
+    char *last;
     last = strtok(temp_string, "/");
     int ret_len = 0;
-    if(last){
-	ret_string = realloc(ret_string, sizeof(char)*(strlen(last)+2));
-	sprintf(ret_string, "%s", last);
-	ret_len = strlen(ret_string);
-	last = strtok(NULL, "/");
+    if (last) {
+        ret_string = realloc(ret_string, sizeof(char) * (strlen(last) + 2));
+        sprintf(ret_string, "%s", last);
+        ret_len = strlen(ret_string);
+        last = strtok(NULL, "/");
     }
-    while(last){
-	if(strchr(last, '.')!=NULL)goto next;
-	ret_string = realloc(ret_string, sizeof(char)*(ret_len+strlen(last)+2));
-	if(!ret_string)return NULL;
-	strcat(ret_string, "/");
-	strcat(ret_string, last);
-	ret_len = strlen(ret_string);
+    while (last) {
+        if (strchr(last, '.') != NULL)
+            goto next;
+        ret_string =
+            realloc(ret_string, sizeof(char) * (ret_len + strlen(last) + 2));
+        if (!ret_string)
+            return NULL;
+        strcat(ret_string, "/");
+        strcat(ret_string, last);
+        ret_len = strlen(ret_string);
     next:
-	last = strtok(NULL, "/");
+        last = strtok(NULL, "/");
     }
 
-    
     return ret_string;
 }
 
@@ -240,33 +199,27 @@ char* str_return_dir_without_start(const char* full_path){
     return ret_string;
 }
 
-char* str_split_string_delim(const char* in_string, const char* delim, char** after_delim){
-    if(!in_string)return NULL;
-    char* delim_string = strstr(in_string, delim);
-    if(!delim_string)return NULL;
-    char* ret_string = delim_string + strlen(delim);
-   
-    unsigned int before_size = strlen(in_string)-strlen(delim_string);
-    char* before_delim = (char*)malloc(sizeof(char)*(before_size+1));
-    if(!before_delim)return NULL;
-    memcpy(before_delim, in_string, before_size);
-    before_delim[before_size] = '\0';
+int str_split_string_delim(const char *in_string, const char *delim,
+                           char *before_delim, char *after_delim,
+                           unsigned int return_char_sizes) {
 
-    unsigned int after_size = strlen(in_string) - before_size - strlen(delim);
-    if(after_size <= 0){
-	*after_delim = NULL;
-	return before_delim;
-    }
-    char* ret_after_delim = (char*)malloc(sizeof(char)*(after_size+1));
-    if(!ret_after_delim){
-	after_delim = NULL;
-	return before_delim;
-    }
-    memcpy(ret_after_delim, ret_string, after_size);
-    ret_after_delim[after_size] = '\0';
-    *after_delim = ret_after_delim;
-    
-    return before_delim;
+    if (!in_string)
+        return -1;
+    char *delim_string = strstr(in_string, delim);
+    if (!delim_string)
+        return -1;
+
+    unsigned int before_end = strlen(in_string) - strlen(delim_string);
+    snprintf(before_delim, return_char_sizes, "%s", in_string);
+    before_delim[before_end] = '\0';
+
+    int after_size = strlen(in_string) - before_end - strlen(delim);
+    if(after_size <= 0) 
+        snprintf(after_delim, return_char_sizes, "");
+    else
+        snprintf(after_delim, return_char_sizes, "%s", delim_string + strlen(delim));
+
+    return 1;
 }
 
 int str_append_to_string(char** append_string, const char* in_string, ...){

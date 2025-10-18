@@ -21,7 +21,10 @@
 
 // what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
-#define CLAP_PATH "/usr/lib/clap/"
+
+// the paths that clap plugins can be in
+const char *clap_paths[3] = {"/usr/lib/clap/", "~/.clap/", NULL};
+
 // how many clap plugins can there be in the plugin array
 #define MAX_INSTANCES 5
 
@@ -33,7 +36,8 @@ static thread_local bool is_audio_thread = false;
 
 // plugin list item - from this struct a clap plugin can be loaded
 typedef struct _plugin_list_item {
-    // full plugin path with the directory and all
+    // full plugin path with the directory and all,
+    // including the path from clap_paths too
     char path[MAX_PATH_STRING];
     // short name that is used in the clap descriptor
     char short_name[MAX_PARAM_NAME_LENGTH];
@@ -108,7 +112,7 @@ typedef struct _clap_plug_plug {
                                        // touch only on [audio_thread]
     int plug_inst_id; // the plugin instance index in the array of the plugin
                       // factory
-    char *plug_path;            // the path for the clap file
+    char plug_path[MAX_PATH_STRING];            // the path for the clap file
     PRM_CONTAIN *plug_params;   // plugin parameter container for params.c
     clap_host_t clap_host_info; // need when creating the plugin instance, this
                                 // struct has this CLAP_PLUG_PLUG in the
@@ -1047,10 +1051,6 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
         }
         plug->plug_entry = NULL;
     }
-    if (plug->plug_path) {
-        free(plug->plug_path);
-        plug->plug_path = NULL;
-    }
     // clean the audio ports
     clap_plug_destroy_ports(plug_data, &(plug->output_ports));
     clap_plug_destroy_ports(plug_data, &(plug->input_ports));
@@ -1336,136 +1336,6 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
     return 0;
 }
 
-static char **
-clap_plug_get_plugin_names_from_file(CLAP_PLUG_INFO *plug_data,
-                                     const char *plug_path,
-                                     unsigned int *num_of_plugins) {
-    void *handle;
-    int *iptr;
-    handle = dlopen(plug_path, RTLD_LOCAL | RTLD_LAZY);
-    if (!handle) {
-        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                             clap_plug_return_is_audio_thread(),
-                             "failed to load %s dso \n", plug_path);
-        return NULL;
-    }
-
-    iptr = (int *)dlsym(handle, "clap_entry");
-    clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t *)iptr;
-    if (!plug_entry)
-        return NULL;
-    unsigned int init_err = plug_entry->init(plug_path);
-    if (!init_err) {
-        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                             clap_plug_return_is_audio_thread(),
-                             "failed to init %s plugin entry\n", plug_path);
-        return NULL;
-    }
-
-    const clap_plugin_factory_t *plug_fac =
-        plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
-    uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
-    if (plug_count <= 0) {
-        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                             clap_plug_return_is_audio_thread(),
-                             "no plugins in %s dso \n", plug_path);
-        return NULL;
-    }
-    char **plug_names = malloc(sizeof(char *));
-    if (!plug_names)
-        return NULL;
-    unsigned int name_count = 0;
-    for (uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++) {
-        const clap_plugin_descriptor_t *plug_desc =
-            plug_fac->get_plugin_descriptor(plug_fac, pl_iter);
-        if (!plug_desc)
-            continue;
-        if (!(plug_desc->name))
-            continue;
-        char **temp_names =
-            realloc(plug_names, sizeof(char *) * (name_count + 1));
-        if (!temp_names)
-            continue;
-        plug_names = temp_names;
-        plug_names[name_count] = NULL;
-        unsigned int cur_name_size = strlen(plug_desc->name) + 1;
-        char *cur_name = malloc(sizeof(char) * cur_name_size);
-        if (!cur_name)
-            continue;
-        snprintf(cur_name, cur_name_size, "%s", plug_desc->name);
-        plug_names[name_count] = cur_name;
-        name_count += 1;
-    }
-
-    if (name_count == 0) {
-        free(plug_names);
-        return NULL;
-    }
-    plug_entry->deinit();
-
-    *num_of_plugins = name_count;
-    return plug_names;
-}
-
-// get the clap files in the directory
-static char **clap_plug_get_clap_files(const char *file_path,
-                                       unsigned int *size) {
-    char **ret_files = NULL;
-    *size = 0;
-    DIR *d;
-    struct dirent *dir = NULL;
-    d = opendir(file_path);
-    if (d) {
-        int ret_files_max = PTR_ARRAY_COUNT;
-        ret_files = malloc(sizeof(char *)  * ret_files_max);
-        unsigned int iter = 0;
-        while ((dir = readdir(d)) != NULL) {
-            if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
-                continue;
-            char *after_delim = NULL;
-            char *before_delim =
-                str_split_string_delim(dir->d_name, ".", &after_delim);
-            if (!after_delim) {
-                if (before_delim)
-                    free(before_delim);
-                continue;
-            }
-            if (strcmp(after_delim, "clap") != 0) {
-                if (after_delim)
-                    free(after_delim);
-                if (before_delim)
-                    free(before_delim);
-                continue;
-            }
-            if (after_delim)
-                free(after_delim);
-            if (before_delim)
-                free(before_delim);
-            //the new array member will not fit need to realloc
-            if (iter >= ret_files_max) {
-                ret_files_max *= 2;
-                char **temp_files =
-                    realloc(ret_files, sizeof(char *) * ret_files_max);
-                if (!temp_files)
-                    continue;
-                ret_files = temp_files;
-            }
-            ret_files[iter] = NULL;
-            unsigned int cur_file_len = strlen(dir->d_name) + 1;
-            char *cur_file = malloc(sizeof(char) * cur_file_len);
-            if (!cur_file) {
-                continue;
-            }
-            snprintf(cur_file, cur_file_len, "%s", dir->d_name);
-            ret_files[iter] = cur_file;
-            iter += 1;
-        }
-        closedir(d);
-        *size = iter;
-    }
-    return ret_files;
-}
-
 void clap_plug_presets_clean_preset(CLAP_PLUG_INFO *plug_data,
                                     void *preset_info) {
     if (!plug_data)
@@ -1649,6 +1519,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     }
     memset(plug_data, '\0', sizeof(*plug_data));
     plug_data->audio_backend = audio_backend;
+    plug_data->clap_plugin_list.plugin_list = NULL;
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
     rt_funcs_struct.subcx_start_process = clap_plug_start_process;
@@ -1723,35 +1594,35 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->plug_inst_id = -1;
         plug->plug_inst_processing = 0;
         plug->plug_params = NULL;
-        plug->plug_path = NULL;
         plug->preset_fac = NULL;
     }
+
+    // create the plugin_list and populate it with plugins available to the user
+    // TODO test for undifined behaviour
+    if(clap_plug_plugin_list_init(plug_data) == -1){
+        clap_plug_clean_memory(plug_data);
+        return NULL;
+    }
+
     return plug_data;
 }
 
 // TODO instead of this function everything should be in the plugin_list_item 
 // load_and_activate function should get the item and load the plugin
-// All path returns and plug list init should use as little of malloc as possible
-// Maybe the function that returns clap paths can return strings with know lengths
-// without any mallocs?
-// TODO clap_plugin_list_init algorithm:
-// go through files (maybe the clap_plug_get_clap_files should not even exist)
-// per each file create plugin_list_item with the file path, name and the inst_id 
 // in load_and_activate check if the plugin with same path exists, get the entry if yes
 // create the entry if no
 
 // search if another plugin has the same path as the plug->plug_path
+// returns the id of the plugin first found 
 static int clap_plug_find_same_path(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug){
     if (!plug_data)return -1;
     if (!plug)return -1;
 
     for (unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++) {
         CLAP_PLUG_PLUG cur_plug = plug_data->plugins[plug_num];
-        if (!cur_plug.plug_path)
+        if (!(cur_plug.plug_entry))
             continue;
         if (strcmp(plug->plug_path, cur_plug.plug_path) != 0)
-            continue;
-        if (!(cur_plug.plug_entry))
             continue;
         return cur_plug.id;
     }
@@ -1761,254 +1632,198 @@ static int clap_plug_find_same_path(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* p
 
 // create the entry on the plug
 // plug has to have plug_path
-static int clap_plug_entry_create(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug){
-    if(!plug_data)return -1;
-    if(!plug)return -1;
+static void clap_plug_entry_create(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug){
+    if(!plug_data)return;
+    if(!plug)return;
+    plug->plug_entry = NULL;
 
     void *handle;
     int *iptr;
-    char total_file_path[MAX_PATH_STRING];
-    snprintf(total_file_path, MAX_PATH_STRING, "%s%s", CLAP_PATH, plug->plug_path);
 
-    handle = dlopen(total_file_path, RTLD_LOCAL | RTLD_LAZY);
-    if (!handle) return -1;
+    handle = dlopen(plug->plug_path, RTLD_LOCAL | RTLD_LAZY);
+    if (!handle) return;
 
     iptr = (int *)dlsym(handle, "clap_entry");
     clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t *)iptr;
 
-    bool init_err = plug_entry->init(total_file_path);
-    if (!init_err) return -1;
+    bool init_err = plug_entry->init(plug->plug_path);
+    if (!init_err) return;
     plug->plug_entry = plug_entry;
-    return 1;
 }
 
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
     if(!plug_data)return -1;
-    // TODO check if the list exists, if so free it and create again
+    PLUGIN_LIST* plugin_list = &(plug_data->clap_plugin_list);
+    if(plugin_list->plugin_list)free(plugin_list->plugin_list);
+    plugin_list->plugin_list = calloc(PTR_ARRAY_COUNT, sizeof(PLUGIN_LIST_ITEM));
+    plugin_list->size_curr = 0;
+    plugin_list->size_max = PTR_ARRAY_COUNT;
+
     DIR *d;
     struct dirent *dir = NULL;
-    // TODO would be best to iterate through all possible clap paths
-    d = opendir(CLAP_PATH);
-    if (d) {
-        while ((dir = readdir(d)) != NULL) {
-            if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
-                continue;
-            // TODO no need for convoluted mallocs here
-            // either rewrite the str_split_string_delim function or
-            // do without a function here
-            char *after_delim = NULL;
-            char *before_delim =
-                str_split_string_delim(dir->d_name, ".", &after_delim);
-            if (!after_delim) {
-                if (before_delim)
-                    free(before_delim);
-                continue;
+    unsigned int iter = 0;
+    const char *clap_path = clap_paths[iter];
+    while(clap_path){
+        d = opendir(clap_path);
+        if (d) {
+            while ((dir = readdir(d)) != NULL) {
+                if (strcmp(dir->d_name, ".") == 0 ||
+                    strcmp(dir->d_name, "..") == 0)
+                    continue;
+
+                char after_delim[MAX_PATH_STRING];
+                char before_delim[MAX_PATH_STRING];
+
+                if (str_split_string_delim(dir->d_name, ".", before_delim,
+                                           after_delim, MAX_PATH_STRING) == -1)
+                    continue;
+
+                if (strcmp(after_delim, "clap") != 0)
+                    continue;
+
+                // Go through the plugins names in the path and create a plugin_list_item
+                // per valiable name
+                char total_file_path[MAX_PATH_STRING];
+                snprintf(total_file_path, MAX_PATH_STRING, "%s%s", clap_path, dir->d_name);
+                void *handle;
+                int *iptr;
+                handle = dlopen(total_file_path, RTLD_LOCAL | RTLD_LAZY);
+                if(!handle)
+                    continue;
+
+                iptr = (int*)dlsym(handle, "clap_entry");
+                clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t*)iptr;
+                if(!plug_entry)
+                    continue;
+
+                unsigned int init_err = plug_entry->init(total_file_path);
+                if(!init_err)
+                    continue;
+
+                const clap_plugin_factory_t *plug_fac = plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
+                uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
+                
+                for(uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++){
+                    const clap_plugin_descriptor_t *plug_desc =
+                        plug_fac->get_plugin_descriptor(plug_fac, pl_iter);
+                    if (!plug_desc)
+                        continue;
+                    if (!(plug_desc->name))
+                        continue;
+
+                    unsigned int cur_list_size = plugin_list->size_curr + 1;
+                    // need to increase the size
+                    if (cur_list_size > plugin_list->size_max) {
+                        unsigned int new_max_size = plugin_list->size_max * 2;
+                        PLUGIN_LIST_ITEM *temp_array =
+                            realloc(plugin_list->plugin_list,
+                                    new_max_size * sizeof(PLUGIN_LIST_ITEM));
+                        if (!temp_array)
+                            continue;
+                        plugin_list->size_max = new_max_size;
+                        plugin_list->plugin_list = temp_array;
+                    }
+                    plugin_list->size_curr = cur_list_size;
+                    unsigned int cur_member = plugin_list->size_curr - 1;
+                    PLUGIN_LIST_ITEM* cur_item = &(plugin_list->plugin_list[cur_member]);
+                    snprintf(cur_item->path, MAX_PATH_STRING, "%s", total_file_path);
+                    snprintf(cur_item->short_name, MAX_PARAM_NAME_LENGTH, "%s", plug_desc->name);
+                    cur_item->plug_data = plug_data;
+                    cur_item->plug_inst_id = pl_iter;
+                }
+
+                plug_entry->deinit();
             }
-            if (strcmp(after_delim, "clap") != 0) {
-                if (after_delim)
-                    free(after_delim);
-                if (before_delim)
-                    free(before_delim);
-                continue;
-            }
-            if (after_delim)
-                free(after_delim);
-            if (before_delim)
-                free(before_delim);
-            // TODO go through all the plugins in the dir->d_name path
-            // create plugin_list_item per plugin name, fill its variables
+            closedir(d);
         }
-        closedir(d);
+        iter += 1;
+        clap_path = clap_paths[iter];
     }
-    // TODO after successfull creation of the plugin list dont forget to dirty it
+
+    plugin_list->dirty = true;
+
     return 1;
 }
 
-static int clap_plug_create_plug_from_name(CLAP_PLUG_INFO *plug_data,
-                                           const char *plug_name, int plug_id) {
-    if (!plug_data)
+void *clap_plug_plugin_list_item_get(CLAP_PLUG_INFO *plug_data, unsigned int idx){
+    if(!plug_data)
+        return NULL;
+    PLUGIN_LIST cur_plugin_list = plug_data->clap_plugin_list;
+    if(idx >= cur_plugin_list.size_curr)
+        return NULL;
+    PLUGIN_LIST_ITEM *cur_plugin_list_item = &(cur_plugin_list.plugin_list[idx]);
+    return (void*)cur_plugin_list_item;
+}
+
+int clap_plug_plugin_list_item_name(void *plugin_item, char *return_name,
+                                    unsigned int return_name_len) {
+    if (!plugin_item)
         return -1;
-    if (plug_id < 0)
+    PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
+    if (!plugin_list_item->plug_data)
         return -1;
-    if (plug_id >= MAX_INSTANCES)
-        return -1;
-    CLAP_PLUG_PLUG *return_plug = &(plug_data->plugins[plug_id]);
-    unsigned int clap_files_num = 0;
-    char **clap_files = clap_plug_get_clap_files(CLAP_PATH, &clap_files_num);
-    if (!clap_files)
-        return -1;
-    char *plug_name_path = NULL;
-    // first find the file_path of the plug_name plugin
-    for (unsigned int i = 0; i < clap_files_num; i++) {
-        char *cur_clap_file = clap_files[i];
-        unsigned int total_file_name_size =
-            strlen(CLAP_PATH) + strlen(cur_clap_file) + 1;
-        char *total_file_path = malloc(sizeof(char) * total_file_name_size);
-        if (!total_file_path)
-            continue;
-        snprintf(total_file_path, total_file_name_size, "%s%s", CLAP_PATH,
-                 cur_clap_file);
-        unsigned int plug_count = 0;
-        char **cur_plug_names = clap_plug_get_plugin_names_from_file(
-            plug_data, total_file_path, &plug_count);
-        if (!cur_plug_names) {
-            free(total_file_path);
-            continue;
-        }
-        unsigned int found = 0;
-        for (unsigned int name = 0; name < plug_count; name++) {
-            if (!cur_plug_names[name])
-                continue;
-            if (strcmp(cur_plug_names[name], plug_name) != 0)
-                continue;
-            plug_name_path = cur_clap_file;
-            found = 1;
-            break;
-        }
-        for (unsigned int j = 0; j < plug_count; j++) {
-            if (cur_plug_names[j])
-                free(cur_plug_names[j]);
-        }
-        free(cur_plug_names);
-        free(total_file_path);
-        if (found == 1)
-            break;
-    }
-    return_plug->plug_path = plug_name_path;
-    // free the clap_files entries
-    for (unsigned int i = 0; i < clap_files_num; i++) {
-        if (!clap_files[i])
-            continue;
-        if (return_plug->plug_path == clap_files[i])
-            continue;
-        free(clap_files[i]);
-    }
-    free(clap_files);
 
-    if (!return_plug->plug_path) {
-        context_sub_send_msg(
-            plug_data->control_data, (void *)plug_data, is_audio_thread,
-            "Could not find a plugin with %s name \n", plug_name);
-        return -1;
-    }
-    // find a plugin if one exists with the same plugin path and get its entry
-    // if so
-    for (unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++) {
-        CLAP_PLUG_PLUG cur_plug = plug_data->plugins[plug_num];
-        if (!cur_plug.plug_path)
-            continue;
-        if (strcmp(return_plug->plug_path, cur_plug.plug_path) != 0)
-            continue;
-        if (!(cur_plug.plug_entry))
-            continue;
-        return_plug->plug_entry = cur_plug.plug_entry;
-        break;
-    }
+    snprintf(return_name, return_name_len, "%s", plugin_list_item->short_name);
+    return 1;
+}
 
-    // if return_plug was not created it means a plugin with the same plugin
-    // path is not loaded, we need to load it
-    if (!(return_plug->plug_entry)) {
-        void *handle;
-        int *iptr;
-        unsigned int total_file_name_size =
-            strlen(CLAP_PATH) + strlen(return_plug->plug_path) + 1;
-        char *total_file_path = malloc(sizeof(char) * total_file_name_size);
-        if (!total_file_path) {
-            clap_plug_plug_stop_and_clean(plug_data, return_plug->id);
-            return -1;
-        }
-        snprintf(total_file_path, total_file_name_size, "%s%s", CLAP_PATH,
-                 return_plug->plug_path);
-
-        handle = dlopen(total_file_path, RTLD_LOCAL | RTLD_LAZY);
-        if (!handle) {
-            free(total_file_path);
-            clap_plug_plug_stop_and_clean(plug_data, return_plug->id);
-            return -1;
-        }
-
-        iptr = (int *)dlsym(handle, "clap_entry");
-        clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t *)iptr;
-
-        bool init_err = plug_entry->init(total_file_path);
-        free(total_file_path);
-        if (!init_err) {
-            clap_plug_plug_stop_and_clean(plug_data, return_plug->id);
-            return -1;
-        }
-        return_plug->plug_entry = plug_entry;
-    }
-    if (!(return_plug->plug_entry)) {
-        context_sub_send_msg(
-            plug_data->control_data, (void *)plug_data, is_audio_thread,
-            "Could not create entry for plugin %s\n", plug_name);
-        clap_plug_plug_stop_and_clean(plug_data, return_plug->id);
-        return -1;
-    }
-    // now we have the plug_entry and path, find the instance id
-    const clap_plugin_factory_t *plug_fac =
-        return_plug->plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
-    uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
-
-    for (uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++) {
-        const clap_plugin_descriptor_t *plug_desc =
-            plug_fac->get_plugin_descriptor(plug_fac, pl_iter);
-        if (!plug_desc)
-            continue;
-        if (!(plug_desc->name))
-            continue;
-        if (strcmp(plug_desc->name, plug_name) != 0)
-            continue;
-        return_plug->plug_inst_id = pl_iter;
-        break;
-    }
-
-    if (return_plug->plug_inst_id == -1) {
-        clap_plug_plug_stop_and_clean(plug_data, return_plug->id);
-        return -1;
-    }
-
-    return 0;
+bool clap_plug_plugin_list_is_dirty(CLAP_PLUG_INFO* plug_data){
+    if(!plug_data)
+        return false;
+    PLUGIN_LIST *plugin_list = &(plug_data->clap_plugin_list);
+    bool is_dirty = plugin_list->dirty;
+    plugin_list->dirty = false;
+    return is_dirty;
 }
 
 int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
-                                const char *plugin_name, int id) {
+                                void* plugin_item) {
     int return_id = -1;
     if (!plug_data)
         return -1;
-    if (!plugin_name)
+
+    PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
+    if (!plugin_list_item)
         return -1;
-    if (id >= MAX_INSTANCES)
-        return -1;
-    // if id is negative find an empty slot in the plugins array and create the
+
+    // find an empty slot in the plugins array and create the
     // plugin there
-    if (id < 0) {
-        for (int i = 0; i < (MAX_INSTANCES + 1); i++) {
-            CLAP_PLUG_PLUG cur_plug = plug_data->plugins[i];
-            // if there is a path for this plugin the slot is not empty
-            if (cur_plug.plug_inst)
-                continue;
-            id = cur_plug.id;
-            break;
-        }
+    int id = -1;
+    for (int i = 0; i < (MAX_INSTANCES + 1); i++) {
+        CLAP_PLUG_PLUG cur_plug = plug_data->plugins[i];
+        // if there is an plugin entry point the slot is not empty
+        if (cur_plug.plug_entry)
+            continue;
+        id = cur_plug.id;
+        break;
     }
-    // if the id is still not within range an error happened, cant create the
-    // plugin
+
+    // if id is not in range an error occured or there is no space for the plugin
     if (id < 0 || id >= MAX_INSTANCES)
         return -1;
+
     // if id is in the possible range, clean the slot just in case its occupied
     clap_plug_plug_stop_and_clean(plug_data, id);
 
-    if (clap_plug_create_plug_from_name(plug_data, plugin_name, id) < 0) {
+    CLAP_PLUG_PLUG *plug = &(plug_data->plugins[id]);
+    snprintf(plug->plug_path, MAX_PATH_STRING, "%s", plugin_list_item->path);
+    // try to find a plugin with the same entry
+    int nb_plugin = clap_plug_find_same_path(plug_data, plug);
+    if(nb_plugin != -1 && nb_plugin < MAX_INSTANCES){
+        plug->plug_entry = plug_data->plugins[nb_plugin].plug_entry;
+    }
+    else{
+        // create the plugin entry if a plugin with same path does not exist
+        clap_plug_entry_create(plug_data, plug);
+    }
+    if(!plug->plug_entry)
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
-                             "could not laod plugin from name %s\n",
-                             plugin_name);
-        return -1;
-    }
-    // this plug will only have the entry, plug_path and which plug_inst_id this
-    // plugin_name is in the plugin factory array at this point
-    CLAP_PLUG_PLUG *plug = &(plug_data->plugins[id]);
+                             "Could not create entry point for %s plugin\n",
+                             plug->plug_path);
+
+    plug->plug_inst_id = plugin_list_item->plug_inst_id;
+
     const clap_plugin_factory_t *plug_fac =
         plug->plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
     const clap_plugin_descriptor_t *plug_desc =
@@ -2034,6 +1849,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
                              plug_desc->description);
     }
     snprintf(plug->plugin_id, MAX_UNIQUE_ID_STRING, "%s", plug_desc->id);
+
     // add the clap_host_t struct to the plug
     clap_host_t clap_info_host;
     clap_info_host.clap_version = plug_data->clap_host_info.clap_version;
@@ -2048,23 +1864,25 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
     clap_info_host.request_callback =
         plug_data->clap_host_info.request_callback;
     plug->clap_host_info = clap_info_host;
+
     // create plugin instance
     const clap_plugin_t *plug_inst = plug_fac->create_plugin(
         plug_fac, &(plug->clap_host_info), plug_desc->id);
     if (!plug_inst) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
-                             "Failed to create %s plugin\n", plugin_name);
+                             "Failed to create %s plugin\n", plug->plug_path);
         clap_plug_plug_stop_and_clean(plug_data, plug->id);
         return -1;
     }
+
     plug->plug_inst = plug_inst;
     plug->plug_inst_created = 1;
     bool inst_err = plug->plug_inst->init(plug->plug_inst);
     if (!inst_err) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
-                             "Failed to init %s plugin\n", plugin_name);
+                             "Failed to init %s plugin\n", plug->plug_path);
         clap_plug_plug_stop_and_clean(plug_data, plug->id);
         return -1;
     }
@@ -2078,7 +1896,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
                              "Failed to create %s plugin audio ports\n",
-                             plugin_name);
+                             plug->plug_path);
         clap_plug_plug_stop_and_clean(plug_data, plug->id);
         return -1;
     }
@@ -2095,7 +1913,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
     if (!in_events->ctx || !out_events->ctx) {
         context_sub_send_msg(
             plug_data->control_data, (void *)plug_data, is_audio_thread,
-            "Failed to create %s plugin clap event structs\n", plugin_name);
+            "Failed to create %s plugin clap event structs\n", plug->plug_path);
         clap_plug_plug_stop_and_clean(plug_data, plug->id);
         return -1;
     }
@@ -2107,7 +1925,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
                              "Failed to create %s plugin note ports\n",
-                             plugin_name);
+                             plug->plug_path);
         clap_plug_plug_stop_and_clean(plug_data, plug->id);
         return -1;
     }
@@ -2116,7 +1934,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
         context_sub_send_msg(
             plug_data->control_data, (void *)plug_data,
             clap_plug_return_is_audio_thread(),
-            "Failed to create %s plugin parameters container\n", plugin_name);
+            "Failed to create %s plugin parameters container\n", plug->plug_path);
         clap_plug_plug_stop_and_clean(plug_data, plug->id);
         return -1;
     }
@@ -2531,6 +2349,9 @@ void clap_plug_clean_memory(CLAP_PLUG_INFO *plug_data) {
     }
 
     context_sub_clean(plug_data->control_data);
+
+    if (plug_data->clap_plugin_list.plugin_list)
+        free(plug_data->clap_plugin_list.plugin_list);
 
     free(plug_data);
 }
