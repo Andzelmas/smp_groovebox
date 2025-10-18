@@ -76,7 +76,7 @@ int clap_plug_plugin_list_item_name(void *plugin_item, char *return_name,
 bool clap_plug_plugin_list_is_dirty(CLAP_PLUG_INFO* plug_data);
 
 // initiate and load plugin from the plugin_list_item 
-int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data, void* plugin_item);
+int clap_plug_load_and_activate(void* plugin_item);
 
 // return the name of the plugin, caller must free the char*
 char *clap_plug_return_plugin_name(CLAP_PLUG_INFO *plug_data, int plug_id);

@@ -99,6 +99,7 @@ typedef struct _clap_plug_plug {
                                           // (now to match if preset container
                                           // from preset-factory is can be used
                                           // with the plugin)
+    void* dso_handle; //the dso handle to which plug_entry is dlsym() linked
     clap_plugin_entry_t *plug_entry; // the clap library file for this plugin
     const clap_plugin_t *plug_inst;  // the plugin instance
     unsigned int plug_inst_created;  // was a init function called in the
@@ -177,18 +178,22 @@ typedef struct _clap_plug_info {
 // plug_entry (initiated) if no plugin has this plug_entry return -1
 static int
 clap_plug_return_plug_id_with_same_plug_entry(CLAP_PLUG_INFO *plug_data,
-                                              clap_plugin_entry_t *plug_entry) {
+                                              CLAP_PLUG_PLUG *plug) {
     int return_id = -1;
     if (!plug_data)
         return -1;
-    if (!plug_entry)
+    if (!plug)
+        return -1;
+    if (!plug->plug_entry)
         return -1;
 
     for (unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++) {
         CLAP_PLUG_PLUG *cur_plug = &(plug_data->plugins[plug_num]);
         if (!cur_plug)
             continue;
-        if (cur_plug->plug_entry != plug_entry)
+        if (cur_plug->id == plug->id)
+            continue;
+        if (cur_plug->plug_entry != plug->plug_entry)
             continue;
         return_id = cur_plug->id;
         break;
@@ -1045,11 +1050,13 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
         plug->plug_inst = NULL;
     }
     if (plug->plug_entry) {
-        if (clap_plug_return_plug_id_with_same_plug_entry(
-                plug_data, plug->plug_entry) == -1) {
+        if (clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug) ==
+            -1) {
             plug->plug_entry->deinit();
+            dlclose(plug->dso_handle);
         }
         plug->plug_entry = NULL;
+        plug->dso_handle = NULL;
     }
     snprintf(plug->plug_path, MAX_PATH_STRING, "");
 
@@ -1590,6 +1597,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->id = i;
         plug->plug_data = plug_data;
         plug->plug_entry = NULL;
+        plug->dso_handle = NULL;
         plug->plug_inst = NULL;
         plug->plug_inst_activated = 0;
         plug->plug_inst_created = 0;
@@ -1622,6 +1630,8 @@ static int clap_plug_find_same_path(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* p
 
     for (unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++) {
         CLAP_PLUG_PLUG cur_plug = plug_data->plugins[plug_num];
+        if (cur_plug.id == plug->id)
+            continue;
         if (!(cur_plug.plug_entry))
             continue;
         if (strcmp(plug->plug_path, cur_plug.plug_path) != 0)
@@ -1637,8 +1647,6 @@ static int clap_plug_find_same_path(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* p
 static void clap_plug_entry_create(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug){
     if(!plug_data)return;
     if(!plug)return;
-    plug->plug_entry = NULL;
-
     void *handle;
     int *iptr;
 
@@ -1647,10 +1655,17 @@ static void clap_plug_entry_create(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* pl
 
     iptr = (int *)dlsym(handle, "clap_entry");
     clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t *)iptr;
-
+    if(!plug_entry){
+        dlclose(handle);
+        return;
+    }
     bool init_err = plug_entry->init(plug->plug_path);
-    if (!init_err) return;
+    if (!init_err) {
+        dlclose(handle);
+        return;
+    }
     plug->plug_entry = plug_entry;
+    plug->dso_handle = handle;
 }
 
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
@@ -1689,18 +1704,22 @@ int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
                 snprintf(total_file_path, MAX_PATH_STRING, "%s%s", clap_path, dir->d_name);
                 void *handle;
                 int *iptr;
+
                 handle = dlopen(total_file_path, RTLD_LOCAL | RTLD_LAZY);
                 if(!handle)
                     continue;
 
                 iptr = (int*)dlsym(handle, "clap_entry");
                 clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t*)iptr;
-                if(!plug_entry)
+                if(!plug_entry){
+                    dlclose(handle);
                     continue;
-
+                }
                 unsigned int init_err = plug_entry->init(total_file_path);
-                if(!init_err)
+                if(!init_err){
+                    dlclose(handle);
                     continue;
+                }
 
                 const clap_plugin_factory_t *plug_fac = plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
                 uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
@@ -1735,6 +1754,7 @@ int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
                 }
 
                 plug_entry->deinit();
+                dlclose(handle);
             }
             closedir(d);
         }
@@ -1778,14 +1798,12 @@ bool clap_plug_plugin_list_is_dirty(CLAP_PLUG_INFO* plug_data){
     return is_dirty;
 }
 
-int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
-                                void* plugin_item) {
-    int return_id = -1;
-    if (!plug_data)
-        return -1;
-
+int clap_plug_load_and_activate(void* plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
     if (!plugin_list_item)
+        return -1;
+    CLAP_PLUG_INFO* plug_data = plugin_list_item->plug_data;
+    if (!plug_data)
         return -1;
 
     // find an empty slot in the plugins array and create the
@@ -1811,10 +1829,10 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
     snprintf(plug->plug_path, MAX_PATH_STRING, "%s", plugin_list_item->path);
     // try to find a plugin with the same entry
     int nb_plugin = clap_plug_find_same_path(plug_data, plug);
-    if(nb_plugin != -1 && nb_plugin < MAX_INSTANCES){
+    if (nb_plugin != -1) {
         plug->plug_entry = plug_data->plugins[nb_plugin].plug_entry;
-    }
-    else{
+        plug->dso_handle = plug_data->plugins[nb_plugin].dso_handle;
+    } else {
         // create the plugin entry if a plugin with same path does not exist
         clap_plug_entry_create(plug_data, plug);
     }
@@ -1948,8 +1966,7 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
     context_sub_activate_start_process_msg(plug_data->control_data,
                                            (void *)plug, is_audio_thread);
 
-    return_id = plug->id;
-    return return_id;
+    return plug->id;
 }
 
 char *clap_plug_return_plugin_name(CLAP_PLUG_INFO *plug_data, int plug_id) {

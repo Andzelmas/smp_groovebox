@@ -704,20 +704,20 @@ int clap_ext_preset_info_return(CLAP_EXT_PRESET_FACTORY *preset_fac,
                     }
 
                     if (categories) {
-                        char *after_delim = NULL;
-                        char *before_delim = str_split_string_delim(
-                            cur_dir->dir_path, cur_loc->loc_location,
-                            &after_delim);
-                        if (after_delim)
-                            snprintf(categories, categories_len, "%s%s",
-                                     cur_loc->loc_name, after_delim);
-                        else
-                            snprintf(categories, categories_len, "%s",
-                                     cur_loc->loc_name);
-                        if (after_delim)
-                            free(after_delim);
-                        if (before_delim)
-                            free(before_delim);
+                        char after_delim[categories_len];
+                        char before_delim[categories_len];
+                        if (str_split_string_delim(cur_dir->dir_path,
+                                                   cur_loc->loc_location,
+                                                   before_delim, after_delim,
+                                                   categories_len) != -1) {
+
+                            if (strcmp(after_delim, "") != 0)
+                                snprintf(categories, categories_len, "%s%s",
+                                         cur_loc->loc_name, after_delim);
+                            else
+                                snprintf(categories, categories_len, "%s",
+                                         cur_loc->loc_name);
+                        }
                     }
                     // only return presets that have the same unique plugin_id
                     // string

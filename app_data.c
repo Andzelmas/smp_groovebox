@@ -5,6 +5,7 @@
 // my libraries
 #include "app_data.h"
 // string functions
+#include "contexts/clap_plugins.h"
 #include "types.h"
 #include "util_funcs/string_funcs.h"
 // math helper functions
@@ -351,6 +352,7 @@ void *app_data_child_return(void *parent_data, uint16_t parent_type,
         }
         // TODO idx > 1 go through loaded plugins
     }
+
     // Return children for the lv2 plugins list
     if (parent_type == USER_DATA_T_PLUGINS_LV2_NEW) {
         APP_INFO *app_data = (APP_INFO *)parent_data;
@@ -366,14 +368,18 @@ void *app_data_child_return(void *parent_data, uint16_t parent_type,
             void *plugins_list_item_user_data =
                 plug_plugin_list_item_get(app_data->plug_data, iter);
             if (plugins_list_item_user_data) {
-                *return_type = USER_DATA_T_PLUGINS_LV2_LIST_ITEM;
-                plug_plugin_list_item_name(plugins_list_item_user_data,
-                                           return_name, return_name_len);
-                *return_flags = (INTRF_FLAG_INTERACT | INTRF_FLAG_LIST_ITEM);
-                return plugins_list_item_user_data;
+                if (plug_plugin_list_item_name(plugins_list_item_user_data,
+                                               return_name,
+                                               return_name_len) != -1) {
+                    *return_flags =
+                        (INTRF_FLAG_INTERACT | INTRF_FLAG_LIST_ITEM);
+                    *return_type = USER_DATA_T_PLUGINS_LV2_LIST_ITEM;
+                    return plugins_list_item_user_data;
+                }
             }
         }
     }
+
     // Return children for the clap plugins list
     if (parent_type == USER_DATA_T_PLUGINS_CLAP_NEW) {
         APP_INFO *app_data = (APP_INFO *)parent_data;
@@ -384,7 +390,18 @@ void *app_data_child_return(void *parent_data, uint16_t parent_type,
             return (void *)app_data;
         }
         if (idx > 0) {
-            // TODO get a list of the clap plugins
+            unsigned int iter = idx - 1;
+            void *plugin_list_item =
+                clap_plug_plugin_list_item_get(app_data->clap_plug_data, iter);
+            if (plugin_list_item) {
+                if (clap_plug_plugin_list_item_name(
+                        plugin_list_item, return_name, return_name_len) != -1) {
+                    *return_flags =
+                        (INTRF_FLAG_INTERACT | INTRF_FLAG_LIST_ITEM);
+                    *return_type = USER_DATA_T_PLUGINS_CLAP_LIST_ITEM;
+                    return plugin_list_item;
+                }
+            }
         }
     }
     //----------------------------------------------------------------------------------------------------
@@ -406,7 +423,12 @@ void app_data_invoke(void *user_data, uint16_t user_data_type,
     // user pressed on the button to recreate the clap plugin list
     if (user_data_type == USER_DATA_T_PLUGINS_CLAP_LIST_REFRESH){
         APP_INFO* app_data = (APP_INFO*)user_data;
-        // TODO function to init the clap plugin list
+        clap_plug_plugin_list_init(app_data->clap_plug_data);
+    }
+
+    //user pressed to load a clap plugin from a plugin list item
+    if (user_data_type == USER_DATA_T_PLUGINS_CLAP_LIST_ITEM){
+        clap_plug_load_and_activate(user_data);
     }
     //----------------------------------------------------------------------------------------------------
 }
@@ -424,7 +446,7 @@ bool app_data_is_dirty(void *user_data, uint16_t user_data_type) {
     // check if the clap plugin list to add new plugins is dirty
     if (user_data_type == USER_DATA_T_PLUGINS_CLAP_NEW){
         APP_INFO* app_data = (APP_INFO*)user_data;
-        //TODO return if the clap plugin list is dirty
+        return clap_plug_plugin_list_is_dirty(app_data->clap_plug_data);
     }
     //----------------------------------------------------------------------------------------------------
     return false;

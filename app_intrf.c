@@ -28,7 +28,7 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Clap plugin lists; Lv2 and Clap plugin loading.
+// Lv2 and Clap plugin loading.
 // TODO DAY AFTER.
 // Implement groups.
 

@@ -33,7 +33,7 @@ build_sanitize: make_dir
 run:
 	(cd build && ./smp_sampler)
 run_valgrind:
-	(cd build && valgrind --leak-check=full --log-file=val_log ./smp_sampler)
+	(cd build && valgrind --leak-check=full --show-leak-kinds=all --log-file=val_log ./smp_sampler)
 clean_build:
 	(cd build && rm -r *)
 make_dir:
