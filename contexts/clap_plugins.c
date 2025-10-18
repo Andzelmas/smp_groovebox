@@ -1051,6 +1051,8 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
         }
         plug->plug_entry = NULL;
     }
+    snprintf(plug->plug_path, MAX_PATH_STRING, "");
+
     // clean the audio ports
     clap_plug_destroy_ports(plug_data, &(plug->output_ports));
     clap_plug_destroy_ports(plug_data, &(plug->input_ports));
@@ -1816,11 +1818,14 @@ int clap_plug_load_and_activate(CLAP_PLUG_INFO *plug_data,
         // create the plugin entry if a plugin with same path does not exist
         clap_plug_entry_create(plug_data, plug);
     }
-    if(!plug->plug_entry)
+    if(!plug->plug_entry){
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
                              "Could not create entry point for %s plugin\n",
                              plug->plug_path);
+        clap_plug_plug_stop_and_clean(plug_data, plug->id);
+        return -1;
+    }
 
     plug->plug_inst_id = plugin_list_item->plug_inst_id;
 
