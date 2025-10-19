@@ -272,6 +272,7 @@ typedef struct _plug_plug {
     PLUG_CONTROL **controls;   // parameters (properties and port controls)
     unsigned int num_controls; // number of PLUG_CONTROL
     PRM_CONTAIN *plug_params;  // plugin parameter container for params.c
+    PLUG_INFO *plug_data; // plug_data struct for convenience
 } PLUG_PLUG;
 
 typedef struct _plug_info {
@@ -287,6 +288,8 @@ typedef struct _plug_info {
     // create one more plugin, the last one is a NULL shell to
     // check if there are not too many plugins
     struct _plug_plug plugins[MAX_INSTANCES + 1];
+    // did the plugins array change?
+    bool plugins_dirty;
     // sample_rate
     float sample_rate;
     // block_length
@@ -426,6 +429,8 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     cur_plug->request_update = false;
     cur_plug->safe_restore = false;
     cur_plug->plug = NULL;
+    cur_plug->plug_data = NULL;
+    plug_data->plugins_dirty = true;
     return 0;
 }
 
@@ -726,6 +731,7 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_data->audio_backend = audio_backend;
 
     // init the plugin instances to shell
+    plug_data->plugins_dirty = false;
     for (int i = 0; i < (MAX_INSTANCES + 1); i++) {
         PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->is_processing = 0;
@@ -745,6 +751,7 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
         plug->plug_params = NULL;
         plug->safe_restore = false;
         plug->id = i;
+        plug->plug_data = NULL;
 
         // initialize the plug urids, they are the same as plug_data, used for
         // convenience
@@ -803,8 +810,6 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
         // init atom forge
         lv2_atom_forge_init(&(plug->forge), &(plug->map));
     }
-    // Initialize the list of the available plugins on the system
-    plug_plugin_list_init(plug_data);
 
     return plug_data;
 }
@@ -882,65 +887,6 @@ bool plug_plugin_list_is_dirty(PLUG_INFO *plug_data) {
     bool is_dirty = list->dirty;
     list->dirty = false;
     return is_dirty;
-}
-
-char *plug_return_plugin_name(PLUG_INFO *plug_data, int plug_id) {
-    if (!plug_data)
-        return NULL;
-    if (plug_id >= MAX_INSTANCES)
-        return NULL;
-
-    PLUG_PLUG *cur_plug = &(plug_data->plugins[plug_id]);
-    if (!cur_plug->plug)
-        return NULL;
-
-    char *ret_string = NULL;
-
-    const LilvNode *name_node = lilv_plugin_get_uri(cur_plug->plug);
-    const char *name_string = lilv_node_as_string(name_node);
-
-    ret_string = (char *)malloc(sizeof(char) * (strlen(name_string) + 1));
-    if (!ret_string)
-        return NULL;
-    strcpy(ret_string, name_string);
-
-    return ret_string;
-}
-
-char **plug_return_plugin_names(PLUG_INFO *plug_data, unsigned int *size) {
-    if (!plug_data)
-        return NULL;
-    const LilvPlugins *plugins =
-        lilv_world_get_all_plugins(plug_data->lv_world);
-    if (!plugins)
-        return NULL;
-    LilvIter *plug_iter = lilv_plugins_begin(plugins);
-    char **name_array = NULL;
-    unsigned int name_size = lilv_plugins_size(plugins) + 1;
-    if (name_size <= 0)
-        return NULL;
-    name_array = (char **)malloc(sizeof(char *) * (name_size));
-    if (!name_array)
-        return NULL;
-    for (int i = 0; i < name_size; i++) {
-        name_array[i] = NULL;
-    }
-    int iter = 0;
-    while (!lilv_plugins_is_end(plugins, plug_iter)) {
-        const LilvPlugin *cur_plug = lilv_plugins_get(plugins, plug_iter);
-        const LilvNode *cur_name = lilv_plugin_get_uri(cur_plug);
-        const char *name_string = lilv_node_as_string(cur_name);
-        char *save_string =
-            (char *)malloc(sizeof(char) * (strlen(name_string) + 1));
-        if (save_string) {
-            strcpy(save_string, name_string);
-            name_array[iter] = save_string;
-        }
-        plug_iter = lilv_plugins_next(plugins, plug_iter);
-        iter += 1;
-    }
-    *size = iter;
-    return name_array;
 }
 
 void *plug_plugin_presets_iterate(PLUG_INFO *plug_data, unsigned int idx,
@@ -1132,46 +1078,42 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
     return 0;
 }
 
-int plug_load_and_activate(PLUG_INFO *plug_data, const char *plugin_uri,
-                           const int id) {
-    int return_val = -1;
+int plug_load_and_activate(void *plugin_item) {
+    PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM*)plugin_item;
+    if (!plugin_list_item)
+        return -1;
+    PLUG_INFO *plug_data = plugin_list_item->plug_data;
     if (!plug_data) {
         return -1;
     }
     if (!plug_data->lv_world) {
         return -1;
     }
-    if (!plugin_uri) {
-        return -1;
-    }
-    if (id >= MAX_INSTANCES)
-        return -1;
 
     const LilvPlugin *plugins = lilv_world_get_all_plugins(plug_data->lv_world);
-    LilvNode *name_uri = lilv_new_uri(plug_data->lv_world, plugin_uri);
+    LilvNode *name_uri = lilv_new_uri(plug_data->lv_world, plugin_list_item->plugin_path);
     const LilvPlugin *plugin = lilv_plugins_get_by_uri(plugins, name_uri);
     lilv_node_free(name_uri);
     if (!plugin) {
         return -1;
     }
-    int plug_id = id;
+    int plug_id = -1;
     // find next empty plugin and fill it in
-    if (plug_id == -1) {
-        for (int i = 0; i < (MAX_INSTANCES + 1); i++) {
-            PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
-            if (cur_plug->plug_instance)
-                continue;
-            plug_id = cur_plug->id;
-            break;
-        }
+    for (int i = 0; i < (MAX_INSTANCES + 1); i++) {
+        PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
+        if (cur_plug->plug_instance)
+            continue;
+        plug_id = cur_plug->id;
+        break;
     }
+
     if (plug_id == -1 || plug_id >= MAX_INSTANCES)
         return -1;
-    // just in case clean the plugin up
-    plug_stop_and_remove_plug(plug_data, plug_id);
 
     PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
-    return_val = plug_id;
+    // just in case clean the plugin up
+    plug_stop_and_remove_plug((void*)plug);
+
     plug->plug = plugin;
 
     zix_sem_init(&(plug->work_lock), 1);
@@ -1205,7 +1147,7 @@ int plug_load_and_activate(PLUG_INFO *plug_data, const char *plugin_uri,
 
     plug->feature_list = (const LV2_Feature **)calloc(1, sizeof(features));
     if (!plug->feature_list) {
-        plug_stop_and_remove_plug(plug_data, plug_id);
+        plug_stop_and_remove_plug((void*)plug);
         return -1;
     }
     memcpy(plug->feature_list, features, sizeof(features));
@@ -1236,7 +1178,7 @@ int plug_load_and_activate(PLUG_INFO *plug_data, const char *plugin_uri,
 
     // create the ports on audio_client from the sys_ports
     if (plug_activate_backend_ports(plug_data, plug) != 0) {
-        plug_stop_and_remove_plug(plug_data, plug_id);
+        plug_stop_and_remove_plug((void*)plug);
         return -1;
     }
 
@@ -1380,16 +1322,52 @@ int plug_load_and_activate(PLUG_INFO *plug_data, const char *plugin_uri,
 
     plug->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
     if (!plug->midi_cont) {
-        plug_stop_and_remove_plug(plug_data, plug->id);
+        plug_stop_and_remove_plug((void*)plug);
         return -1;
     }
 
     // activate the plugin instance
     lilv_instance_activate(plug->plug_instance);
     plug->plug_instance_activated = 1;
+    plug->plug_data = plug_data;
     // wait for the plugin to start processing
     context_sub_wait_for_start(plug_data->control_data, (void *)plug);
-    return return_val;
+    plug_data->plugins_dirty = true;
+    return plug->id;
+}
+
+void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx){
+    if(!plug_data)
+        return NULL;
+    if(idx >= MAX_INSTANCES)
+        return NULL;
+    PLUG_PLUG *cur_plug = &(plug_data->plugins[idx]);
+    if(!cur_plug->plug_instance)
+        return NULL;
+    return (void *)cur_plug;
+}
+
+int plug_plugin_name(void *plug, char *return_name, unsigned int return_name_len){
+    PLUG_PLUG *cur_plug = (PLUG_PLUG*)plug;
+    if(!cur_plug)
+        return -1;
+    if(!cur_plug->plug_instance)
+        return -1;
+
+    const LilvNode *name_node = lilv_plugin_get_name(cur_plug->plug);
+    const char *name_string = lilv_node_as_string(name_node);
+
+    snprintf(return_name, return_name_len, "%d_%s", cur_plug->id, name_string);
+
+    return 1;
+}
+
+bool plug_plugins_is_dirty(PLUG_INFO *plug_data){
+    if(!plug_data)
+        return false;
+    bool is_dirty = plug_data->plugins_dirty;
+    plug_data->plugins_dirty = false;
+    return is_dirty;
 }
 
 static void plug_set_value_direct(const char *port_symbol, void *data,
@@ -2082,13 +2060,15 @@ static void plug_run_rt(PLUG_PLUG *plug, unsigned int nframes) {
     jalv_worker_end_run(plug->worker);
 }
 
-int plug_stop_and_remove_plug(PLUG_INFO *plug_data, int id) {
-    if (id >= MAX_INSTANCES || id < 0)
+int plug_stop_and_remove_plug(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG*) plug;
+    if(!cur_plug)
         return -1;
-    PLUG_PLUG *plug = &(plug_data->plugins[id]);
+    if(!cur_plug->plug_data)
+        return -1;
     // first stop the plugin process
-    context_sub_wait_for_stop(plug_data->control_data, (void *)plug);
-    return plug_remove_plug(plug_data, id);
+    context_sub_wait_for_stop(cur_plug->plug_data->control_data, (void *)cur_plug);
+    return plug_remove_plug(cur_plug->plug_data, cur_plug->id);
 }
 
 void plug_clean_memory(PLUG_INFO *plug_data) {

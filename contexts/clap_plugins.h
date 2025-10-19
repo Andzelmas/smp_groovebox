@@ -78,14 +78,21 @@ bool clap_plug_plugin_list_is_dirty(CLAP_PLUG_INFO* plug_data);
 // initiate and load plugin from the plugin_list_item 
 int clap_plug_load_and_activate(void* plugin_item);
 
-// return the name of the plugin, caller must free the char*
-char *clap_plug_return_plugin_name(CLAP_PLUG_INFO *plug_data, int plug_id);
+// return the plugin user_data
+void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx);
+
+// return the name of a plugin, returned name will be id_name format
+int clap_plug_plugin_name(void *plug, char *return_name,
+                                 unsigned int return_name_len);
+
+// return if the plugins array is dirty - if it changed
+bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data);
 
 // process the clap plugins, must be called on the [audio-thread]
 void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes);
 
 // remove the clap plugin
-int clap_plug_plug_stop_and_clean(CLAP_PLUG_INFO *plug_data, int plug_id);
+int clap_plug_plug_stop_and_clean(void *plug);
 
 // clean the plugin struct and free memory
 void clap_plug_clean_memory(CLAP_PLUG_INFO *plug_data);

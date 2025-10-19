@@ -6,6 +6,7 @@
 #include "app_data.h"
 // string functions
 #include "contexts/clap_plugins.h"
+#include "contexts/plugins.h"
 #include "types.h"
 #include "util_funcs/string_funcs.h"
 // math helper functions
@@ -314,16 +315,21 @@ void *app_data_child_return(void *parent_data, uint16_t parent_type,
             *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
             return (void *)app_data;
         case 1:
-            *return_type = USER_DATA_T_PLUGINS;
-            snprintf(return_name, return_name_len, "%s", PLUGINS_NAME);
+            *return_type = USER_DATA_T_PLUGINS_LV2;
+            snprintf(return_name, return_name_len, "%s", PLUGINS_LV2_NAME);
             *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
             return (void *)app_data;
         case 2:
+            *return_type = USER_DATA_T_PLUGINS_CLAP;
+            snprintf(return_name, return_name_len, "%s", PLUGINS_CLAP_NAME);
+            *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
+            return (void *)app_data;
+        case 3:
             *return_type = USER_DATA_T_SYNTH;
             snprintf(return_name, return_name_len, "%s", SYNTH_NAME);
             *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
             return (void *)app_data;
-        case 3:
+        case 4:
             *return_type = USER_DATA_T_JACK;
             snprintf(return_name, return_name_len, "%s", TRK_NAME);
             *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_ON_TOP);
@@ -332,25 +338,68 @@ void *app_data_child_return(void *parent_data, uint16_t parent_type,
     }
     // PLUGINS context
     //----------------------------------------------------------------------------------------------------
-    if (parent_type == USER_DATA_T_PLUGINS) {
+    if (parent_type == USER_DATA_T_PLUGINS_LV2) {
         APP_INFO *app_data = (APP_INFO *)parent_data;
-        // This context is to create new plugins
-        // one context for lv2 lists and the other for clap plugin lists
+        // This context is to create new lv2 plugins
         if (idx == 0) {
             *return_type = USER_DATA_T_PLUGINS_LV2_NEW;
-            snprintf(return_name, return_name_len, "%s", NAME_LV2_ADD_NEW);
+            snprintf(return_name, return_name_len, "%s", NAME_ADD_NEW);
             *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_LIST |
                              INTRF_FLAG_CANT_DIRTY);
             return (void *)app_data;
         }
-        if (idx == 1){
+        if (idx > 0){
+            unsigned int iter = idx -1;
+            void *lv2_plugin= plug_plugin_return(app_data->plug_data, iter);
+            if(lv2_plugin){
+                if(plug_plugin_name(lv2_plugin, return_name, return_name_len) != -1){
+                    *return_flags = (INTRF_FLAG_CONTAINER);
+                    *return_type = USER_DATA_T_PLUG_LV2;
+                    return lv2_plugin;
+                }
+            }
+        }
+    }
+    if (parent_type == USER_DATA_T_PLUGINS_CLAP) {
+        APP_INFO *app_data = (APP_INFO *)parent_data;
+        // This context is to create new clap plugins
+        if (idx == 0){
             *return_type = USER_DATA_T_PLUGINS_CLAP_NEW;
-            snprintf(return_name, return_name_len, "%s", NAME_CLAP_ADD_NEW);
+            snprintf(return_name, return_name_len, "%s", NAME_ADD_NEW);
             *return_flags = (INTRF_FLAG_CONTAINER | INTRF_FLAG_LIST |
                              INTRF_FLAG_CANT_DIRTY);
             return (void *)app_data;
         }
-        // TODO idx > 1 go through loaded plugins
+        if (idx > 0){
+            unsigned int iter = idx -1;
+            void *clap_plugin = clap_plug_plugin_return(app_data->clap_plug_data, iter);
+            if(clap_plugin){
+                if(clap_plug_plugin_name(clap_plugin, return_name, return_name_len) != -1){
+                    *return_flags = (INTRF_FLAG_CONTAINER);
+                    *return_type = USER_DATA_T_PLUG_CLAP;
+                    return clap_plugin;
+                }
+            }
+        }
+    }
+
+    // lv2_plugin
+    if (parent_type == USER_DATA_T_PLUG_LV2){
+        if (idx == 0){
+            *return_type = USER_DATA_T_PLUG_LV2_REMOVE;
+            snprintf(return_name, return_name_len, "%s", NAME_REMOVE);
+            *return_flags = (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP);
+            return parent_data;
+        }
+    }
+    // clap_plugin 
+    if (parent_type == USER_DATA_T_PLUG_CLAP){
+        if (idx == 0){
+            *return_type = USER_DATA_T_PLUG_CLAP_REMOVE;
+            snprintf(return_name, return_name_len, "%s", NAME_REMOVE);
+            *return_flags = (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP);
+            return parent_data;
+        }
     }
 
     // Return children for the lv2 plugins list
@@ -426,9 +475,21 @@ void app_data_invoke(void *user_data, uint16_t user_data_type,
         clap_plug_plugin_list_init(app_data->clap_plug_data);
     }
 
+    //user pressed to load a lv2 plugin from a plugin list item
+    if (user_data_type == USER_DATA_T_PLUGINS_LV2_LIST_ITEM){
+        plug_load_and_activate(user_data);
+    }
+    // user pressed to remove a lv2 plugin
+    if (user_data_type == USER_DATA_T_PLUG_LV2_REMOVE){
+        plug_stop_and_remove_plug(user_data);
+    }
     //user pressed to load a clap plugin from a plugin list item
     if (user_data_type == USER_DATA_T_PLUGINS_CLAP_LIST_ITEM){
         clap_plug_load_and_activate(user_data);
+    }
+    // user pressed to remove a clap plugin
+    if (user_data_type == USER_DATA_T_PLUG_CLAP_REMOVE){
+        clap_plug_plug_stop_and_clean(user_data);
     }
     //----------------------------------------------------------------------------------------------------
 }
@@ -443,10 +504,19 @@ bool app_data_is_dirty(void *user_data, uint16_t user_data_type) {
         APP_INFO *app_data = (APP_INFO *)user_data;
         return plug_plugin_list_is_dirty(app_data->plug_data);
     }
+    if (user_data_type == USER_DATA_T_PLUGINS_LV2){
+        APP_INFO *app_data = (APP_INFO *)user_data;
+        return plug_plugins_is_dirty(app_data->plug_data); 
+    }
     // check if the clap plugin list to add new plugins is dirty
     if (user_data_type == USER_DATA_T_PLUGINS_CLAP_NEW){
         APP_INFO* app_data = (APP_INFO*)user_data;
         return clap_plug_plugin_list_is_dirty(app_data->clap_plug_data);
+    }
+    // check if the clap plugins are dirty (if new plugins where added or removed)
+    if (user_data_type == USER_DATA_T_PLUGINS_CLAP){
+        APP_INFO *app_data = (APP_INFO*)user_data;
+        return clap_plug_plugins_is_dirty(app_data->clap_plug_data);
     }
     //----------------------------------------------------------------------------------------------------
     return false;
