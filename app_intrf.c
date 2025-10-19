@@ -28,7 +28,9 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Lv2 and Clap plugin loading.
+// Figure out how to properly load/remove plugins
+// now the plugins array can have empty members
+// because of this no plugins are loaded after such a NULL member
 // TODO DAY AFTER.
 // Implement groups.
 
