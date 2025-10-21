@@ -31,6 +31,7 @@
 // Figure out how to properly load/remove plugins
 // now the plugins array can have empty members
 // because of this no plugins are loaded after such a NULL member
+// ALSO - Why MAX_INSTANCES + 1 in arrays?
 // TODO DAY AFTER.
 // Implement groups.
 
