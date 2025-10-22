@@ -28,12 +28,14 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Figure out how to properly load/remove plugins
-// now the plugins array can have empty members
-// because of this no plugins are loaded after such a NULL member
-// ALSO - Why MAX_INSTANCES + 1 in arrays?
-// TODO DAY AFTER.
 // Implement groups.
+// AFTER TODAY.
+// Implement Port connectivity, test sound
+// AFTER TODAY.
+// Implement Params:
+// Must be able to change amount of params during runtime
+// Remove unecessary various log conversion methods in params, instead use the
+// string callback function (like in clap plugin parameters)
 
 /*
  TODO Groups (for example 10 total) each with cx_curr, cx_selected.
