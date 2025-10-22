@@ -6,6 +6,7 @@
 #include "../util_funcs/ring_buffer.h"
 #include "../util_funcs/string_funcs.h"
 #include "../util_funcs/uniform_buffer.h"
+#include "../util_funcs/array_utils.h"
 #include "context_control.h"
 #include <clap/clap.h>
 #include <dirent.h>
@@ -140,7 +141,11 @@ typedef struct _clap_plug_plug {
 // the main clap struct
 typedef struct _clap_plug_info {
     struct _clap_plug_plug
-        plugins[MAX_INSTANCES + 1]; // array with single clap plugins
+        plugins[MAX_INSTANCES]; // array with single clap plugins
+    // there can be gaps in the plugins array when plugins are added 
+    // and removed. UI requests plugins by idx, iterating in order 0...n
+    // so this array of loaded plugin indices is necassary for UI
+    unsigned int plugins_idx[MAX_INSTANCES];
     bool plugins_dirty; //did plugins array change?
     SAMPLE_T sample_rate;
     // for clap there can be min and max buffer sizes, for not changing buffer
@@ -1082,6 +1087,10 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
 
     plug->plug_inst_id = -1;
     plug_data->plugins_dirty = true;
+    // update the plugins_idx array so it only holds the 
+    // loaded plugins indices
+    arr_u_idx_array_member_remove(plug_data->plugins_idx, MAX_INSTANCES, plug->id);
+
     return 0;
 }
 
@@ -1589,10 +1598,11 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     plug_data->ext_preset_load.loaded = clap_ext_preset_load_on_load;
     plug_data->ext_preset_load.on_error = clap_ext_preset_load_on_error;
 
-    // the array holds one more plugin, it will be an empty shell to check if
-    // the total number of plugins arent too many
+    // init the plugins array
     plug_data->plugins_dirty = false;
-    for (int i = 0; i < (MAX_INSTANCES + 1); i++) {
+    for (int i = 0; i < (MAX_INSTANCES); i++) {
+        plug_data->plugins_idx[i] = MAX_INSTANCES;
+
         CLAP_PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->clap_host_info = clap_info_host;
         plug->id = i;
@@ -1799,7 +1809,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
     // find an empty slot in the plugins array and create the
     // plugin there
     int id = -1;
-    for (int i = 0; i < (MAX_INSTANCES + 1); i++) {
+    for (int i = 0; i < (MAX_INSTANCES); i++) {
         CLAP_PLUG_PLUG cur_plug = plug_data->plugins[i];
         // if there is an plugin entry point the slot is not empty
         if (cur_plug.plug_entry)
@@ -1958,6 +1968,9 @@ int clap_plug_load_and_activate(void* plugin_item) {
 
     plug_data->plugins_dirty = true;
 
+    // insert the plugin id into the plugins_idx indices array
+    arr_u_idx_array_member_insert(plug_data->plugins_idx, MAX_INSTANCES, plug->id);
+
     return plug->id;
 }
 
@@ -1966,7 +1979,13 @@ void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx){
         return NULL;
     if(idx >= MAX_INSTANCES)
         return NULL;
-    CLAP_PLUG_PLUG *cur_plug = &(plug_data->plugins[idx]);
+
+    // since there can be gaps in plug_data->plugins
+    // get the plugin id from the indices array
+    unsigned int plug_id = plug_data->plugins_idx[idx];
+    if (plug_id >= MAX_INSTANCES) return NULL;
+
+    CLAP_PLUG_PLUG *cur_plug = &(plug_data->plugins[plug_id]);
     if(!cur_plug->plug_inst)
         return NULL;
     return (void *)cur_plug;
