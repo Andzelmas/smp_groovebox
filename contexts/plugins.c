@@ -437,6 +437,7 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
 
     //update the loaded plugin indices array
     arr_u_idx_array_member_remove(plug_data->plugins_idx, MAX_INSTANCES, cur_plug->id);
+
     return 0;
 }
 
@@ -1371,11 +1372,12 @@ int plug_plugin_name(void *plug, char *return_name, unsigned int return_name_len
     if(!cur_plug->plug_instance)
         return -1;
 
-    const LilvNode *name_node = lilv_plugin_get_name(cur_plug->plug);
+    LilvNode *name_node = lilv_plugin_get_name(cur_plug->plug);
     const char *name_string = lilv_node_as_string(name_node);
 
     snprintf(return_name, return_name_len, "%d_%s", cur_plug->id, name_string);
 
+    lilv_node_free(name_node);
     return 1;
 }
 
