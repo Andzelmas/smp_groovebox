@@ -1,4 +1,16 @@
 /*
+   Using from ui:
+   After initiating the APP_INTRF with app_intrf_init(), 
+   run a loop.
+   In the loop first call the nav_update function, then
+   Retrieve CX* contexts (these cant be saved, they must be retrieved
+   each loop cycle!).
+   Display the contexts to the user.
+   Let the user interact with the displayed interface by calling the 
+   various nav_ functions.
+*/
+
+/*
     The INTRF layer is for creating the app_data structure
     Also, it allows UI to communicate with app_data
     For this reason no temporary cx's should be created -
@@ -67,6 +79,14 @@
    TODO one ui implementation to try is similar to cli programs:
    couple commands to interact with interface, for example 'ls' to list context children
    just to show that wildly different ui interfaces are possible
+*/
+
+/*
+   TODO another ui implementation: 
+   Daemon that accepts commands through an ip address.
+   Could be used to control the program through web browser, a phone.
+   Also could be used to display the interface on a phone and controlled through 
+   keybindings (a combination of interfaces).
 */
 
 /*
