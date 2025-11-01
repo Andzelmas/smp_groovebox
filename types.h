@@ -12,6 +12,8 @@
 #define NAME_REMOVE "remove"
 #define NAME_REFRESH_LIST "refresh"
 
+#define CX_GROUPS 5 //context groups, each has cx_curr, cx_selected etc.
+
 #define MAX_STRING_MSG_LENGTH 128 // max string size for sys messages
 
 #define MAX_PARAM_NAME_LENGTH 100 // the max length for param names

@@ -5,6 +5,7 @@
    In the loop first call the nav_update function, then
    Retrieve CX* contexts (these cant be saved, they must be retrieved
    each loop cycle!).
+   Check if the returned CX* are not NULL !!!!
    Display the contexts to the user.
    Let the user interact with the displayed interface by calling the 
    various nav_ functions.
@@ -40,7 +41,7 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Implement groups.
+// Implement groups. nav_ function to set cx_curr directly, for convenient UI navigation
 // AFTER TODAY.
 // Implement Port connectivity, test sound
 // AFTER TODAY.
@@ -106,7 +107,7 @@ typedef struct _cx_array{
     // a temporary nav_ function to delete the cx_curr children
     // TODO for cx_last_selected with groups could work an array
     // one cx_last_selected per group
-    struct _cx* cx_last_selected;
+    struct _cx* cx_last_selected[CX_GROUPS];
     unsigned int count;
     unsigned int count_max;
     struct _cx **contexts;
@@ -127,11 +128,18 @@ typedef struct _cx {
     struct _cx_array cx_children;
 } CX;
 
-typedef struct _app_intrf {
-    CX *cx_root;
+typedef struct _cx_group {
     CX *cx_curr;     // current context that is entered right now
     CX *cx_selected; // the selected or last interacted context, when entering
                      // a context will be the first child
+} CX_GROUP;
+
+typedef struct _app_intrf {
+    CX *cx_root;
+    CX_GROUP groups[CX_GROUPS]; // groups that have the cx_curr, cx_selected
+                                // contexts. Different groups can have separate
+                                // contexs selected, so UI can display different
+                                // contexts at the same time.
     uint16_t main_user_data_type; // type for the main user_data sturct, the
                                   // same type is in cx_root->user_data_type
     void *main_user_data; // main user_data struct for convenience, the same
@@ -161,21 +169,24 @@ typedef struct _app_intrf {
 
 // cx_selected could have changed (because of removal of cx for example)
 // this function refreshes the cx_selected
-static void app_intrf_cx_selected_refresh(APP_INTRF *app_intrf){
+// gr_idx - the group index for which the cx_selected should be updated
+static void app_intrf_cx_selected_refresh(APP_INTRF *app_intrf, unsigned int gr_idx){
     if(!app_intrf)return;
-    if(!app_intrf->cx_curr)return;
+    if(gr_idx >= CX_GROUPS)return;
+    CX_GROUP *cur_group = &(app_intrf->groups[gr_idx]);
+    if(!cur_group->cx_curr)return;
 
     // no need to change cx_selected if it exists
-    if (app_intrf->cx_selected) 
+    if (cur_group->cx_selected) 
         return;
 
-    if(app_intrf->cx_curr->cx_children.count > 0){
-        app_intrf->cx_selected = app_intrf->cx_curr->cx_children.cx_last_selected;
-        if (!app_intrf->cx_selected)
-            app_intrf->cx_selected = app_intrf->cx_curr->cx_children.contexts[0];
+    if(cur_group->cx_curr->cx_children.count > 0){
+        cur_group->cx_selected = cur_group->cx_curr->cx_children.cx_last_selected[gr_idx];
+        if (!cur_group->cx_selected)
+            cur_group->cx_selected = cur_group->cx_curr->cx_children.contexts[0];
     }
     else{
-        app_intrf->cx_selected = NULL; 
+        cur_group->cx_selected = NULL; 
     }
 }
 
@@ -214,29 +225,36 @@ static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
                     curr_cx->idx -= 1;
                 }
             }
-            // change the last selected cx in the parent cx_children array
-            if (parent->cx_children.cx_last_selected == cx_rem) {
-                int new_sel_idx = cx_rem->idx - 1;
-                if(new_sel_idx < 0 || new_sel_idx >= parent->cx_children.count)new_sel_idx = 0;
-                if (parent->cx_children.count > 0)
-                    parent->cx_children.cx_last_selected =
-                        parent->cx_children.contexts[new_sel_idx];
-                else
-                    parent->cx_children.cx_last_selected = NULL;
-            }
         }
     }
 
-    // if cx_curr is the same as cx_rem, change it to parent
-    if (app_intrf->cx_curr == cx_rem)
-        app_intrf->cx_curr = parent;
-    
-    //if cx_selected is the same as cx_rem, change it to null
-    if (app_intrf->cx_selected == cx_rem)
-        app_intrf->cx_selected = NULL;
+    // go through the groups and check if the cx to be removed is in any of those groups
+    for (unsigned int i = 0; i < CX_GROUPS; i++){
+        CX_GROUP *cur_group = &(app_intrf->groups[i]);
+        // change the last selected cx in the parent cx_children array
+        if (parent) {
+            if (parent->cx_children.cx_last_selected[i] == cx_rem) {
+                int new_sel_idx = cx_rem->idx - 1;
+                if (new_sel_idx < 0 || new_sel_idx >= parent->cx_children.count)
+                    new_sel_idx = 0;
+                if (parent->cx_children.count > 0)
+                    parent->cx_children.cx_last_selected[i] =
+                        parent->cx_children.contexts[new_sel_idx];
+                else
+                    parent->cx_children.cx_last_selected[i] = NULL;
+            }
+        }
+        // if cx_curr is the same as cx_rem, change it to parent
+        if (cur_group->cx_curr == cx_rem)
+            cur_group->cx_curr = parent;
+        
+        //if cx_selected is the same as cx_rem, change it to null
+        if (cur_group->cx_selected == cx_rem)
+            cur_group->cx_selected = NULL;
 
-    // refresh the cx_selected, since it can be a NULL now
-    app_intrf_cx_selected_refresh(app_intrf);
+        // refresh the cx_selected, since it can be a NULL now
+        app_intrf_cx_selected_refresh(app_intrf, i);
+    }
 
     //remove the cx_rem
     if(cx_rem->cx_children.contexts)free(cx_rem->cx_children.contexts);
@@ -270,9 +288,11 @@ static int app_intrf_cx_children_push(APP_INTRF *app_intrf, CX *child) {
     parent->cx_children.contexts[child->idx] = child;
     parent->cx_children.contexts[child->idx + 1] = NULL;
 
-    //change cx_selected for cases when cx_selected==cx_curr and 
-    //a new cx is created inside cx_curr
-    app_intrf_cx_selected_refresh(app_intrf);
+    // after adding a cx to the parent, 
+    // cx can be available for cx_selected if previously cx_selected was == NULL
+    for (unsigned int i = 0; i < CX_GROUPS; i++){
+        app_intrf_cx_selected_refresh(app_intrf, i);
+    }
 
     return 1;
 }
@@ -305,7 +325,9 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
         return NULL;
 
     new_cx->flags = flags;
-    new_cx->cx_children.cx_last_selected = NULL;
+    for(unsigned int i = 0; i < CX_GROUPS; i++){
+        new_cx->cx_children.cx_last_selected[i] = NULL;
+    }
     new_cx->cx_children.contexts = NULL;
     new_cx->cx_children.count = 0;
     new_cx->cx_children.count_max = PTR_ARRAY_COUNT;
@@ -378,6 +400,11 @@ APP_INTRF *app_intrf_init() {
     APP_INTRF *app_intrf = calloc(1, sizeof(APP_INTRF));
     if (!app_intrf)
         return NULL;
+    // for safety init the groups
+    for(unsigned int i = 0; i < CX_GROUPS; i++){
+        app_intrf->groups[i].cx_curr = NULL;
+        app_intrf->groups[i].cx_selected = NULL;
+    }
 
     // initiate the app_intrf functions for data manipulation
     //--------------------------------------------------
@@ -413,8 +440,12 @@ APP_INTRF *app_intrf_init() {
     // and create the cx_root children recursively
     app_intrf_cx_children_create(app_intrf, app_intrf->cx_root);
 
-    app_intrf->cx_curr = app_intrf->cx_root;
-    app_intrf_cx_selected_refresh(app_intrf);
+    // now groups has cx_curr and cx_selected NULLs
+    // init cx_curr to cx_root and cx_selected to its first child
+    for(unsigned int i = 0; i < CX_GROUPS; i++){
+        app_intrf->groups[i].cx_curr = app_intrf->cx_root;
+        app_intrf_cx_selected_refresh(app_intrf, i);
+    }
 
     return app_intrf;
 }
@@ -517,22 +548,31 @@ void nav_update(APP_INTRF *app_intrf) {
                                   app_intrf_cx_check_dirty);
 }
 
-CX *nav_cx_root_return(APP_INTRF *app_intrf) {
+CX *nav_cx_curr_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
     if (!app_intrf)
         return NULL;
-    return app_intrf->cx_root;
+    if (gr_idx >= CX_GROUPS)return NULL;
+    return app_intrf->groups[gr_idx].cx_curr;
 }
 
-CX *nav_cx_curr_return(APP_INTRF *app_intrf) {
+CX *nav_cx_selected_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
     if (!app_intrf)
         return NULL;
-    return app_intrf->cx_curr;
+    if (gr_idx >= CX_GROUPS)return NULL;
+    return app_intrf->groups[gr_idx].cx_selected;
 }
 
-CX *nav_cx_selected_return(APP_INTRF *app_intrf) {
+CX *nav_cx_child_return(APP_INTRF *app_intrf, CX *parent, unsigned int child_idx){
     if (!app_intrf)
         return NULL;
-    return app_intrf->cx_selected;
+    if (!parent)
+        return NULL;
+    if (!parent->cx_children.contexts)
+        return NULL;
+    if (child_idx >= parent->cx_children.count)
+        return NULL;
+
+    return parent->cx_children.contexts[child_idx];
 }
 
 CX **nav_cx_children_return(APP_INTRF *app_intrf, CX *parent,
@@ -561,84 +601,100 @@ int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
     return 1;
 }
 
-void nav_cx_selected_next(APP_INTRF *app_intrf) {
+void nav_cx_selected_next(APP_INTRF *app_intrf, unsigned int gr_idx) {
     if (!app_intrf)
         return;
-    CX *selected_cx = app_intrf->cx_selected;
+    if (gr_idx >= CX_GROUPS)return;
+    CX *selected_cx = app_intrf->groups[gr_idx].cx_selected;
     if (!selected_cx)
         return;
     if (!selected_cx->cx_parent)
         return;
     if (selected_cx->idx < 0)
         return;
+
+    if(selected_cx->cx_parent->cx_children.count == 0)return;
 
     int new_idx = selected_cx->idx + 1;
     if (new_idx >= selected_cx->cx_parent->cx_children.count)
         new_idx = 0;
+
     CX *new_selected = selected_cx->cx_parent->cx_children.contexts[new_idx];
-    selected_cx->cx_parent->cx_children.cx_last_selected = new_selected;
-    app_intrf->cx_selected = new_selected;
+    selected_cx->cx_parent->cx_children.cx_last_selected[gr_idx] = new_selected;
+    app_intrf->groups[gr_idx].cx_selected = NULL;
+    app_intrf_cx_selected_refresh(app_intrf, gr_idx);
 }
 
-void nav_cx_selected_prev(APP_INTRF *app_intrf) {
+void nav_cx_selected_prev(APP_INTRF *app_intrf, unsigned int gr_idx) {
     if (!app_intrf)
         return;
-    CX *selected_cx = app_intrf->cx_selected;
+    if (gr_idx >= CX_GROUPS)return;
+    CX *selected_cx = app_intrf->groups[gr_idx].cx_selected;
     if (!selected_cx)
         return;
     if (!selected_cx->cx_parent)
         return;
     if (selected_cx->idx < 0)
         return;
+
+    if (selected_cx->cx_parent->cx_children.count == 0)return;
 
     int new_idx = selected_cx->idx - 1;
     if (new_idx < 0)
         new_idx = selected_cx->cx_parent->cx_children.count - 1;
     CX *new_selected = selected_cx->cx_parent->cx_children.contexts[new_idx];
-    selected_cx->cx_parent->cx_children.cx_last_selected = new_selected; 
-    app_intrf->cx_selected = new_selected;
+    selected_cx->cx_parent->cx_children.cx_last_selected[gr_idx] = new_selected; 
+    app_intrf->groups[gr_idx].cx_selected = NULL;
+    app_intrf_cx_selected_refresh(app_intrf, gr_idx);
 }
 
-int nav_cx_curr_exit(APP_INTRF *app_intrf) {
+int nav_cx_curr_exit(APP_INTRF *app_intrf, unsigned int gr_idx) {
     if (!app_intrf)
         return -1;
-    if (!app_intrf->cx_curr)
+    if (gr_idx >= CX_GROUPS)return -1;
+    if (!app_intrf->groups[gr_idx].cx_curr)
         return -1;
-    if (!app_intrf->cx_curr->cx_parent)
+    if (!app_intrf->groups[gr_idx].cx_curr->cx_parent)
         return -1;
 
-    app_intrf->cx_curr = app_intrf->cx_curr->cx_parent;
-    app_intrf->cx_selected = NULL;
-    app_intrf_cx_selected_refresh(app_intrf);
+    app_intrf->groups[gr_idx].cx_curr = app_intrf->groups[gr_idx].cx_curr->cx_parent;
+    app_intrf->groups[gr_idx].cx_selected = NULL;
+    app_intrf_cx_selected_refresh(app_intrf, gr_idx);
     return 1;
 }
 
-int nav_cx_selected_invoke(APP_INTRF *app_intrf) {
+int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx){
+    if (!app_intrf)return -1;
+    if (!cx_self)return 0;
+    // if this context has children enter inside
+    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
+        return 0;
+    if (cx_self->cx_children.count == 0)
+        return 0;
+
+    app_intrf->groups[gr_idx].cx_curr = cx_self;
+    app_intrf->groups[gr_idx].cx_selected = NULL;
+    app_intrf_cx_selected_refresh(app_intrf, gr_idx);
+
+    return 1;
+}
+
+int nav_cx_invoke(APP_INTRF *app_intrf, CX *cx_self) {
     if (!app_intrf)
         return -1;
-    if (!app_intrf->cx_selected)
-        return -1;
-    CX *selected = app_intrf->cx_selected;
+    if (!cx_self)
+        return 0;
     // call the data invoke callback
-    if (app_intrf->data_invoke)
+    if (app_intrf->data_invoke){
         // TODO check flags if a filename or some other string needs to be
         // presented to the data If data needs a file string, or after invoke
         // the user needs to do another action the UI should be informed. This
         // could be done through flags on cx or this function can return codes
         // what needs to be done
-        app_intrf->data_invoke(selected->user_data, selected->user_data_type,
+        app_intrf->data_invoke(cx_self->user_data, cx_self->user_data_type,
                                NULL);
-
-    // if this context has children enter inside
-    if (!(selected->flags & INTRF_FLAG_CONTAINER))
         return 1;
-    if (selected->cx_children.count == 0)
-        return 1;
-
-    app_intrf->cx_curr = selected;
-    app_intrf->cx_selected = NULL;
-    app_intrf_cx_selected_refresh(app_intrf);
-
-    return 1;
+    }
+    return 0;
 }
 //----------------------------------------------------------------------------------------------------
