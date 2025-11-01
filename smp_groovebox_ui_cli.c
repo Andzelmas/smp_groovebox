@@ -172,10 +172,13 @@ int main() {
         // the entered CX will become the cx_curr in the GROUP_MAIN GROUP
         if (input >= '0' && input <= '9' && root_children_count > 0) {
             unsigned int num = input - '0';
-            CX *root_child = nav_cx_child_return(app_intrf, cx_curr_root, num);
-            if (root_child)
+            CX *root_child = NULL;
+            if(nav_cx_selected_choose(app_intrf, num, GROUP_ROOT) == 1)
+                root_child = nav_cx_selected_return(app_intrf, GROUP_ROOT);
+            if (root_child){
                 if (nav_cx_enter(app_intrf, root_child, GROUP_MAIN) == -1)
                     exit = 1;
+            }
         }
 
         if (exit == 1)

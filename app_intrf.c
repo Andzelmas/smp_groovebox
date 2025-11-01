@@ -44,12 +44,14 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Implement Port connectivity, test sound
-// AFTER TODAY.
-// Implement Params:
-// Must be able to change amount of params during runtime
-// Remove unecessary various log conversion methods in params, instead use the
-// string callback function (like in clap plugin parameters)
+// Test cx groups for context of certain flags.
+// Will need a way to cx_select_prev _next for only certain flags.
+// Also how to display and then choose/enter contexts with only certain flags.
+// Need to find an elegant way. Implement Port connectivity, test sound. Will
+// also need to introduce connected CX* to app_intrf.
+// AFTER TODAY. Implement Params: Must be able to change amount of params during
+// runtime Remove unecessary various log conversion methods in params, instead
+// use the string callback function (like in clap plugin parameters)
 
 /*
  TODO Groups (for example 10 total) each with cx_curr, cx_selected.
@@ -649,20 +651,21 @@ void nav_cx_selected_prev(APP_INTRF *app_intrf, unsigned int gr_idx) {
     app_intrf_cx_selected_refresh(app_intrf, gr_idx);
 }
 
-void nav_cx_selected_choose(APP_INTRF *app_intrf, unsigned int sel_idx, unsigned int gr_idx) {
+int nav_cx_selected_choose(APP_INTRF *app_intrf, unsigned int sel_idx, unsigned int gr_idx) {
     if (!app_intrf)
-        return;
-    if (gr_idx >= CX_GROUPS)return;
-    if (!app_intrf->groups[gr_idx].cx_curr) return;
-    if (!app_intrf->groups[gr_idx].cx_curr->cx_children.contexts) return;
-    if (sel_idx >=  app_intrf->groups[gr_idx].cx_curr->cx_children.count) return;
+        return -1;
+    if (gr_idx >= CX_GROUPS)return -1;
+    if (!app_intrf->groups[gr_idx].cx_curr) return -1;
+    if (!app_intrf->groups[gr_idx].cx_curr->cx_children.contexts) return -1;
+    if (sel_idx >=  app_intrf->groups[gr_idx].cx_curr->cx_children.count) return -1;
     CX *selected_cx = app_intrf->groups[gr_idx].cx_curr->cx_children.contexts[sel_idx];
     if (selected_cx->idx < 0)
-        return;
+        return -1;
 
     selected_cx->cx_parent->cx_children.cx_last_selected[gr_idx] = selected_cx;
     app_intrf->groups[gr_idx].cx_selected = NULL;
     app_intrf_cx_selected_refresh(app_intrf, gr_idx);
+    return 1;
 }
 
 int nav_cx_curr_exit(APP_INTRF *app_intrf, unsigned int gr_idx) {
@@ -720,4 +723,10 @@ int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx){
     return 1;
 }
 
+uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, CX *cx_self){
+    if (!app_intrf)return 0;
+    if (!cx_self)return 0;
+
+    return cx_self->flags;
+}
 //----------------------------------------------------------------------------------------------------

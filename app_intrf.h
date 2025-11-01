@@ -1,5 +1,5 @@
 #pragma once
-
+#include <stdint.h>
 // Interface for building the data layer structure.
 // This structure can be safely presented to the user
 // IMPORTANT: the returned CX* structs should not be saved - each UI cycle,
@@ -55,7 +55,8 @@ void nav_cx_selected_prev(APP_INTRF *app_intrf, unsigned int gr_idx);
 
 // select the sel_idx CX in the gr_idx cx_group.
 // the sel_idx is the index in the gr_idx cx_group cx_curr children array.
-void nav_cx_selected_choose(APP_INTRF *app_intrf, unsigned int sel_idx, unsigned int gr_idx);
+// return 1 on success
+int nav_cx_selected_choose(APP_INTRF *app_intrf, unsigned int sel_idx, unsigned int gr_idx);
 
 // exit the cx_curr context of the cx_group, 
 // after this cx_curr will be cx_curr->cx_parent 
@@ -72,4 +73,7 @@ int nav_cx_invoke(APP_INTRF *app_intrf, CX *cx_self);
 // this function calls nav_cx_invoke, so no need to do that separatly
 int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx);
 
+// return the cx interface flags, 
+// see the intrfFlags enum in types.h
+uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, CX *cx_self);
 //----------------------------------------------------------------------------------------------------
