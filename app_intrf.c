@@ -9,7 +9,7 @@
    Display the contexts to the user.
    Let the user interact with the displayed interface by calling the
    various nav_ functions.
-   In principal the context structure could be traveresed without cx_selected.
+   In principal the context structure could be traversed without cx_selected.
    However, since the various CX* has to be retrieved each cycle after
    nav_update cx_selected is the only way to remember what the user did.
 */
