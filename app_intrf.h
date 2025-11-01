@@ -53,6 +53,10 @@ void nav_cx_selected_next(APP_INTRF *app_intrf, unsigned int gr_idx);
 // cx_selected = previous child of the cx_curr in cx_group
 void nav_cx_selected_prev(APP_INTRF *app_intrf, unsigned int gr_idx);
 
+// select the sel_idx CX in the gr_idx cx_group.
+// the sel_idx is the index in the gr_idx cx_group cx_curr children array.
+void nav_cx_selected_choose(APP_INTRF *app_intrf, unsigned int sel_idx, unsigned int gr_idx);
+
 // exit the cx_curr context of the cx_group, 
 // after this cx_curr will be cx_curr->cx_parent 
 int nav_cx_curr_exit(APP_INTRF *app_intrf, unsigned int gr_idx);

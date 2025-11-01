@@ -112,7 +112,7 @@ int context_sub_process_rt(CXCONTROL *cxcontrol_data) {
             if (cxcontrol_data->rt_funcs_struct.subcx_start_process)
                 cxcontrol_data->rt_funcs_struct.subcx_start_process(
                     cur_bit.user_data);
-            // this messages will be sent from [main-thread] only with sam_wait,
+            // these messages will be sent from [main-thread] only with sam_wait,
             // so error or no error, release the semaphore
             sem_post(&cxcontrol_data->pause_for_rt);
         }
@@ -120,7 +120,7 @@ int context_sub_process_rt(CXCONTROL *cxcontrol_data) {
             if (cxcontrol_data->rt_funcs_struct.subcx_stop_process)
                 cxcontrol_data->rt_funcs_struct.subcx_stop_process(
                     cur_bit.user_data);
-            // this messages will be sent from [main-thread] only with sam_wait,
+            // these messages will be sent from [main-thread] only with sam_wait,
             // so error or no error, release the semaphore
             sem_post(&cxcontrol_data->pause_for_rt);
         }

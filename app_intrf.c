@@ -1,14 +1,17 @@
 /*
    Using from ui:
-   After initiating the APP_INTRF with app_intrf_init(), 
+   After initiating the APP_INTRF with app_intrf_init(),
    run a loop.
    In the loop first call the nav_update function, then
    Retrieve CX* contexts (these cant be saved, they must be retrieved
    each loop cycle!).
    Check if the returned CX* are not NULL !!!!
    Display the contexts to the user.
-   Let the user interact with the displayed interface by calling the 
+   Let the user interact with the displayed interface by calling the
    various nav_ functions.
+   In principal the context structure could be traveresed without cx_selected.
+   However, since the various CX* has to be retrieved each cycle after
+   nav_update cx_selected is the only way to remember what the user did.
 */
 
 /*
@@ -642,6 +645,22 @@ void nav_cx_selected_prev(APP_INTRF *app_intrf, unsigned int gr_idx) {
         new_idx = selected_cx->cx_parent->cx_children.count - 1;
     CX *new_selected = selected_cx->cx_parent->cx_children.contexts[new_idx];
     selected_cx->cx_parent->cx_children.cx_last_selected[gr_idx] = new_selected; 
+    app_intrf->groups[gr_idx].cx_selected = NULL;
+    app_intrf_cx_selected_refresh(app_intrf, gr_idx);
+}
+
+void nav_cx_selected_choose(APP_INTRF *app_intrf, unsigned int sel_idx, unsigned int gr_idx) {
+    if (!app_intrf)
+        return;
+    if (gr_idx >= CX_GROUPS)return;
+    if (!app_intrf->groups[gr_idx].cx_curr) return;
+    if (!app_intrf->groups[gr_idx].cx_curr->cx_children.contexts) return;
+    if (sel_idx >=  app_intrf->groups[gr_idx].cx_curr->cx_children.count) return;
+    CX *selected_cx = app_intrf->groups[gr_idx].cx_curr->cx_children.contexts[sel_idx];
+    if (selected_cx->idx < 0)
+        return;
+
+    selected_cx->cx_parent->cx_children.cx_last_selected[gr_idx] = selected_cx;
     app_intrf->groups[gr_idx].cx_selected = NULL;
     app_intrf_cx_selected_refresh(app_intrf, gr_idx);
 }
