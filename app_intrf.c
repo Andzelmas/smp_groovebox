@@ -41,8 +41,6 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Implement groups. nav_ function to set cx_curr directly, for convenient UI navigation
-// AFTER TODAY.
 // Implement Port connectivity, test sound
 // AFTER TODAY.
 // Implement Params:
