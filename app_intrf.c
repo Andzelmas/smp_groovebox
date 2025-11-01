@@ -44,14 +44,14 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Test cx groups for context of certain flags.
+// Test cx groups for contexts of certain flags. Setup ui hopping between groups.
 // Will need a way to cx_select_prev _next for only certain flags.
-// Also how to display and then choose/enter contexts with only certain flags.
-// Need to find an elegant way. Implement Port connectivity, test sound. Will
-// also need to introduce connected CX* to app_intrf.
-// AFTER TODAY. Implement Params: Must be able to change amount of params during
-// runtime Remove unecessary various log conversion methods in params, instead
-// use the string callback function (like in clap plugin parameters)
+// Will also need to introduce connected CX* to app_intrf. 
+// Implement Port connectivity, test sound. 
+// AFTER TODAY. Implement Params: Must be able to
+// change amount of params during runtime Remove unecessary various log
+// conversion methods in params, instead use the string callback function (like
+// in clap plugin parameters)
 
 /*
  TODO Groups (for example 10 total) each with cx_curr, cx_selected.

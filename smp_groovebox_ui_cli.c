@@ -1,6 +1,7 @@
 #include "app_intrf.h"
 #include "types.h"
 #include "util_funcs/log_funcs.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <termios.h>
@@ -124,6 +125,7 @@ int main() {
         //----------------------------------------------------------------------------------------------------
 
         // this is the ROOT UI GROUP display
+        // only cx with INTRF_FLAG_ON_TOP will be shown
         CX *cx_curr_root = nav_cx_curr_return(app_intrf, GROUP_ROOT);
         unsigned int root_children_count = 0;
         if(cx_curr_root){
@@ -132,6 +134,9 @@ int main() {
             if (root_children && root_children_count > 0) {
                 for (unsigned int child_idx = 0; child_idx < root_children_count; child_idx++) {
                     CX *cx_this = root_children[child_idx];
+                    uint32_t flags = nav_cx_flags_return(app_intrf, cx_this);
+                    if ((flags & INTRF_FLAG_ON_TOP) != INTRF_FLAG_ON_TOP)
+                        continue;
                     char name[MAX_PARAM_NAME_LENGTH];
                     if (nav_cx_display_name_return(app_intrf, cx_this, name,
                                                    MAX_PARAM_NAME_LENGTH) ==
@@ -176,8 +181,11 @@ int main() {
             if(nav_cx_selected_choose(app_intrf, num, GROUP_ROOT) == 1)
                 root_child = nav_cx_selected_return(app_intrf, GROUP_ROOT);
             if (root_child){
-                if (nav_cx_enter(app_intrf, root_child, GROUP_MAIN) == -1)
-                    exit = 1;
+                uint32_t flags = nav_cx_flags_return(app_intrf, root_child);
+                if ((flags & INTRF_FLAG_ON_TOP) == INTRF_FLAG_ON_TOP) {
+                    if (nav_cx_enter(app_intrf, root_child, GROUP_MAIN) == -1)
+                        exit = 1;
+                }
             }
         }
 
