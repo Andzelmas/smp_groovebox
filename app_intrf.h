@@ -57,12 +57,15 @@ void nav_cx_selected_prev(APP_INTRF *app_intrf, unsigned int gr_idx);
 // after this cx_curr will be cx_curr->cx_parent 
 int nav_cx_curr_exit(APP_INTRF *app_intrf, unsigned int gr_idx);
 
-// enter cx_self if it has children and is a container
-// the cx_curr will become cx_self on the gr_idx cx_group
-int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx);
-
 // invoke the app_data on the cx_self (push a button from user perspective)
 // during invoke the context structure will not be changed, but it can be marked
 // dirty, so the nav_update() function will change the context structure
+// USE ONLY if there is a need to invoke a CX without entering it
 int nav_cx_invoke(APP_INTRF *app_intrf, CX *cx_self);
+
+// enter cx_self if it has children and is a container
+// the cx_curr will become cx_self on the gr_idx cx_group
+// this function calls nav_cx_invoke, so no need to do that separatly
+int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx);
+
 //----------------------------------------------------------------------------------------------------

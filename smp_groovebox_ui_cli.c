@@ -158,8 +158,6 @@ int main() {
             nav_cx_selected_prev(app_intrf, GROUP_MAIN);
             break;
         case 'l':
-            if (nav_cx_invoke(app_intrf, selected_cx_main) == -1)
-                exit = 1;
             if (nav_cx_enter(app_intrf, selected_cx_main, GROUP_MAIN) == -1)
                 exit = 1;
             break;
@@ -175,12 +173,9 @@ int main() {
         if (input >= '0' && input <= '9' && root_children_count > 0) {
             unsigned int num = input - '0';
             CX *root_child = nav_cx_child_return(app_intrf, cx_curr_root, num);
-            if (root_child) {
-                if (nav_cx_invoke(app_intrf, root_child) == -1)
-                    exit = 1;
+            if (root_child)
                 if (nav_cx_enter(app_intrf, root_child, GROUP_MAIN) == -1)
                     exit = 1;
-            }
         }
 
         if (exit == 1)

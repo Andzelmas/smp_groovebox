@@ -663,27 +663,12 @@ int nav_cx_curr_exit(APP_INTRF *app_intrf, unsigned int gr_idx) {
     return 1;
 }
 
-int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx){
-    if (!app_intrf)return -1;
-    if (!cx_self)return 0;
-    // if this context has children enter inside
-    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
-        return 0;
-    if (cx_self->cx_children.count == 0)
-        return 0;
-
-    app_intrf->groups[gr_idx].cx_curr = cx_self;
-    app_intrf->groups[gr_idx].cx_selected = NULL;
-    app_intrf_cx_selected_refresh(app_intrf, gr_idx);
-
-    return 1;
-}
-
 int nav_cx_invoke(APP_INTRF *app_intrf, CX *cx_self) {
     if (!app_intrf)
         return -1;
     if (!cx_self)
         return 0;
+
     // call the data invoke callback
     if (app_intrf->data_invoke){
         // TODO check flags if a filename or some other string needs to be
@@ -697,4 +682,25 @@ int nav_cx_invoke(APP_INTRF *app_intrf, CX *cx_self) {
     }
     return 0;
 }
+
+int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx){
+    if (!app_intrf)return -1;
+    if (!cx_self)return 0;
+
+    // invoke cx_self first
+    nav_cx_invoke(app_intrf, cx_self);
+
+    // if this context has children enter inside
+    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
+        return 0;
+    if (cx_self->cx_children.count == 0)
+        return 0;
+
+    app_intrf->groups[gr_idx].cx_curr = cx_self;
+    app_intrf->groups[gr_idx].cx_selected = NULL;
+    app_intrf_cx_selected_refresh(app_intrf, gr_idx);
+
+    return 1;
+}
+
 //----------------------------------------------------------------------------------------------------
