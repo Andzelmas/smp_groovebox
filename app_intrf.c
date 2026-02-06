@@ -44,6 +44,8 @@
 #include <stdlib.h>
 
 // TODO TODAY.
+// Nav_ function to set the groups filters.
+// Nav_ functions should check the groups filters.
 // Test cx groups for contexts of certain flags. Setup ui hopping between groups.
 // Will need a way to cx_select_prev _next for only certain flags.
 // Will also need to introduce connected CX* to app_intrf. 
@@ -56,17 +58,7 @@
 /*
  TODO Groups (for example 10 total) each with cx_curr, cx_selected.
  CURRENTLY cx_selected (and even cx_curr) can become NULL.
- If this would not happen nav_ functions would not be able to return CX*
- Nav_ functions that return CX* should accept filters what to return
- and what not to return. So UI can display only specific CX*, depending on the
- group. Think how the cx_last_selected should be implemented with groups. When
- removing cx, check each group if the cx being removed is  not in cx_curr or
- cx_selected. Nav_ functions that exits cx_curr or invokes cx_selected should
- exit and invoke cx given as arguments and apply the results to the group given
- as an argument. OR these functions should have arguments of groups where to
- exit cx_curr and invoke cx_selected and to what group apply the result. This
- way ui can invoke cx and enter it in one group but update the cx_curr on
- another group and show the children in a different window for example.
+ If this would not happen nav_ functions would not be able to return CX*.
 */
 
 /*
@@ -100,16 +92,8 @@
 */
 
 typedef struct _cx_array{
-    // the cx that was last interacted with, convenient to know for lists,
-    // so user can continue from last place of visit
-    // TODO will not quite work with groups:
-    // if the same CX will be navigated in different groups the cx_last_selected
-    // can change to a CX that one group filters out and that group will
-    // have its cx_selected == to a CX that is not visible in that group
-    // TODO to properly test cx_last_selected implementation will need
-    // a temporary nav_ function to delete the cx_curr children
-    // TODO for cx_last_selected with groups could work an array
-    // one cx_last_selected per group
+    //the cx that was last interacted with in thic cx_array
+    //each group has a different cx_last_selected
     struct _cx* cx_last_selected[CX_GROUPS];
     unsigned int count;
     unsigned int count_max;
@@ -135,6 +119,13 @@ typedef struct _cx_group {
     CX *cx_curr;     // current context that is entered right now
     CX *cx_selected; // the selected or last interacted context, when entering
                      // a context will be the first child
+    //by default flags in cx_filter are excluded from the group
+    //if cx_filter_include is true, only contexts with flags in cx_filter are included in this group
+    bool cx_filter_include; 
+    //allowed or not allowed contexts for this group
+    //nav_ functions that return contexts will check this value before
+    //returning contexts; choosing cx_selecting and cx_last_selected contexts etc.
+    enum intrfFlags cx_filter; 
 } CX_GROUP;
 
 typedef struct _app_intrf {
