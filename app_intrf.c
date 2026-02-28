@@ -398,6 +398,8 @@ APP_INTRF *app_intrf_init() {
     for(unsigned int i = 0; i < CX_GROUPS; i++){
         app_intrf->groups[i].cx_curr = NULL;
         app_intrf->groups[i].cx_selected = NULL;
+        app_intrf->groups[i].cx_filter_include = false;
+        app_intrf->groups[i].cx_filter = 0;
     }
 
     // initiate the app_intrf functions for data manipulation
