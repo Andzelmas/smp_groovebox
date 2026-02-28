@@ -205,7 +205,7 @@ int str_split_string_delim(const char *in_string, const char *delim,
 
     if (!in_string)
         return -1;
-    char *delim_string = strstr(in_string, delim);
+    const char *delim_string = strstr(in_string, delim);
     if (!delim_string)
         return -1;
 
