@@ -126,6 +126,7 @@ int main() {
 
         // this is the ROOT UI GROUP display
         // only cx with INTRF_FLAG_ON_TOP will be shown
+        // TODO flags compare should be done in the nav_ function
         CX *cx_curr_root = nav_cx_curr_return(app_intrf, GROUP_ROOT);
         unsigned int root_children_count = 0;
         if(cx_curr_root){
