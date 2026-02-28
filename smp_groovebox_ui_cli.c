@@ -33,6 +33,9 @@ int main() {
     enableRawMode();
     log_clear_logfile();
     APP_INTRF *app_intrf = app_intrf_init();
+    // set the gorup filters
+    nav_group_filter_set(app_intrf, GROUP_ROOT, INTRF_FLAG_ON_TOP, true);
+
     // if app_intrf failed to initialize analyze the error write it and exit
     if (!app_intrf) {
         log_append_logfile("Could not start the app_intrf\n");

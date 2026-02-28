@@ -1,5 +1,8 @@
 #pragma once
 #include <stdint.h>
+#include "types.h"
+#include <stdbool.h>
+
 // Interface for building the data layer structure.
 // This structure can be safely presented to the user
 // IMPORTANT: the returned CX* structs should not be saved - each UI cycle,
@@ -27,6 +30,12 @@ void app_intrf_destroy(APP_INTRF *app_intrf);
 // call data_update() and check if any contexts are dirty, if yes recreate their
 // children
 void nav_update(APP_INTRF *app_intrf);
+
+// set the group cx filter
+// the nav_ functions that navigate cx_curr, cx_selected and return children will use these flags
+// if group_filter_include = false (default) nav_ functions will exclude cx of types in the group_flags,
+// otherwise nav_ functions will only show the cx in the group_flags
+void nav_group_filter_set(APP_INTRF *app_intrf, unsigned int gr_idx, enum intrfFlags group_flags, bool group_filter_include);
 
 // return the cx_curr of the cx_group - the context in which the user is
 // currently in

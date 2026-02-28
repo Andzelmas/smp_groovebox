@@ -38,13 +38,11 @@
 #include "app_intrf.h"
 #include <string.h>
 #include "app_data.h"
-#include "types.h"
 #include "util_funcs/log_funcs.h"
 #include <stdio.h>
 #include <stdlib.h>
 
 // TODO TODAY.
-// Nav_ function to set the groups filters.
 // Nav_ functions should check the groups filters.
 // Test cx groups for contexts of certain flags. Setup ui hopping between groups.
 // Will need a way to cx_select_prev _next for only certain flags.
@@ -56,8 +54,7 @@
 // in clap plugin parameters)
 
 /*
- TODO Groups (for example 10 total) each with cx_curr, cx_selected.
- CURRENTLY cx_selected (and even cx_curr) can become NULL.
+ TODO CURRENTLY cx_selected (and even cx_curr) can become NULL.
  If this would not happen nav_ functions would not be able to return CX*.
 */
 
@@ -542,6 +539,16 @@ void nav_update(APP_INTRF *app_intrf) {
     app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root,
                                   app_intrf->cx_root, 0, 0, 0,
                                   app_intrf_cx_check_dirty);
+}
+
+void nav_group_filter_set(APP_INTRF *app_intrf, unsigned int gr_idx, enum intrfFlags group_flags, bool group_filter_include){
+    if(!app_intrf)
+        return;
+    if(gr_idx >= CX_GROUPS)
+        return;
+
+    app_intrf->groups[gr_idx].cx_filter = group_flags;
+    app_intrf->groups[gr_idx].cx_filter_include = group_filter_include;
 }
 
 CX *nav_cx_curr_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
