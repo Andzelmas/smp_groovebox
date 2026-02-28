@@ -43,7 +43,7 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Nav_ functions should check the groups filters.
+// Nav_ functions should check the groups filters. Will need to redo the nav_ children return. So returns cx only with group filters
 // Test cx groups for contexts of certain flags. Setup ui hopping between groups.
 // Will need a way to cx_select_prev _next for only certain flags.
 // Will also need to introduce connected CX* to app_intrf. 
@@ -563,19 +563,6 @@ CX *nav_cx_selected_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
         return NULL;
     if (gr_idx >= CX_GROUPS)return NULL;
     return app_intrf->groups[gr_idx].cx_selected;
-}
-
-CX *nav_cx_child_return(APP_INTRF *app_intrf, CX *parent, unsigned int child_idx){
-    if (!app_intrf)
-        return NULL;
-    if (!parent)
-        return NULL;
-    if (!parent->cx_children.contexts)
-        return NULL;
-    if (child_idx >= parent->cx_children.count)
-        return NULL;
-
-    return parent->cx_children.contexts[child_idx];
 }
 
 CX **nav_cx_children_return(APP_INTRF *app_intrf, CX *parent,

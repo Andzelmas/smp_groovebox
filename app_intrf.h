@@ -44,9 +44,6 @@ CX *nav_cx_curr_return(APP_INTRF *app_intrf, unsigned int gr_idx);
 // return the currently selected context for a cx_group
 CX *nav_cx_selected_return(APP_INTRF *app_intrf, unsigned int gr_idx);
 
-// return a single parent child
-CX *nav_cx_child_return(APP_INTRF *app_intrf, CX *parent, unsigned int child_idx);
-
 // return the children in the parent->cx_children array
 // count is how many children there are
 CX **nav_cx_children_return(APP_INTRF *app_intrf, CX *parent,
