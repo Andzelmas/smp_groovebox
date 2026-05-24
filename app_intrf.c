@@ -36,6 +36,7 @@
 */
 
 #include "app_intrf.h"
+#include <stdint.h>
 #include <string.h>
 #include "app_data.h"
 #include "util_funcs/log_funcs.h"
@@ -157,6 +158,27 @@ typedef struct _app_intrf {
     // when closing the app
     void (*data_destroy)(void *user_data, uint16_t type);
 } APP_INTRF;
+
+// Check if a given CX is valid, when compared to the gr_idx groups cx filter
+static bool app_intrf_cx_filter_check(APP_INTRF *app_intrf, CX *cx_check, unsigned int gr_idx){
+    if(!app_intrf)return false;
+    if(gr_idx >= CX_GROUPS)return false;
+    CX_GROUP *cur_group = &(app_intrf->groups[gr_idx]);
+    //inclusive or exclusive flag check
+    bool filter_include = cur_group->cx_filter_include;
+    uint32_t group_filter= cur_group->cx_filter;
+    if(!filter_include){
+        //if at least one cx flag will be the same as a group_filter flag the function will return false
+        if((cx_check->flags & group_filter) == 0)
+            return true;
+    }
+    else{
+        //cx must have all the flags as in the group_filter flags to return true
+        if((cx_check->flags & group_filter) == group_filter)
+            return true;
+    }
+    return false;
+}
 
 // cx_selected could have changed (because of removal of cx for example)
 // this function refreshes the cx_selected
