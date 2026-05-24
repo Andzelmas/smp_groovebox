@@ -195,8 +195,17 @@ static void app_intrf_cx_selected_refresh(APP_INTRF *app_intrf, unsigned int gr_
 
     if(cur_group->cx_curr->cx_children.count > 0){
         cur_group->cx_selected = cur_group->cx_curr->cx_children.cx_last_selected[gr_idx];
-        if (!cur_group->cx_selected)
-            cur_group->cx_selected = cur_group->cx_curr->cx_children.contexts[0];
+        if (!cur_group->cx_selected){
+            cur_group->cx_selected = NULL;
+            //Choose the new cx_selected but only if it is valid for the gr_idx group filter
+            for(unsigned int i = 0; i < cur_group->cx_curr->cx_children.count; i++){
+                CX* cx_new_selected = cur_group->cx_curr->cx_children.contexts[i];
+                if(!(app_intrf_cx_filter_check(app_intrf, cx_new_selected, gr_idx)))
+                    continue;
+                cur_group->cx_selected = cx_new_selected; 
+                break;
+            }
+        }
     }
     else{
         cur_group->cx_selected = NULL; 
