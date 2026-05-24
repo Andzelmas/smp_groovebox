@@ -44,6 +44,7 @@
 #include <stdlib.h>
 
 // TODO TODAY.
+// Merge remove cx_selected, leave only cx_last_selected[CX_GROUPS] (rename to cx_selected?) 
 // Nav_ functions should check the groups filters. Will need to redo the nav_ children return. So returns cx only with group filters
 // Test cx groups for contexts of certain flags. Setup ui hopping between groups.
 // Will need a way to cx_select_prev _next for only certain flags.
