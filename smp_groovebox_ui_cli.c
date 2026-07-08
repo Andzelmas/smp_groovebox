@@ -127,32 +127,6 @@ int main() {
         }
         //----------------------------------------------------------------------------------------------------
 
-        // this is the ROOT UI GROUP display
-        // only cx with INTRF_FLAG_ON_TOP will be shown
-        // TODO flags compare should be done in the nav_ function
-        CX *cx_curr_root = nav_cx_curr_return(app_intrf, GROUP_ROOT);
-        unsigned int root_children_count = 0;
-        if(cx_curr_root){
-            printf("-----------------------------------------\n");
-            CX **root_children = nav_cx_children_return(app_intrf, cx_curr_root, &root_children_count);
-            if (root_children && root_children_count > 0) {
-                for (unsigned int child_idx = 0; child_idx < root_children_count; child_idx++) {
-                    CX *cx_this = root_children[child_idx];
-                    uint32_t flags = nav_cx_flags_return(app_intrf, cx_this);
-                    if ((flags & INTRF_FLAG_ON_TOP) != INTRF_FLAG_ON_TOP)
-                        continue;
-                    char name[MAX_PARAM_NAME_LENGTH];
-                    if (nav_cx_display_name_return(app_intrf, cx_this, name,
-                                                   MAX_PARAM_NAME_LENGTH) ==
-                        1) {
-                        printf("%d - %s | ", child_idx, name);
-                    }
-                }
-            }
-
-            printf ("\n");
-        }
-
         // get user inputs
         char input = getchar();
         unsigned int exit = 0;
@@ -174,23 +148,6 @@ int main() {
             if (nav_cx_curr_exit(app_intrf, GROUP_MAIN) == -1)
                 exit = 1;
             break;
-        }
-
-        // navigate the GROUP ROOT
-        // user can enter numbers that represent the root CX,
-        // the entered CX will become the cx_curr in the GROUP_MAIN GROUP
-        if (input >= '0' && input <= '9' && root_children_count > 0) {
-            unsigned int num = input - '0';
-            CX *root_child = NULL;
-            if(nav_cx_selected_choose(app_intrf, num, GROUP_ROOT) == 1)
-                root_child = nav_cx_selected_return(app_intrf, GROUP_ROOT);
-            if (root_child){
-                uint32_t flags = nav_cx_flags_return(app_intrf, root_child);
-                if ((flags & INTRF_FLAG_ON_TOP) == INTRF_FLAG_ON_TOP) {
-                    if (nav_cx_enter(app_intrf, root_child, GROUP_MAIN) == -1)
-                        exit = 1;
-                }
-            }
         }
 
         if (exit == 1)
