@@ -44,10 +44,12 @@ CX *nav_cx_curr_return(APP_INTRF *app_intrf, unsigned int gr_idx);
 // return the currently selected context for a cx_group
 CX *nav_cx_selected_return(APP_INTRF *app_intrf, unsigned int gr_idx);
 
-// return the children in the parent->cx_children array
-// count is how many children there are
-CX **nav_cx_children_return(APP_INTRF *app_intrf, CX *parent,
-                            unsigned int *count);
+// go through children and run the match_func on each match
+// gr_idx is the group index where the filters for the context matching are stored
+void nav_cx_children_match_callback(APP_INTRF *app_intrf, CX *parent,
+                                    unsigned int gr_idx, void *user_data,
+                                    void(match_func)(CX *cx_matched,
+                                                     void *user_data));
 
 // return the name of the cx
 int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,

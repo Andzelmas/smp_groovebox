@@ -45,10 +45,7 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Merge remove cx_selected, leave only cx_last_selected[CX_GROUPS] (rename to cx_selected?) 
-// Nav_ functions should check the groups filters. Will need to redo the nav_ children return. So returns cx only with group filters
-// Test cx groups for contexts of certain flags. Setup ui hopping between groups.
-// Will need a way to cx_select_prev _next for only certain flags.
+// Test cx groups for contexts of certain flags (main group does not show buttons, another group does that). Setup ui hopping between groups.
 // Will also need to introduce connected CX* to app_intrf. 
 // Implement Port connectivity, test sound. 
 // AFTER TODAY. Implement Params: Must be able to
@@ -163,8 +160,8 @@ static bool app_intrf_cx_filter_check(APP_INTRF *app_intrf, CX *cx_check, unsign
     bool filter_include = cur_group->cx_filter_include;
     uint32_t group_filter= cur_group->cx_filter;
     if(!filter_include){
-        //if at least one cx flag will be the same as a group_filter flag the function will return false
-        if((cx_check->flags & group_filter) == 0)
+        // if the context flags matches all of the group flags the function will return false
+        if((cx_check->flags & group_filter) != group_filter)
             return true;
     }
     else{
@@ -203,6 +200,7 @@ static unsigned int app_intrf_cx_selected_prev_next(APP_INTRF* app_intrf, CX* cx
         CX* cx_new_selected = cx_curr->cx_children.contexts[from_id];
         if(app_intrf_cx_filter_check(app_intrf, cx_new_selected, gr_idx)){
             cx_curr->cx_children.cx_selected[gr_idx] = cx_new_selected;
+            break;
         }
 
         if(prev == 0){
@@ -593,18 +591,28 @@ CX *nav_cx_selected_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
     if (!app_intrf)
         return NULL;
     if (gr_idx >= CX_GROUPS)return NULL;
+    if(!app_intrf->groups[gr_idx].cx_curr)return NULL;
+
+    // if there is no cx_selected, try to find
+    if(!app_intrf->groups[gr_idx].cx_curr->cx_children.cx_selected[gr_idx]){
+        app_intrf_cx_selected_prev_next(app_intrf, app_intrf->groups[gr_idx].cx_curr, gr_idx, 0);
+    }
     return app_intrf->groups[gr_idx].cx_curr->cx_children.cx_selected[gr_idx];
 }
 
-CX **nav_cx_children_return(APP_INTRF *app_intrf, CX *parent,
-                            unsigned int *count) {
-    if (!app_intrf)
-        return NULL;
-    if (!parent)
-        return NULL;
+void nav_cx_children_match_callback(APP_INTRF *app_intrf, CX *parent,
+                                    unsigned int gr_idx, void *user_data,
+                                    void(match_func)(CX *cx_matched,
+                                                     void *user_data)) {
+    if(!app_intrf) return;
+    if(!parent)return;
 
-    *count = parent->cx_children.count;
-    return parent->cx_children.contexts;
+    for(unsigned int i = 0; i < parent->cx_children.count; i++){
+        CX* cx_curr = parent->cx_children.contexts[i];
+        if(app_intrf_cx_filter_check(app_intrf, cx_curr, gr_idx)){
+            match_func(cx_curr, user_data);
+        }
+    }
 }
 
 int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
