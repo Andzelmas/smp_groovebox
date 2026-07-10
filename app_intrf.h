@@ -42,7 +42,7 @@ void nav_group_filter_set(APP_INTRF *app_intrf, unsigned int gr_idx, enum intrfF
 CX *nav_cx_curr_return(APP_INTRF *app_intrf, unsigned int gr_idx);
 
 // return the currently selected context for a cx_group
-CX *nav_cx_selected_return(APP_INTRF *app_intrf, unsigned int gr_idx);
+CX *nav_cx_selected_return(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx);
 
 // go through children and run the match_func on each match
 // gr_idx is the group index where the filters for the context matching are stored
@@ -55,16 +55,11 @@ void nav_cx_children_match_callback(APP_INTRF *app_intrf, CX *parent,
 int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
                                unsigned int name_len);
 
-// cx_selected = next child of the cx_curr in cx_group
-void nav_cx_selected_next(APP_INTRF *app_intrf, unsigned int gr_idx);
+// cx_selected = next child of the cx_curr in gr_idx group 
+void nav_cx_selected_next(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx);
 
-// cx_selected = previous child of the cx_curr in cx_group
-void nav_cx_selected_prev(APP_INTRF *app_intrf, unsigned int gr_idx);
-
-// select the sel_idx CX in the gr_idx cx_group.
-// the sel_idx is the index in the gr_idx cx_group cx_curr children array.
-// return 1 on success
-int nav_cx_selected_choose(APP_INTRF *app_intrf, unsigned int sel_idx, unsigned int gr_idx);
+// cx_selected = previous child of the cx_curr in gr_idx group 
+void nav_cx_selected_prev(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx);
 
 // exit the cx_curr context of the cx_group, 
 // after this cx_curr will be cx_curr->cx_parent 
@@ -80,6 +75,9 @@ int nav_cx_invoke(APP_INTRF *app_intrf, CX *cx_self);
 // the cx_curr will become cx_self on the gr_idx cx_group
 // this function calls nav_cx_invoke, so no need to do that separatly
 int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx);
+
+// change the cx_curr of the gr_idx, without calling the data_invoke function
+int nav_cx_curr_change(APP_INTRF* app_intrf, CX* cx_self, unsigned int gr_idx);
 
 // return the cx interface flags, 
 // see the intrfFlags enum in types.h

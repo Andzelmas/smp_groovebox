@@ -45,7 +45,7 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Test cx groups for contexts of certain flags (main group does not show buttons, another group does that). Setup ui hopping between groups.
+// setup the root group, which always displays the cx_root children and is navigated with 1..4 shortcuts
 // Will also need to introduce connected CX* to app_intrf. 
 // Implement Port connectivity, test sound. 
 // AFTER TODAY. Implement Params: Must be able to
@@ -587,17 +587,17 @@ CX *nav_cx_curr_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
     return app_intrf->groups[gr_idx].cx_curr;
 }
 
-CX *nav_cx_selected_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
+CX *nav_cx_selected_return(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx) {
     if (!app_intrf)
         return NULL;
     if (gr_idx >= CX_GROUPS)return NULL;
-    if(!app_intrf->groups[gr_idx].cx_curr)return NULL;
+    if(!cx_curr)return NULL;
 
     // if there is no cx_selected, try to find
-    if(!app_intrf->groups[gr_idx].cx_curr->cx_children.cx_selected[gr_idx]){
-        app_intrf_cx_selected_prev_next(app_intrf, app_intrf->groups[gr_idx].cx_curr, gr_idx, 0);
+    if(!cx_curr->cx_children.cx_selected[gr_idx]){
+        app_intrf_cx_selected_prev_next(app_intrf, cx_curr, gr_idx, 0);
     }
-    return app_intrf->groups[gr_idx].cx_curr->cx_children.cx_selected[gr_idx];
+    return cx_curr->cx_children.cx_selected[gr_idx];
 }
 
 void nav_cx_children_match_callback(APP_INTRF *app_intrf, CX *parent,
@@ -630,19 +630,19 @@ int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
     return 1;
 }
 
-void nav_cx_selected_next(APP_INTRF *app_intrf, unsigned int gr_idx) {
+void nav_cx_selected_next(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx) {
     if (!app_intrf)
         return;
     if (gr_idx >= CX_GROUPS)return;
-    if (!app_intrf->groups[gr_idx].cx_curr)return;
-    app_intrf_cx_selected_prev_next(app_intrf, app_intrf->groups[gr_idx].cx_curr, gr_idx, 0);
+    if (!cx_curr)return;
+    app_intrf_cx_selected_prev_next(app_intrf, cx_curr, gr_idx, 0);
 }
 
-void nav_cx_selected_prev(APP_INTRF *app_intrf, unsigned int gr_idx) {
+void nav_cx_selected_prev(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx) {
     if (!app_intrf)
         return;
-    if (!app_intrf->groups[gr_idx].cx_curr)return;
-    app_intrf_cx_selected_prev_next(app_intrf, app_intrf->groups[gr_idx].cx_curr, gr_idx, 1);
+    if (!cx_curr)return;
+    app_intrf_cx_selected_prev_next(app_intrf, cx_curr, gr_idx, 1);
 }
 
 int nav_cx_curr_exit(APP_INTRF *app_intrf, unsigned int gr_idx) {
@@ -684,6 +684,21 @@ int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx){
 
     // invoke cx_self first
     nav_cx_invoke(app_intrf, cx_self);
+
+    // if this context has children enter inside
+    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
+        return 0;
+    if (cx_self->cx_children.count == 0)
+        return 0;
+
+    app_intrf->groups[gr_idx].cx_curr = cx_self;
+
+    return 1;
+}
+
+int nav_cx_curr_change(APP_INTRF* app_intrf, CX* cx_self, unsigned int gr_idx){
+    if (!app_intrf)return -1;
+    if (!cx_self)return 0;
 
     // if this context has children enter inside
     if (!(cx_self->flags & INTRF_FLAG_CONTAINER))

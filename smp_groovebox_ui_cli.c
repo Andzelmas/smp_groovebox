@@ -24,7 +24,8 @@ static void enableRawMode() {
 
 enum ui_groups {
     GROUP_MAIN = 0,
-    GROUP_ROOT = 1
+    GROUP_BUTTONS = 1,
+    GROUP_ROOT = 2
 };
 
 // used for callback functions
@@ -40,13 +41,13 @@ struct ui_data{
 };
 
 // clean the user_data struct
-static void ui_data_clean(struct ui_data* my_data){
+static void ui_data_clean(struct ui_data* my_data, APP_INTRF* app_intrf){
     my_data->user_int01 = 0;
     my_data->user_int02 = 0;
     my_data->user_int03 = 0;
     my_data->user_int04 = 0;
     my_data->cx_user = NULL;
-    my_data->app_intrf = NULL;
+    my_data->app_intrf = app_intrf;
 }
 
 // find which iteration is the given cx in the matched contexts
@@ -74,8 +75,26 @@ static void ui_cx_match_print_names(CX* cx_matched, void* user_data){
 
     int iter = my_data->user_int01;
     int selected_iter = my_data->user_int02;
-    int min_cx = my_data->user_int03;
-    int max_cx = my_data->user_int04;
+    int count = my_data->user_int03;
+    int highlight = my_data->user_int04;
+
+    int min_cx = selected_iter - SELECTED_DIST;
+    int p_max = 0;
+    if (min_cx < 0)
+        p_max = abs(min_cx);
+
+    int max_cx = selected_iter + SELECTED_DIST;
+    int p_min = 0;
+    if (max_cx > (count - 1))
+        p_min = (max_cx - (count - 1));
+
+    min_cx -= p_min;
+    if (min_cx < 0)
+        min_cx = 0;
+    max_cx += p_max;
+    if (max_cx > (count - 1))
+        max_cx = count - 1;
+
     CX* selected_cx_main = my_data->cx_user;
 
     char display_name[MAX_PARAM_NAME_LENGTH];
@@ -98,7 +117,7 @@ static void ui_cx_match_print_names(CX* cx_matched, void* user_data){
     }
 
     // highlight the selected context
-    if (selected_cx_main == cx_matched) {
+    if (selected_cx_main == cx_matched && highlight == 1) {
         printf("\033[0;30;47m");
     }
     printf("     |");
@@ -109,11 +128,36 @@ static void ui_cx_match_print_names(CX* cx_matched, void* user_data){
         printf("--> %s", display_name);
     }
     // reset highlighting
-    if (selected_cx_main == cx_matched)
+    if (selected_cx_main == cx_matched && highlight == 1)
         printf("\033[0m");
     printf("\n");
 
     my_data->user_int01 += 1;
+}
+
+static void ui_cx_match_print_names_horizontal(CX* cx_matched, void* user_data){
+    if(!cx_matched)return;
+    if(!user_data)return;
+
+    struct ui_data* my_data = (struct ui_data*)user_data;
+
+    char display_name[MAX_PARAM_NAME_LENGTH];
+    CX* selected_cx_main = my_data->cx_user;
+    int highlight = my_data->user_int04;
+    // highlight the selected context
+    if(selected_cx_main){
+        if (selected_cx_main == cx_matched && highlight == 1) {
+            printf("\033[0;30;47m");
+        }
+    }
+    if(nav_cx_display_name_return(my_data->app_intrf, cx_matched, display_name, MAX_PARAM_NAME_LENGTH) == 1){
+        printf("| %s |", display_name);
+    }
+    // reset highlighting
+    if (selected_cx_main) {
+        if (selected_cx_main == cx_matched && highlight == 1)
+            printf("\033[0m");
+    }
 }
 
 int main() {
@@ -126,9 +170,10 @@ int main() {
     // set the group filters for the main group
     // dont show buttons that should be on top (delete, refresh and similar)
     nav_group_filter_set(app_intrf, GROUP_MAIN, (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP), false);
-
-    // set the gorup filters
+    // set the root group filters
     nav_group_filter_set(app_intrf, GROUP_ROOT, INTRF_FLAG_ON_TOP, true);
+    //group for the buttons
+    nav_group_filter_set(app_intrf, GROUP_BUTTONS, (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP), true);
 
     // if app_intrf failed to initialize analyze the error write it and exit
     if (!app_intrf) {
@@ -136,23 +181,31 @@ int main() {
         exit(1);
     }
 
+    //which group is chosen right now
+    unsigned int group_curr = GROUP_MAIN;
+    //the last possible group
+    unsigned int group_max = GROUP_BUTTONS;
     while (1) {
         // erase the terminal
         printf("\033[2J\033[H");
         // update the interface, of course should be in a loop
         nav_update(app_intrf);
         // clean the user_data struct
-        ui_data_clean(user_data);
-        user_data->app_intrf = app_intrf;
+        ui_data_clean(user_data, app_intrf);
 
         // this is the MAIN UI GROUP 
         CX *cx_curr_main = nav_cx_curr_return(app_intrf, GROUP_MAIN);
-        CX *selected_cx_main = nav_cx_selected_return(app_intrf, GROUP_MAIN);
+        CX *selected_cx_main = nav_cx_selected_return(app_intrf, cx_curr_main, GROUP_MAIN);
         if (cx_curr_main){
             char display_name[MAX_PARAM_NAME_LENGTH];
             if (nav_cx_display_name_return(app_intrf, cx_curr_main, display_name,
                                            MAX_PARAM_NAME_LENGTH) == 1) {
-                printf("---> %s\n", display_name);
+                if(group_curr == GROUP_MAIN){
+                    printf("---> %s\n", display_name);
+                }
+                else{
+                    printf("%s\n", display_name);
+                }
             }
             // reset highlighting
             printf("\033[0m");
@@ -165,52 +218,76 @@ int main() {
             selected_iter = user_data->user_int02;
             // calc the min and max cx to show
             int count = user_data->user_int01;
-
-            int min_cx = selected_iter - SELECTED_DIST;
-            int p_max = 0;
-            if (min_cx < 0)
-                p_max = abs(min_cx);
-
-            int max_cx = selected_iter + SELECTED_DIST;
-            int p_min = 0;
-            if (max_cx > (count - 1))
-                p_min = (max_cx - (count - 1));
-
-            min_cx -= p_min;
-            if (min_cx < 0)
-                min_cx = 0;
-            max_cx += p_max;
-            if (max_cx > (count - 1))
-                max_cx = count - 1;
-
-            user_data->user_int03 = min_cx;
-            user_data->user_int04 = max_cx;
+            user_data->user_int03 = count;
+            user_data->user_int04 = 0;
+            // do wee need to highlight the selected item in the main group
+            if(group_curr == GROUP_MAIN)
+                user_data->user_int04 = 1;
             user_data->user_int01 = 0;
 
             nav_cx_children_match_callback(app_intrf, cx_curr_main, GROUP_MAIN, (void*)user_data, ui_cx_match_print_names);
         }
         //----------------------------------------------------------------------------------------------------
 
+        // this is the BUTTON UI GROUP
+        printf("--------------------------------------------------\n");
+        if(group_curr == GROUP_BUTTONS)
+            printf("---> ");
+        ui_data_clean(user_data, app_intrf);
+        // sync the cx_curr of the buttons group to the main group
+        nav_cx_curr_change(app_intrf, cx_curr_main, GROUP_BUTTONS);
+        CX* cx_curr_buttons = nav_cx_curr_return(app_intrf, GROUP_BUTTONS);
+        CX* cx_selected_buttons = nav_cx_selected_return(app_intrf, cx_curr_buttons, GROUP_BUTTONS);
+        user_data->cx_user = cx_selected_buttons;
+        // higlight the selected item or no in the buttons group
+        if(group_curr == GROUP_BUTTONS)
+            user_data->user_int04 = 1;
+        nav_cx_children_match_callback(app_intrf, cx_curr_buttons, GROUP_BUTTONS, (void*)user_data, ui_cx_match_print_names_horizontal);
+        printf("\n--------------------------------------------------\n");
+        //----------------------------------------------------------------------------------------------------
+
         // get user inputs
         char input = getchar();
         unsigned int exit = 0;
+
+        // set vars for what is possible for the current group
+        unsigned int cx_curr_exit = 1;
+        unsigned int cx_selected_enter = 1;
+        CX* cx_selected = selected_cx_main;
+        CX* cx_curr = cx_curr_main;
+        switch (group_curr){
+            case GROUP_BUTTONS:
+                cx_curr = cx_curr_buttons;
+                cx_selected = cx_selected_buttons;
+                // in the buttons group cannot exit to upper layer then the cx_curr in the main group
+                // not really necessary precaution, since in the button group it should be impossible to enter the contexts
+                if(cx_curr_buttons == cx_curr_main)
+                    cx_curr_exit = 0;
+        }
+
         switch (input) {
         // Current UI GROUP navigation
-        // TODO currently only MAIN and ROOT GROUPS navigated, implement GROUP switching
         // TODO would be better to use json conf to set the keybindings
+        case 'J':
+            group_curr += 1;
+            if (group_curr > group_max)
+                group_curr = GROUP_MAIN;
+            break;
         case 'j':
-            nav_cx_selected_next(app_intrf, GROUP_MAIN);
+            nav_cx_selected_next(app_intrf, cx_curr, group_curr);
             break;
         case 'k':
-            nav_cx_selected_prev(app_intrf, GROUP_MAIN);
+            nav_cx_selected_prev(app_intrf, cx_curr, group_curr);
             break;
         case 'l':
-            if (nav_cx_enter(app_intrf, selected_cx_main, GROUP_MAIN) == -1)
+            if (nav_cx_enter(app_intrf, cx_selected, group_curr) == -1)
                 exit = 1;
             break;
         case 'h':
-            if (nav_cx_curr_exit(app_intrf, GROUP_MAIN) == -1)
-                exit = 1;
+            if (cx_curr_exit == 1) {
+                if (nav_cx_curr_exit(app_intrf, group_curr) == -1)
+                    exit = 1;
+            }
             break;
         }
 
