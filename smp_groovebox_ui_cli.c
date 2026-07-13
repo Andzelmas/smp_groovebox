@@ -28,15 +28,17 @@ enum ui_groups {
     GROUP_ROOT = 2
 };
 
+// how many temporary CX* can hold the cx_user_array in the ui_data struct
+#define CX_USER_ARRAY_MAX 10
 // used for callback functions
 // the CX* in this struct must be set to NULL at the beginning of each loop
-// the CX* can be removed or their addresses changed between the loops
 struct ui_data{
     int user_int01;
     int user_int02;
     int user_int03;
     int user_int04;
     CX* cx_user;
+    CX* cx_user_array[CX_USER_ARRAY_MAX];
     APP_INTRF* app_intrf;
 };
 
@@ -47,6 +49,9 @@ static void ui_data_clean(struct ui_data* my_data, APP_INTRF* app_intrf){
     my_data->user_int03 = 0;
     my_data->user_int04 = 0;
     my_data->cx_user = NULL;
+    for(unsigned int i = 0; i < CX_USER_ARRAY_MAX; i ++){
+        my_data->cx_user_array[i] = NULL;
+    }
     my_data->app_intrf = app_intrf;
 }
 
@@ -144,14 +149,29 @@ static void ui_cx_match_print_names_horizontal(CX* cx_matched, void* user_data){
     char display_name[MAX_PARAM_NAME_LENGTH];
     CX* selected_cx_main = my_data->cx_user;
     int highlight = my_data->user_int04;
+    int numbers = my_data->user_int01;
+    int iter = my_data->user_int02;
+    int put_into_cx_array = my_data->user_int03;
+
     // highlight the selected context
     if(selected_cx_main){
         if (selected_cx_main == cx_matched && highlight == 1) {
             printf("\033[0;30;47m");
         }
     }
+
+    if(put_into_cx_array == 1){
+        my_data->cx_user_array[iter] = cx_matched;
+    }
+
     if(nav_cx_display_name_return(my_data->app_intrf, cx_matched, display_name, MAX_PARAM_NAME_LENGTH) == 1){
-        printf("| %s |", display_name);
+        if (numbers == 0) {
+            printf("| %s |", display_name);
+        }
+        else{
+            printf("| %d_%s |", iter, display_name);
+            my_data->user_int02 += 1;
+        }
     }
     // reset highlighting
     if (selected_cx_main) {
@@ -168,12 +188,12 @@ int main() {
     log_clear_logfile();
     APP_INTRF *app_intrf = app_intrf_init();
     // set the group filters for the main group
-    // dont show buttons that should be on top (delete, refresh and similar)
-    nav_group_filter_set(app_intrf, GROUP_MAIN, (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP), false);
-    // set the root group filters
-    nav_group_filter_set(app_intrf, GROUP_ROOT, INTRF_FLAG_ON_TOP, true);
-    //group for the buttons
-    nav_group_filter_set(app_intrf, GROUP_BUTTONS, (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP), true);
+    // dont show buttons (delete, refresh and similar)
+    nav_group_filter_set(app_intrf, GROUP_MAIN, 0, (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP));
+    // set the root group filters - show on top contexts, but not buttons
+    nav_group_filter_set(app_intrf, GROUP_ROOT, INTRF_FLAG_ON_TOP, INTRF_FLAG_INTERACT);
+    //group for the buttons - show only buttons
+    nav_group_filter_set(app_intrf, GROUP_BUTTONS, (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP), 0);
 
     // if app_intrf failed to initialize analyze the error write it and exit
     if (!app_intrf) {
@@ -246,8 +266,22 @@ int main() {
         printf("\n--------------------------------------------------\n");
         //----------------------------------------------------------------------------------------------------
 
+        // this is the ROOT UI GROUP
+        printf("--------------------------------------------------\n");
+        ui_data_clean(user_data, app_intrf);
+        // dont highlight anything
+        user_data->user_int04 = 0;
+        // put a number in front of the context name
+        user_data->user_int01 = 1;
+        // put the matched contexts into the cx_user_array for navigation
+        user_data->user_int03 = 1;
+        CX* cx_curr_root = nav_cx_root_return(app_intrf);
+        nav_cx_children_match_callback(app_intrf, cx_curr_root, GROUP_ROOT, (void*)user_data, ui_cx_match_print_names_horizontal);
+        printf("\n--------------------------------------------------\n");
+        //----------------------------------------------------------------------------------------------------
+
         // get user inputs
-        char input = getchar();
+        int input = getchar();
         unsigned int exit = 0;
 
         // set vars for what is possible for the current group
@@ -289,6 +323,15 @@ int main() {
                     exit = 1;
             }
             break;
+        default:
+            // if a number 0..9 is entered, enter the cx in the GROUP_ROOT
+            // but dont change the cx_curr in GROUP_ROOT - change it in the
+            // GROUP_MAIN
+            if (input >= '0' && input <= '9') {
+                int digit = input - '0';
+                nav_cx_enter(app_intrf, user_data->cx_user_array[digit],
+                             GROUP_MAIN);
+            }
         }
 
         if (exit == 1)

@@ -45,8 +45,9 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// setup the root group, which always displays the cx_root children and is navigated with 1..4 shortcuts
-// Will also need to introduce connected CX* to app_intrf. 
+// Introduce connected CX* to app_intrf. 
+// Also will need memory slots per group (arrays of CX* per group). This will be useful for port connectivity so user
+// can select many ports (put them into memory slots) and then disconnect or connect with one button.
 // Implement Port connectivity, test sound. 
 // AFTER TODAY. Implement Params: Must be able to
 // change amount of params during runtime Remove unecessary various log
@@ -109,13 +110,10 @@ typedef struct _cx {
 
 typedef struct _cx_group {
     CX *cx_curr;     // current context that is entered right now
-    //by default flags in cx_filter are excluded from the group
-    //if cx_filter_include is true, only contexts with flags in cx_filter are included in this group
-    bool cx_filter_include; 
-    //allowed or not allowed contexts for this group
-    //nav_ functions that return contexts will check this value before
-    //returning contexts
-    enum intrfFlags cx_filter; 
+    // what contexts to exclude from this group - these will not be shown when returing children
+    enum intrfFlags cx_filter_exclude; 
+    // what contexts to include in this group - these will be shown or not checked if 0 
+    enum intrfFlags cx_filter_include; 
 } CX_GROUP;
 
 typedef struct _app_intrf {
@@ -157,19 +155,19 @@ static bool app_intrf_cx_filter_check(APP_INTRF *app_intrf, CX *cx_check, unsign
     if(gr_idx >= CX_GROUPS)return false;
     CX_GROUP *cur_group = &(app_intrf->groups[gr_idx]);
     //inclusive or exclusive flag check
-    bool filter_include = cur_group->cx_filter_include;
-    uint32_t group_filter= cur_group->cx_filter;
-    if(!filter_include){
+    uint32_t group_filter_exclude = cur_group->cx_filter_exclude;
+    uint32_t group_filter_include = cur_group->cx_filter_include;
+    if(group_filter_exclude != 0){
         // if the context flags matches all of the group flags the function will return false
-        if((cx_check->flags & group_filter) != group_filter)
-            return true;
+        if((cx_check->flags & group_filter_exclude) == group_filter_exclude)
+            return false;
     }
-    else{
+    if(group_filter_include != 0){
         //cx must have all the flags as in the group_filter flags to return true
-        if((cx_check->flags & group_filter) == group_filter)
-            return true;
+        if((cx_check->flags & group_filter_include) != group_filter_include)
+            return false;
     }
-    return false;
+    return true;
 }
 
 //finds the next or previous (if prev == 1) cx_selected context for the cx_curr
@@ -258,7 +256,9 @@ static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
     // go through the groups and check if the cx to be removed is in any of those groups
     for (unsigned int i = 0; i < CX_GROUPS; i++){
         CX_GROUP *cur_group = &(app_intrf->groups[i]);
-        // change the selected cx in the parent cx_children array
+        // change the selected cx in the parent cx_children array to NULL
+        // no need to find a new cx_selected, since the nav_ function that returns a cx_selected
+        // will find a new cx_selected if it is NULL
         if (parent) {
             if (parent->cx_children.cx_selected[i] == cx_rem) {
                 parent->cx_children.cx_selected[i] = NULL;
@@ -274,12 +274,6 @@ static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
     if(cx_rem->cx_children.contexts)free(cx_rem->cx_children.contexts);
     free(cx_rem);
 
-    if (parent) {
-        for (unsigned int i = 0; i < CX_GROUPS; i++) {
-            if (parent->cx_children.cx_selected[i] == NULL)
-                app_intrf_cx_selected_prev_next(app_intrf, parent, i, 0);
-        }
-    }
 }
 
 // add child to the end of the parent cx_children array
@@ -308,13 +302,6 @@ static int app_intrf_cx_children_push(APP_INTRF *app_intrf, CX *child) {
     child->idx = parent->cx_children.count - 1; 
     parent->cx_children.contexts[child->idx] = child;
     parent->cx_children.contexts[child->idx + 1] = NULL;
-
-    // after adding a cx to the parent, 
-    // cx can be available for cx_selected if previously cx_selected was == NULL
-    for (unsigned int i = 0; i < CX_GROUPS; i++){
-        if(parent->cx_children.cx_selected[i] == NULL)
-            app_intrf_cx_selected_prev_next(app_intrf, parent, i, 0);
-    }
 
     return 1;
 }
@@ -425,8 +412,8 @@ APP_INTRF *app_intrf_init() {
     // for safety init the groups
     for(unsigned int i = 0; i < CX_GROUPS; i++){
         app_intrf->groups[i].cx_curr = NULL;
-        app_intrf->groups[i].cx_filter_include = false;
-        app_intrf->groups[i].cx_filter = 0;
+        app_intrf->groups[i].cx_filter_include = 0;
+        app_intrf->groups[i].cx_filter_exclude = 0;
     }
 
     // initiate the app_intrf functions for data manipulation
@@ -463,8 +450,7 @@ APP_INTRF *app_intrf_init() {
     // and create the cx_root children recursively
     app_intrf_cx_children_create(app_intrf, app_intrf->cx_root);
 
-    // now groups has cx_curr and cx_selected NULLs
-    // init cx_curr to cx_root and cx_selected to its first child
+    // init cx_curr to cx_root
     for(unsigned int i = 0; i < CX_GROUPS; i++){
         app_intrf->groups[i].cx_curr = app_intrf->cx_root;
     }
@@ -570,14 +556,20 @@ void nav_update(APP_INTRF *app_intrf) {
                                   app_intrf_cx_check_dirty);
 }
 
-void nav_group_filter_set(APP_INTRF *app_intrf, unsigned int gr_idx, enum intrfFlags group_flags, bool group_filter_include){
+void nav_group_filter_set(APP_INTRF *app_intrf, unsigned int gr_idx, enum intrfFlags group_flags_include, enum intrfFlags group_flags_exclude){
     if(!app_intrf)
         return;
     if(gr_idx >= CX_GROUPS)
         return;
 
-    app_intrf->groups[gr_idx].cx_filter = group_flags;
-    app_intrf->groups[gr_idx].cx_filter_include = group_filter_include;
+    app_intrf->groups[gr_idx].cx_filter_exclude = group_flags_exclude;
+    app_intrf->groups[gr_idx].cx_filter_include = group_flags_include;
+}
+
+CX* nav_cx_root_return(APP_INTRF* app_intrf){
+    if(!app_intrf)return NULL;
+
+    return app_intrf->cx_root;
 }
 
 CX *nav_cx_curr_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
@@ -585,6 +577,72 @@ CX *nav_cx_curr_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
         return NULL;
     if (gr_idx >= CX_GROUPS)return NULL;
     return app_intrf->groups[gr_idx].cx_curr;
+}
+
+int nav_cx_curr_exit(APP_INTRF *app_intrf, unsigned int gr_idx) {
+    if (!app_intrf)
+        return -1;
+    if (gr_idx >= CX_GROUPS)return -1;
+    if (!app_intrf->groups[gr_idx].cx_curr)
+        return -1;
+    if (!app_intrf->groups[gr_idx].cx_curr->cx_parent)
+        return -1;
+
+    app_intrf->groups[gr_idx].cx_curr = app_intrf->groups[gr_idx].cx_curr->cx_parent;
+    return 1;
+}
+
+int nav_cx_curr_change(APP_INTRF* app_intrf, CX* cx_self, unsigned int gr_idx){
+    if (!app_intrf)return -1;
+    if (!cx_self)return 0;
+
+    // if this context has children enter inside
+    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
+        return 0;
+    if (cx_self->cx_children.count == 0)
+        return 0;
+
+    app_intrf->groups[gr_idx].cx_curr = cx_self;
+
+    return 1;
+}
+
+int nav_cx_invoke(APP_INTRF *app_intrf, CX *cx_self) {
+    if (!app_intrf)
+        return -1;
+    if (!cx_self)
+        return 0;
+
+    // call the data invoke callback
+    if (app_intrf->data_invoke){
+        // TODO check flags if a filename or some other string needs to be
+        // presented to the data If data needs a file string, or after invoke
+        // the user needs to do another action the UI should be informed. This
+        // could be done through flags on cx or this function can return codes
+        // what needs to be done
+        app_intrf->data_invoke(cx_self->user_data, cx_self->user_data_type,
+                               NULL);
+        return 1;
+    }
+    return 0;
+}
+
+int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx){
+    if (!app_intrf)return -1;
+    if (!cx_self)return 0;
+
+    // invoke cx_self first
+    nav_cx_invoke(app_intrf, cx_self);
+
+    // if this context has children enter inside
+    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
+        return 0;
+    if (cx_self->cx_children.count == 0)
+        return 0;
+
+    app_intrf->groups[gr_idx].cx_curr = cx_self;
+
+    return 1;
 }
 
 CX *nav_cx_selected_return(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx) {
@@ -643,72 +701,6 @@ void nav_cx_selected_prev(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx
         return;
     if (!cx_curr)return;
     app_intrf_cx_selected_prev_next(app_intrf, cx_curr, gr_idx, 1);
-}
-
-int nav_cx_curr_exit(APP_INTRF *app_intrf, unsigned int gr_idx) {
-    if (!app_intrf)
-        return -1;
-    if (gr_idx >= CX_GROUPS)return -1;
-    if (!app_intrf->groups[gr_idx].cx_curr)
-        return -1;
-    if (!app_intrf->groups[gr_idx].cx_curr->cx_parent)
-        return -1;
-
-    app_intrf->groups[gr_idx].cx_curr = app_intrf->groups[gr_idx].cx_curr->cx_parent;
-    return 1;
-}
-
-int nav_cx_invoke(APP_INTRF *app_intrf, CX *cx_self) {
-    if (!app_intrf)
-        return -1;
-    if (!cx_self)
-        return 0;
-
-    // call the data invoke callback
-    if (app_intrf->data_invoke){
-        // TODO check flags if a filename or some other string needs to be
-        // presented to the data If data needs a file string, or after invoke
-        // the user needs to do another action the UI should be informed. This
-        // could be done through flags on cx or this function can return codes
-        // what needs to be done
-        app_intrf->data_invoke(cx_self->user_data, cx_self->user_data_type,
-                               NULL);
-        return 1;
-    }
-    return 0;
-}
-
-int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx){
-    if (!app_intrf)return -1;
-    if (!cx_self)return 0;
-
-    // invoke cx_self first
-    nav_cx_invoke(app_intrf, cx_self);
-
-    // if this context has children enter inside
-    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
-        return 0;
-    if (cx_self->cx_children.count == 0)
-        return 0;
-
-    app_intrf->groups[gr_idx].cx_curr = cx_self;
-
-    return 1;
-}
-
-int nav_cx_curr_change(APP_INTRF* app_intrf, CX* cx_self, unsigned int gr_idx){
-    if (!app_intrf)return -1;
-    if (!cx_self)return 0;
-
-    // if this context has children enter inside
-    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
-        return 0;
-    if (cx_self->cx_children.count == 0)
-        return 0;
-
-    app_intrf->groups[gr_idx].cx_curr = cx_self;
-
-    return 1;
 }
 
 uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, CX *cx_self){
