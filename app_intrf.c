@@ -45,10 +45,15 @@
 #include <stdlib.h>
 
 // TODO TODAY.
+// Finish implementing _ON_TOP array in the group struct. Will need a function, that updates the array when navigating.
+// The function should add _ON_TOP contexts to the array from the cx_curr children, but if nav_cx_curr_change is called rebuild on_top array from scratch
+// ALSO, no group filter, but instead of nav_cx_children_match_callback() function a function that filters a cx array with a given filter
+// so ui layer can ask to return the group on_top contexts with a filter _ON_TOP and _INTERACT, or return the cx_curr children with a context.
+// Also, when removing and adding contexts, check if the context in the ON_TOP array needs to be removed.
 // Introduce connected CX* to app_intrf. 
+// Implement Port connectivity, test sound. 
 // Also will need memory slots per group (arrays of CX* per group). This will be useful for port connectivity so user
 // can select many ports (put them into memory slots) and then disconnect or connect with one button.
-// Implement Port connectivity, test sound. 
 // AFTER TODAY. Implement Params: Must be able to
 // change amount of params during runtime Remove unecessary various log
 // conversion methods in params, instead use the string callback function (like
@@ -110,6 +115,9 @@ typedef struct _cx {
 
 typedef struct _cx_group {
     CX *cx_curr;     // current context that is entered right now
+    // the _ON_TOP contexts from the root to the cx_curr context (inclusive)
+    CX **cx_on_top;
+    size_t cx_on_top_count;
     // what contexts to exclude from this group - these will not be shown when returing children
     enum intrfFlags cx_filter_exclude; 
     // what contexts to include in this group - these will be shown or not checked if 0 
@@ -118,10 +126,8 @@ typedef struct _cx_group {
 
 typedef struct _app_intrf {
     CX *cx_root;
-    CX_GROUP groups[CX_GROUPS]; // groups that have the cx_curr context. 
-                                //Different groups can have separate
-                                // contexs selected, so UI can display different
-                                // contexts at the same time.
+    // different groups can have different current contexts and selected contexts
+    CX_GROUP groups[CX_GROUPS]; 
     uint16_t main_user_data_type; // type for the main user_data sturct, the
                                   // same type is in cx_root->user_data_type
     void *main_user_data; // main user_data struct for convenience, the same
@@ -267,7 +273,6 @@ static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
         // if cx_curr is the same as cx_rem, change it to parent
         if (cur_group->cx_curr == cx_rem)
             cur_group->cx_curr = parent;
-        
     }
 
     //remove the cx_rem
@@ -412,6 +417,8 @@ APP_INTRF *app_intrf_init() {
     // for safety init the groups
     for(unsigned int i = 0; i < CX_GROUPS; i++){
         app_intrf->groups[i].cx_curr = NULL;
+        app_intrf->groups[i].cx_on_top = NULL;
+        app_intrf->groups[i].cx_on_top_count = 0;
         app_intrf->groups[i].cx_filter_include = 0;
         app_intrf->groups[i].cx_filter_exclude = 0;
     }

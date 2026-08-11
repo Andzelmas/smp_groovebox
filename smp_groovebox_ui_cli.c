@@ -286,7 +286,6 @@ int main() {
 
         // set vars for what is possible for the current group
         unsigned int cx_curr_exit = 1;
-        unsigned int cx_selected_enter = 1;
         CX* cx_selected = selected_cx_main;
         CX* cx_curr = cx_curr_main;
         switch (group_curr){
@@ -306,6 +305,10 @@ int main() {
             group_curr += 1;
             if (group_curr > group_max)
                 group_curr = GROUP_MAIN;
+            break;
+        case 'K':
+            if (group_curr > GROUP_MAIN)
+                group_curr -= 1;
             break;
         case 'j':
             nav_cx_selected_next(app_intrf, cx_curr, group_curr);
