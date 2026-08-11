@@ -48,6 +48,7 @@
 // Finish implementing _ON_TOP array in the group struct. Will need a function, that updates the array when navigating.
 // The function should add _ON_TOP contexts to the array from the cx_curr children, but if nav_cx_curr_change is called rebuild on_top array from scratch
 // Also, there should be a possibility for the ui layer to return on_top array with a filter (the same group filter?)
+// IF the ui could return the children or on_top contexts by giving the filter as argument, for the _ON_TOP buttons and similar there would be no groups necessary.
 // Also, when removing and adding contexts, check if the context in the ON_TOP array needs to be removed.
 // Introduce connected CX* to app_intrf. 
 // Implement Port connectivity, test sound. 
