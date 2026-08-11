@@ -45,11 +45,9 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Finish implementing _ON_TOP array in the group struct. Will need a function, that updates the array when navigating.
-// The function should add _ON_TOP contexts to the array from the cx_curr children, but if nav_cx_curr_change is called rebuild on_top array from scratch
-// Also, there should be a possibility for the ui layer to return on_top array with a filter (the same group filter?)
-// IF the ui could return the children or on_top contexts by giving the filter as argument, for the _ON_TOP buttons and similar there would be no groups necessary.
-// Also, when removing and adding contexts, check if the context in the ON_TOP array needs to be removed.
+// Implement _ON_TOP in the group struct. Will need a function, that traverses the structure of the group and returns _ON_TOP contexts.
+// this function should travel up from cx_curr and search ancestry children (but not inside).
+// To optimize think if possible to introduce linked lists of only the _ON_TOP contexts for the contexts.
 // Introduce connected CX* to app_intrf. 
 // Implement Port connectivity, test sound. 
 // Also will need memory slots per group (arrays of CX* per group). This will be useful for port connectivity so user
@@ -115,9 +113,6 @@ typedef struct _cx {
 
 typedef struct _cx_group {
     CX *cx_curr;     // current context that is entered right now
-    // the _ON_TOP contexts from the root to the cx_curr context (inclusive)
-    CX **cx_on_top;
-    size_t cx_on_top_count;
     // what contexts to exclude from this group - these will not be shown when returing children
     enum intrfFlags cx_filter_exclude; 
     // what contexts to include in this group - these will be shown or not checked if 0 
@@ -417,8 +412,6 @@ APP_INTRF *app_intrf_init() {
     // for safety init the groups
     for(unsigned int i = 0; i < CX_GROUPS; i++){
         app_intrf->groups[i].cx_curr = NULL;
-        app_intrf->groups[i].cx_on_top = NULL;
-        app_intrf->groups[i].cx_on_top_count = 0;
         app_intrf->groups[i].cx_filter_include = 0;
         app_intrf->groups[i].cx_filter_exclude = 0;
     }
