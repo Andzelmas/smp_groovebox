@@ -70,6 +70,13 @@ void nav_cx_children_match_callback(APP_INTRF *app_intrf, CX *parent,
                                     void(match_func)(CX *cx_matched,
                                                      void *user_data));
 
+//go through contexts with _ON_TOP flag, starting from cx_curr
+// traverse the context tree moving up towards the root cx
+void nav_cx_on_top_match_callback(APP_INTRF *app_intrf, CX *cx_curr,
+                                  unsigned int gr_idx, void *user_data,
+                                  void(match_func)(CX *cx_matched,
+                                                   void *user_data));
+
 // return the name of the cx
 int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
                                unsigned int name_len);

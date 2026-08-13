@@ -45,9 +45,9 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Implement _ON_TOP in the group struct. Will need a function, that traverses the structure of the group and returns _ON_TOP contexts.
-// this function should travel up from cx_curr and search ancestry children (but not inside).
-// To optimize think if possible to introduce linked lists of only the _ON_TOP contexts for the contexts.
+// Selected contexts, groups, filtering by flags and even cx_curr? should be left to the UI layer. Will need to make unique ids for contexts
+// Might be good idea to implement this using uistates, hashmaps. As a separate ui api, that user can use by default or create their own.
+// AND think what to do when UI requests an id and it no longer exists
 // Introduce connected CX* to app_intrf. 
 // Implement Port connectivity, test sound. 
 // Also will need memory slots per group (arrays of CX* per group). This will be useful for port connectivity so user
@@ -109,6 +109,13 @@ typedef struct _cx {
 
     //contexts array of children
     struct _cx_array cx_children;
+
+    //first context among the children that has the _ON_TOP flag
+    // or NULL if there are no _ON_TOP children
+    struct _cx* cx_on_top_first;
+    //linked array of _ON_TOP sibling contexts if this context is _ON_TOP itself
+    struct _cx* cx_on_top_prev;
+    struct _cx* cx_on_top_next;
 } CX;
 
 typedef struct _cx_group {
@@ -270,6 +277,21 @@ static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
             cur_group->cx_curr = parent;
     }
 
+    //remove the context from the _ON_TOP linked array if it has this flag
+    if((cx_rem->flags & INTRF_FLAG_ON_TOP) == INTRF_FLAG_ON_TOP){
+        if(cx_rem->cx_on_top_prev){
+            cx_rem->cx_on_top_prev->cx_on_top_next = cx_rem->cx_on_top_next;
+        }
+        if(cx_rem->cx_on_top_next){
+            cx_rem->cx_on_top_next->cx_on_top_prev = cx_rem->cx_on_top_prev;
+        }
+        if(parent){
+            if(parent->cx_on_top_first == cx_rem){
+                parent->cx_on_top_first = cx_rem->cx_on_top_next;
+            }
+        }
+    }
+
     //remove the cx_rem
     if(cx_rem->cx_children.contexts)free(cx_rem->cx_children.contexts);
     free(cx_rem);
@@ -343,6 +365,9 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     new_cx->cx_parent = parent_cx;
     new_cx->user_data = user_data;
     new_cx->user_data_type = user_data_type;
+    new_cx->cx_on_top_next = NULL;
+    new_cx->cx_on_top_prev = NULL;
+    new_cx->cx_on_top_first = NULL;
     new_cx->idx = -1;
 
     //if the context is not a container it will not have any children
@@ -369,7 +394,26 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     // if the context was created succesfully check the flags and do additional
     // work as needed
     //----------------------------------------------------------------------------------------------------
-
+    // for _ON_TOP flag, put this context into the _ON_TOP linked array
+    if((new_cx->flags & INTRF_FLAG_ON_TOP) == INTRF_FLAG_ON_TOP){
+        if(new_cx->cx_parent){
+            if(!new_cx->cx_parent->cx_on_top_first){
+                new_cx->cx_parent->cx_on_top_first = new_cx;
+            }
+            else {
+                CX* cx_next = new_cx->cx_parent->cx_on_top_first;
+                CX* cx_no_next = NULL;
+                while(cx_next){
+                    cx_no_next = cx_next;
+                    cx_next = cx_next->cx_on_top_next;
+                    if(!cx_next)
+                        break;
+                }
+                cx_no_next->cx_on_top_next = new_cx;
+                new_cx->cx_on_top_prev = cx_no_next;
+            }
+        }
+    }
     //----------------------------------------------------------------------------------------------------
     return new_cx;
 }
@@ -670,6 +714,27 @@ void nav_cx_children_match_callback(APP_INTRF *app_intrf, CX *parent,
         if(app_intrf_cx_filter_check(app_intrf, cx_curr, gr_idx)){
             match_func(cx_curr, user_data);
         }
+    }
+}
+
+void nav_cx_on_top_match_callback(APP_INTRF *app_intrf, CX *cx_curr,
+                                  unsigned int gr_idx, void *user_data,
+                                  void(match_func)(CX *cx_matched,
+                                                   void *user_data)) {
+    if(!app_intrf)return;
+    if(!cx_curr)return;
+
+    CX* parent = cx_curr;
+    while(parent){
+        CX* cx_next = parent->cx_on_top_first;
+        while(cx_next){
+            if(app_intrf_cx_filter_check(app_intrf, cx_next, gr_idx)){
+                match_func(cx_next, user_data);
+            }
+            cx_next = cx_next->cx_on_top_next;
+        }
+
+        parent = parent->cx_parent;
     }
 }
 

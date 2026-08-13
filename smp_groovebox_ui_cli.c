@@ -193,7 +193,7 @@ int main() {
     // set the root group filters - show on top contexts, but not buttons
     nav_group_filter_set(app_intrf, GROUP_ROOT, INTRF_FLAG_ON_TOP, INTRF_FLAG_INTERACT);
     //group for the buttons - show only buttons
-    nav_group_filter_set(app_intrf, GROUP_BUTTONS, (INTRF_FLAG_INTERACT | INTRF_FLAG_ON_TOP), 0);
+    nav_group_filter_set(app_intrf, GROUP_BUTTONS, (INTRF_FLAG_ON_TOP), 0);
 
     // if app_intrf failed to initialize analyze the error write it and exit
     if (!app_intrf) {
@@ -262,7 +262,7 @@ int main() {
         // higlight the selected item or no in the buttons group
         if(group_curr == GROUP_BUTTONS)
             user_data->user_int04 = 1;
-        nav_cx_children_match_callback(app_intrf, cx_curr_buttons, GROUP_BUTTONS, (void*)user_data, ui_cx_match_print_names_horizontal);
+        nav_cx_on_top_match_callback(app_intrf, cx_curr_buttons, GROUP_BUTTONS, (void*)user_data, ui_cx_match_print_names_horizontal);
         printf("\n--------------------------------------------------\n");
         //----------------------------------------------------------------------------------------------------
 
