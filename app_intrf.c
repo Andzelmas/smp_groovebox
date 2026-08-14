@@ -45,9 +45,297 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Selected contexts, groups, filtering by flags and even cx_curr? should be left to the UI layer. Will need to make unique ids for contexts
+// Instead of current system where app_data creates the buttons: data layer should return to context layer ant context to ui what actions possible with the context/data
+// Then no need for _CONTAINER and similar flags, because the action type will say "this context can be entered and has children", "this context can be invoked",
+// "this context can be removed", "this context can be renamed", "this context has a value, and it can be changed", "this context can create contexts", etc.
+// The UI can then separate showing names of contexts; current context; selected contexts; last_visited; currently visited etc. And:
+// actions of the context (add, remove, rename, etc.). It can even show separatly the actions for the current context and its selected children.
+// Also remove from data and context layers context that are temporary: for example add lists.
+// Implementation should be action invocation + action options (to create the add lists, save file requests and similar).
+// UI gets possible actions on context; asks for action options (arguments); depending on that displays choices (generated on data layer or not) for user or calls command_execute() on context layer
+// Also, this way UI can get possible actions and if an action needs options it can for example hide the whole interface and only show the choices or input (for rename operation).
+// For choice arguments to be generic and work with categories ActionSelection struct can be implemented in the context layer:
+// These can be yes/no questions; list choices; list choices with multilevel categories and etc. Important thing to remember is to not return an array of items but an ActionSelectionModel struct
+// and use that to iterate and give the UI the type: is it a leaf? if yes use command_execute on it, if no go inside.
+/*
+typedef struct ActionSelectionModel
+    ActionSelectionModel;
+
+ActionSelectionModel *
+context_action_selection_begin(
+    Context *ctx,
+    ActionId action);
+
+const ActionNode *
+action_selection_root(...);
+
+size_t
+action_selection_children(
+    ...);
+
+void
+action_selection_destroy(...);
+
+IN UI (pseudo)
+void handle_node_click(
+    ActionSelectionModel *model,
+    ActionNodeId node_id)
+{
+    const ActionNode *node =
+        action_selection_get_node(
+            model,
+            node_id);
+
+    if (node->type == ACTION_NODE_CATEGORY) {
+
+        ui_navigate_into(node_id);
+
+    } else if (node->type == ACTION_NODE_CHOICE) {
+
+        ActionInvocation invocation = {
+            .action = model->action,
+            .choice_id = node_id
+        };
+
+        context_dispatch(
+            model->target_context,
+            &invocation);
+    }
+}
+*/
+// for example (instead of context* should be contex unique id):
+/*
+IN DATA:
+bool app_data_can_remove(void user_data);
+bool app_data_can_rename(void user_data);
+and similar functions
+
+IN CONTEXT:
+
+typedef enum {
+    ACTION_VALUE_NONE,
+    ACTION_VALUE_STRING,
+    ACTION_VALUE_INT,
+    ACTION_VALUE_BOOL,
+    ACTION_VALUE_CHOICE,
+    ACTION_VALUE_CONTEXT,
+} ActionValueType;
+typedef struct {
+    uint32_t id;
+    const char *label;
+} ActionChoice;
+typedef struct {
+    const char *name;
+    const char *label;
+
+    ActionValueType type;
+
+    bool required;
+
+    const ActionChoice *choices;
+    size_t choice_count;
+} ActionArgument;
+
+typedef enum {
+    CONTEXT_COMMAND_REMOVE,
+    CONTEXT_COMMAND_RENAME,
+} ContextRequestType;
+
+typedef struct {
+    ContextRequestType type;
+
+    union {
+        struct {
+        } remove;
+
+        struct {
+            const char *name;
+        } rename;
+    };
+} ContextRequest;
+
+typedef enum {
+    CONTEXT_ACTION_STYLE_NORMAL,
+    CONTEXT_ACTION_STYLE_DANGEROUS,
+} ContextActionStyle;
+
+typedef enum {
+    CONTEXT_ACTION_REMOVE,
+    CONTEXT_ACTION_RENAME,
+} ContextActionType;
+
+typedef struct {
+    ContextActionType type;
+    const char *label;
+    const char *tooltip;
+    bool enabled;
+    ContextActionStyle style;
+} ContextAction;
+
+typedef enum {
+    CONTEXT_OK = 0,
+    CONTEXT_ERR_INVALID,
+    CONTEXT_ERR_NOT_ALLOWED,
+    CONTEXT_ERR_DATA,
+} ContextResult;
+
+size_t context_get_actions(
+    const Context *ctx,
+    ContextAction *actions,
+    size_t capacity
+)
+{
+    size_t count = 0;
+
+    if (!ctx || !actions)
+        return 0;
+
+    if (count < capacity) {
+        actions[count++] = (ContextAction) {
+            .type = CONTEXT_ACTION_REMOVE,
+            .enabled = context_can_remove(ctx),
+            .label = "Remove"
+        };
+    }
+
+    if (count < capacity) {
+        actions[count++] = (ContextAction) {
+            .type = CONTEXT_ACTION_RENAME,
+            .enabled = context_can_rename(ctx),
+            .label = "Rename"
+        };
+    }
+
+    return count;
+}
+
+size_t context_get_action_arguments(
+    Context *ctx,
+    ActionId action,
+    ActionArgument *arguments,
+    size_t capacity)
+{
+    if (!ctx || !arguments)
+        return 0;
+
+    switch (action) {
+
+    case ACTION_REMOVE:
+        return 0;
+
+    case ACTION_RENAME:
+        if (capacity < 1)
+            return 0;
+
+        arguments[0] = (ActionArgument) {
+            .name = "name",
+            .label = "New name",
+            .type = ACTION_VALUE_STRING,
+            .required = true
+        };
+
+        return 1;
+
+    case ACTION_ADD_NEW:
+        if (capacity < 1)
+            return 0;
+
+        arguments[0] = (ActionArgument) {
+            .name = "item_type",
+            .label = "Type",
+            .type = ACTION_VALUE_CHOICE,
+            .required = true,
+            for choice the ui should call action_get_action_choices()
+                and then use the opaque struct that it got to iterate through
+the items
+
+        };
+
+        return 1;
+
+    default:
+        return 0;
+    }
+}
+ContextResult context_execute(
+    Context *ctx,
+    const ContextCommand *cmd)
+{
+    if (!ctx || !cmd)
+        return CONTEXT_ERR_INVALID;
+
+    switch (cmd->type) {
+
+    case CONTEXT_COMMAND_REMOVE:
+        return context_execute_remove(ctx);
+
+    case CONTEXT_COMMAND_RENAME:
+        return context_execute_rename(
+            ctx,
+            cmd->rename.name
+        );
+
+    default:
+        return CONTEXT_ERR_INVALID;
+    }
+}
+ON UI LAYER:
+void ui_show_context_menu(Context *ctx)
+{
+    ContextAction actions[16];
+
+    size_t count =
+        context_get_actions(
+            ctx,
+            actions,
+            16
+        );
+
+    for (size_t i = 0; i < count; ++i) {
+        ui_menu_add(
+            actions[i].label,
+            actions[i].enabled,
+            actions[i].type
+        );
+    }
+}
+
+UI GETS ACTION RENAME:
+context_get_action_arguments(
+    parent,
+    CONTEXT_ACTION_RENAME,
+    arguments,
+    16
+);
+should use the returned arguments in this function
+void ui_rename_selected(Context *ctx)
+{
+    char name[256];
+
+    if (!ui_get_text("New name", name, sizeof(name)))
+        return;
+
+    ContextCommand cmd = {
+        .type = CONTEXT_COMMAND_RENAME,
+        .rename = {
+            .name = name
+        }
+    };
+
+    ContextResult result =
+        context_execute(ctx, &cmd);
+
+    if (result != CONTEXT_OK) {
+        ui_show_error(result);
+    }
+}
+*/
+
+// Selected contexts, groups, filtering by flags (or even knowing the flags?) and even cx_curr? should be left to the UI layer. Will need to make unique ids for contexts
 // Might be good idea to implement this using uistates, hashmaps. As a separate ui api, that user can use by default or create their own.
-// AND think what to do when UI requests an id and it no longer exists
+// MAIN IDEA: contexts is the World, uilayer is the user view of the World.
+// use events, uilayer removes all references of the contextid when it gets an event from the context layer that it was removed. This way tombstones will not increase the memory.
+// also, this way there can be multiply ui states (named groups now) and they can even appear/disappear dynamically. Each uistate has to have a separate cursor that reads the context layer events.
 // Introduce connected CX* to app_intrf. 
 // Implement Port connectivity, test sound. 
 // Also will need memory slots per group (arrays of CX* per group). This will be useful for port connectivity so user
