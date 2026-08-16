@@ -63,47 +63,33 @@ enum userDataTypes {
 
     // data that contains lv2 plugins, user_data casts to APP_INFO*
     USER_DATA_T_PLUGINS_LV2 = 2,
-    // data that contains a list to create new
-    // lv2 plugins, user_data casts to APP_INFO*
-    USER_DATA_T_PLUGINS_LV2_NEW = 3,
-    // data that is used to recreate the lv2 plugin list available on this
-    // machine for the user
-    USER_DATA_T_PLUGINS_LV2_LIST_REFRESH = 4,
-    // data representing the lv2 plugin list item
-    // it is used to load a plugin 
-    USER_DATA_T_PLUGINS_LV2_LIST_ITEM = 5,
     // lv2 plugin data type
-    USER_DATA_T_PLUG_LV2 = 6,
-    // lv2 plugin remove data type
-    USER_DATA_T_PLUG_LV2_REMOVE = 7,
+    USER_DATA_T_PLUG_LV2 = 3,
+    // lv2 plugin list item to load the plugin 
+    USER_DATA_T_PLUGINS_LV2_LIST_ITEM = 4,
 
     // data that contains clap plugins, user_data casts to APP_INFO*
-    USER_DATA_T_PLUGINS_CLAP = 8,
+    USER_DATA_T_PLUGINS_CLAP = 5,
     // clap plugin data type
-    USER_DATA_T_PLUG_CLAP = 9,
-    // clap plugin remove data type
-    USER_DATA_T_PLUG_CLAP_REMOVE = 10,
-    // same contexts as for lv2 plugins
-    // used to load clap plugins from a list
-    USER_DATA_T_PLUGINS_CLAP_NEW = 11,
-    USER_DATA_T_PLUGINS_CLAP_LIST_REFRESH = 12,
-    USER_DATA_T_PLUGINS_CLAP_LIST_ITEM = 13,
+    USER_DATA_T_PLUG_CLAP = 6,
+    // clap plugin list item to load the plugin
+    USER_DATA_T_PLUGINS_CLAP_LIST_ITEM = 7,
 
     // the Sampler context
     // sampler data type, user_data casts to APP_INFO*
-    USER_DATA_T_SAMPLER = 14,
+    USER_DATA_T_SAMPLER = 8,
     // single sample
-    USER_DATA_T_SAMPLE = 15,
+    USER_DATA_T_SAMPLE = 9,
 
     // the Synth context
     // built in synth, user_data casts to APP_INFO*
-    USER_DATA_T_SYNTH = 16,
+    USER_DATA_T_SYNTH = 10,
     // single oscillator in the synth
-    USER_DATA_T_OSC = 17,
+    USER_DATA_T_OSC = 11,
 
     // the Trk, audio backend context
     // audio backend data, user_data casts to APP_INFO*
-    USER_DATA_T_JACK = 18
+    USER_DATA_T_JACK = 12
 };
 
 enum intrfFlags {
@@ -113,40 +99,13 @@ enum intrfFlags {
     // the parent of all contexts on the app, exiting
     // this context closes the app
     INTRF_FLAG_ROOT = 1 << 1,
-    // if this context parent becomes dirty, dont
-    // remove this children. This context will be
-    // recreated only if the parent is removed.
-    INTRF_FLAG_CANT_DIRTY = 1 << 2,
     // the user can interact with the context not only to see its
     // children, but to for example press a button
-    INTRF_FLAG_INTERACT = 1 << 3,
+    INTRF_FLAG_INTERACT = 1 << 2,
     // Name of this context is dynamic (for example a parameter
     // name) It should be returned not from cx->short_name but with
     // a special data function
-    INTRF_FLAG_DISPLAY_NAME_DYN = 1 << 4,
-    // this context is a list - it has _LIST_ITEM or
-    // _LIST children in it (among others)
-    INTRF_FLAG_LIST = 1 << 5,
-    // this context is a list item
-    INTRF_FLAG_LIST_ITEM = 1 << 6,
-    // this context should be reachable for the user, even when
-    // navigating this contexts parents other children. For example
-    // a "delete" button when browsing files
-    INTRF_FLAG_ON_TOP = 1 << 7,
-    // whatever the data is doing with this user_data on invoke it
-    // needs a file name from the user. Data will try to create this
-    // file
-    INTRF_FLAG_INV_FROM_FILE_NEW = 1 << 8,
-    // whatever the data is doing with this user_data on invoke it
-    // needs an existing file name already present on disk
-    INTRF_FLAG_INV_FROM_FILE_EXISTING = 1 << 9,
-    // after creating all the children for this context a
-    // data_update_children() function needs to be called, so data
-    // can update this structure (possibly from a user config file)
-    INTRF_FLAG_UPDATE_CHILDREN = 1 << 10,
-    // this context is some kind of a parameter and its
-    // values can be changed with data_val_change()
-    INTRF_FLAG_VAL = 1 << 11
+    INTRF_FLAG_DISPLAY_NAME_DYN = 1 << 3,
 };
 
 // enum for context types

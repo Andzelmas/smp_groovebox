@@ -45,18 +45,19 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// Instead of current system where app_data creates the buttons: data layer should return to context layer ant context to ui what actions possible with the context/data
-// Then no need for _CONTAINER and similar flags, because the action type will say "this context can be entered and has children", "this context can be invoked",
-// "this context can be removed", "this context can be renamed", "this context has a value, and it can be changed", "this context can create contexts", etc.
-// The UI can then separate showing names of contexts; current context; selected contexts; last_visited; currently visited etc. And:
-// actions of the context (add, remove, rename, etc.). It can even show separatly the actions for the current context and its selected children.
-// But for this to work need contextid, ui layer wont ever retrieve cx pointers. 
+// CONTEXT UNIQUE IDS implementation (with hash maps). Start with returning of the communications with unique ids.
 // Might be good idea to implement this using uistates, hashmaps. As a separate ui api, that user can use by default or create their own.
 // MAIN IDEA: contexts is the World, uilayer is the user view of the World.
 // use events, uilayer removes all references of the contextid when it gets an event from the context layer that it was removed. This way tombstones will not increase the memory.
-// also, this way there can be multiply ui states (named groups now) and they can even appear/disappear dynamically. Each uistate has to have a separate cursor that reads the context layer events.
-// Also remove from data and context layers context that are temporary: for example add lists.
-// Because of this there wont be a need for _CANT_DIRTY flag (or any flag checking in context layer), since ui layer will have the ownership of lists and the like and lists wont be inside anything that is destroyed.
+// Each uistate has to have a separate cursor that reads the context layer events.
+
+// The UI can then separate showing names of contexts; current context; selected contexts; last_visited; currently visited etc. And:
+// actions of the context (add, remove, rename, etc.). It can even show separatly the actions for the current context and its selected children.
+// also, this way there can be multiply ui states (named groups now) and they can even appear/disappear dynamically. 
+
+//NEW INKOVE:
+// Action type will say "this context can be entered and has children", "this context can be invoked",
+// "this context can be removed", "this context can be renamed", "this context has a value, and it can be changed", "this context can create contexts", etc.
 // Implementation should be action invocation + action options (to create the add lists, save file requests and similar).
 // UI gets possible actions on context; asks for action options (arguments); depending on that displays choices (generated on data layer or not) for user or calls command_execute() on context layer
 // Also, this way UI can get possible actions and if an action needs options it can for example hide the whole interface and only show the choices or input (for rename operation).
@@ -377,18 +378,21 @@ void ui_rename_selected(Context *ctx)
 */
 
 typedef struct _cx_array{
-    //the cx that was last interacted with in this cx_array
-    //each group has a different cx_selected
-    struct _cx* cx_selected[CX_GROUPS];
     unsigned int count;
     unsigned int count_max;
     struct _cx **contexts;
 } CX_ARRAY;
 
+typedef struct _cx_uniqueid{
+    unsigned int id;
+    unsigned int gen;
+}CX_ID;
+
 typedef struct _cx {
     // name of the cx, data must make sure this is unique in the context,
     // otherwise the cx will not be created
     char short_name[MAX_PARAM_NAME_LENGTH];
+    struct _cx_uniqueid uid; //unique context id
     int idx; // index number of this CX in the cx_parent cx_children array
     uint16_t user_data_type;
     void *user_data; // user_data for this cx, that the data layer uses. IT IS
@@ -398,28 +402,12 @@ typedef struct _cx {
 
     //contexts array of children
     struct _cx_array cx_children;
-
-    //first context among the children that has the _ON_TOP flag
-    // or NULL if there are no _ON_TOP children
-    struct _cx* cx_on_top_first;
-    //linked array of _ON_TOP sibling contexts if this context is _ON_TOP itself
-    struct _cx* cx_on_top_prev;
-    struct _cx* cx_on_top_next;
 } CX;
-
-typedef struct _cx_group {
-    CX *cx_curr;     // current context that is entered right now
-    // what contexts to exclude from this group - these will not be shown when returing children
-    enum intrfFlags cx_filter_exclude; 
-    // what contexts to include in this group - these will be shown or not checked if 0 
-    enum intrfFlags cx_filter_include; 
-} CX_GROUP;
 
 typedef struct _app_intrf {
     CX *cx_root;
-    // different groups can have different current contexts and selected contexts
-    CX_GROUP groups[CX_GROUPS]; 
-    uint16_t main_user_data_type; // type for the main user_data sturct, the
+    CX_ID next_uid; //uniqueid for the next context
+    uint16_t main_user_data_type; // type for the main user_data struct, the
                                   // same type is in cx_root->user_data_type
     void *main_user_data; // main user_data struct for convenience, the same
                           // struct is in cx_root->user_data
@@ -433,11 +421,6 @@ typedef struct _app_intrf {
     // data function that updates its internal structures every cycle, should
     // be called first before any navigation
     void (*data_update)(void *main_user_data, uint16_t main_user_data_type);
-    // do something with the user_data, this is a "button" callback
-    // file can be a NULL, a file on the disk, or some other char* that data
-    // needs depending on the INTRF_FLAG_
-    void (*data_invoke)(void *user_data, uint16_t user_data_type,
-                        const char *file);
     // check this user_data for dirty, if it is dirty, need to remove all of
     // its children cx and create them again.
     bool (*data_is_dirty)(void *user_data, uint16_t type);
@@ -445,72 +428,6 @@ typedef struct _app_intrf {
     // when closing the app
     void (*data_destroy)(void *user_data, uint16_t type);
 } APP_INTRF;
-
-// Check if a given CX is valid, when compared to the gr_idx groups cx filter
-static bool app_intrf_cx_filter_check(APP_INTRF *app_intrf, CX *cx_check, unsigned int gr_idx){
-    if(!app_intrf)return false;
-    if(gr_idx >= CX_GROUPS)return false;
-    CX_GROUP *cur_group = &(app_intrf->groups[gr_idx]);
-    //inclusive or exclusive flag check
-    uint32_t group_filter_exclude = cur_group->cx_filter_exclude;
-    uint32_t group_filter_include = cur_group->cx_filter_include;
-    if(group_filter_exclude != 0){
-        // if the context flags matches all of the group flags the function will return false
-        if((cx_check->flags & group_filter_exclude) == group_filter_exclude)
-            return false;
-    }
-    if(group_filter_include != 0){
-        //cx must have all the flags as in the group_filter flags to return true
-        if((cx_check->flags & group_filter_include) != group_filter_include)
-            return false;
-    }
-    return true;
-}
-
-//finds the next or previous (if prev == 1) cx_selected context for the cx_curr
-//compares the contexts to the groups gr_idx filters
-//cx_selected can be NULL after this if there are no contexts for the groups filter
-static unsigned int app_intrf_cx_selected_prev_next(APP_INTRF* app_intrf, CX* cx_curr, unsigned int gr_idx, unsigned int prev){
-    if(!app_intrf)return 0;
-    if(!cx_curr)return 0;
-    if(gr_idx >= CX_GROUPS)return 0;
-
-    if(cx_curr->cx_children.count <= 0)return 0;
-    int from_id = -1;
-    CX* cx_last_selected = cx_curr->cx_children.cx_selected[gr_idx];
-
-    if(cx_last_selected){
-        from_id = cx_last_selected->idx;
-    }
-
-    cx_curr->cx_children.cx_selected[gr_idx] = NULL;
-
-    unsigned int iter = 0;
-    if(prev == 0)from_id += 1;
-    if(prev == 1)from_id -=1;
-    while(cx_curr->cx_children.cx_selected[gr_idx] == NULL){
-        if(from_id < 0) from_id = cx_curr->cx_children.count - 1;
-        if(from_id >= cx_curr->cx_children.count)from_id = 0;
-
-        CX* cx_new_selected = cx_curr->cx_children.contexts[from_id];
-        if(app_intrf_cx_filter_check(app_intrf, cx_new_selected, gr_idx)){
-            cx_curr->cx_children.cx_selected[gr_idx] = cx_new_selected;
-            break;
-        }
-
-        if(prev == 0){
-            from_id += 1;
-        }
-        else{
-            from_id -= 1;
-        }
-
-        iter += 1;
-        if(iter >= cx_curr->cx_children.count)break;
-    }
-
-    return 1;
-}
 
 // pop the child from the context structure 
 static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
@@ -550,37 +467,6 @@ static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
         }
     }
 
-    // go through the groups and check if the cx to be removed is in any of those groups
-    for (unsigned int i = 0; i < CX_GROUPS; i++){
-        CX_GROUP *cur_group = &(app_intrf->groups[i]);
-        // change the selected cx in the parent cx_children array to NULL
-        // no need to find a new cx_selected, since the nav_ function that returns a cx_selected
-        // will find a new cx_selected if it is NULL
-        if (parent) {
-            if (parent->cx_children.cx_selected[i] == cx_rem) {
-                parent->cx_children.cx_selected[i] = NULL;
-            }
-        }
-        // if cx_curr is the same as cx_rem, change it to parent
-        if (cur_group->cx_curr == cx_rem)
-            cur_group->cx_curr = parent;
-    }
-
-    //remove the context from the _ON_TOP linked array if it has this flag
-    if((cx_rem->flags & INTRF_FLAG_ON_TOP) == INTRF_FLAG_ON_TOP){
-        if(cx_rem->cx_on_top_prev){
-            cx_rem->cx_on_top_prev->cx_on_top_next = cx_rem->cx_on_top_next;
-        }
-        if(cx_rem->cx_on_top_next){
-            cx_rem->cx_on_top_next->cx_on_top_prev = cx_rem->cx_on_top_prev;
-        }
-        if(parent){
-            if(parent->cx_on_top_first == cx_rem){
-                parent->cx_on_top_first = cx_rem->cx_on_top_next;
-            }
-        }
-    }
-
     //remove the cx_rem
     if(cx_rem->cx_children.contexts)free(cx_rem->cx_children.contexts);
     free(cx_rem);
@@ -598,8 +484,14 @@ static int app_intrf_cx_children_push(APP_INTRF *app_intrf, CX *child) {
 
     CX* parent = child->cx_parent;
     unsigned int nmemb = parent->cx_children.count + 1; 
-    //will need to realloc 
-    if (nmemb >= parent->cx_children.count_max){
+    if(!parent->cx_children.contexts){
+        parent->cx_children.contexts =
+            calloc(parent->cx_children.count_max, sizeof(CX *));
+        if (!parent->cx_children.contexts) {
+            return -1;
+        }
+    }
+    else if (nmemb >= parent->cx_children.count_max){
         unsigned int new_count_max = parent->cx_children.count_max * 2;
         CX **temp_array =
             realloc(parent->cx_children.contexts, sizeof(CX *) * new_count_max);
@@ -645,30 +537,16 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
         return NULL;
 
     new_cx->flags = flags;
-    for(unsigned int i = 0; i < CX_GROUPS; i++){
-        new_cx->cx_children.cx_selected[i] = NULL;
-    }
+    new_cx->uid.id = app_intrf->next_uid.id;
+    new_cx->uid.gen = app_intrf->next_uid.gen;
+    app_intrf->next_uid.id += 1;
     new_cx->cx_children.contexts = NULL;
     new_cx->cx_children.count = 0;
     new_cx->cx_children.count_max = PTR_ARRAY_COUNT;
     new_cx->cx_parent = parent_cx;
     new_cx->user_data = user_data;
     new_cx->user_data_type = user_data_type;
-    new_cx->cx_on_top_next = NULL;
-    new_cx->cx_on_top_prev = NULL;
-    new_cx->cx_on_top_first = NULL;
     new_cx->idx = -1;
-
-    //if the context is not a container it will not have any children
-    //if it is a container create the children array
-    if ((new_cx->flags & INTRF_FLAG_CONTAINER)) {
-        new_cx->cx_children.contexts =
-           calloc(new_cx->cx_children.count_max, sizeof(CX *));
-        if (!new_cx->cx_children.contexts) {
-            app_intrf_cx_children_pop(app_intrf, new_cx);
-            return NULL;
-        }
-    }
 
     snprintf(new_cx->short_name, MAX_PARAM_NAME_LENGTH, "%s", short_name);
 
@@ -680,30 +558,6 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
         }
     }
 
-    // if the context was created succesfully check the flags and do additional
-    // work as needed
-    //----------------------------------------------------------------------------------------------------
-    // for _ON_TOP flag, put this context into the _ON_TOP linked array
-    if((new_cx->flags & INTRF_FLAG_ON_TOP) == INTRF_FLAG_ON_TOP){
-        if(new_cx->cx_parent){
-            if(!new_cx->cx_parent->cx_on_top_first){
-                new_cx->cx_parent->cx_on_top_first = new_cx;
-            }
-            else {
-                CX* cx_next = new_cx->cx_parent->cx_on_top_first;
-                CX* cx_no_next = NULL;
-                while(cx_next){
-                    cx_no_next = cx_next;
-                    cx_next = cx_next->cx_on_top_next;
-                    if(!cx_next)
-                        break;
-                }
-                cx_no_next->cx_on_top_next = new_cx;
-                new_cx->cx_on_top_prev = cx_no_next;
-            }
-        }
-    }
-    //----------------------------------------------------------------------------------------------------
     return new_cx;
 }
 
@@ -742,18 +596,11 @@ APP_INTRF *app_intrf_init() {
     APP_INTRF *app_intrf = calloc(1, sizeof(APP_INTRF));
     if (!app_intrf)
         return NULL;
-    // for safety init the groups
-    for(unsigned int i = 0; i < CX_GROUPS; i++){
-        app_intrf->groups[i].cx_curr = NULL;
-        app_intrf->groups[i].cx_filter_include = 0;
-        app_intrf->groups[i].cx_filter_exclude = 0;
-    }
 
     // initiate the app_intrf functions for data manipulation
     //--------------------------------------------------
     app_intrf->data_child_return = app_data_child_return;
     app_intrf->data_update = app_data_update;
-    app_intrf->data_invoke = app_data_invoke;
     app_intrf->data_is_dirty = app_data_is_dirty;
     app_intrf->data_destroy = app_stop_and_clean;
 
@@ -762,6 +609,9 @@ APP_INTRF *app_intrf_init() {
         return NULL;
     }
     //--------------------------------------------------
+    app_intrf->next_uid.gen = 0;
+    app_intrf->next_uid.id = 0;
+
     uint32_t root_flags = 0;
     char root_name[MAX_PARAM_NAME_LENGTH];
 
@@ -783,25 +633,16 @@ APP_INTRF *app_intrf_init() {
     // and create the cx_root children recursively
     app_intrf_cx_children_create(app_intrf, app_intrf->cx_root);
 
-    // init cx_curr to cx_root
-    for(unsigned int i = 0; i < CX_GROUPS; i++){
-        app_intrf->groups[i].cx_curr = app_intrf->cx_root;
-    }
-
     return app_intrf;
 }
 
-// iterate from root_cx through the children recursively and call the void user
+// iterate from root_cx through the children recursively and call the void user func
 // ok to use callback to remove cx but not to create (untested)
 // root_cx - the cx from which to start iterating
 // top_cx - should be same as root_cx, so iterating func knows the top cx
 // leave_top - if 1, do not call callback_func for the top level cx
-// filter_flags - for cx with these flags the callback function will not be
-// called filter_only_top - filter_flags are only checked for the top level cx
-// children, after that filter_flags are ignored
 static void app_intrf_cx_children_iterate(
     APP_INTRF *app_intrf, CX *root_cx, CX *top_cx, unsigned int leave_top,
-    enum intrfFlags filter_flags, unsigned int filter_only_top,
     void(callback_func)(APP_INTRF *app_intrf, CX *cur_cx)) {
 
     if (!root_cx)
@@ -814,19 +655,8 @@ static void app_intrf_cx_children_iterate(
         CX *cur_cx = root_cx->cx_children.contexts[iter];
         unsigned int go_inside = 1;
 
-        if (filter_flags != 0) {
-            // dont go inside if the exclude flags coincide
-            if ((cur_cx->flags & filter_flags) && filter_only_top == 0)
-                go_inside = 0;
-            // dont go inside if the exclude flags coincide for the top level
-            // children
-            if ((cur_cx->flags & filter_flags) && filter_only_top == 1 &&
-                root_cx == top_cx)
-                go_inside = 0;
-        }
         if (go_inside == 1)
             app_intrf_cx_children_iterate(app_intrf, cur_cx, top_cx, leave_top,
-                                          filter_flags, filter_only_top,
                                           callback_func);
 
         iter += 1;
@@ -842,6 +672,12 @@ static void app_intrf_cx_children_iterate(
     callback_func(app_intrf, root_cx);
 }
 
+//TEMP FUNC for testing
+//print the id and gen per context
+static void print_id_gen(APP_INTRF* app_intrf, CX* cur_cx){
+    printf("id: %d; gen: %d\n", cur_cx->uid.id, cur_cx->uid.gen);
+}
+
 void app_intrf_destroy(APP_INTRF *app_intrf) {
     if (!app_intrf)
         return;
@@ -850,9 +686,11 @@ void app_intrf_destroy(APP_INTRF *app_intrf) {
         app_intrf->data_destroy(app_intrf->main_user_data,
                                 app_intrf->main_user_data_type);
 
+    //TEMP FOR TESTING printout all contexts ids and gens
+    app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root, app_intrf->cx_root, 0, print_id_gen);
     // remove the cx structure
     app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root,
-                                  app_intrf->cx_root, 0, 0, 0,
+                                  app_intrf->cx_root, 0,
                                   app_intrf_cx_children_pop);
 
     free(app_intrf);
@@ -868,15 +706,16 @@ static void app_intrf_cx_check_dirty(APP_INTRF *app_intrf, CX *cur_cx) {
     if (!app_intrf->data_is_dirty(cur_cx->user_data, cur_cx->user_data_type))
         return;
     // if it is remove all children recursively
-    // but leave the cur_cx context and do not remove any of the cur_cx children
-    // that has the _CANT_DIRTY flag
+    // but leave the cur_cx context 
     app_intrf_cx_children_iterate(app_intrf, cur_cx, cur_cx, 1,
-                                  INTRF_FLAG_CANT_DIRTY, 1,
                                   app_intrf_cx_children_pop);
     // create the children inside cur_cx again
+    app_intrf->next_uid.gen += 1;
+    app_intrf->next_uid.id = 0;
     app_intrf_cx_children_create(app_intrf, cur_cx);
 }
 
+// functions for the ui layer
 void nav_update(APP_INTRF *app_intrf) {
     if (!app_intrf)
         return;
@@ -885,146 +724,14 @@ void nav_update(APP_INTRF *app_intrf) {
                                app_intrf->main_user_data_type);
     // iterate the whole structure and check if any CX are dirty
     app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root,
-                                  app_intrf->cx_root, 0, 0, 0,
+                                  app_intrf->cx_root, 0,
                                   app_intrf_cx_check_dirty);
-}
-
-void nav_group_filter_set(APP_INTRF *app_intrf, unsigned int gr_idx, enum intrfFlags group_flags_include, enum intrfFlags group_flags_exclude){
-    if(!app_intrf)
-        return;
-    if(gr_idx >= CX_GROUPS)
-        return;
-
-    app_intrf->groups[gr_idx].cx_filter_exclude = group_flags_exclude;
-    app_intrf->groups[gr_idx].cx_filter_include = group_flags_include;
 }
 
 CX* nav_cx_root_return(APP_INTRF* app_intrf){
     if(!app_intrf)return NULL;
 
     return app_intrf->cx_root;
-}
-
-CX *nav_cx_curr_return(APP_INTRF *app_intrf, unsigned int gr_idx) {
-    if (!app_intrf)
-        return NULL;
-    if (gr_idx >= CX_GROUPS)return NULL;
-    return app_intrf->groups[gr_idx].cx_curr;
-}
-
-int nav_cx_curr_exit(APP_INTRF *app_intrf, unsigned int gr_idx) {
-    if (!app_intrf)
-        return -1;
-    if (gr_idx >= CX_GROUPS)return -1;
-    if (!app_intrf->groups[gr_idx].cx_curr)
-        return -1;
-    if (!app_intrf->groups[gr_idx].cx_curr->cx_parent)
-        return -1;
-
-    app_intrf->groups[gr_idx].cx_curr = app_intrf->groups[gr_idx].cx_curr->cx_parent;
-    return 1;
-}
-
-int nav_cx_curr_change(APP_INTRF* app_intrf, CX* cx_self, unsigned int gr_idx){
-    if (!app_intrf)return -1;
-    if (!cx_self)return 0;
-
-    // if this context has children enter inside
-    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
-        return 0;
-    if (cx_self->cx_children.count == 0)
-        return 0;
-
-    app_intrf->groups[gr_idx].cx_curr = cx_self;
-
-    return 1;
-}
-
-int nav_cx_invoke(APP_INTRF *app_intrf, CX *cx_self) {
-    if (!app_intrf)
-        return -1;
-    if (!cx_self)
-        return 0;
-
-    // call the data invoke callback
-    if (app_intrf->data_invoke){
-        // TODO check flags if a filename or some other string needs to be
-        // presented to the data If data needs a file string, or after invoke
-        // the user needs to do another action the UI should be informed. This
-        // could be done through flags on cx or this function can return codes
-        // what needs to be done
-        app_intrf->data_invoke(cx_self->user_data, cx_self->user_data_type,
-                               NULL);
-        return 1;
-    }
-    return 0;
-}
-
-int nav_cx_enter(APP_INTRF *app_intrf, CX *cx_self, unsigned int gr_idx){
-    if (!app_intrf)return -1;
-    if (!cx_self)return 0;
-
-    // invoke cx_self first
-    nav_cx_invoke(app_intrf, cx_self);
-
-    // if this context has children enter inside
-    if (!(cx_self->flags & INTRF_FLAG_CONTAINER))
-        return 0;
-    if (cx_self->cx_children.count == 0)
-        return 0;
-
-    app_intrf->groups[gr_idx].cx_curr = cx_self;
-
-    return 1;
-}
-
-CX *nav_cx_selected_return(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx) {
-    if (!app_intrf)
-        return NULL;
-    if (gr_idx >= CX_GROUPS)return NULL;
-    if(!cx_curr)return NULL;
-
-    // if there is no cx_selected, try to find
-    if(!cx_curr->cx_children.cx_selected[gr_idx]){
-        app_intrf_cx_selected_prev_next(app_intrf, cx_curr, gr_idx, 0);
-    }
-    return cx_curr->cx_children.cx_selected[gr_idx];
-}
-
-void nav_cx_children_match_callback(APP_INTRF *app_intrf, CX *parent,
-                                    unsigned int gr_idx, void *user_data,
-                                    void(match_func)(CX *cx_matched,
-                                                     void *user_data)) {
-    if(!app_intrf) return;
-    if(!parent)return;
-
-    for(unsigned int i = 0; i < parent->cx_children.count; i++){
-        CX* cx_curr = parent->cx_children.contexts[i];
-        if(app_intrf_cx_filter_check(app_intrf, cx_curr, gr_idx)){
-            match_func(cx_curr, user_data);
-        }
-    }
-}
-
-void nav_cx_on_top_match_callback(APP_INTRF *app_intrf, CX *cx_curr,
-                                  unsigned int gr_idx, void *user_data,
-                                  void(match_func)(CX *cx_matched,
-                                                   void *user_data)) {
-    if(!app_intrf)return;
-    if(!cx_curr)return;
-
-    CX* parent = cx_curr;
-    while(parent){
-        CX* cx_next = parent->cx_on_top_first;
-        while(cx_next){
-            if(app_intrf_cx_filter_check(app_intrf, cx_next, gr_idx)){
-                match_func(cx_next, user_data);
-            }
-            cx_next = cx_next->cx_on_top_next;
-        }
-
-        parent = parent->cx_parent;
-    }
 }
 
 int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
@@ -1042,25 +749,9 @@ int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
     return 1;
 }
 
-void nav_cx_selected_next(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx) {
-    if (!app_intrf)
-        return;
-    if (gr_idx >= CX_GROUPS)return;
-    if (!cx_curr)return;
-    app_intrf_cx_selected_prev_next(app_intrf, cx_curr, gr_idx, 0);
-}
-
-void nav_cx_selected_prev(APP_INTRF *app_intrf, CX* cx_curr, unsigned int gr_idx) {
-    if (!app_intrf)
-        return;
-    if (!cx_curr)return;
-    app_intrf_cx_selected_prev_next(app_intrf, cx_curr, gr_idx, 1);
-}
-
 uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, CX *cx_self){
     if (!app_intrf)return 0;
     if (!cx_self)return 0;
 
     return cx_self->flags;
 }
-//----------------------------------------------------------------------------------------------------
