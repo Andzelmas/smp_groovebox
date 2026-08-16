@@ -50,7 +50,13 @@
 // "this context can be removed", "this context can be renamed", "this context has a value, and it can be changed", "this context can create contexts", etc.
 // The UI can then separate showing names of contexts; current context; selected contexts; last_visited; currently visited etc. And:
 // actions of the context (add, remove, rename, etc.). It can even show separatly the actions for the current context and its selected children.
+// But for this to work need contextid, ui layer wont ever retrieve cx pointers. 
+// Might be good idea to implement this using uistates, hashmaps. As a separate ui api, that user can use by default or create their own.
+// MAIN IDEA: contexts is the World, uilayer is the user view of the World.
+// use events, uilayer removes all references of the contextid when it gets an event from the context layer that it was removed. This way tombstones will not increase the memory.
+// also, this way there can be multiply ui states (named groups now) and they can even appear/disappear dynamically. Each uistate has to have a separate cursor that reads the context layer events.
 // Also remove from data and context layers context that are temporary: for example add lists.
+// Because of this there wont be a need for _CANT_DIRTY flag (or any flag checking in context layer), since ui layer will have the ownership of lists and the like and lists wont be inside anything that is destroyed.
 // Implementation should be action invocation + action options (to create the add lists, save file requests and similar).
 // UI gets possible actions on context; asks for action options (arguments); depending on that displays choices (generated on data layer or not) for user or calls command_execute() on context layer
 // Also, this way UI can get possible actions and if an action needs options it can for example hide the whole interface and only show the choices or input (for rename operation).
@@ -331,11 +337,6 @@ void ui_rename_selected(Context *ctx)
 }
 */
 
-// Selected contexts, groups, filtering by flags (or even knowing the flags?) and even cx_curr? should be left to the UI layer. Will need to make unique ids for contexts
-// Might be good idea to implement this using uistates, hashmaps. As a separate ui api, that user can use by default or create their own.
-// MAIN IDEA: contexts is the World, uilayer is the user view of the World.
-// use events, uilayer removes all references of the contextid when it gets an event from the context layer that it was removed. This way tombstones will not increase the memory.
-// also, this way there can be multiply ui states (named groups now) and they can even appear/disappear dynamically. Each uistate has to have a separate cursor that reads the context layer events.
 // Introduce connected CX* to app_intrf. 
 // Implement Port connectivity, test sound. 
 // Also will need memory slots per group (arrays of CX* per group). This will be useful for port connectivity so user
