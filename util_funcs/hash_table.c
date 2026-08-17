@@ -306,7 +306,7 @@ void* ht_remove(HashTable *ht, const char* key, size_t key_len)
     return NULL;
 }
 
-void ht_destroy(HashTable *ht)
+void ht_destroy(HashTable *ht, void(user_destroy_func)(void* user_data))
 {
     if (!ht)
         return;
@@ -316,6 +316,8 @@ void ht_destroy(HashTable *ht)
 
         while (entry) {
             HashEntry *next = entry->next;
+            if (user_destroy_func)
+                user_destroy_func(entry->value);
 
             free(entry);
             entry = next;

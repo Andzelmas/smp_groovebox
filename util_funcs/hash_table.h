@@ -76,8 +76,9 @@ void* ht_remove(HashTable *ht, const char* key, size_t key_len);
 /*
  * Destroy the hash table.
  *
- * Stored values are NOT freed.
+ * Stored values can be destroyed with the given user_destroy_func 
+ * user_data is provided from the HashEntry->value
  */
-void ht_destroy(HashTable *ht);
+void ht_destroy(HashTable *ht, void(user_destroy_func)(void* user_data));
 
 #endif /* HASH_TABLE_H */
