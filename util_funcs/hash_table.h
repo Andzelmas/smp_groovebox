@@ -62,13 +62,10 @@ int ht_contains(const HashTable *ht, uint64_t key);
 /*
  * Remove key from the table.
  *
- * The associated value is NOT freed.
- *
- * Returns:
- *   0  key was removed
- *  -1  key was not found or table is invalid
+ * Returns associated user data, or
+ * NULL if key not found or error
  */
-int ht_remove(HashTable *ht, uint64_t key);
+void* ht_remove(HashTable *ht, uint64_t key);
 
 /*
  * Destroy the hash table.

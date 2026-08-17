@@ -186,20 +186,23 @@ int ht_contains(const HashTable *ht, uint64_t key)
     return 0;
 }
 
-int ht_remove(HashTable *ht, uint64_t key)
+void* ht_remove(HashTable *ht, uint64_t key)
 {
     if (!ht)
-        return -1;
+        return NULL;
 
     size_t index = hash_key(key, ht->capacity);
 
     HashEntry **current = &ht->buckets[index];
+
+    void* user_data = NULL;
 
     while (*current) {
         HashEntry *entry = *current;
 
         if (entry->key == key) {
             *current = entry->next;
+            user_data = entry->value;
 
             free(entry);
             ht->size--;
@@ -223,13 +226,13 @@ int ht_remove(HashTable *ht, uint64_t key)
                 (void)ht_resize(ht, new_capacity);
             }
 
-            return 0;
+            return user_data;
         }
 
         current = &entry->next;
     }
 
-    return -1;
+    return NULL;
 }
 
 void ht_destroy(HashTable *ht)
