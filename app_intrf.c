@@ -45,14 +45,17 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// CONTEXT UNIQUE IDS implementation (with hash maps with const char* keys). Start with returning of
-// the communications with unique ids. Might be good idea to implement this
-// using uistates, hashmaps. As a separate ui api, that user can use by default
-// or create their own. MAIN IDEA: contexts is the World, uilayer is the user
-// view of the World. use events, uilayer removes all references of the
-// contextid when it gets an event from the context layer that it was removed.
-// This way tombstones will not increase the memory. Each uistate has to have a
-// separate cursor that reads the context layer events.
+// CONTEXT UNIQUE IDS implementation (with hash maps with const char* keys).
+// Start with returning of the communications with unique ids. Might be good
+// idea to implement this using uistates, hashmaps. The UI layer could be a
+// separate api, that user can use by default or create their own.
+
+// MAIN IDEA: contexts is the World, uilayer is the user view of the World.
+
+//  use events, uilayer removes all references of the
+//  contextid when it gets an event from the context layer that it was removed.
+//  This way tombstones will not increase the memory. Each uistate has to have a
+//  separate cursor that reads the context layer events.
 
 // The UI can then separate showing names of contexts; current context; selected
 // contexts; last_visited; currently visited etc. And: actions of the context
@@ -72,19 +75,34 @@
 //  or calls command_execute() on context layer Also, this way UI can get
 //  possible actions and if an action needs options it can for example hide the
 //  whole interface and only show the choices or input (for rename operation).
-//  For choice arguments to be generic and work with categories ActionSelection
-//  struct can be implemented in the context layer: These can be yes/no
-//  questions; list choices; list choices with multilevel categories and etc.
-//  Important thing to remember is to not return an array of items but an
-//  ActionSelectionModel struct and use that to iterate and give the UI the
-//  type: is it a leaf? if yes use command_execute on it, if no go inside. 
-//
+
+//  For choice arguments to be generic and work with categories ContextChoice struct
+//  should have 
+/*
+typedef struct {
+    const char *key;
+    const char *value;
+} ContextAttribute;
+
+typedef struct {
+    DataId id;
+
+    const char *label;
+    const char *description;
+
+    ContextAttribute *attributes;
+    size_t attribute_count;
+
+} ContextChoice;
+*/
+//  Then attributes can be expanded in the future ("version", "provider" etc.)
+
 //  SO in
 //  plugins.c and clap_plugins.c the plugin lists have to have stable ids (hash
 //  tables with const char* keys instead of unique plugin lists). Then UI can own an item list and
 //  dispatch an action for the item. Context uses the unique key given by the UI
 //  and asks the data layer to do the action with the item. Data checks, if the
-//  item with the key exists, if not the context can give the result back to UI
+//  item with the key exists, if not - the context can give the result back to UI
 //  layer and it can refresh the item list.
 /*
 typedef struct ActionSelectionModel
@@ -142,30 +160,6 @@ and similar functions
 IN CONTEXT:
 
 typedef enum {
-    ACTION_VALUE_NONE,
-    ACTION_VALUE_STRING,
-    ACTION_VALUE_INT,
-    ACTION_VALUE_BOOL,
-    ACTION_VALUE_CHOICE,
-    ACTION_VALUE_CONTEXT,
-} ActionValueType;
-typedef struct {
-    uint32_t id;
-    const char *label;
-} ActionChoice;
-typedef struct {
-    const char *name;
-    const char *label;
-
-    ActionValueType type;
-
-    bool required;
-
-    const ActionChoice *choices;
-    size_t choice_count;
-} ActionArgument;
-
-typedef enum {
     CONTEXT_COMMAND_REMOVE,
     CONTEXT_COMMAND_RENAME,
 } ContextRequestType;
@@ -180,6 +174,9 @@ typedef struct {
         struct {
             const char *name;
         } rename;
+        struct {
+            ContextChoice choice;
+        } choice;
     };
 } ContextRequest;
 
