@@ -184,9 +184,7 @@ int ht_set(HashTable *ht, const char* key, size_t key_len, void *value)
     if ((double)(ht->size + 1) / ht->capacity >
         HT_MAX_LOAD_FACTOR) {
 
-        /*
-         * Prevent size_t overflow.
-         */
+         // Prevent size_t overflow.
         if (ht->capacity > SIZE_MAX / 2)
             return -1;
 
@@ -195,10 +193,8 @@ int ht_set(HashTable *ht, const char* key, size_t key_len, void *value)
         if (ht_resize(ht, new_capacity) != 0)
             return -1;
 
-        /*
-         * Capacity changed, so the bucket index must
-         * be recalculated.
-         */
+         // Capacity changed, so the bucket index must
+         // be recalculated.
         index = hash_key(key, key_len, ht->capacity);
     }
 
@@ -290,13 +286,10 @@ void* ht_remove(HashTable *ht, const char* key, size_t key_len)
                 if (new_capacity < HT_INITIAL_CAPACITY)
                     new_capacity = HT_INITIAL_CAPACITY;
 
-                /*
-                 * Failure to shrink is not an error.
-                 * The existing table remains valid.
-                 */
+                 // Failure to shrink is not an error.
+                 // The existing table remains valid.
                 (void)ht_resize(ht, new_capacity);
             }
-
             return user_data;
         }
 

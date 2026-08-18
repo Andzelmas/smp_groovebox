@@ -28,14 +28,14 @@ void app_intrf_destroy(APP_INTRF *app_intrf);
 // children
 void nav_update(APP_INTRF *app_intrf);
 
-// return the top context, that has no parent
-CX *nav_cx_root_return(APP_INTRF *app_intrf);
+// return the key of thetop context, that has no parent
+const char *nav_cx_root_return(APP_INTRF *app_intrf);
 
-// return the name of the cx
-int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
+// return the name of the key cx
+int nav_cx_display_name_return(APP_INTRF *app_intrf, const char* key, char *return_name,
                                unsigned int name_len);
 
 // return the cx interface flags, 
 // see the intrfFlags enum in types.h
-uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, CX *cx_self);
+uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, const char* key);
 //----------------------------------------------------------------------------------------------------

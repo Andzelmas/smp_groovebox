@@ -36,6 +36,7 @@
 */
 
 #include "app_intrf.h"
+#include "util_funcs/hash_table.h"
 #include <stdint.h>
 #include <string.h>
 #include "app_data.h"
@@ -56,6 +57,71 @@
 //  contextid when it gets an event from the context layer that it was removed.
 //  This way tombstones will not increase the memory. Each uistate has to have a
 //  separate cursor that reads the context layer events.
+
+// Instead of app_data switch types implement typed opaque data + operation structs/functions
+/*
+struct DataObject {
+    const DataOps *ops;
+    DataId id;
+};
+
+typedef struct {
+    DataObject base;
+
+    DataObject **children;
+    size_t child_count;
+} Directory;
+
+typedef enum {
+    DATA_CAP_NAME        = 1 << 0,
+    DATA_CAP_CHILDREN    = 1 << 1,
+    DATA_CAP_ACTIONS     = 1 << 2,
+    DATA_CAP_RENAME      = 1 << 3,
+} DataCapabilities;
+struct DataOps{
+    DataCapabilities capabilities;
+
+    DataIterator* (children)(DataObject*);
+    uint16_t (object_flag)(DataObject*);
+    bool (object_name)(DataObject*, char* return_name, unsigned int return_name_len);
+    DataCapabilities (object_capabilities)(DataObject*);
+}
+
+static const DataOps directory_ops = {
+    .children = directory_children
+};
+
+static DataIterator *directory_children(DataObject *object)
+{
+    Directory *dir = (Directory *)object;
+
+    return directory_iterator_create(
+        dir->children,
+        dir->child_count
+    );
+}
+
+Directory *directory_create(DataId id)
+{
+    Directory *dir = malloc(sizeof(*dir));
+
+    dir->base.id = id;
+    dir->base.ops = &directory_ops;
+
+    dir->children = NULL;
+    dir->child_count = 0;
+
+    return dir;
+}
+//this is for the context layer to use
+bool data_name(DataObject* object, char* return_name, unsigned int return_name_len){
+    return object->ops->object_name(object, return_name, return_name_len);
+}
+DataIterator *data_children(DataObject *object)
+{
+    return object->ops->children(object);
+}
+*/
 
 // The UI can then separate showing names of contexts; current context; selected
 // contexts; last_visited; currently visited etc. And: actions of the context
@@ -103,7 +169,7 @@ typedef struct {
 //  dispatch an action for the item. Context uses the unique key given by the UI
 //  and asks the data layer to do the action with the item. Data checks, if the
 //  item with the key exists, if not - the context can give the result back to UI
-//  layer and it can refresh the item list.
+//  layer and it can refresh the item list (request the list items from the context again and rebuild the list that the UI owns).
 /*
 typedef struct ActionSelectionModel
     ActionSelectionModel;
@@ -405,11 +471,11 @@ typedef struct _cx_array{
 typedef struct _cx_uniqueid{
     unsigned int id;
     unsigned int gen;
+    char key[MAX_PATH_STRING];
 }CX_ID;
 
 typedef struct _cx {
-    // name of the cx, data must make sure this is unique in the context,
-    // otherwise the cx will not be created
+    // name for display
     char short_name[MAX_PARAM_NAME_LENGTH];
     struct _cx_uniqueid uid; //unique context id
     int idx; // index number of this CX in the cx_parent cx_children array
@@ -426,6 +492,8 @@ typedef struct _cx {
 typedef struct _app_intrf {
     CX *cx_root;
     CX_ID next_uid; //uniqueid for the next context
+    HashTable* cx_hashtable; //hash table that links next_uid->key to a context
+
     uint16_t main_user_data_type; // type for the main user_data struct, the
                                   // same type is in cx_root->user_data_type
     void *main_user_data; // main user_data struct for convenience, the same
@@ -449,8 +517,10 @@ typedef struct _app_intrf {
 } APP_INTRF;
 
 // pop the child from the context structure 
-static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
-    if (!app_intrf)
+static void app_intrf_cx_children_pop(APP_INTRF* app_intrf, CX* cx_rem){
+    if(!app_intrf)
+        return;
+    if(!cx_rem)
         return;
     CX* parent = cx_rem->cx_parent;
     if (parent){
@@ -488,6 +558,7 @@ static void app_intrf_cx_children_pop(APP_INTRF *app_intrf, CX *cx_rem){
 
     //remove the cx_rem
     if(cx_rem->cx_children.contexts)free(cx_rem->cx_children.contexts);
+    ht_remove(app_intrf->cx_hashtable, cx_rem->uid.key, MAX_PATH_STRING);
     free(cx_rem);
 
 }
@@ -542,14 +613,6 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     if (!short_name) {
         return NULL;
     }
-    //two CX with same short_name under the same parent_cx cant exist
-    if(parent_cx){
-        for(unsigned int i = 0; i < parent_cx->cx_children.count; i++){
-            CX* nb_cx = parent_cx->cx_children.contexts[i];
-            if(strcmp(nb_cx->short_name, short_name)==0)
-                return NULL;
-        }
-    }
 
     CX *new_cx = calloc(1, sizeof(CX));
     if (!new_cx)
@@ -558,6 +621,7 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     new_cx->flags = flags;
     new_cx->uid.id = app_intrf->next_uid.id;
     new_cx->uid.gen = app_intrf->next_uid.gen;
+    snprintf(new_cx->uid.key, MAX_PATH_STRING, "%d_%d", new_cx->uid.gen, new_cx->uid.id);
     app_intrf->next_uid.id += 1;
     new_cx->cx_children.contexts = NULL;
     new_cx->cx_children.count = 0;
@@ -577,6 +641,11 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
         }
     }
 
+    // put the new CX into the hashtable
+    if(ht_set(app_intrf->cx_hashtable, new_cx->uid.key, MAX_PATH_STRING, (void*)new_cx) != 0){
+        app_intrf_cx_children_pop(app_intrf, new_cx);
+        return NULL;
+    }
     return new_cx;
 }
 
@@ -630,6 +699,11 @@ APP_INTRF *app_intrf_init() {
     //--------------------------------------------------
     app_intrf->next_uid.gen = 0;
     app_intrf->next_uid.id = 0;
+    app_intrf->cx_hashtable = ht_create(32);
+    if(!app_intrf->cx_hashtable){
+        app_intrf_destroy(app_intrf);
+        return NULL;
+    }
 
     uint32_t root_flags = 0;
     char root_name[MAX_PARAM_NAME_LENGTH];
@@ -694,7 +768,7 @@ static void app_intrf_cx_children_iterate(
 //TEMP FUNC for testing
 //print the id and gen per context
 static void print_id_gen(APP_INTRF* app_intrf, CX* cur_cx){
-    printf("id: %d; gen: %d\n", cur_cx->uid.id, cur_cx->uid.gen);
+    printf("key: %s\n", cur_cx->uid.key);
 }
 
 void app_intrf_destroy(APP_INTRF *app_intrf) {
@@ -712,6 +786,7 @@ void app_intrf_destroy(APP_INTRF *app_intrf) {
                                   app_intrf->cx_root, 0,
                                   app_intrf_cx_children_pop);
 
+    ht_destroy(app_intrf->cx_hashtable, NULL);
     free(app_intrf);
 }
 
@@ -747,30 +822,28 @@ void nav_update(APP_INTRF *app_intrf) {
                                   app_intrf_cx_check_dirty);
 }
 
-CX* nav_cx_root_return(APP_INTRF* app_intrf){
+const char* nav_cx_root_return(APP_INTRF* app_intrf){
     if(!app_intrf)return NULL;
 
-    return app_intrf->cx_root;
+    return app_intrf->cx_root->uid.key; 
 }
 
-int nav_cx_display_name_return(APP_INTRF *app_intrf, CX *cx, char *return_name,
+int nav_cx_display_name_return(APP_INTRF *app_intrf, const char* key, char *return_name,
                                unsigned int name_len) {
     if (!app_intrf)
         return -1;
-    if (!cx)
-        return -1;
     if (!return_name)
         return -1;
-    // TODO Should check the flag _DISPLAY_NAME_DYN
-    // for this flag should call special data function for returning dynamic
-    // names this is needed for parameters and similar contexts
-    snprintf(return_name, name_len, "%s", cx->short_name);
+    void* cx_data = ht_get(app_intrf->cx_hashtable, key, MAX_PATH_STRING);
+    if (!cx_data)
+        return -1;
+    CX* cx_curr = (CX*)cx_data;
+    snprintf(return_name, name_len, "%s", cx_curr->short_name);
     return 1;
 }
 
-uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, CX *cx_self){
+uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, const char* key){
     if (!app_intrf)return 0;
-    if (!cx_self)return 0;
 
-    return cx_self->flags;
+    return 0; 
 }

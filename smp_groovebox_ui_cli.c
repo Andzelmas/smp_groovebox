@@ -39,13 +39,18 @@ int main() {
         exit(1);
     }
 
+    const char* root_key = nav_cx_root_return(app_intrf);
+    char name[MAX_PARAM_NAME_LENGTH];
+    nav_cx_display_name_return(app_intrf, root_key, name, MAX_PARAM_NAME_LENGTH);
+    printf("root name: %s\n", name);
+
     //which group is chosen right now
     unsigned int group_curr = GROUP_MAIN;
     //the last possible group
     unsigned int group_max = GROUP_BUTTONS;
     while (1) {
         // erase the terminal
-        printf("\033[2J\033[H");
+        //printf("\033[2J\033[H");
         // update the interface, of course should be in a loop
         nav_update(app_intrf);
 
