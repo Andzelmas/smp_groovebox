@@ -58,19 +58,18 @@
 //  This way tombstones will not increase the memory. Each uistate has to have a
 //  separate cursor that reads the context layer events.
 
-// Instead of app_data switch types implement typed opaque data + operation structs/functions
+// Instead of app_data switch types implement typed opaque data + operation
+// structs/functions ALSO instead of dirty functions, all data that can be
+// returned to context should have a generation number Context can get
+// generation number and if it is not equal to the current generation number it
+// can remove and repopulate this contexts' (but not the context itself)
+// children.
 /*
 struct DataObject {
-    const DataOps *ops;
-    DataId id;
+    const DataOps *ops;   // how to operate on it
+    DataId id;            // identity
+    void *user_data;      // where the actual state lives
 };
-
-typedef struct {
-    DataObject base;
-
-    DataObject **children;
-    size_t child_count;
-} Directory;
 
 typedef enum {
     DATA_CAP_NAME        = 1 << 0,
@@ -78,48 +77,40 @@ typedef enum {
     DATA_CAP_ACTIONS     = 1 << 2,
     DATA_CAP_RENAME      = 1 << 3,
 } DataCapabilities;
-struct DataOps{
+
+typedef struct {
     DataCapabilities capabilities;
 
-    DataIterator* (children)(DataObject*);
-    uint16_t (object_flag)(DataObject*);
-    bool (object_name)(DataObject*, char* return_name, unsigned int return_name_len);
-    DataCapabilities (object_capabilities)(DataObject*);
-}
+    DataIterator *(*children)(void *user_data);
+    uint16_t (*flags)(void *user_data);
+    bool (*name)(void *user_data, char *buffer, size_t buffer_len);
+} DataOps;
 
 static const DataOps directory_ops = {
-    .children = directory_children
+    .capabilities = DATA_CAP_CHILDREN | DATA_CAP_NAME,
+    .children = directory_children,
+    .flags = directory_flags,
+    .name = directory_name,
 };
 
-static DataIterator *directory_children(DataObject *object)
+static DataIterator *directory_children(void* user_data)
 {
-    Directory *dir = (Directory *)object;
+    Directory *dir = (Directory *)user_data;
 
-    return directory_iterator_create(
-        dir->children,
-        dir->child_count
-    );
+    ...
 }
 
-Directory *directory_create(DataId id)
-{
-    Directory *dir = malloc(sizeof(*dir));
+// in functions that return DataObjects:
+DataObject result = {
+    .ops = &directory_ops,
+    .id = id,
+    .user_data = existing_directory_data
+};
 
-    dir->base.id = id;
-    dir->base.ops = &directory_ops;
-
-    dir->children = NULL;
-    dir->child_count = 0;
-
-    return dir;
-}
 //this is for the context layer to use
-bool data_name(DataObject* object, char* return_name, unsigned int return_name_len){
-    return object->ops->object_name(object, return_name, return_name_len);
-}
-DataIterator *data_children(DataObject *object)
+DataIterator *data_children(void* user_data)
 {
-    return object->ops->children(object);
+    return object->ops->children(user_data);
 }
 */
 
