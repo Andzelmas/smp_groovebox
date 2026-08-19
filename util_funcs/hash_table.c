@@ -1,9 +1,9 @@
-#include "hash_table.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+
+#include "hash_table.h"
 
 // HT_INITIAL_CAPACITY must be power of two
 #define HT_INITIAL_CAPACITY 16
@@ -34,50 +34,20 @@ static bool next_power_of_two(size_t x, size_t *result)
     return true;
 }
 
-/*
- * 64-bit integer mixing function.
- *
- * Based on the finalizer used by MurmurHash3.
- */
-static inline uint64_t hash_mix(uint64_t x)
+static size_t hash_key(uint64_t key, size_t capacity)
 {
+
+    // capacity must be a power of two.
+    uint64_t x = key;
+
+    // SplitMix64 mixing
     x ^= x >> 30;
     x *= UINT64_C(0xbf58476d1ce4e5b9);
     x ^= x >> 27;
     x *= UINT64_C(0x94d049bb133111eb);
     x ^= x >> 31;
 
-    return x;
-}
-
-static size_t hash_key(const char* key, size_t key_len, size_t capacity)
-{
-    const unsigned char *p = (const unsigned char *)key;
-    size_t len = key_len;
-
-    uint64_t hash = UINT64_C(0x9e3779b97f4a7c15);
-
-    while (len >= 8) {
-        uint64_t v;
-
-        memcpy(&v, p, sizeof(v));
-
-        hash ^= hash_mix(v);
-        hash *= UINT64_C(0x9e3779b185ebca87);
-
-        p += 8;
-        len -= 8;
-    }
-
-    /* Remaining 0–7 bytes */
-    uint64_t tail = 0;
-
-    for (size_t i = 0; i < len; ++i)
-        tail |= (uint64_t)p[i] << (i * 8);
-
-    hash ^= hash_mix(tail);
-
-    return (size_t)(hash & (capacity - 1));
+    return (size_t)x & (capacity - 1);
 }
 
 static int ht_resize(HashTable *ht, size_t new_capacity)
@@ -104,7 +74,7 @@ static int ht_resize(HashTable *ht, size_t new_capacity)
             HashEntry *next = entry->next;
 
             size_t index =
-                hash_key(entry->key, entry->key_len, new_capacity);
+                hash_key(entry->key, new_capacity);
 
             entry->next = new_buckets[index];
             new_buckets[index] = entry;
@@ -156,12 +126,12 @@ HashTable *ht_create(size_t capacity)
     return ht;
 }
 
-int ht_set(HashTable *ht, const char* key, size_t key_len, void *value)
+int ht_set(HashTable *ht, uint64_t key, void *value)
 {
     if (!ht)
         return -1;
 
-    size_t index = hash_key(key, key_len, ht->capacity);
+    size_t index = hash_key(key, ht->capacity);
 
     /*
      * If key already exists, replace the value.
@@ -169,8 +139,7 @@ int ht_set(HashTable *ht, const char* key, size_t key_len, void *value)
     HashEntry *entry = ht->buckets[index];
 
     while (entry) {
-        if (strcmp(entry->key, key) == 0) {
-            entry->key_len = key_len;
+        if (entry->key == key) {
             entry->value = value;
             return 0;
         }
@@ -195,7 +164,7 @@ int ht_set(HashTable *ht, const char* key, size_t key_len, void *value)
 
          // Capacity changed, so the bucket index must
          // be recalculated.
-        index = hash_key(key, key_len, ht->capacity);
+        index = hash_key(key, ht->capacity);
     }
 
     entry = malloc(sizeof(*entry));
@@ -203,8 +172,7 @@ int ht_set(HashTable *ht, const char* key, size_t key_len, void *value)
     if (!entry)
         return -1;
 
-    snprintf(entry->key, MAX_KEY_LENGTH, "%s", key);
-    entry->key_len = key_len;
+    entry->key = key;
     entry->value = value;
 
     entry->next = ht->buckets[index];
@@ -215,17 +183,17 @@ int ht_set(HashTable *ht, const char* key, size_t key_len, void *value)
     return 0;
 }
 
-void *ht_get(const HashTable *ht, const char* key, size_t key_len)
+void *ht_get(const HashTable *ht, uint64_t key)
 {
     if (!ht)
         return NULL;
 
-    size_t index = hash_key(key, key_len, ht->capacity);
+    size_t index = hash_key(key, ht->capacity);
 
     HashEntry *entry = ht->buckets[index];
 
     while (entry) {
-        if (strcmp(entry->key, key) == 0)
+        if (entry->key == key)
             return entry->value;
 
         entry = entry->next;
@@ -234,17 +202,17 @@ void *ht_get(const HashTable *ht, const char* key, size_t key_len)
     return NULL;
 }
 
-int ht_contains(const HashTable *ht, const char* key, size_t key_len)
+int ht_contains(const HashTable *ht, uint64_t key)
 {
     if (!ht)
         return 0;
 
-    size_t index = hash_key(key, key_len, ht->capacity);
+    size_t index = hash_key(key, ht->capacity);
 
     HashEntry *entry = ht->buckets[index];
 
     while (entry) {
-        if (strcmp(entry->key, key) == 0)
+        if (entry->key == key)
             return 1;
 
         entry = entry->next;
@@ -253,12 +221,12 @@ int ht_contains(const HashTable *ht, const char* key, size_t key_len)
     return 0;
 }
 
-void* ht_remove(HashTable *ht, const char* key, size_t key_len)
+void* ht_remove(HashTable *ht, uint64_t key)
 {
     if (!ht)
         return NULL;
 
-    size_t index = hash_key(key, key_len, ht->capacity);
+    size_t index = hash_key(key, ht->capacity);
 
     HashEntry **current = &ht->buckets[index];
 
@@ -267,7 +235,7 @@ void* ht_remove(HashTable *ht, const char* key, size_t key_len)
     while (*current) {
         HashEntry *entry = *current;
 
-        if (strcmp(entry->key, key) == 0) {
+        if (entry->key == key) {
             *current = entry->next;
             user_data = entry->value;
 
@@ -297,6 +265,10 @@ void* ht_remove(HashTable *ht, const char* key, size_t key_len)
     }
 
     return NULL;
+}
+
+uint64_t ht_make_key(uint32_t num_1, uint32_t num_2){
+    return ((uint64_t) num_2 << 32) | num_1;
 }
 
 void ht_destroy(HashTable *ht, void(user_destroy_func)(void* user_data))

@@ -64,6 +64,10 @@
 // generation number and if it is not equal to the current generation number it
 // can remove and repopulate this contexts' (but not the context itself)
 // children.
+// SO remove all _USER_DATA and _FLAGS from types.h. If UI needs to get flags
+// these should be in app_intrf.h. All functions that return string should
+// return const char* instead of return_string in arguments. Then, wont need to
+// synchronize defines between layer because of string lengths
 /*
 struct DataObject {
     const DataOps *ops;   // how to operate on it
@@ -460,9 +464,9 @@ typedef struct _cx_array{
 } CX_ARRAY;
 
 typedef struct _cx_uniqueid{
-    unsigned int id;
-    unsigned int gen;
-    char key[MAX_PATH_STRING];
+    uint32_t id;
+    uint32_t gen;
+    uint64_t key;
 }CX_ID;
 
 typedef struct _cx {
@@ -549,7 +553,7 @@ static void app_intrf_cx_children_pop(APP_INTRF* app_intrf, CX* cx_rem){
 
     //remove the cx_rem
     if(cx_rem->cx_children.contexts)free(cx_rem->cx_children.contexts);
-    ht_remove(app_intrf->cx_hashtable, cx_rem->uid.key, MAX_PATH_STRING);
+    ht_remove(app_intrf->cx_hashtable, cx_rem->uid.key);
     free(cx_rem);
 
 }
@@ -612,7 +616,7 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     new_cx->flags = flags;
     new_cx->uid.id = app_intrf->next_uid.id;
     new_cx->uid.gen = app_intrf->next_uid.gen;
-    snprintf(new_cx->uid.key, MAX_PATH_STRING, "%d_%d", new_cx->uid.gen, new_cx->uid.id);
+    new_cx->uid.key = ht_make_key(new_cx->uid.id, new_cx->uid.gen);
     app_intrf->next_uid.id += 1;
     new_cx->cx_children.contexts = NULL;
     new_cx->cx_children.count = 0;
@@ -633,7 +637,7 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     }
 
     // put the new CX into the hashtable
-    if(ht_set(app_intrf->cx_hashtable, new_cx->uid.key, MAX_PATH_STRING, (void*)new_cx) != 0){
+    if(ht_set(app_intrf->cx_hashtable, new_cx->uid.key, (void*)new_cx) != 0){
         app_intrf_cx_children_pop(app_intrf, new_cx);
         return NULL;
     }
@@ -689,7 +693,7 @@ APP_INTRF *app_intrf_init() {
     }
     //--------------------------------------------------
     app_intrf->next_uid.gen = 0;
-    app_intrf->next_uid.id = 0;
+    app_intrf->next_uid.id = 1;
     app_intrf->cx_hashtable = ht_create(32);
     if(!app_intrf->cx_hashtable){
         app_intrf_destroy(app_intrf);
@@ -759,7 +763,7 @@ static void app_intrf_cx_children_iterate(
 //TEMP FUNC for testing
 //print the id and gen per context
 static void print_id_gen(APP_INTRF* app_intrf, CX* cur_cx){
-    printf("key: %s\n", cur_cx->uid.key);
+    printf("key: %"PRIu64"\n", cur_cx->uid.key);
 }
 
 void app_intrf_destroy(APP_INTRF *app_intrf) {
@@ -813,19 +817,19 @@ void nav_update(APP_INTRF *app_intrf) {
                                   app_intrf_cx_check_dirty);
 }
 
-const char* nav_cx_root_return(APP_INTRF* app_intrf){
-    if(!app_intrf)return NULL;
+uint64_t nav_cx_root_return(APP_INTRF* app_intrf){
+    if(!app_intrf)return 0;
 
     return app_intrf->cx_root->uid.key; 
 }
 
-int nav_cx_display_name_return(APP_INTRF *app_intrf, const char* key, char *return_name,
+int nav_cx_display_name_return(APP_INTRF *app_intrf, uint64_t key, char *return_name,
                                unsigned int name_len) {
     if (!app_intrf)
         return -1;
     if (!return_name)
         return -1;
-    void* cx_data = ht_get(app_intrf->cx_hashtable, key, MAX_PATH_STRING);
+    void* cx_data = ht_get(app_intrf->cx_hashtable, key);
     if (!cx_data)
         return -1;
     CX* cx_curr = (CX*)cx_data;
@@ -833,7 +837,7 @@ int nav_cx_display_name_return(APP_INTRF *app_intrf, const char* key, char *retu
     return 1;
 }
 
-uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, const char* key){
+uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, uint64_t key){
     if (!app_intrf)return 0;
 
     return 0; 

@@ -4,13 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifndef MAX_KEY_LENGTH
-#define MAX_KEY_LENGTH 1024
-#endif
-
 typedef struct HashEntry {
-    char key[MAX_KEY_LENGTH];
-    size_t key_len;
+    uint64_t key;
     void *value;
     struct HashEntry *next;
 } HashEntry;
@@ -42,7 +37,7 @@ HashTable *ht_create(size_t capacity);
  *
  * The hash table does not take ownership of value.
  */
-int ht_set(HashTable *ht, const char* key, size_t key_len, void *value);
+int ht_set(HashTable *ht, uint64_t key, void *value);
 
 /*
  * Get the value associated with key.
@@ -54,7 +49,7 @@ int ht_set(HashTable *ht, const char* key, size_t key_len, void *value);
  * Note that NULL cannot be distinguished from a stored NULL value
  * using this function alone. Use ht_contains() when necessary.
  */
-void *ht_get(const HashTable *ht, const char* key, size_t key_len);
+void *ht_get(const HashTable *ht, uint64_t key);
 
 /*
  * Check whether key exists.
@@ -63,7 +58,7 @@ void *ht_get(const HashTable *ht, const char* key, size_t key_len);
  *   1  key exists
  *   0  key does not exist
  */
-int ht_contains(const HashTable *ht, const char* key, size_t key_len);
+int ht_contains(const HashTable *ht, uint64_t key);
 
 /*
  * Remove key from the table.
@@ -71,7 +66,10 @@ int ht_contains(const HashTable *ht, const char* key, size_t key_len);
  * Returns associated user data, or
  * NULL if key not found or error
  */
-void* ht_remove(HashTable *ht, const char* key, size_t key_len);
+void* ht_remove(HashTable *ht, uint64_t key);
+
+// create a unique key from two 32bit unsigned integers
+uint64_t ht_make_key(uint32_t num_1, uint32_t num_2);
 
 /*
  * Destroy the hash table.

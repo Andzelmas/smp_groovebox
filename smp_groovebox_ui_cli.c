@@ -39,7 +39,7 @@ int main() {
         exit(1);
     }
 
-    const char* root_key = nav_cx_root_return(app_intrf);
+    uint64_t root_key = nav_cx_root_return(app_intrf);
     char name[MAX_PARAM_NAME_LENGTH];
     nav_cx_display_name_return(app_intrf, root_key, name, MAX_PARAM_NAME_LENGTH);
     printf("root name: %s\n", name);
