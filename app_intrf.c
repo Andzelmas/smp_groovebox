@@ -46,7 +46,7 @@
 #include <stdlib.h>
 
 // TODO TODAY.
-// CONTEXT UNIQUE IDS implementation (with hash maps with const char* keys).
+// CONTEXT UNIQUE IDS implementation.
 // Start with returning of the communications with unique ids. Might be good
 // idea to implement this using uistates, hashmaps. The UI layer could be a
 // separate api, that user can use by default or create their own.
