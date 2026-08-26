@@ -1,4 +1,4 @@
-#include "app_intrf.h"
+#include "ui_layer.h"
 #include "types.h"
 #include "util_funcs/log_funcs.h"
 #include <stdint.h>
@@ -24,35 +24,27 @@ static void enableRawMode() {
 
 enum ui_groups {
     GROUP_MAIN = 0,
-    GROUP_BUTTONS = 1,
-    GROUP_ROOT = 2
+    GROUP_ROOT = 1
 };
 
 int main() {
     enableRawMode();
     log_clear_logfile();
-    APP_INTRF *app_intrf = app_intrf_init();
+    UI_LAYER* ui_layer = ui_layer_init(2);
 
     // if app_intrf failed to initialize analyze the error write it and exit
-    if (!app_intrf) {
-        log_append_logfile("Could not start the app_intrf\n");
+    if (!ui_layer) {
+        log_append_logfile("Could not start the ui_layer\n");
         exit(1);
     }
 
-    uint64_t root_key = nav_cx_root_return(app_intrf);
-    char name[MAX_PARAM_NAME_LENGTH];
-    nav_cx_display_name_return(app_intrf, root_key, name, MAX_PARAM_NAME_LENGTH);
-    printf("root name: %s\n", name);
-
     //which group is chosen right now
     unsigned int group_curr = GROUP_MAIN;
-    //the last possible group
-    unsigned int group_max = GROUP_BUTTONS;
     while (1) {
         // erase the terminal
         //printf("\033[2J\033[H");
         // update the interface, of course should be in a loop
-        nav_update(app_intrf);
+        ui_layer_update_cycle(ui_layer);
 
         // get user inputs
         int input = getchar();
@@ -61,13 +53,8 @@ int main() {
         switch (input) {
         // Current UI GROUP navigation
         case 'J':
-            group_curr += 1;
-            if (group_curr > group_max)
-                group_curr = GROUP_MAIN;
             break;
         case 'K':
-            if (group_curr > GROUP_MAIN)
-                group_curr -= 1;
             break;
         case 'j':
             break;
@@ -86,7 +73,7 @@ int main() {
             break;
     }
 
-    app_intrf_destroy(app_intrf);
+    ui_layer_destroy(ui_layer);
 
     log_append_logfile("Cleaned everything, closing the app \n");
     disableRawMode();

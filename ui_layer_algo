@@ -1,0 +1,1501 @@
+#include "ui_layer.h"
+#include "app_intrf.h"
+#include <stdlib.h>
+
+Yes. I think that system works very well, and it gives you exactly the separation you're after:
+
+    Context layer: owns ContextIds and actual contexts.
+    UI layer: owns relationships between IDs.
+    User/application: defines what Hover, Resume, Focus, etc. mean.
+    UI layer: treats the purpose as an opaque number.
+
+I'd make one small change: use a typed bit/enum value, but don't actually use bit flags unless you intend to combine purposes. Each entry should have exactly one purpose.
+1. The API you describe
+
+Something like:
+
+typedef uint32_t ContextId;
+typedef uint32_t UiPurpose;
+
+enum {
+    UI_PURPOSE_HOVERED  = 1u,
+    UI_PURPOSE_SELECTED = 2u,
+    UI_PURPOSE_RESUME   = 3u,
+    UI_PURPOSE_FOCUS    = 4u,
+};
+
+Then:
+
+ContextId current = ...;
+ContextId target  = ...;
+
+ui_layer_nav_set(
+    &UI_STATE_A,
+    current,
+    target,
+    UI_PURPOSE_HOVERED
+);
+
+Later:
+
+ContextId hovered;
+
+if (ui_layer_nav_get(
+        &UI_STATE_A,
+        current,
+        UI_PURPOSE_HOVERED,
+        &hovered))
+{
+    // hovered is valid
+}
+
+The UI layer doesn't know that UI_PURPOSE_HOVERED means "hovered":
+
+UI layer sees:
+
+    context_id = 1234
+    purpose    = 1
+    target     = 5678
+
+It doesn't care that 1 means HOVERED.
+
+That's a very clean abstraction.
+2. I'd make UiPurpose an enum-like integer
+
+You wrote:
+
+enum ui_purpose {
+    Hover 1 << 0,
+    Selected 2 << 1,
+    ...
+}
+
+There's a slight C issue here: if you want one purpose per entry, I wouldn't make them bit flags.
+
+I'd do:
+
+typedef uint32_t UiPurpose;
+
+enum {
+    UI_PURPOSE_HOVERED  = 1,
+    UI_PURPOSE_SELECTED = 2,
+    UI_PURPOSE_RESUME   = 3,
+    UI_PURPOSE_FOCUS    = 4,
+};
+
+Then the purpose is a simple type/category ID.
+
+If instead you want an entry to potentially have multiple purposes simultaneously, then bit flags make sense:
+
+enum {
+    UI_PURPOSE_HOVERED  = 1u << 0,
+    UI_PURPOSE_SELECTED = 1u << 1,
+    UI_PURPOSE_FOCUSED  = 1u << 2,
+};
+
+But I think the former is better for your proposed hash-table design.
+
+Why?
+
+Because:
+
+(context, HOVERED)  → A
+(context, RESUME)   → B
+(context, FOCUS)    → C
+
+is conceptually three independent records.
+3. The entry becomes exactly what you described
+
+I'd use:
+
+typedef struct UiNavigationEntry {
+    ContextId context;
+    UiPurpose purpose;
+    ContextId target;
+} UiNavigationEntry;
+
+Conceptually:
+
+┌────────────────────────────────────┐
+│ UiNavigationEntry                  │
+├────────────────────────────────────┤
+│ context = 123                      │
+│ purpose = UI_PURPOSE_HOVERED       │
+│ target = 456                       │
+└────────────────────────────────────┘
+
+Another:
+
+┌────────────────────────────────────┐
+│ context = 123                      │
+│ purpose = UI_PURPOSE_RESUME        │
+│ target = 789                       │
+└────────────────────────────────────┘
+
+So the same context can have multiple independent UI relationships.
+4. The hash key
+
+You don't actually need to store a separate "unique key" in the entry.
+
+Your logical key is:
+
+(context, purpose)
+
+So:
+
+typedef struct UiNavigationKey {
+    ContextId context;
+    UiPurpose purpose;
+} UiNavigationKey;
+
+and hash:
+
+hash(context, purpose)
+
+You can either store both fields in the entry or pack them into a hash-table key.
+
+I'd keep the fields separate:
+
+typedef struct UiNavigationEntry {
+    ContextId context;
+    UiPurpose purpose;
+    ContextId target;
+} UiNavigationEntry;
+
+It's simpler and makes rehashing/debugging easier.
+5. Your UiNavigation then becomes
+
+typedef struct UiNavigation {
+    UiNavigationEntry *entries;
+
+    size_t count;
+    size_t capacity;
+} UiNavigation;
+
+Internally, those entries form an open-addressed hash table.
+
+For example:
+
+UiNavigation
+
+capacity = 16
+
+slot 0    EMPTY
+slot 1    { 10, HOVERED, 20 }
+slot 2    EMPTY
+slot 3    { 10, RESUME, 30 }
+slot 4    { 25, HOVERED, 26 }
+slot 5    EMPTY
+...
+
+Notice that context 10 can appear multiple times because the full key is:
+
+(10, HOVERED)
+(10, RESUME)
+
+6. set is exactly as you imagine
+
+Conceptually:
+
+bool ui_layer_nav_set(
+    UiState *state,
+    ContextId context,
+    ContextId target,
+    UiPurpose purpose
+)
+{
+    UiNavigation *nav = &state->navigation;
+
+    // 1. Find slot using (context, purpose).
+    // 2. If it exists:
+    //       entry->target = target;
+    // 3. Otherwise:
+    //       create new entry.
+    // 4. Grow table if necessary.
+
+    return true;
+}
+
+The important behavior is:
+
+set(A, HOVERED, B)
+
+followed later by:
+
+set(A, HOVERED, C)
+
+does not create another entry.
+
+It updates:
+
+(A, HOVERED) → C
+
+because (A, HOVERED) is the unique key.
+7. get is equally simple
+
+bool ui_layer_nav_get(
+    const UiState *state,
+    ContextId context,
+    UiPurpose purpose,
+    ContextId *target
+)
+{
+    const UiNavigation *nav = &state->navigation;
+
+    // Find (context, purpose).
+    // If found:
+    //     *target = entry->target;
+    //     return true;
+    //
+    // Otherwise:
+    //     return false;
+}
+
+Usage:
+
+ContextId hovered;
+
+if (ui_layer_nav_get(
+        &UI_STATE_A,
+        curr_id,
+        UI_PURPOSE_HOVERED,
+        &hovered))
+{
+    // use hovered
+}
+
+This is a very natural C API.
+8. I'd actually provide a direct-return convenience function too
+
+Since CONTEXT_ID_INVALID can represent "not found":
+
+ContextId ui_layer_nav_get(
+    const UiState *state,
+    ContextId context,
+    UiPurpose purpose
+);
+
+Then:
+
+ContextId hovered =
+    ui_layer_nav_get(
+        &UI_STATE_A,
+        curr_id,
+        UI_PURPOSE_HOVERED
+    );
+
+if (context_id_valid(hovered)) {
+    ...
+}
+
+And perhaps additionally:
+
+bool ui_layer_nav_try_get(...);
+
+if you need to distinguish "not found" from an invalid target.
+
+I like having both:
+
+ContextId ui_layer_nav_get(...);
+
+bool ui_layer_nav_try_get(
+    ...,
+    ContextId *out_target
+);
+
+The first is convenient; the second is explicit.
+9. I would rename target depending on your philosophy
+
+target is actually a good generic name here.
+
+The UI layer doesn't know whether it's:
+
+current → hovered
+current → selected
+current → resume
+current → focus
+current → preferred child
+
+All it knows is:
+
+source + purpose → target
+
+That's arguably the fundamental abstraction:
+
+    For this context and this user-defined purpose, associate another context.
+
+That's more general than "navigation".
+
+You could even call the structure:
+
+UiRelation
+
+instead of UiNavigation.
+
+But if the feature is primarily intended for navigation, UiNavigation is perfectly reasonable.
+10. One thing I would change in your API order
+
+You proposed:
+
+ui_layer_nav_set(
+    &UI_STATE_A,
+    curr_id,
+    target_id,
+    Hover
+);
+
+I think that's good.
+
+I'd perhaps make the signature:
+
+bool ui_layer_nav_set(
+    UiState *state,
+    ContextId source,
+    ContextId target,
+    UiPurpose purpose
+);
+
+The names source and target make the semantics obvious:
+
+(source, purpose) → target
+
+Then:
+
+ui_layer_nav_set(
+    &UI_STATE_A,
+    current,
+    hovered,
+    UI_PURPOSE_HOVERED
+);
+
+reads nicely.
+11. And yes, UiState stays wonderfully generic
+
+It becomes:
+
+typedef struct UiState {
+    ContextId current;
+
+    UiSelection selection;
+
+    UiNavigation navigation;
+} UiState;
+
+That's it.
+
+It doesn't know about:
+
+hover
+resume
+focus
+back
+forward
+preferred
+
+The application does.
+
+For example, one application might define:
+
+enum {
+    NAV_HOVERED = 1,
+    NAV_RESUME  = 2,
+    NAV_FOCUS   = 3,
+};
+
+Another might define:
+
+enum {
+    NAV_MOUSE = 1,
+    NAV_KEYBOARD = 2,
+    NAV_SEARCH = 3,
+    NAV_LAST_OPENED = 4,
+};
+
+The UI library doesn't care.
+12. And multiple UiStates become very powerful
+
+You can have:
+
+UiState explorer;
+UiState sidebar;
+UiState search;
+
+all pointing into the same context layer.
+
+Then:
+
+explorer.navigation:
+    (A, HOVERED) → B
+    (A, RESUME)  → C
+
+sidebar.navigation:
+    (A, HOVERED) → D
+    (A, RESUME)  → E
+
+search.navigation:
+    (A, FOCUS)   → F
+
+No conflict.
+
+The contexts remain completely unaware of any of this.
+13. One concern: your wording "unique key from curr_id and Hover"
+
+You don't necessarily need to physically create a combined key.
+
+For example, don't necessarily do:
+
+uint64_t key = ((uint64_t)context << 32) | purpose;
+
+unless your ID/purpose sizes make that safe and convenient.
+
+I'd simply implement the hash over both:
+
+uint64_t hash_navigation_key(
+    ContextId context,
+    UiPurpose purpose
+);
+
+For example conceptually:
+
+hash = hash_context_id(context);
+hash = hash_combine(hash, purpose);
+
+Then equality is:
+
+entry->context == context &&
+entry->purpose == purpose
+
+This avoids unnecessary packing assumptions about ContextId.
+14. And the growth behavior fits perfectly
+
+Your table can use:
+
+initial capacity: 16
+load factor:      ~0.7
+growth:           ×2
+
+So:
+
+16 entries
+    ↓
+11 entries → grow
+    ↓
+32
+    ↓
+22 entries → grow
+    ↓
+64
+
+All entries remain in one contiguous allocation:
+
+malloc:
+┌──────┬──────┬──────┬──────┬──────┬──────┐
+│ entry│ entry│ entry│ entry│ entry│ ...  │
+└──────┴──────┴──────┴──────┴──────┴──────┘
+
+No allocation per relationship.
+
+That's particularly nice because a UI state might have:
+
+50,000 contexts
+but only 150 navigation relationships
+
+and you allocate only for those ~150 relationships.
+15. I would add remove and perhaps clear
+
+The core API I'd settle on is:
+
+bool ui_layer_nav_set(
+    UiState *state,
+    ContextId source,
+    ContextId target,
+    UiPurpose purpose
+);
+
+bool ui_layer_nav_try_get(
+    const UiState *state,
+    ContextId source,
+    UiPurpose purpose,
+    ContextId *target
+);
+
+ContextId ui_layer_nav_get(
+    const UiState *state,
+    ContextId source,
+    UiPurpose purpose
+);
+
+bool ui_layer_nav_remove(
+    UiState *state,
+    ContextId source,
+    UiPurpose purpose
+);
+
+void ui_layer_nav_clear(
+    UiState *state
+);
+
+Potentially also:
+
+bool ui_layer_nav_has(
+    const UiState *state,
+    ContextId source,
+    UiPurpose purpose
+);
+
+although try_get() often makes that unnecessary.
+The resulting mental model
+
+I think you've arrived at a very nice abstraction:
+
+                      UiState
+                         │
+                         ▼
+                  UiNavigation
+                         │
+                         │
+             ┌───────────┴────────────┐
+             │                        │
+        (ContextId, Purpose)      (ContextId, Purpose)
+             │                        │
+             ▼                        ▼
+         ContextId                ContextId
+             │                        │
+             └───────────┬────────────┘
+                         │
+                         ▼
+                    ContextLayer
+
+The context layer defines what things are.
+
+The UI layer stores relationships between those things.
+
+The application defines what those relationships mean.
+
+That last part is especially valuable: you're not building a UI framework that dictates "hover means X, selection means Y, navigation means Z." You're providing a sparse, persistent association mechanism over the context graph, which the application can use to construct whatever navigation model it wants.
+
+One small terminology point: I'd probably call your enum UiPurpose rather than ui_purpose, and use values like UI_PURPOSE_HOVER, UI_PURPOSE_SELECTED, etc. The purpose is effectively a namespace/key supplied by the user, not really a bitmask.
+
+1. UiNavigationEntry can absolutely be stored by value
+
+You don't need:
+
+UiNavigationEntry *entry = malloc(...);
+
+for each entry.
+
+Instead, UiNavigation can own one contiguous allocation:
+
+typedef struct UiNavigationEntry {
+    ContextId source;
+    UiPurpose purpose;
+    ContextId target;
+} UiNavigationEntry;
+
+typedef struct UiNavigation {
+    UiNavigationEntry *entries;
+
+    size_t count;
+    size_t capacity;
+} UiNavigation;
+
+So if the navigation table grows to 128 entries, you have essentially:
+
+one allocation
+       │
+       ▼
+┌──────────┬──────────┬──────────┬──────────┐
+│ Entry    │ Entry    │ Entry    │ Entry    │ ...
+└──────────┴──────────┴──────────┴──────────┘
+
+Each UiNavigationEntry is just a few integer values copied around.
+
+No individual allocations.
+
+And yes, the hash table can essentially be the UiNavigation.
+2. UiNavigation is the hash table
+
+I'd think of it this way:
+
+typedef struct UiNavigation {
+    UiNavigationEntry *entries;
+    size_t count;
+    size_t capacity;
+} UiNavigation;
+
+entries is the hash-table storage.
+
+You don't need:
+
+UiNavigation
+    ↓
+HashTable
+    ↓
+UiNavigationEntry*
+
+unless you have a reusable generic hash-table implementation you want to use.
+
+For this specialized case, a dedicated implementation is probably better.
+
+So:
+
+UiState
+ ├── current
+ ├── selection
+ └── navigation
+       │
+       ├── entries[]
+       ├── count
+       └── capacity
+
+navigation itself is the hash table.
+3. Yes, the hash key consists of two values
+
+Your logical key is:
+
+(source ContextId, UiPurpose)
+
+For example:
+
+(42, HOVER) → 100
+(42, RESUME) → 101
+(100, HOVER) → 105
+
+The hash function takes both:
+
+uint64_t hash_navigation_key(
+    ContextId source,
+    UiPurpose purpose
+);
+
+Then the table finds the appropriate slot.
+
+But the hash itself is not enough to establish equality.
+
+You do:
+
+if (entry->source == source &&
+    entry->purpose == purpose)
+{
+    // found it
+}
+
+This is important because two different keys can have the same hash.
+
+So the process is:
+
+                source + purpose
+                       │
+                       ▼
+                     hash
+                       │
+                       ▼
+                  table slot
+                       │
+                       ▼
+             compare actual values
+                /             \
+             equal          different
+               │                │
+             found          probe next
+
+That's standard hash-table behavior.
+4. And yes, the target is simply copied
+
+If you do:
+
+ui_layer_nav_set(
+    &state,
+    source,
+    target,
+    UI_PURPOSE_RESUME
+);
+
+the entry stores:
+
+entry->source = source;
+entry->purpose = purpose;
+entry->target = target;
+
+All three are values.
+
+No pointers to contexts.
+
+No ownership issue.
+
+So the table might contain:
+
+┌────────┬─────────┬────────┐
+│ source │ purpose │ target │
+├────────┼─────────┼────────┤
+│  100   │ RESUME  │  105   │
+│  100   │ HOVER   │  108   │
+│  105   │ RESUME  │  112   │
+└────────┴─────────┴────────┘
+
+This is exactly the sort of thing that works very nicely in C.
+5. Your context events idea fits this architecture very well
+
+I like this approach:
+
+ContextLayer
+      │
+      │ events
+      ▼
+UiLayer
+      │
+      ├── UiState A
+      │     └── navigation
+      │
+      ├── UiState B
+      │     └── navigation
+      │
+      └── UiState C
+            └── navigation
+
+Suppose the context layer reports:
+
+Context 100 removed
+suggested replacement: 101
+
+The UI layer can update:
+
+(100, HOVER)  → 100
+(100, RESUME) → 105
+(105, HOVER)  → 100
+
+depending on your policy.
+6. But I would make the context event generic
+
+I'd avoid making the context layer say:
+
+    "UI, you should replace this ID with that ID."
+
+The context layer shouldn't know the UI exists.
+
+Instead, something like:
+
+typedef enum ContextEventType {
+    CONTEXT_EVENT_REMOVED,
+    CONTEXT_EVENT_REPLACED,
+    CONTEXT_EVENT_CHANGED,
+} ContextEventType;
+
+and:
+
+typedef struct ContextEvent {
+    ContextEventType type;
+
+    ContextId id;
+    ContextId replacement;
+} ContextEvent;
+
+The context layer publishes:
+
+Context 100 was removed.
+A reasonable replacement is 101.
+
+The UI layer decides what to do with that.
+
+That keeps the dependency direction correct:
+
+Context layer
+      ↓
+   events
+      ↓
+ UI layer
+
+not:
+
+Context layer
+      ↓
+knows about UI
+
+7. ui_layer_update() is a reasonable API
+
+Your proposed:
+
+ui_layer_update(UiLayer *);
+
+makes sense.
+
+You could have:
+
+void ui_layer_update(UiLayer *ui)
+{
+    while (context_layer_next_event(
+        ui->contexts,
+        &event))
+    {
+        ui_process_context_event(ui, &event);
+    }
+}
+
+Then the application does:
+
+while (running) {
+    context_update(contexts);
+
+    ui_layer_update(&ui);
+
+    application_update(...);
+
+    render(...);
+}
+
+This is a nice architecture.
+8. But I would avoid scanning every entry on every update
+
+This is the one part I'd reconsider.
+
+You said:
+
+    the UI layer would check all the UI_STATES and the UiNavigationEntry entries if there are ids from the messages.
+
+That is simple and perfectly valid initially.
+
+But consider:
+
+100 UiStates
+×
+10,000 navigation entries
+=
+1,000,000 entries scanned per update
+
+If context events are rare, that's unnecessary work.
+
+I'd make ui_layer_update() process only the IDs that appeared in events.
+
+For each removed context:
+
+ContextId 100 removed
+
+you need to find:
+
+source == 100
+
+or:
+
+target == 100
+
+The problem is that your primary hash table is indexed by:
+
+(source, purpose)
+
+so finding entries where target == 100 requires scanning.
+9. You have two possible strategies
+Simple strategy
+
+Just scan everything:
+
+event
+  ↓
+all UiStates
+  ↓
+all navigation entries
+
+This is very easy and might be completely adequate.
+
+I would actually start here unless your numbers are large.
+Indexed strategy
+
+Maintain a secondary index:
+
+target ContextId → navigation entries referring to it
+
+Then:
+
+Context 100 removed
+       ↓
+target index
+       ↓
+find all references to 100
+
+But now you have two data structures to keep consistent:
+
+(source, purpose) → target
+
+target → references
+
+I'd not introduce this complexity early.
+10. There is an even simpler solution with your generation IDs
+
+If your ContextId contains a generation:
+
+typedef struct ContextId {
+    uint32_t index;
+    uint32_t generation;
+} ContextId;
+
+then you may not need to eagerly clean every stale UI navigation entry.
+
+Suppose:
+
+UI:
+(100,generation=5, RESUME) → (101,generation=2)
+
+Context 101 gets removed.
+
+The next context using slot 101 becomes:
+
+(101,generation=3)
+
+The old target:
+
+(101,generation=2)
+
+is automatically invalid.
+
+So the UI can lazily discard it when accessed.
+
+That's a very powerful property.
+
+You can still process events to provide replacement suggestions, but stale references aren't dangerous.
+11. Your event could contain multiple replacement candidates
+
+Your "suggestions on what IDs to use instead" idea is interesting.
+
+I'd perhaps define the event more like:
+
+typedef struct ContextRemovalEvent {
+    ContextId removed;
+
+    const ContextId *suggestions;
+    size_t suggestion_count;
+} ContextRemovalEvent;
+
+Then the context layer could say:
+
+Removed:
+    100
+
+Suggestions:
+    101
+    102
+    103
+
+The UI layer doesn't have to blindly choose one.
+
+The application can decide its own policy.
+
+For example:
+
+Hover:
+    choose nearest sibling
+
+Resume:
+    choose parent
+
+Selected:
+    remove selection
+
+Focus:
+    choose first valid child
+
+That is much more flexible.
+12. In fact, I wouldn't necessarily let ui_layer_update() automatically choose replacements
+
+This is an important architectural choice.
+
+Suppose:
+
+Context 100 is removed.
+
+and you have:
+
+(A, HOVER) → 100
+(B, RESUME) → 100
+(C, FOCUS) → 100
+
+There isn't necessarily one correct replacement.
+
+You might want:
+
+HOVER → nearest sibling
+RESUME → parent
+FOCUS → first child
+
+So I'd make ui_layer_update() responsible for invalidating/processing the event, but perhaps not deciding application semantics.
+
+For example:
+
+void ui_layer_update(UiLayer *ui);
+
+could:
+
+    consume context events;
+    invalidate obviously dead IDs;
+    optionally notify the user;
+    leave policy-specific replacement to user callbacks.
+
+13. A callback-based event mechanism might fit
+
+For example:
+
+typedef void (*UiContextRemovedFn)(
+    UiState *state,
+    ContextId removed,
+    const ContextId *suggestions,
+    size_t suggestion_count,
+    void *userdata
+);
+
+But I'd be cautious about adding callbacks too early.
+
+Your simple model:
+
+ui_layer_update(&ui);
+
+is easier to reason about.
+
+You can later add callbacks if needed.
+14. One thing I'd change in UiLayer
+
+If UiLayer contains multiple UiStates, then yes:
+
+struct UiLayer {
+    ContextLayer *contexts;
+
+    UiState **states;
+    size_t state_count;
+    size_t state_capacity;
+};
+
+could work.
+
+But I still prefer the possibility that UiState is user-owned.
+
+For example:
+
+typedef struct UiLayer {
+    ContextLayer *contexts;
+
+    // Context event processing state.
+    ...
+} UiLayer;
+
+while:
+
+typedef struct UiState {
+    ContextId current;
+    UiSelection selection;
+    UiNavigation navigation;
+} UiState;
+
+is independently created by the user.
+
+Then:
+
+UiState main_view = {0};
+UiState sidebar_view = {0};
+UiState search_view = {0};
+
+The user can register them with the UI layer if ui_layer_update() needs to process all of them:
+
+ui_layer_add_state(&ui, &main_view);
+ui_layer_add_state(&ui, &sidebar_view);
+ui_layer_add_state(&ui, &search_view);
+
+Now the ownership is explicit:
+
+Application owns UiState
+          │
+          ▼
+      UiLayer tracks it
+
+rather than:
+
+UiLayer owns UiState
+
+I think this is especially appropriate for a C library.
+15. There is a useful distinction between UiLayer and UiState
+
+I'd make this explicit in the design:
+UiLayer
+
+Infrastructure shared by views:
+
+- ContextLayer reference
+- context event processing
+- registered UiStates
+- possibly allocator
+
+UiState
+
+A particular view/session:
+
+- current ContextId
+- selection
+- navigation table
+
+So:
+
+                   UiLayer
+                      │
+             ContextLayer*
+                      │
+        ┌─────────────┼─────────────┐
+        │             │             │
+        ▼             ▼             ▼
+     UiState A     UiState B     UiState C
+        │             │             │
+   navigation     navigation    navigation
+
+That separation is very useful.
+16. One subtle API improvement: pass UiLayer separately
+
+Instead of:
+
+ui_layer_nav_set(
+    &state,
+    ...
+);
+
+I'd consider:
+
+ui_layer_nav_set(
+    &ui,
+    &state,
+    source,
+    target,
+    purpose
+);
+
+Why?
+
+Because the UI layer might need the context layer to validate IDs:
+
+context_exists(ui->contexts, source)
+context_exists(ui->contexts, target)
+
+It also means all UI operations have access to the same infrastructure.
+
+But there is a tradeoff: if UiNavigation is supposed to be completely independent storage, then requiring UiLayer isn't necessary.
+
+I'd probably separate the two:
+
+ui_nav_set(&state.navigation, source, target, purpose);
+
+for pure storage, and:
+
+ui_layer_update(&ui);
+
+for integration with the context layer.
+
+That's cleaner.
+17. So the API might settle into three levels
+Pure navigation storage
+
+ui_nav_set(...)
+ui_nav_get(...)
+ui_nav_remove(...)
+ui_nav_clear(...)
+
+These don't know about contexts beyond IDs.
+UI state
+
+ui_state_init(...)
+ui_state_reset(...)
+
+and direct access to:
+
+state.current
+state.selection
+state.navigation
+
+UI/context integration
+
+ui_layer_update(...)
+ui_layer_add_state(...)
+ui_layer_remove_state(...)
+
+This keeps responsibilities nicely separated.
+18. One final thought about your event processing
+
+Your idea is fundamentally sound:
+
+context layer
+     │
+     │ events
+     ▼
+ui_layer_update()
+     │
+     ├── UiState A
+     │     └── navigation
+     ├── UiState B
+     │     └── navigation
+     └── UiState C
+           └── navigation
+
+I'd implement the simple full scan first.
+
+Because your navigation entries are compact:
+
+typedef struct UiNavigationEntry {
+    ContextId source;
+    UiPurpose purpose;
+    ContextId target;
+} UiNavigationEntry;
+
+a scan is very cache-friendly:
+
+for (each state)
+    for (each navigation entry)
+        ...
+
+That's much better than it sounds.
+
+If you have:
+
+10 states × 100 entries
+
+it's trivial.
+
+Even:
+
+50 states × 1,000 entries
+
+is only 50,000 tiny entries.
+
+Don't build a secondary reverse index until the actual scale demands it.
+
+And if you use generation-aware ContextIds, you can make event processing even less critical: invalid references become safely detectable, and ui_layer_update() can focus on applying the context layer's explicit removal/replacement information rather than being responsible for memory safety.
+
+Overall, I think your architecture is converging toward something quite elegant:
+
+ContextLayer
+    owns objects + IDs
+          │
+          │ events
+          ▼
+      UiLayer
+    shared integration
+          │
+          ├─────────────┐
+          ▼             ▼
+      UiState A      UiState B
+          │             │
+          ▼             ▼
+    UiNavigation   UiNavigation
+          │
+          ▼
+ (ContextId, UiPurpose) → ContextId
+
+And the UI library never needs to know what UiPurpose means. That's probably the most valuable property of the design you're developing.
+
+UiLayer
+
+It can be very small:
+
+typedef struct UiLayer {
+    ContextLayer *contexts;
+} UiLayer;
+
+Potentially it could eventually contain other UI-wide infrastructure, but it doesn't need to know about individual views.
+UiState
+
+The user owns these:
+
+typedef struct UiState {
+    ContextId current;
+    UiSelection selection;
+    UiNavigation navigation;
+} UiState;
+
+So the application can have:
+
+UiState main_view;
+UiState sidebar_view;
+UiState search_view;
+
+with no relationship to the lifetime of UiLayer.
+
+Then:
+
+UiState *states[] = {
+    &main_view,
+    &sidebar_view,
+    &search_view
+};
+
+ui_layer_update(
+    &ui,
+    states,
+    sizeof(states) / sizeof(states[0])
+);
+
+The ownership is very clean:
+
+Application
+│
+├── UiState main_view
+├── UiState sidebar_view
+├── UiState search_view
+│
+└── UiLayer
+      │
+      └── ContextLayer *
+
+UiLayer doesn't own any of the states.
+It also makes UiLayer stateless with respect to views
+
+This is a nice property.
+
+You could have:
+
+UiLayer ui = {
+    .contexts = context_layer
+};
+
+and then use it with completely different sets of states:
+
+UiState states_a[] = {
+    main_view,
+    sidebar_view
+};
+
+UiState states_b[] = {
+    temporary_view,
+    debug_view,
+    inspector_view
+};
+
+The UiLayer doesn't care.
+
+In fact, you could even update only one state:
+
+UiState *states[] = { &main_view };
+
+ui_layer_update(&ui, states, 1);
+
+That's useful if, for example, a particular view is temporarily inactive.
+I'd make the update API const where possible
+
+The states obviously need to be modified when invalid IDs are repaired, so:
+
+void ui_layer_update(
+    UiLayer *ui,
+    UiState **states,
+    size_t state_count
+);
+
+is appropriate if the update can modify them.
+
+But the array itself doesn't need to be modified. You could express that as:
+
+void ui_layer_update(
+    UiLayer *ui,
+    UiState *const *states,
+    size_t state_count
+);
+
+This means:
+
+states array:       don't modify
+UiState objects:    can modify
+
+It's a subtle distinction, and you don't necessarily need it, but I like it for library APIs.
+You could also avoid the array entirely for one state
+
+If you find this common:
+
+UiState *states[] = { &main_view };
+
+ui_layer_update(&ui, states, 1);
+
+you might provide:
+
+void ui_layer_update_state(
+    UiLayer *ui,
+    UiState *state
+);
+
+implemented conceptually as:
+
+void ui_layer_update_state(UiLayer *ui, UiState *state)
+{
+    ui_layer_update(ui, &state, 1);
+}
+
+But I'd only add that if it's actually useful.
+One more architectural benefit
+
+This makes UiLayer and UiState have very clear responsibilities:
+
+UiLayer
+    ContextLayer *
+    context-event integration
+    ID validation/replacement
+    UI-layer-wide operations
+
+UiState
+    current ContextId
+    selection
+    sparse navigation relationships
+
+And the application owns:
+
+which UiStates exist
+which UiStates are active
+when UiStates are created/destroyed
+which UiStates are passed to update
+
+That's a very good fit for C because there is no hidden ownership or allocation happening behind the scenes.
+
+So yes: I'd remove the states array from UiLayer in this version. It makes UiLayer simpler and gives the application more control.
+
+18. My current preference
+
+Given your goal of keeping this sparse, allocation-conscious, and generic, I'd probably settle on:
+
+typedef struct UiNavigationEntry {
+    ContextId source;
+    UiPurpose purpose;
+    ContextId target;
+} UiNavigationEntry;
+
+typedef struct UiNavigation {
+    UiNavigationEntry *entries;
+    size_t count;
+    size_t capacity;
+} UiNavigation;
+
+typedef struct UiState {
+    ContextId current;
+    UiSelection selection;     // for now
+    UiNavigation navigation;
+} UiState;
+
+and not force selection into navigation yet.
+
+Then make UiSelection itself very lightweight and contiguous:
+
+typedef struct UiSelection {
+    ContextId *ids;
+    size_t count;
+    size_t capacity;
+} UiSelection;
+
+That's only one extra allocation for a state that actually has a selection.
+
+And the semantics are extremely clear.
+
+The architectural picture is then:
+
+UiState
+│
+├── current
+│
+├── navigation
+│     └── sparse hash table
+│           (source, purpose) → target
+│
+└── selection
+      └── sparse dynamic array
+            [ContextId, ContextId, ...]
+
+Both are ID-only, both are owned by the UI state, neither allocates per context, and both grow only when the user actually uses them.
+
+That is not necessarily an architectural inconsistency. They're two different data structures because they're solving two different cardinality problems.
+
+If, after implementing it, you find that 90% of your UI state consists of (source, purpose) → N ContextIds, then I'd merge them into a generalized multi-target navigation system. I wouldn't complicate the initial design before you know that's actually the dominant use case.

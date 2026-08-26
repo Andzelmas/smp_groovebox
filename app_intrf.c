@@ -159,8 +159,7 @@ typedef struct {
 //  Then attributes can be expanded in the future ("version", "provider" etc.)
 
 //  SO in
-//  plugins.c and clap_plugins.c the plugin lists have to have stable ids (hash
-//  tables with const char* keys instead of unique plugin lists). Then UI can own an item list and
+//  plugins.c and clap_plugins.c the plugin lists have to have stable ids. Then UI can own an item list and
 //  dispatch an action for the item. Context uses the unique key given by the UI
 //  and asks the data layer to do the action with the item. Data checks, if the
 //  item with the key exists, if not - the context can give the result back to UI
@@ -823,22 +822,13 @@ uint64_t nav_cx_root_return(APP_INTRF* app_intrf){
     return app_intrf->cx_root->uid.key; 
 }
 
-int nav_cx_display_name_return(APP_INTRF *app_intrf, uint64_t key, char *return_name,
-                               unsigned int name_len) {
-    if (!app_intrf)
-        return -1;
-    if (!return_name)
-        return -1;
+const char* nav_cx_display_name_return(APP_INTRF *app_intrf, uint64_t key){ 
+    if (!app_intrf) {
+        return NULL;
+    }
     void* cx_data = ht_get(app_intrf->cx_hashtable, key);
     if (!cx_data)
-        return -1;
+        return NULL;
     CX* cx_curr = (CX*)cx_data;
-    snprintf(return_name, name_len, "%s", cx_curr->short_name);
-    return 1;
-}
-
-uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, uint64_t key){
-    if (!app_intrf)return 0;
-
-    return 0; 
+    return cx_curr->short_name;
 }
