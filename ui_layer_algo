@@ -1498,4 +1498,491 @@ Both are ID-only, both are owned by the UI state, neither allocates per context,
 
 That is not necessarily an architectural inconsistency. They're two different data structures because they're solving two different cardinality problems.
 
+
+---------------------------------
+EVENTS DETAILS
+The core problem
+
+You have something roughly like:
+
+Data layer
+    ↓
+Context layer
+    ├── ContextId → context*
+    └── events: ContextId created/removed/changed/...
+
+UI layer
+    ├── ui_states
+    │     └── ui_navigation
+    │           └── entries: (source, purpose, target)
+    │
+    └── user queries
+          ├── get_name(ContextId)
+          ├── get_children(ContextId)
+          ├── get_parent(ContextId)
+          └── ...
+
+Suppose:
+
+101 --LAST_VISITED--> 105
+
+and later the Context layer reports:
+
+CONTEXT_REMOVED(105)
+
+You correctly identify that this can be expensive if the UI layer responds by doing:
+
+for every ui_state
+    for every navigation entry
+        if entry.target == 105
+            ...
+
+every time an event occurs.
+
+That is especially undesirable because the event itself already tells you the identity of what changed.
+I would introduce a UI-side ContextId status/index
+
+When the Context layer produces:
+
+CONTEXT_REMOVED(105)
+
+the UI layer should process that event once and record something like:
+
+typedef enum {
+    UI_CONTEXT_VALID,
+    UI_CONTEXT_REMOVED,
+    UI_CONTEXT_UNKNOWN
+} UiContextStatus;
+
+Conceptually:
+
+Context event
+     │
+     ▼
+UI event processing
+     │
+     ├── ContextId 105 → REMOVED
+     │
+     ▼
+UI-side ContextId status/index
+
+Then your UI API can cheaply do:
+
+ui_get_name(ui, 105, &result);
+
+and internally:
+
+is 105 known to be removed?
+       │
+       ├── no → perform normal operation
+       │
+       └── yes → return CONTEXT_REMOVED
+
+This is essentially lazy invalidation.
+
+You don't have to immediately walk every navigation entry, every UI state, etc.
+Your result-struct idea is particularly good
+
+I like this part of your proposal:
+
+    UI layer returns a result struct with an enum with for example CONTEXT_REMOVED and an array with suggestions
+
+That's a good API boundary.
+
+For example:
+
+typedef enum {
+    UI_RESULT_OK,
+    UI_RESULT_CONTEXT_REMOVED,
+    UI_RESULT_CONTEXT_INVALID,
+    UI_RESULT_ERROR
+} UiResultCode;
+
+typedef struct {
+    ContextId id;
+    // perhaps a reason/type/etc.
+} UiContextSuggestion;
+
+typedef struct {
+    UiResultCode code;
+
+    union {
+        struct {
+            const char *name;
+        } value;
+
+        struct {
+            const UiContextSuggestion *items;
+            size_t count;
+        } invalid_context;
+    };
+} UiResult;
+
+Though I'd probably avoid making the result struct enormous or putting too many operation-specific fields into one union.
+
+You could instead separate the status from the operation result:
+
+typedef struct {
+    UiResultCode code;
+    ContextId id;
+} UiResult;
+
+and have the caller ask for recovery information separately.
+
+Or:
+
+typedef struct {
+    UiResultCode code;
+
+    const ContextId *suggestions;
+    size_t suggestion_count;
+} UiContextResult;
+
+depending on how central the concept becomes.
+One thing I would change: don't necessarily return "suggestions" from get_name()
+
+This is the architectural part I'd be careful about.
+
+Imagine:
+
+ui_get_name(105)
+
+and 105 has been removed.
+
+Should get_name() know that possible replacements are:
+
+101
+103
+104
+107
+...
+
+?
+
+Maybe — but this starts mixing context validity with navigation/recovery policy.
+
+I'd lean toward:
+
+ui_get_name(ui, 105, &name)
+
+returning:
+
+UI_CONTEXT_REMOVED
+
+Then:
+
+ui_context_recovery_candidates(ui, 105, &candidates)
+
+could return candidates.
+
+Or even better, the UI state itself can determine appropriate candidates:
+
+ui_resolve_removed_context(ui, state, 105, ...)
+
+because "what should replace this context?" is inherently dependent on UI state and navigation semantics.
+
+For example, if 105 was the current context, the best replacement might be:
+
+    parent of 105
+    previous sibling
+    next sibling
+    last visited context
+    root
+
+But another UI state might have a completely different policy.
+
+So I'd distinguish:
+
+Context layer:
+    "105 no longer exists."
+
+UI layer:
+    "105 is invalid."
+
+UI navigation/application:
+    "Given that 105 is invalid, what should I navigate to?"
+
+That separation will probably serve you well.
+Even better: process events at controlled points
+
+There's another subtle issue with your proposal.
+
+You said:
+
+    UI layer checks if there are messages from the context layer.
+
+This is reasonable, but I wouldn't literally have every function repeatedly scan the Context-layer message queue.
+
+Instead, have something like:
+
+ui_layer_process_events(ui);
+
+or internally process events at defined synchronization points.
+
+For example:
+
+ui_begin_frame(ui);
+
+/* Context events are consumed here. */
+
+... user/application code ...
+
+ui_end_frame(ui);
+
+Then:
+
+Context layer
+       │
+       │ events
+       ▼
+ui_layer_process_events()
+       │
+       ├── update validity index
+       ├── invalidate relevant state
+       └── update other UI bookkeeping
+
+After that, normal queries are cheap.
+
+If your program isn't frame-based, the same principle applies: define a clear event synchronization boundary.
+What about your navigation entries?
+
+This is where I think your architecture can become particularly nice.
+
+Suppose:
+
+typedef struct {
+    ContextId source;
+    enum purpose purpose;
+    ContextId target;
+} ui_navigation_entry;
+
+You have:
+
+101 --LAST_VISITED--> 105
+
+Then 105 disappears.
+
+Don't necessarily delete that navigation entry immediately.
+
+You can leave:
+
+101 --LAST_VISITED--> 105
+
+and mark 105 invalid.
+
+Then when the user asks:
+
+ui_navigation_get(ui, 101, LAST_VISITED)
+
+you get:
+
+target = 105
+
+but when attempting to use 105:
+
+ui_get_name(ui, 105)
+
+you get:
+
+UI_CONTEXT_REMOVED
+
+This is a perfectly valid form of lazy cleanup.
+
+You can subsequently remove or repair the navigation entry if/when appropriate.
+
+This is often preferable to eagerly walking all navigation structures whenever a context disappears.
+But you may eventually want reverse indexes
+
+There is one situation where I would maintain an additional index.
+
+Suppose your UI has millions of navigation entries and you eventually need to answer:
+
+    "Which UI objects/navigation relationships reference ContextId 105?"
+
+Don't scan everything.
+
+Maintain a reverse relationship:
+
+ContextId
+    ↓
+references
+    ↓
+navigation entries
+
+For example:
+
+ContextId 105
+    ├── navigation entry #17
+    ├── navigation entry #204
+    ├── navigation entry #891
+    └── ...
+
+Then:
+
+CONTEXT_REMOVED(105)
+        │
+        ▼
+reverse index[105]
+        │
+        ├── entry #17
+        ├── entry #204
+        └── entry #891
+
+Now cleanup is proportional to:
+
+number of references to 105
+
+rather than:
+
+number of all UI states × number of navigation entries
+
+That's a much more scalable architecture.
+
+But don't add this prematurely. If you have 1000 navigation entries, a linear scan may be simpler and completely adequate.
+I would also distinguish "invalid" from "removed"
+
+This could become important.
+
+For example:
+
+typedef enum {
+    CONTEXT_STATUS_VALID,
+    CONTEXT_STATUS_REMOVED,
+    CONTEXT_STATUS_UNAVAILABLE
+} ContextStatus;
+
+Because eventually you may have cases such as:
+
+Context exists but cannot currently be displayed
+Context exists but permissions changed
+Context is loading
+Context was destroyed
+ContextId was never valid
+
+In particular, "removed" is an event; "invalid" is a state.
+
+That's a useful conceptual distinction.
+
+EVENT:
+    CONTEXT_REMOVED(105)
+
+STATE:
+    105 → REMOVED
+
+The event happens once.
+
+The state can be queried many times.
+
+That's exactly why your proposed architecture can work well.
+One important point about ContextId lifetime
+
+You said:
+
+    these ids are unique for the lifetime of the program
+
+That's excellent.
+
+It means you can safely interpret:
+
+105
+
+as a historical identity even after the underlying context disappears.
+
+I would preserve that property.
+
+Don't recycle:
+
+105 → context A
+...
+context A removed
+...
+105 → context B   // avoid this
+
+Instead:
+
+105 → context A
+...
+105 → REMOVED
+
+106 → context B
+
+That makes stale references much easier to reason about.
+
+Your navigation table can therefore safely contain historical IDs without ambiguity.
+One architecture I'd consider
+
+I'd structure the responsibility roughly like this:
+
+                  DATA LAYER
+                      │
+                      ▼
+                CONTEXT LAYER
+                      │
+              ContextId + events
+                      │
+                      ▼
+                 UI LAYER
+          ┌───────────┴───────────┐
+          │                       │
+   Context status/index      UI states
+          │                       │
+          │                 navigation entries
+          │                       │
+          └───────────┬───────────┘
+                      ▼
+              UI/application API
+
+And conceptually:
+
+context_event e;
+while (context_poll_event(context, &e)) {
+    ui_process_context_event(ui, &e);
+}
+
+For:
+
+CONTEXT_REMOVED(105)
+
+the UI layer might do:
+
+ui_context_status[105] = REMOVED
+
+and perhaps update some reverse indexes if you have them.
+
+Then:
+
+ui_get_name(ui, 105, ...)
+
+can immediately return:
+
+UI_CONTEXT_REMOVED
+
+without touching the Context layer.
+
+And finally the application decides:
+
+105 removed
+    │
+    ▼
+find recovery candidate
+    │
+    ├── parent?
+    ├── previous sibling?
+    ├── LAST_VISITED?
+    └── root?
+
+That last part is application/navigation policy, rather than Context-layer responsibility.
+So, overall
+
+Yes, I think your architecture is sound. In fact, the important idea is this:
+
+    Don't propagate context destruction by eagerly repairing every UI reference. Propagate the fact that the ContextId became invalid, and let consumers resolve/recover from the invalid reference when necessary.
+
+I'd make three refinements:
+
+    Convert Context events into UI-side state/index information once, rather than checking the event queue from every API call.
+    Return explicit status/result information such as UI_CONTEXT_REMOVED from UI queries.
+    Keep recovery/navigation policy separate from context validity. The Context layer says "105 is gone"; the UI/application decides "therefore I'll navigate to 101."
+
+That gives you a nice separation between identity, lifetime, UI state, and navigation policy, and it should scale considerably better than scanning every ui_navigation_entry whenever a context disappears.
 If, after implementing it, you find that 90% of your UI state consists of (source, purpose) → N ContextIds, then I'd merge them into a generalized multi-target navigation system. I wouldn't complicate the initial design before you know that's actually the dominant use case.
