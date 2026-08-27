@@ -799,7 +799,7 @@ static void app_intrf_cx_check_dirty(APP_INTRF *app_intrf, CX *cur_cx) {
                                   app_intrf_cx_children_pop);
     // create the children inside cur_cx again
     app_intrf->next_uid.gen += 1;
-    app_intrf->next_uid.id = 0;
+    app_intrf->next_uid.id = 1;
     app_intrf_cx_children_create(app_intrf, cur_cx);
 }
 
