@@ -25,6 +25,16 @@ typedef struct _ui_navigation{
     size_t capacity;
 }UI_NAVIGATION;
 
+typedef struct _ui_sel_item{
+    ContextId selected_id;
+}UI_SEL_ITEM;
+
+typedef struct _ui_selection{
+    UI_SEL_ITEM* selection_items;
+    size_t count;
+    size_t capacity;
+}UI_SELECTION;
+
 typedef struct _ui_state{
     ContextId current;
 
@@ -93,7 +103,7 @@ static int entries_resize(UI_NAVIGATION* navigation, size_t new_capacity)
     return 0;
 }
 
-static int entries_create(UI_NAVIGATION* navigation, size_t capacity)
+static bool entries_create(UI_NAVIGATION* navigation, size_t capacity)
 {
     if (capacity == 0){
         capacity = ENTRIES_INIT_CAPACITY;
@@ -103,72 +113,13 @@ static int entries_create(UI_NAVIGATION* navigation, size_t capacity)
         calloc(capacity, sizeof(UI_NAVIGATION_ENTRY));
 
     if (!navigation->entries) {
-        return -1;
+        return false;
     }
 
     navigation->capacity = capacity;
     navigation->count = 0;
 
-    return 0;
-}
-
-static int entries_remove(UI_NAVIGATION *navigation, ContextId context, UiPurpose purpose, ContextId* target)
-{
-    if (!navigation)
-        return -1;
-
-    size_t index = entries_hash_key(context, purpose, navigation->capacity); 
-
-    for (size_t i = 0; i < navigation->capacity; ++i) {
-        UI_NAVIGATION_ENTRY *entry = &navigation->entries[index];
-
-        if (entry->state == ENTRY_EMPTY) {
-            /*
-             An empty slot terminates the probe sequence.
-             The key cannot exist further along this sequence.
-             */
-            return -1;
-        }
-
-        if (entry->state == ENTRY_OCCUPIED && entry->context == context && entry->purpose == purpose) {
-            *target = entry->target;
-
-            /*
-             * Do not make this ENTRY_EMPTY: that could break the
-             * probe sequence for entries that were inserted later.
-             */
-            entry->state = ENTRY_DELETED;
-            navigation->count--;
-
-            /*
-             * Shrink the table if it has become sparse.
-             */
-            if (navigation->capacity > ENTRIES_INIT_CAPACITY &&
-                (double)navigation->count / navigation->capacity < ENTRIES_MIN_LOAD_FACTOR) {
-
-                size_t new_capacity = navigation->capacity / 2;
-
-                if (new_capacity < ENTRIES_INIT_CAPACITY)
-                    new_capacity = ENTRIES_INIT_CAPACITY;
-
-                /*
-                 * Failure to shrink is not an error.
-                 * The existing table remains valid.
-                 */
-                (void)entries_resize(navigation, new_capacity);
-            }
-
-            return 1;
-        }
-
-        /*
-         * ENTRY_DELETED and non-matching EMPTY_OCCUPIED entries
-         * continue the probe sequence.
-         */
-        index = (index + 1) % navigation->capacity;
-    }
-
-    return NULL;
+    return true;
 }
 
 UI_LAYER* ui_layer_init(){
@@ -186,18 +137,49 @@ UI_LAYER* ui_layer_init(){
     return ui_layer;
 }
 
-void ui_layer_destroy(UI_LAYER* ui_layer, UI_STATE *states, size_t states_count){
+UI_STATE* ui_layer_state_init(UI_LAYER* ui_layer){
+    if(!ui_layer)
+        return NULL;
+
+    UI_STATE* state = calloc(1, sizeof(UI_STATE));
+    if(!state)
+        return NULL;
+
+    state->current = (ContextId)nav_cx_root_return(ui_layer->app_intrf);
+    if(entries_create(&state->navigation, ENTRIES_INIT_CAPACITY) != true){
+        ui_layer_state_clear(state);
+        return NULL;
+    }
+    // TODO init state->selection
+    return state;
+}
+
+void ui_layer_state_clear(UI_STATE* state){
+    if(!state)
+        return;
+    UI_NAVIGATION* navigation = &state->navigation;
+    if(navigation->entries){
+        free(navigation->entries);
+        navigation->capacity = ENTRIES_INIT_CAPACITY;
+        navigation->count = 0;
+    }
+    // TODO free state->selection too
+    free(state);
+}
+
+void ui_layer_destroy(UI_LAYER* ui_layer, UI_STATE **states, size_t states_count){
     if(!ui_layer)
         return;
+    // free the ui_layer
     app_intrf_destroy(ui_layer->app_intrf);
     free(ui_layer);
+
     if(!states || states_count < 1)
         return;
     // cleanup the states here
     for(size_t i = 0; i < states_count; i++){
-        UI_STATE state = states[i];
-        if(state.navigation.entries)
-            free(state.navigation.entries);
+        UI_STATE* state = states[i];
+        ui_layer_state_clear(state);
     }
 }
 
@@ -301,4 +283,87 @@ bool ui_layer_nav_try_get(const UI_STATE *state, ContextId context, UiPurpose pu
     }
 
     return false;
+}
+
+bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose, ContextId* target)
+{
+    if(!state)
+        return false;
+
+    UI_NAVIGATION* navigation = &state->navigation;
+    if (!navigation)
+        return false;
+
+    size_t index = entries_hash_key(context, purpose, navigation->capacity); 
+
+    for (size_t i = 0; i < navigation->capacity; ++i) {
+        UI_NAVIGATION_ENTRY *entry = &navigation->entries[index];
+
+        if (entry->state == ENTRY_EMPTY) {
+            /*
+             An empty slot terminates the probe sequence.
+             The key cannot exist further along this sequence.
+             */
+            return false;
+        }
+
+        if (entry->state == ENTRY_OCCUPIED && entry->context == context && entry->purpose == purpose) {
+            *target = entry->target;
+
+            /*
+             * Do not make this ENTRY_EMPTY: that could break the
+             * probe sequence for entries that were inserted later.
+             */
+            entry->state = ENTRY_DELETED;
+            navigation->count--;
+
+            /*
+             * Shrink the table if it has become sparse.
+             */
+            if (navigation->capacity > ENTRIES_INIT_CAPACITY &&
+                (double)navigation->count / navigation->capacity < ENTRIES_MIN_LOAD_FACTOR) {
+
+                size_t new_capacity = navigation->capacity / 2;
+
+                if (new_capacity < ENTRIES_INIT_CAPACITY)
+                    new_capacity = ENTRIES_INIT_CAPACITY;
+
+                /*
+                 * Failure to shrink is not an error.
+                 * The existing table remains valid.
+                 */
+                (void)entries_resize(navigation, new_capacity);
+            }
+
+            return true;
+        }
+
+        /*
+         * ENTRY_DELETED and non-matching EMPTY_OCCUPIED entries
+         * continue the probe sequence.
+         */
+        index = (index + 1) % navigation->capacity;
+    }
+
+    return false;
+}
+
+void ui_layer_update_cycle(UI_LAYER* ui_layer){
+    if(!ui_layer)
+        return;
+    nav_update(ui_layer->app_intrf);
+}
+
+ContextId ui_layer_state_current_return(UI_STATE* state){
+    if (!state)
+        return 0;
+
+    return state->current;
+}
+
+const char* ui_layer_contextid_name_return(UI_LAYER* ui_layer, ContextId context){
+    if(!ui_layer)
+        return NULL;
+
+    return nav_cx_display_name_return(ui_layer->app_intrf, context);
 }

@@ -30,21 +30,28 @@ enum ui_groups {
 int main() {
     enableRawMode();
     log_clear_logfile();
-    UI_LAYER* ui_layer = ui_layer_init(2);
+    UI_LAYER* ui_layer = ui_layer_init();
 
-    // if app_intrf failed to initialize analyze the error write it and exit
+    // if ui_layer failed to initialize analyze the error write it and exit
     if (!ui_layer) {
         log_append_logfile("Could not start the ui_layer\n");
         exit(1);
     }
 
-    //which group is chosen right now
-    unsigned int group_curr = GROUP_MAIN;
+    // create the various states
+    // this state will always stay on the root context
+    UI_STATE* state_root = ui_layer_state_init(ui_layer);
+
     while (1) {
         // erase the terminal
         //printf("\033[2J\033[H");
         // update the interface, of course should be in a loop
         ui_layer_update_cycle(ui_layer);
+        
+        //the root id
+        ContextId id_root = ui_layer_state_current_return(state_root);
+        const char* root_name = ui_layer_contextid_name_return(ui_layer, id_root);
+        printf("--> %s\n", root_name);
 
         // get user inputs
         int input = getchar();
@@ -73,7 +80,8 @@ int main() {
             break;
     }
 
-    ui_layer_destroy(ui_layer);
+    UI_STATE* all_states[1] = {state_root};
+    ui_layer_destroy(ui_layer, all_states, 1);
 
     log_append_logfile("Cleaned everything, closing the app \n");
     disableRawMode();
