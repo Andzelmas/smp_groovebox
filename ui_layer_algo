@@ -1986,3 +1986,460 @@ I'd make three refinements:
 
 That gives you a nice separation between identity, lifetime, UI state, and navigation policy, and it should scale considerably better than scanning every ui_navigation_entry whenever a context disappears.
 If, after implementing it, you find that 90% of your UI state consists of (source, purpose) → N ContextIds, then I'd merge them into a generalized multi-target navigation system. I wouldn't complicate the initial design before you know that's actually the dominant use case.
+
+
+
+// Single context, purpose -> multi target relationship
+typedef struct {
+    ContextId *items;
+    size_t count;
+    size_t capacity;
+} UI_TARGET_LIST;
+
+typedef struct {
+    ContextId context;
+    UiPurpose purpose;
+    UI_TARGET_LIST targets;
+    EntryState state;
+} UI_NAVIGATION_ENTRY;
+
+typedef struct {
+    UI_NAVIGATION_ENTRY *entries;
+    size_t count;
+    size_t capacity;
+
+    size_t borrow_count;
+} UI_NAVIGATION;
+
+Then:
+
+UI_TARGET_LIST *
+ui_navigation_get_targets(
+    UI_STATE *state,
+    ContextId context,
+    UiPurpose purpose);
+
+increments:
+
+navigation->borrow_count++;
+
+And:
+
+void
+ui_navigation_release_targets(
+    UI_STATE *state);
+
+decrements it.
+Why a counter rather than a bool?
+
+This is an important detail.
+
+Suppose later you do:
+
+UI_TARGET_LIST *a =
+    ui_navigation_get_targets(&state, A, P1);
+
+UI_TARGET_LIST *b =
+    ui_navigation_get_targets(&state, B, P2);
+
+Now you have two outstanding borrows.
+
+A boolean doesn't represent that correctly:
+
+borrowed = true
+
+Then releasing a would make it:
+
+borrowed = false
+
+even though b is still being used.
+
+A counter solves this:
+
+borrow_count = 2
+
+release a
+    ↓
+borrow_count = 1
+
+release b
+    ↓
+borrow_count = 0
+
+Then the rule is:
+
+if (navigation->borrow_count != 0)
+    /* cannot modify hash table */
+
+You could make the API symmetrical
+
+For example:
+
+UI_TARGET_LIST *
+ui_navigation_get_targets(
+    UI_STATE *state,
+    ContextId context,
+    UiPurpose purpose);
+
+void
+ui_navigation_release_targets(
+    UI_STATE *state);
+
+Usage:
+
+UI_TARGET_LIST *targets =
+    ui_navigation_get_targets(&state, context, purpose);
+
+if (targets != NULL) {
+    ui_target_list_add(targets, id1);
+    ui_target_list_add(targets, id2);
+    ui_target_list_add(targets, id3);
+
+    ui_navigation_release_targets(&state);
+}
+
+The important contract would be:
+
+    A UI_TARGET_LIST * returned by ui_navigation_get_targets() is valid until ui_navigation_release_targets().
+
+And:
+
+    While a target list is borrowed, operations that can modify the navigation hash table are prohibited.
+
+But there's a subtle problem with get_targets()
+
+Suppose the entry doesn't exist.
+
+You call:
+
+ui_navigation_get_targets(&state, A, P);
+
+The function needs to create the hash-table entry.
+
+But creating it might require a rehash.
+
+So the sequence needs to be:
+
+get_targets()
+    │
+    ├── find entry
+    │
+    ├── if absent:
+    │      maybe resize hash table
+    │      create entry
+    │
+    └── THEN increment borrow_count
+
+You must not increment the borrow count before the lookup/insertion is complete.
+
+Otherwise you'd have:
+
+borrow_count > 0
+
+while simultaneously needing to rehash.
+
+So internally:
+
+UI_TARGET_LIST *
+ui_navigation_get_targets(...)
+{
+    UI_NAVIGATION_ENTRY *entry;
+
+    /* No borrow exists yet. */
+    entry = find_or_create_entry(...);
+
+    if (entry == NULL)
+        return NULL;
+
+    navigation->borrow_count++;
+
+    return &entry->targets;
+}
+
+That's clean.
+What operations should be blocked?
+
+I'd distinguish between entry operations and target-list operations.
+
+While borrowed, this should be forbidden:
+
+ui_navigation_insert(...)
+ui_navigation_remove(...)
+ui_navigation_clear(...)
+ui_navigation_rehash(...)
+
+because these can change:
+
+navigation->entries
+
+But this should remain perfectly valid:
+
+ui_target_list_add(targets, id);
+ui_target_list_remove(targets, id);
+ui_target_list_clear(targets);
+
+because they only manipulate:
+
+targets->items
+
+and don't move the hash table entries.
+
+So:
+
+BORROWED
+│
+├── target list operations      OK
+│     ├── add
+│     ├── remove
+│     ├── clear
+│     └── resize items[]
+│
+└── navigation operations       NOT OK
+      ├── insert entry
+      ├── delete entry
+      ├── rehash
+      └── resize entries[]
+
+This is a very clean distinction.
+One thing I'd be careful about: error handling
+
+Because C doesn't enforce the borrow protocol, the caller can do:
+
+UI_TARGET_LIST *targets =
+    ui_navigation_get_targets(...);
+
+/* forgot release */
+
+Now your UI navigation is permanently locked.
+
+That's the major disadvantage of this design.
+
+It's essentially manually managed resource lifetime:
+
+get()
+...
+...
+release()
+
+similar to:
+
+lock();
+...
+unlock();
+
+or:
+
+malloc();
+...
+free();
+
+The compiler won't help you.
+
+You therefore want the API/documentation to make the rule extremely obvious.
+An even nicer API might be begin/end
+
+I'd actually consider:
+
+UI_TARGET_LIST *
+ui_navigation_targets_begin(
+    UI_STATE *state,
+    ContextId context,
+    UiPurpose purpose);
+
+void
+ui_navigation_targets_end(
+    UI_STATE *state);
+
+The names communicate the lifetime:
+
+UI_TARGET_LIST *targets =
+    ui_navigation_targets_begin(&state, context, purpose);
+
+/* use targets */
+
+ui_navigation_targets_end(&state);
+
+Or:
+
+ui_navigation_borrow_targets(...)
+ui_navigation_return_targets(...)
+
+The word borrow is particularly good because it communicates that the caller doesn't own the returned object.
+Could the borrow state live in UI_TARGET_LIST?
+
+You proposed:
+
+typedef struct {
+    ContextId *items;
+    size_t count;
+    size_t capacity;
+
+    bool borrowed;
+} UI_TARGET_LIST;
+
+I wouldn't do that because it gives the wrong abstraction.
+
+Consider:
+
+UI_NAVIGATION
+    entries[]
+       │
+       ├── targets A (borrowed)
+       ├── targets B
+       └── targets C
+
+The hash table is frozen because A is borrowed.
+
+That has nothing to do with B or C.
+
+So this:
+
+navigation->borrow_count
+
+expresses the actual invariant much better than:
+
+targetsA->borrowed
+
+There is one more improvement I'd strongly consider
+
+Instead of:
+
+size_t borrow_count;
+
+you could have:
+
+size_t borrow_count;
+
+and debug assertions around every operation that can invalidate entry pointers.
+
+For example:
+
+static bool ui_navigation_can_modify(
+    const UI_NAVIGATION *navigation)
+{
+    return navigation->borrow_count == 0;
+}
+
+Then:
+
+bool ui_navigation_remove(...)
+{
+    assert(navigation->borrow_count == 0);
+
+    ...
+}
+
+During development, accidentally doing:
+
+UI_TARGET_LIST *targets =
+    ui_navigation_get_targets(...);
+
+ui_navigation_remove(...);
+
+would immediately expose the bug.
+
+In release builds you can decide whether to return an error instead.
+One concern: UI_STATE copying
+
+Your design also means you need to think about:
+
+UI_STATE a;
+UI_STATE b = a;
+
+You presumably already can't safely shallow-copy UI_STATE because it contains dynamically allocated hash-table storage.
+
+But with borrowing, this becomes even more important.
+
+I'd make UI_STATE explicitly non-copyable by convention and provide:
+
+bool ui_state_init(UI_STATE *);
+void ui_state_destroy(UI_STATE *);
+
+bool ui_state_clone(UI_STATE *dst, const UI_STATE *src);
+
+And probably:
+
+    ui_state_clone() requires that src has no outstanding borrows.
+
+That's a natural invariant.
+Overall, I like this design
+
+Given your architecture, I'd actually prefer this over allocating UI_TARGET_LIST separately.
+
+You get:
+
+                     UI_STATE
+                        │
+                        ▼
+                  UI_NAVIGATION
+                        │
+             ┌──────────┴──────────┐
+             │                     │
+        hash entries           borrow_count
+             │
+             ▼
+      UI_NAVIGATION_ENTRY
+             │
+             ▼
+       UI_TARGET_LIST
+             │
+             ▼
+        ContextId[]
+
+The allocations are:
+
+UI_NAVIGATION.entries
+        ↓
+   hash table storage
+
+UI_TARGET_LIST.items
+        ↓
+   target collection storage
+
+Only those two things need dynamic allocation.
+
+And your API becomes quite elegant:
+
+UI_TARGET_LIST *
+ui_navigation_targets_begin(
+    UI_STATE *state,
+    ContextId context,
+    UiPurpose purpose);
+
+void
+ui_navigation_targets_end(UI_STATE *state);
+
+Usage:
+
+UI_TARGET_LIST *targets =
+    ui_navigation_targets_begin(&state, context, purpose);
+
+if (targets != NULL) {
+    ui_target_list_add(targets, id1);
+    ui_target_list_add(targets, id2);
+    ui_target_list_add(targets, id3);
+
+    ui_navigation_targets_end(&state);
+}
+
+The hash table remains stable for the duration of the borrow, while targets->items is free to realloc().
+Allowed while borrowed
+
+ui_target_list_add()
+ui_target_list_remove()
+ui_target_list_clear()
+
+because they only modify:
+
+ContextId[]
+
+Forbidden while borrowed
+
+ui_navigation_insert()
+ui_navigation_remove()
+ui_navigation_clear()
+ui_navigation_reserve()
+
+because they can modify:
+
+UI_NAVIGATION_ENTRY[]
