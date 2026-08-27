@@ -30,3 +30,9 @@ uint64_t nav_cx_root_return(APP_INTRF *app_intrf);
 
 // return the name of the key cx
 const char* nav_cx_display_name_return(APP_INTRF *app_intrf, uint64_t key);
+
+// run a ChildFn function on the parent_id children
+// in other words iterate children and use function
+void nav_cx_children(APP_INTRF *app_intrf, uint64_t parent_id,
+                     bool (ChildFn)(uint64_t child_id, void *user_data),
+                     void *user_data); 

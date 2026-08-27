@@ -471,7 +471,7 @@ typedef struct _cx_uniqueid{
 typedef struct _cx {
     // name for display
     char short_name[MAX_PARAM_NAME_LENGTH];
-    struct _cx_uniqueid uid; //unique context id
+    CX_ID uid; //unique context id
     int idx; // index number of this CX in the cx_parent cx_children array
     uint16_t user_data_type;
     void *user_data; // user_data for this cx, that the data layer uses. IT IS
@@ -486,7 +486,7 @@ typedef struct _cx {
 typedef struct _app_intrf {
     CX *cx_root;
     CX_ID next_uid; //uniqueid for the next context
-    HashTable* cx_hashtable; //hash table that links next_uid->key to a context
+    HashTable* cx_hashtable; //hash table that links cx_id->key to a context
 
     uint16_t main_user_data_type; // type for the main user_data struct, the
                                   // same type is in cx_root->user_data_type
@@ -832,3 +832,7 @@ const char* nav_cx_display_name_return(APP_INTRF *app_intrf, uint64_t key){
     CX* cx_curr = (CX*)cx_data;
     return cx_curr->short_name;
 }
+
+void nav_cx_children(APP_INTRF *app_intrf, uint64_t parent_id,
+                     bool (ChildFn)(uint64_t child_id, void *user_data),
+                     void *user_data) {}
