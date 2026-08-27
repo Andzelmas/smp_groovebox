@@ -127,7 +127,7 @@ static int entries_remove(UI_NAVIGATION *navigation, ContextId context, UiPurpos
              An empty slot terminates the probe sequence.
              The key cannot exist further along this sequence.
              */
-            return NULL;
+            return -1;
         }
 
         if (entry->state == ENTRY_OCCUPIED && entry->context == context && entry->purpose == purpose) {
@@ -209,7 +209,6 @@ bool ui_layer_nav_set(UI_STATE* state, ContextId context, ContextId target, UiPu
         return false;
 
     size_t index = entries_hash_key(context, purpose, navigation->capacity);
-
     /*
      * Resize before inserting if necessary.
      */
@@ -230,25 +229,46 @@ bool ui_layer_nav_set(UI_STATE* state, ContextId context, ContextId target, UiPu
         index = entries_hash_key(context, purpose, navigation->capacity);
     }
 
-    for (size_t i = 0; i < navigation->capacity; i++) {
-        UI_NAVIGATION_ENTRY *entry = &navigation->entries[(index + i) % navigation->capacity];
+    size_t deleted_index = SIZE_MAX;
 
-        if (entry->state != ENTRY_OCCUPIED) {
+    for (size_t i = 0; i < navigation->capacity; i++) {
+        UI_NAVIGATION_ENTRY *entry =
+            &navigation->entries[(index + i) % navigation->capacity];
+
+        if (entry->state == ENTRY_EMPTY) {
+            /*
+             * Reuse the first deleted slot, if one was found.
+             */
+            if (deleted_index != SIZE_MAX)
+                entry = &navigation->entries[deleted_index];
+
             entry->context = context;
             entry->purpose = purpose;
             entry->target = target;
             entry->state = ENTRY_OCCUPIED;
             navigation->count++;
+
             return true;
         }
 
+        if (entry->state == ENTRY_DELETED) {
+            if (deleted_index == SIZE_MAX)
+                deleted_index = (index + i) % navigation->capacity;
+
+            continue;
+        }
+
+        /*
+         * ENTRY_OCCUPIED
+         */
         if (entry->context == context && entry->purpose == purpose) {
+
             entry->target = target;
             return true;
         }
     }
 
-    return 0;
+    return false;
 }
 
 bool ui_layer_nav_try_get(const UI_STATE *state, ContextId context, UiPurpose purpose, ContextId* target)
