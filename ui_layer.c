@@ -5,6 +5,8 @@
 #define ENTRIES_INIT_CAPACITY 16
 #define ENTRIES_MAX_LOAD_FACTOR 0.75
 #define ENTRIES_MIN_LOAD_FACTOR 0.10
+// contextid cannot be 0
+#define CONTEXT_ID_INVALID 0
 
 typedef enum{
     ENTRY_EMPTY,
@@ -12,10 +14,19 @@ typedef enum{
     ENTRY_DELETED
 }EntryState;
 
+typedef struct _ui_target_list{
+    ContextId *items;
+    size_t count;
+    size_t capacity;
+    // with dynamic false: _target_list_add will wrap around when count>capacity
+    // with dynamic true: _target_list_add will resize the *items array
+    bool dynamic;
+}UI_TARGET_LIST;
+
 typedef struct _ui_navigation_entry{
     ContextId context;
     UiPurpose purpose;
-    ContextId target;
+    UI_TARGET_LIST targets;
     EntryState state;
 }UI_NAVIGATION_ENTRY;
 
@@ -23,22 +34,12 @@ typedef struct _ui_navigation{
     UI_NAVIGATION_ENTRY* entries;
     size_t count;
     size_t capacity;
+    
+    size_t borrow_count;
 }UI_NAVIGATION;
-
-typedef struct _ui_sel_item{
-    ContextId selected_id;
-}UI_SEL_ITEM;
-
-typedef struct _ui_selection{
-    UI_SEL_ITEM* selection_items;
-    size_t count;
-    size_t capacity;
-}UI_SELECTION;
 
 typedef struct _ui_state{
     ContextId current;
-
-    UI_SELECTION selection;
 
     UI_NAVIGATION navigation;
 }UI_STATE;
@@ -46,6 +47,32 @@ typedef struct _ui_state{
 typedef struct _ui_layer{
     APP_INTRF* app_intrf;
 }UI_LAYER;
+
+static void ui_layer_nav_target_list_destroy(UI_TARGET_LIST *targets){
+    if(!targets)
+        return;
+   targets->capacity = 0;
+   targets->count = 0;
+   targets->dynamic = false;
+   if(targets->items)
+       free(targets->items);
+   targets->items = NULL;
+}
+
+static bool ui_layer_nav_target_list_init(UI_TARGET_LIST* targets, size_t capacity, bool dynamic){
+    if(!targets || capacity == 0)
+        return false;
+
+    targets->items = calloc(capacity, sizeof(ContextId));
+    if(!targets->items)
+        return false;
+
+    targets->capacity = capacity;
+    targets->count = 0;
+    targets->dynamic = dynamic;
+
+    return true;
+}
 
 static size_t entries_hash_key(ContextId context, UiPurpose purpose, size_t entries_capacity){
     ContextId h = context;
@@ -118,6 +145,11 @@ static bool entries_create(UI_NAVIGATION* navigation, size_t capacity)
 
     navigation->capacity = capacity;
     navigation->count = 0;
+    navigation->borrow_count = 0;
+    for(size_t i = 0; i< navigation->capacity; i++){
+        UI_NAVIGATION_ENTRY* entry = &navigation->entries[i];
+        ui_layer_nav_target_list_destroy(&entry->targets);
+    }
 
     return true;
 }
@@ -150,7 +182,6 @@ UI_STATE* ui_layer_state_init(UI_LAYER* ui_layer){
         ui_layer_state_clear(state);
         return NULL;
     }
-    // TODO init state->selection
     return state;
 }
 
@@ -159,11 +190,14 @@ void ui_layer_state_clear(UI_STATE* state){
         return;
     UI_NAVIGATION* navigation = &state->navigation;
     if(navigation->entries){
+        for(size_t i = 0; i < navigation->capacity; i++){
+            UI_NAVIGATION_ENTRY* entry = &navigation->entries[i];
+            ui_layer_nav_target_list_destroy(&entry->targets);
+        }
         free(navigation->entries);
-        navigation->capacity = ENTRIES_INIT_CAPACITY;
+        navigation->capacity = 0;
         navigation->count = 0;
     }
-    // TODO free state->selection too
     free(state);
 }
 
@@ -183,11 +217,14 @@ void ui_layer_destroy(UI_LAYER* ui_layer, UI_STATE **states, size_t states_count
     }
 }
 
-bool ui_layer_nav_set(UI_STATE* state, ContextId context, ContextId target, UiPurpose purpose){
+bool ui_layer_nav_set(UI_STATE* state, ContextId context, UiPurpose purpose, size_t capacity, bool dynamic){
     if(!state)
         return false;
     UI_NAVIGATION* navigation = &state->navigation;
     if (!navigation)
+        return false;
+
+    if(navigation->borrow_count != 0)
         return false;
 
     size_t index = entries_hash_key(context, purpose, navigation->capacity);
@@ -224,9 +261,10 @@ bool ui_layer_nav_set(UI_STATE* state, ContextId context, ContextId target, UiPu
             if (deleted_index != SIZE_MAX)
                 entry = &navigation->entries[deleted_index];
 
+            if(!ui_layer_nav_target_list_init(&entry->targets, capacity, dynamic))
+                return false;
             entry->context = context;
             entry->purpose = purpose;
-            entry->target = target;
             entry->state = ENTRY_OCCUPIED;
             navigation->count++;
 
@@ -241,11 +279,15 @@ bool ui_layer_nav_set(UI_STATE* state, ContextId context, ContextId target, UiPu
         }
 
         /*
-         * ENTRY_OCCUPIED
+         ENTRY_OCCUPIED so create the targets list if it is empty
+         otherwise do nothing
          */
         if (entry->context == context && entry->purpose == purpose) {
+            if(!entry->targets.items){
+                if(!ui_layer_nav_target_list_init(&entry->targets, capacity, dynamic))
+                    return false;
+            }
 
-            entry->target = target;
             return true;
         }
     }
@@ -253,45 +295,15 @@ bool ui_layer_nav_set(UI_STATE* state, ContextId context, ContextId target, UiPu
     return false;
 }
 
-bool ui_layer_nav_try_get(const UI_STATE *state, ContextId context, UiPurpose purpose, ContextId* target)
-{
-    if (!state)
-        return false;
-    const UI_NAVIGATION *navigation = &state->navigation;
-    if (!navigation)
-        return false;
-
-    size_t index = entries_hash_key(context, purpose, navigation->capacity); 
-
-    for (size_t i = 0; i < navigation->capacity; i++) {
-        size_t pos = (index + i) % navigation->capacity;
-        const UI_NAVIGATION_ENTRY *entry = &navigation->entries[pos];
-
-        if (entry->state == ENTRY_EMPTY)
-            return false;
-
-        if (entry->state == ENTRY_OCCUPIED && entry->context == context && entry->purpose == purpose){
-            *target = entry->target;
-            return true;
-        }
-
-        /*
-         ENTRY_DELETED:
-         Keep probing because the key may be further
-         along the probe sequence.
-         */
-    }
-
-    return false;
-}
-
-bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose, ContextId* target)
-{
+bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose){
     if(!state)
         return false;
 
     UI_NAVIGATION* navigation = &state->navigation;
     if (!navigation)
+        return false;
+
+    if(navigation->borrow_count != 0)
         return false;
 
     size_t index = entries_hash_key(context, purpose, navigation->capacity); 
@@ -308,7 +320,6 @@ bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose, 
         }
 
         if (entry->state == ENTRY_OCCUPIED && entry->context == context && entry->purpose == purpose) {
-            *target = entry->target;
 
             /*
              * Do not make this ENTRY_EMPTY: that could break the
@@ -316,6 +327,7 @@ bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose, 
              */
             entry->state = ENTRY_DELETED;
             navigation->count--;
+            ui_layer_nav_target_list_destroy(&entry->targets);
 
             /*
              * Shrink the table if it has become sparse.
@@ -348,6 +360,84 @@ bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose, 
     return false;
 }
 
+
+// TARGET_LIST public operations
+// --------------------------------------------------
+
+UI_TARGET_LIST* ui_layer_nav_target_list_begin(UI_STATE *state, ContextId context, UiPurpose purpose){ 
+    if (!state)
+        return NULL;
+    UI_NAVIGATION *navigation = &state->navigation;
+
+    size_t index = entries_hash_key(context, purpose, navigation->capacity); 
+
+    for (size_t i = 0; i < navigation->capacity; i++) {
+        size_t pos = (index + i) % navigation->capacity;
+        UI_NAVIGATION_ENTRY *entry = &navigation->entries[pos];
+
+        if (entry->state == ENTRY_EMPTY){
+            return NULL;
+        }
+
+        if (entry->state == ENTRY_OCCUPIED && entry->context == context && entry->purpose == purpose){
+            navigation->borrow_count++;
+
+            return &entry->targets;
+        }
+
+        /*
+         ENTRY_DELETED:
+         Keep probing because the key may be further
+         along the probe sequence.
+         */
+    }
+
+    return NULL;
+}
+
+bool ui_layer_nav_target_list_add(UI_TARGET_LIST* targets, ContextId context_insert){
+    if(!targets)
+        return false;
+    if(!targets->items)
+        return false;
+
+    size_t index = targets->count;
+    // is the targets array full
+    if(targets->count >= targets->capacity){
+        // if the targets array is static simply wrap around and overwrite the value
+        if (!targets->dynamic) {
+            index = 0;
+            targets->count = 0;
+        } 
+        // if the targets array is dynamic double it in size
+        else {
+        }
+    }
+
+    targets->items[index] = context_insert;
+    targets->count++;
+
+    return true;
+}
+
+int ui_layer_nav_target_list_find(UI_TARGET_LIST* targets, ContextId context_find){
+}
+
+bool ui_layer_nav_target_list_insert(UI_TARGET_LIST* targets, ContextId context_insert, size_t idx){
+}
+
+void ui_layer_nav_target_list_remove(UI_TARGET_LIST* targets, size_t idx){
+}
+
+void ui_layer_nav_target_list_end(UI_STATE *state){
+    if(!state)
+        return;
+    UI_NAVIGATION* navigation = &state->navigation;
+    navigation->borrow_count--;
+}
+// TARGET_LIST operations END
+// --------------------------------------------------
+
 void ui_layer_update_cycle(UI_LAYER* ui_layer){
     if(!ui_layer)
         return;
@@ -356,7 +446,7 @@ void ui_layer_update_cycle(UI_LAYER* ui_layer){
 
 ContextId ui_layer_state_current_return(UI_STATE* state){
     if (!state)
-        return 0;
+        return CONTEXT_ID_INVALID;
 
     return state->current;
 }

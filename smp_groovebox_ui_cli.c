@@ -27,6 +27,22 @@ enum ui_groups {
     GROUP_ROOT = 1
 };
 
+enum UiPurpose{
+    UI_PURPOSE_HOVERED = 1,
+    UI_PURPOSE_SELECTED = 2
+};
+
+static void target_list_init_standard(UI_STATE* state, ContextId context){
+    if(!state)
+        return;
+
+    // in the targets this will have only one ContextId and it is static
+    ui_layer_nav_set(state, context, UI_PURPOSE_HOVERED, 1, false);
+    // the selected purpose is a dynamic targets array
+    // initialy it is 4 items
+    ui_layer_nav_set(state, context, UI_PURPOSE_SELECTED, 4, true);
+}
+
 int main() {
     enableRawMode();
     log_clear_logfile();
@@ -41,6 +57,8 @@ int main() {
     // create the various states
     // this state will always stay on the root context
     UI_STATE* state_root = ui_layer_state_init(ui_layer);
+    ContextId id_root = ui_layer_state_current_return(state_root);
+    target_list_init_standard(state_root, id_root);
 
     while (1) {
         // erase the terminal
@@ -49,7 +67,6 @@ int main() {
         ui_layer_update_cycle(ui_layer);
         
         //the root id
-        ContextId id_root = ui_layer_state_current_return(state_root);
         const char* root_name = ui_layer_contextid_name_return(ui_layer, id_root);
         printf("--> %s\n", root_name);
 
