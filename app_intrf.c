@@ -833,6 +833,20 @@ const char* nav_cx_display_name_return(APP_INTRF *app_intrf, uint64_t key){
     return cx_curr->short_name;
 }
 
-void nav_cx_children(APP_INTRF *app_intrf, uint64_t parent_id,
+uint64_t nav_cx_children_get_first(APP_INTRF* app_intrf, uint64_t parent_id){
+    if(!app_intrf)
+        return 0;
+
+    void* cx_data = ht_get(app_intrf->cx_hashtable, parent_id);
+    if(!cx_data)
+        return 0;
+    CX* cx_curr = (CX*)cx_data;
+    if(!cx_curr->cx_children.contexts || cx_curr->cx_children.count == 0)
+        return 0;
+
+    return cx_curr->cx_children.contexts[0]->uid.key;
+}
+
+void nav_cx_children_iterate(APP_INTRF *app_intrf, uint64_t parent_id,
                      bool (ChildFn)(uint64_t child_id, void *user_data),
                      void *user_data) {}

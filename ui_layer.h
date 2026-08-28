@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
+// contextid cannot be 0
+#define CONTEXT_ID_INVALID 0
+
 typedef uint64_t ContextId;
 typedef uint32_t UiPurpose;
 
@@ -38,6 +41,8 @@ bool ui_layer_nav_remove(UI_STATE* state, ContextId source, UiPurpose purpose);
 UI_TARGET_LIST* ui_layer_nav_target_list_begin(UI_STATE* state, ContextId context, UiPurpose purpose); 
 // insert the context_insert into the UI_TARGET_LIST
 bool ui_layer_nav_target_list_add(UI_TARGET_LIST* targets, ContextId context_insert);
+// get the ContextId from the targets list in the idx index
+ContextId ui_layer_nav_target_list_get(UI_TARGET_LIST* targets, size_t idx);
 // find the context_find and return the index in the targets array or -1 on failure
 int ui_layer_nav_target_list_find(UI_TARGET_LIST* targets, ContextId context_find);
 // insert context_insert into the index idx, return false is failed
@@ -56,3 +61,6 @@ ContextId ui_layer_state_current_return(UI_STATE* state);
 
 // return name of a contextid
 const char* ui_layer_contextid_name_return(UI_LAYER* ui_layer, ContextId context);
+// return the first child of the parent
+// returns CONTEX_ID_INVALID on error or if parent has no children
+ContextId ui_layer_contextid_children_get_first(UI_LAYER* ui_layer, ContextId parent);

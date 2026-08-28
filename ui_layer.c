@@ -5,8 +5,6 @@
 #define ENTRIES_INIT_CAPACITY 16
 #define ENTRIES_MAX_LOAD_FACTOR 0.75
 #define ENTRIES_MIN_LOAD_FACTOR 0.10
-// contextid cannot be 0
-#define CONTEXT_ID_INVALID 0
 
 typedef enum{
     ENTRY_EMPTY,
@@ -420,6 +418,16 @@ bool ui_layer_nav_target_list_add(UI_TARGET_LIST* targets, ContextId context_ins
     return true;
 }
 
+ContextId ui_layer_nav_target_list_get(UI_TARGET_LIST* targets, size_t idx){
+    if(!targets)
+        return CONTEXT_ID_INVALID;
+    if(!targets->items)
+        return CONTEXT_ID_INVALID;
+    if(idx >= targets->capacity)
+        return CONTEXT_ID_INVALID;
+    return targets->items[idx];
+}
+
 int ui_layer_nav_target_list_find(UI_TARGET_LIST* targets, ContextId context_find){
 }
 
@@ -456,4 +464,11 @@ const char* ui_layer_contextid_name_return(UI_LAYER* ui_layer, ContextId context
         return NULL;
 
     return nav_cx_display_name_return(ui_layer->app_intrf, context);
+}
+
+ContextId ui_layer_contextid_children_get_first(UI_LAYER* ui_layer, ContextId parent){
+    if(!ui_layer)
+        return CONTEXT_ID_INVALID;
+
+    return nav_cx_children_get_first(ui_layer->app_intrf, parent);
 }
