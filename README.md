@@ -1,4 +1,11 @@
 # smp_groovebox
+## The APP_INTRF layer is being completely rewritten
+After the app_intrf layer overhaul it will be, hopefully, easy to write different user interfaces.
+Also, I am working towards implementing several user interfaces as a choice during the compilation.
+
+This is necessary, because i started this project as a learning experience in C programming.
+Now, I have to come back to naive architectural solution and fix/change them.
+
 ## Still early development. Some parts of code can change completely.
 ## Simple groovebox for linux based systems. Works on rpi too.
 Check out https://brumakes.com/programming.php for development blog and some videos.
