@@ -28,14 +28,25 @@ void ui_layer_state_clear(UI_STATE* state);
 // destroy the ui_layer and the given ui_states
 void ui_layer_destroy(UI_LAYER *ui_layer, UI_STATE **states,
                       size_t states_count);
+
 // create a new UI_NAVIGATION_ENTRY on the UI_NAVIGATION on UI_STATE state
-// UiPurpose is a user enum that the ui_layer knows nothing about
+// UI_NAVIGATION_ENTRY* is a hash table, where the user can save ContextId arrays in the UI_TARGET_LIST->items
+// Example: source ContextId 101, with UiPurpose UI_PURPOSE_SELECTED.
+// later the user can _target_list_add to that entry and have 101 (UI_PURPOSE_SELECTED) -> {102, 104, 107} 
+// and use that to display selected ContexIds in the 101 ContextId.
+
 // if the (source, purpose) already exists returns true but does nothing
 // if the (source, purpose) does not exist, create entry and initiate the UI_TARGET_LIST with the capacity
 // dynamic true will resize the UI_TARGET_LIST when adding, otherwise _target_list_add will wrap around
 bool ui_layer_nav_set(UI_STATE* state, ContextId source, UiPurpose purpose, size_t capacity, bool dynamic);
 // remove a UI_NAVIGATION_ENTRY
 bool ui_layer_nav_remove(UI_STATE* state, ContextId source, UiPurpose purpose);
+
+// -------------------------------------------------- 
+// UI_TARGET_LIST operations:
+// user uses these functions to add, remove, retrieve etc. the UI_TARGE_LIST->items
+// In other words use the UI_TARGET_LIST->items as save slots for ContextIds
+
 // get the target list from the state with key (context,purpose).
 // must call ui_layer_nav_target_list_end after modifying the target list
 UI_TARGET_LIST* ui_layer_nav_target_list_begin(UI_STATE* state, ContextId context, UiPurpose purpose); 
@@ -51,6 +62,7 @@ bool ui_layer_nav_target_list_insert(UI_TARGET_LIST* targets, ContextId context_
 void ui_layer_nav_target_list_remove(UI_TARGET_LIST* targets, size_t idx);
 // lower the borrow_count of the state->navigation, indicating that it is safe to change the hash table
 void ui_layer_nav_target_list_end(UI_STATE* state);
+// -------------------------------------------------- 
 
 // user should call this each cycle
 // TODO should return context messages if contexts are deleted

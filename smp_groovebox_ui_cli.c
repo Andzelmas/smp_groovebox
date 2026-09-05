@@ -32,17 +32,6 @@ enum UiPurpose{
     UI_PURPOSE_SELECTED = 2
 };
 
-static void target_list_init_standard(UI_STATE* state, ContextId context){
-    if(!state)
-        return;
-
-    // in the targets this will have only one ContextId and it is static
-    ui_layer_nav_set(state, context, UI_PURPOSE_HOVERED, 1, false);
-    // the selected purpose is a dynamic targets array
-    // initialy it is 4 items
-    ui_layer_nav_set(state, context, UI_PURPOSE_SELECTED, 4, true);
-}
-
 int main() {
     enableRawMode();
     log_clear_logfile();
@@ -58,8 +47,10 @@ int main() {
     // this state will always stay on the root context
     UI_STATE* state_root = ui_layer_state_init(ui_layer);
     ContextId id_root = ui_layer_state_current_return(state_root);
-    target_list_init_standard(state_root, id_root);
-    // init the id_root purposes
+    // init the root state purposes
+    // TODO just for testing, the root state does not have to havy any purposes
+    // since it will display the root children and the user will be able to go to one of them with a shortcut
+    ui_layer_nav_set(state_root, id_root, UI_PURPOSE_HOVERED, 1, false);
     ContextId first_child = ui_layer_contextid_children_get_first(ui_layer, id_root);
     UI_TARGET_LIST* targets = ui_layer_nav_target_list_begin(state_root, id_root, UI_PURPOSE_HOVERED);
     if(targets){
