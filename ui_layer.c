@@ -1,5 +1,7 @@
 #include "ui_layer.h"
 #include "app_intrf.h"
+#include <stdbool.h>
+#include <stdlib.h>
 
 //UI_NAVIGATION_ENTRY* initial size, must be power of two
 #define ENTRIES_INIT_CAPACITY 16
@@ -16,9 +18,6 @@ typedef struct _ui_target_list{
     ContextId *items;
     size_t count;
     size_t capacity;
-    // with dynamic false: _target_list_add will wrap around when count>capacity
-    // with dynamic true: _target_list_add will resize the *items array
-    bool dynamic;
 }UI_TARGET_LIST;
 
 typedef struct _ui_navigation_entry{
@@ -51,13 +50,12 @@ static void ui_layer_nav_target_list_destroy(UI_TARGET_LIST *targets){
         return;
    targets->capacity = 0;
    targets->count = 0;
-   targets->dynamic = false;
    if(targets->items)
        free(targets->items);
    targets->items = NULL;
 }
 
-static bool ui_layer_nav_target_list_init(UI_TARGET_LIST* targets, size_t capacity, bool dynamic){
+static bool ui_layer_nav_target_list_init(UI_TARGET_LIST* targets, size_t capacity){
     if(!targets || capacity == 0)
         return false;
 
@@ -67,7 +65,6 @@ static bool ui_layer_nav_target_list_init(UI_TARGET_LIST* targets, size_t capaci
 
     targets->capacity = capacity;
     targets->count = 0;
-    targets->dynamic = dynamic;
 
     return true;
 }
@@ -215,7 +212,7 @@ void ui_layer_destroy(UI_LAYER* ui_layer, UI_STATE **states, size_t states_count
     }
 }
 
-bool ui_layer_nav_set(UI_STATE* state, ContextId context, UiPurpose purpose, size_t capacity, bool dynamic){
+bool ui_layer_nav_set(UI_STATE* state, ContextId context, UiPurpose purpose, size_t capacity){
     if(!state)
         return false;
     UI_NAVIGATION* navigation = &state->navigation;
@@ -259,7 +256,7 @@ bool ui_layer_nav_set(UI_STATE* state, ContextId context, UiPurpose purpose, siz
             if (deleted_index != SIZE_MAX)
                 entry = &navigation->entries[deleted_index];
 
-            if(!ui_layer_nav_target_list_init(&entry->targets, capacity, dynamic))
+            if(!ui_layer_nav_target_list_init(&entry->targets, capacity))
                 return false;
             entry->context = context;
             entry->purpose = purpose;
@@ -282,7 +279,7 @@ bool ui_layer_nav_set(UI_STATE* state, ContextId context, UiPurpose purpose, siz
          */
         if (entry->context == context && entry->purpose == purpose) {
             if(!entry->targets.items){
-                if(!ui_layer_nav_target_list_init(&entry->targets, capacity, dynamic))
+                if(!ui_layer_nav_target_list_init(&entry->targets, capacity))
                     return false;
             }
 
@@ -393,29 +390,52 @@ UI_TARGET_LIST* ui_layer_nav_target_list_begin(UI_STATE *state, ContextId contex
     return NULL;
 }
 
-bool ui_layer_nav_target_list_add(UI_TARGET_LIST* targets, ContextId context_insert){
+UiTargetListAddResult ui_layer_nav_target_list_add(UI_TARGET_LIST* targets, ContextId context_insert){
+    if(context_insert == CONTEXT_ID_INVALID)
+        return UI_TARGET_LIST_ADD_ERROR;
     if(!targets)
-        return false;
+        return UI_TARGET_LIST_ADD_ERROR;
     if(!targets->items)
-        return false;
+        return UI_TARGET_LIST_ADD_ERROR;
 
     size_t index = targets->count;
     // is the targets array full
     if(targets->count >= targets->capacity){
-        // if the targets array is static simply wrap around and overwrite the value
-        if (!targets->dynamic) {
-            index = 0;
-            targets->count = 0;
-        } 
-        // if the targets array is dynamic double it in size
-        else {
-        }
+        // return that the array is full
+        return UI_TARGET_LIST_ADD_FULL;
     }
 
     targets->items[index] = context_insert;
     targets->count++;
 
+    return UI_TARGET_LIST_ADD_SUCCESS;
+}
+
+bool ui_layer_nav_target_list_remove(UI_TARGET_LIST* targets, size_t idx){
+    if(!targets)return false;
+    if(!targets->items)return false;
+    if(idx >= targets->count)return false;
+
+    for (size_t i = idx; i + 1 < targets->count; i++) {
+        targets->items[i] = targets->items[i + 1];
+    }
+
+    targets->count--;
+    targets->items[targets->count] = CONTEXT_ID_INVALID;
+
     return true;
+}
+
+size_t ui_layer_nav_target_list_capacity(UI_TARGET_LIST* targets){
+    if(!targets)
+        return 0;
+    return targets->capacity;
+}
+
+size_t ui_layer_nav_target_list_count(UI_TARGET_LIST* targets){
+    if(!targets)
+        return 0;
+    return targets->count;
 }
 
 ContextId ui_layer_nav_target_list_get(UI_TARGET_LIST* targets, size_t idx){
@@ -423,18 +443,41 @@ ContextId ui_layer_nav_target_list_get(UI_TARGET_LIST* targets, size_t idx){
         return CONTEXT_ID_INVALID;
     if(!targets->items)
         return CONTEXT_ID_INVALID;
-    if(idx >= targets->capacity)
+    if(idx >= targets->count)
         return CONTEXT_ID_INVALID;
     return targets->items[idx];
 }
 
-int ui_layer_nav_target_list_find(UI_TARGET_LIST* targets, ContextId context_find){
+bool ui_layer_nav_target_list_resize(UI_TARGET_LIST* targets, size_t new_capacity){
+    if(!targets)
+        return false;
+    if(!targets->items)
+        return false;
+    if(new_capacity == 0 || new_capacity < targets->count)return false;
+
+    ContextId* new_items = calloc(new_capacity, sizeof(ContextId));
+    if(!new_items)return false;
+
+    for(size_t i = 0; i < targets->count; i++){
+        new_items[i] = targets->items[i];
+    }
+    targets->capacity = new_capacity;
+    free(targets->items);
+    targets->items = new_items;
+
+    return true;
 }
 
-bool ui_layer_nav_target_list_insert(UI_TARGET_LIST* targets, ContextId context_insert, size_t idx){
-}
+bool ui_layer_nav_target_list_clear(UI_TARGET_LIST* targets){
+    if(!targets)
+        return false;
 
-void ui_layer_nav_target_list_remove(UI_TARGET_LIST* targets, size_t idx){
+    for (size_t i = 0; i < targets->count; i++)
+        targets->items[i] = CONTEXT_ID_INVALID;
+
+    targets->count = 0;
+
+    return true;
 }
 
 void ui_layer_nav_target_list_end(UI_STATE *state){

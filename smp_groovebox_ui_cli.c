@@ -32,6 +32,55 @@ enum UiPurpose{
     UI_PURPOSE_SELECTED = 2
 };
 
+// Add add_id, if the array is full reset the array and start from beginning
+static bool helper_target_list_add_reset_on_full(UI_TARGET_LIST* target_list, ContextId add_id){
+    if (!target_list)
+        return false;
+    if (add_id == CONTEXT_ID_INVALID)
+        return false;
+
+    UiTargetListAddResult add_result =
+        ui_layer_nav_target_list_add(target_list, add_id);
+    if (add_result == UI_TARGET_LIST_ADD_ERROR)
+        return false;
+    if (add_result == UI_TARGET_LIST_ADD_FULL) {
+        if(!ui_layer_nav_target_list_clear(target_list))
+            return false;
+
+        add_result = ui_layer_nav_target_list_add(target_list, add_id);
+        if(add_result != UI_TARGET_LIST_ADD_SUCCESS)
+            return false;
+    }
+
+    return true;
+}
+// Helper function to add a add_id, if the array is full, double its size
+static bool helper_target_list_add_resize(UI_TARGET_LIST* target_list, ContextId add_id){
+    if (!target_list)
+        return false;
+    if (add_id == CONTEXT_ID_INVALID)
+        return false;
+
+    UiTargetListAddResult add_result =
+        ui_layer_nav_target_list_add(target_list, add_id);
+    if (add_result == UI_TARGET_LIST_ADD_ERROR)
+        return false;
+    if (add_result == UI_TARGET_LIST_ADD_FULL) {
+        size_t capacity = ui_layer_nav_target_list_capacity(target_list);
+        if (capacity > SIZE_MAX / 2)
+            return false;
+        size_t new_capacity = capacity * 2;
+        if(!ui_layer_nav_target_list_resize(target_list, new_capacity))
+            return false;
+
+        add_result = ui_layer_nav_target_list_add(target_list, add_id);
+        if(add_result != UI_TARGET_LIST_ADD_SUCCESS)
+            return false;
+    }
+
+    return true;
+}
+
 int main() {
     enableRawMode();
     log_clear_logfile();
@@ -50,12 +99,11 @@ int main() {
     // init the root state purposes
     // TODO just for testing, the root state does not have to havy any purposes
     // since it will display the root children and the user will be able to go to one of them with a shortcut
-    ui_layer_nav_set(state_root, id_root, UI_PURPOSE_HOVERED, 1, false);
+    ui_layer_nav_set(state_root, id_root, UI_PURPOSE_HOVERED, 1);
     ContextId first_child = ui_layer_contextid_children_get_first(ui_layer, id_root);
     UI_TARGET_LIST* targets = ui_layer_nav_target_list_begin(state_root, id_root, UI_PURPOSE_HOVERED);
     if(targets){
-        if (first_child != CONTEXT_ID_INVALID)
-            ui_layer_nav_target_list_add(targets, first_child);
+        helper_target_list_add_reset_on_full(targets, first_child);
         ui_layer_nav_target_list_end(state_root);
     }
 

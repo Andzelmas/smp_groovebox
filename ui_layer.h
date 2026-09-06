@@ -18,6 +18,13 @@ typedef struct _ui_state UI_STATE;
 // this is owned by the ui_layer
 typedef struct _ui_layer UI_LAYER;
 
+// results of adding an item to a target_list
+typedef enum{
+    UI_TARGET_LIST_ADD_SUCCESS = 1,
+    UI_TARGET_LIST_ADD_FULL = 2,
+    UI_TARGET_LIST_ADD_ERROR = 3
+}UiTargetListAddResult;
+
 // init the ui_layer struct
 UI_LAYER* ui_layer_init();
 // initiate the ui_state - create the ui_navigation_entry entries
@@ -37,8 +44,7 @@ void ui_layer_destroy(UI_LAYER *ui_layer, UI_STATE **states,
 
 // if the (source, purpose) already exists returns true but does nothing
 // if the (source, purpose) does not exist, create entry and initiate the UI_TARGET_LIST with the capacity
-// dynamic true will resize the UI_TARGET_LIST when adding, otherwise _target_list_add will wrap around
-bool ui_layer_nav_set(UI_STATE* state, ContextId source, UiPurpose purpose, size_t capacity, bool dynamic);
+bool ui_layer_nav_set(UI_STATE* state, ContextId source, UiPurpose purpose, size_t capacity);
 // remove a UI_NAVIGATION_ENTRY
 bool ui_layer_nav_remove(UI_STATE* state, ContextId source, UiPurpose purpose);
 
@@ -51,15 +57,19 @@ bool ui_layer_nav_remove(UI_STATE* state, ContextId source, UiPurpose purpose);
 // must call ui_layer_nav_target_list_end after modifying the target list
 UI_TARGET_LIST* ui_layer_nav_target_list_begin(UI_STATE* state, ContextId context, UiPurpose purpose); 
 // insert the context_insert into the UI_TARGET_LIST
-bool ui_layer_nav_target_list_add(UI_TARGET_LIST* targets, ContextId context_insert);
+UiTargetListAddResult ui_layer_nav_target_list_add(UI_TARGET_LIST* targets, ContextId context_insert);
+// remove idx from the target_list
+bool ui_layer_nav_target_list_remove(UI_TARGET_LIST* targets, size_t idx);
+// return how many items the target_list can hold
+size_t ui_layer_nav_target_list_capacity(UI_TARGET_LIST* targets);
+// return how many items the target_list currently holds
+size_t ui_layer_nav_target_list_count(UI_TARGET_LIST* targets);
+// clear the target list - target_list->count becomes 0
+bool ui_layer_nav_target_list_clear(UI_TARGET_LIST* targets);
 // get the ContextId from the targets list in the idx index
 ContextId ui_layer_nav_target_list_get(UI_TARGET_LIST* targets, size_t idx);
-// find the context_find and return the index in the targets array or -1 on failure
-int ui_layer_nav_target_list_find(UI_TARGET_LIST* targets, ContextId context_find);
-// insert context_insert into the index idx, return false is failed
-bool ui_layer_nav_target_list_insert(UI_TARGET_LIST* targets, ContextId context_insert, size_t idx);
-// remove the idx index from targets array, shrink the array if necessary and dynamic, lower count
-void ui_layer_nav_target_list_remove(UI_TARGET_LIST* targets, size_t idx);
+// double the target_list size
+bool ui_layer_nav_target_list_resize(UI_TARGET_LIST* targets, size_t new_capacity);
 // lower the borrow_count of the state->navigation, indicating that it is safe to change the hash table
 void ui_layer_nav_target_list_end(UI_STATE* state);
 // -------------------------------------------------- 
