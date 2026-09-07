@@ -27,26 +27,24 @@ typedef enum{
 
 // init the ui_layer struct
 UI_LAYER* ui_layer_init();
-// initiate the ui_state - create the ui_navigation_entry entries
-// init the selection array etc.
+// initiate the ui_state - create the ui_state_entry entries
 UI_STATE* ui_layer_state_init(UI_LAYER* ui_layer);
 // clean the ui_state
 void ui_layer_state_clear(UI_STATE* state);
 // destroy the ui_layer and the given ui_states
-void ui_layer_destroy(UI_LAYER *ui_layer, UI_STATE **states,
-                      size_t states_count);
+void ui_layer_destroy(UI_LAYER *ui_layer, UI_STATE **states, size_t states_count);
 
-// create a new UI_NAVIGATION_ENTRY on the UI_NAVIGATION on UI_STATE state
-// UI_NAVIGATION_ENTRY* is a hash table, where the user can save ContextId arrays in the UI_TARGET_LIST->items
+// create a new UI_STATE_ENTRY on the UI_STATE state
+// UI_STATE_ENTRY* is a hash table, where the user can save ContextId arrays in the UI_TARGET_LIST->items
 // Example: source ContextId 101, with UiPurpose UI_PURPOSE_SELECTED.
 // later the user can _target_list_add to that entry and have 101 (UI_PURPOSE_SELECTED) -> {102, 104, 107} 
 // and use that to display selected ContexIds in the 101 ContextId.
 
 // if the (source, purpose) already exists returns true but does nothing
 // if the (source, purpose) does not exist, create entry and initiate the UI_TARGET_LIST with the capacity
-bool ui_layer_nav_set(UI_STATE* state, ContextId source, UiPurpose purpose, size_t capacity);
-// remove a UI_NAVIGATION_ENTRY
-bool ui_layer_nav_remove(UI_STATE* state, ContextId source, UiPurpose purpose);
+bool ui_layer_state_entry_set(UI_STATE* state, ContextId source, UiPurpose purpose, size_t capacity);
+// remove a UI_STATE_ENTRY
+bool ui_layer_state_entry_remove(UI_STATE* state, ContextId source, UiPurpose purpose);
 
 // -------------------------------------------------- 
 // UI_TARGET_LIST operations:
@@ -70,19 +68,29 @@ bool ui_layer_nav_target_list_clear(UI_TARGET_LIST* targets);
 ContextId ui_layer_nav_target_list_get(UI_TARGET_LIST* targets, size_t idx);
 // double the target_list size
 bool ui_layer_nav_target_list_resize(UI_TARGET_LIST* targets, size_t new_capacity);
-// lower the borrow_count of the state->navigation, indicating that it is safe to change the hash table
+// lower the borrow_count of the state, indicating that it is safe to change the hash table
 void ui_layer_nav_target_list_end(UI_STATE* state);
 // -------------------------------------------------- 
 
 // user should call this each cycle
-// TODO should return context messages if contexts are deleted
 void ui_layer_update_cycle(UI_LAYER* ui_layer);
 
-// return the current ContextId of a state
-ContextId ui_layer_state_current_return(UI_STATE* state);
+// return the root context ContextId
+ContextId ui_layer_state_root_return(UI_LAYER* ui_layer);
 
-// return name of a contextid
-const char* ui_layer_contextid_name_return(UI_LAYER* ui_layer, ContextId context);
-// return the first child of the parent
-// returns CONTEX_ID_INVALID on error or if parent has no children
-ContextId ui_layer_contextid_children_get_first(UI_LAYER* ui_layer, ContextId parent);
+// check if the context is valid and still linked to an existing cx on the context layer
+bool ui_layer_context_valid(UI_LAYER *ui_layer, ContextId context);
+
+// return the address of the context name
+const char *ui_layer_context_name_return(UI_LAYER *ui_layer, ContextId context);
+
+uint32_t ui_layer_context_flags_return(UI_LAYER *ui_layer, ContextId context);
+
+// how many children the context has
+size_t ui_layer_context_children_count(UI_LAYER *ui_layer, ContextId context);
+
+// get the ContextId of the index child in the parent children array
+ContextId ui_layer_context_child_at(UI_LAYER *ui_layer, ContextId parent, size_t index);
+
+// return the context parent
+ContextId ui_layer_context_parent_return(UI_LAYER *ui_layer, ContextId context);

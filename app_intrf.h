@@ -28,14 +28,20 @@ void nav_update(APP_INTRF *app_intrf);
 // return the key of the top context, that has no parent
 uint64_t nav_cx_root_return(APP_INTRF *app_intrf);
 
-// return the name of the key cx
-const char* nav_cx_display_name_return(APP_INTRF *app_intrf, uint64_t key);
+// return how many children a context has
+size_t nav_cx_children_count(APP_INTRF *app_intrf, uint64_t context);
 
-// return the first child of the parent_id
-// returns 0 on error or if parent_id has no children
-uint64_t nav_cx_children_get_first(APP_INTRF* app_intrf, uint64_t parent_id);
-// run a ChildFn function on the parent_id children
-// in other words iterate children and use function
-void nav_cx_children(APP_INTRF *app_intrf, uint64_t parent_id,
-                     bool (ChildFn)(uint64_t child_id, void *user_data),
-                     void *user_data); 
+// return a cx in the index of the parent array
+uint64_t nav_cx_child_at(APP_INTRF *app_intrf, uint64_t parent, size_t index);
+
+// return the parent of the context
+uint64_t nav_cx_parent_return(APP_INTRF *app_intrf, uint64_t context);
+
+// return the address of the string of the context name
+const char *nav_cx_name_return(APP_INTRF *app_intrf, uint64_t context);
+
+// return flags of the context
+uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, uint64_t context);
+
+// check if the context is valid or not anymore
+bool nav_cx_is_valid(APP_INTRF *app_intrf, uint64_t context);

@@ -44,6 +44,7 @@
 #include "util_funcs/log_funcs.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/types.h>
 
 // TODO TODAY.
 // CONTEXT UNIQUE IDS implementation.
@@ -822,31 +823,106 @@ uint64_t nav_cx_root_return(APP_INTRF* app_intrf){
     return app_intrf->cx_root->uid.key; 
 }
 
-const char* nav_cx_display_name_return(APP_INTRF *app_intrf, uint64_t key){ 
-    if (!app_intrf) {
-        return NULL;
-    }
-    void* cx_data = ht_get(app_intrf->cx_hashtable, key);
-    if (!cx_data)
-        return NULL;
-    CX* cx_curr = (CX*)cx_data;
-    return cx_curr->short_name;
+bool nav_cx_is_valid(APP_INTRF *app_intrf, uint64_t context) {
+    if (!app_intrf)
+        return false;
+
+    if (context == 0)
+        return false;
+
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+
+    return cx != NULL;
 }
 
-uint64_t nav_cx_children_get_first(APP_INTRF* app_intrf, uint64_t parent_id){
-    if(!app_intrf)
-        return 0;
+const char *nav_cx_name_return(APP_INTRF *app_intrf, uint64_t context)
+{
+    if (!app_intrf)
+        return NULL;
 
-    void* cx_data = ht_get(app_intrf->cx_hashtable, parent_id);
-    if(!cx_data)
-        return 0;
-    CX* cx_curr = (CX*)cx_data;
-    if(!cx_curr->cx_children.contexts || cx_curr->cx_children.count == 0)
-        return 0;
+    if (context == 0)
+        return NULL;
 
-    return cx_curr->cx_children.contexts[0]->uid.key;
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+
+    if (!cx)
+        return NULL;
+
+    return cx->short_name;
 }
 
-void nav_cx_children_iterate(APP_INTRF *app_intrf, uint64_t parent_id,
-                     bool (ChildFn)(uint64_t child_id, void *user_data),
-                     void *user_data) {}
+uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, uint64_t context)
+{
+    if (!app_intrf)
+        return 0;
+
+    if (context == 0)
+        return 0;
+
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+
+    if (!cx)
+        return 0;
+
+    return cx->flags;
+}
+
+size_t nav_cx_children_count(APP_INTRF *app_intrf, uint64_t context)
+{
+    if (!app_intrf)
+        return 0;
+
+    if (context == 0)
+        return 0;
+
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+
+    if (!cx)
+        return 0;
+
+    return (size_t)cx->cx_children.count;
+}
+
+uint64_t nav_cx_child_at(APP_INTRF *app_intrf, uint64_t parent,
+                          size_t index)
+{
+    if (!app_intrf) return 0;
+
+    if (parent == 0)
+        return 0;
+
+    CX *parent_cx = ht_get(app_intrf->cx_hashtable, parent);
+
+    if (!parent_cx)
+        return 0;
+
+    if (index >= parent_cx->cx_children.count)
+        return 0;
+
+    CX *child = parent_cx->cx_children.contexts[index];
+
+    if (!child)
+        return 0;
+
+    return child->uid.key;
+}
+
+uint64_t
+nav_cx_parent_return(APP_INTRF *app_intrf, uint64_t context)
+{
+    if (!app_intrf)
+        return 0;
+
+    if (context == 0)
+        return 0;
+
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+
+    if (!cx)
+        return 0;
+
+    if (!cx->cx_parent)
+        return 0;
+
+    return cx->cx_parent->uid.key;
+}

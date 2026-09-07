@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
-//UI_NAVIGATION_ENTRY* initial size, must be power of two
+//UI_STATE_ENTRY* initial size, must be power of two
 #define ENTRIES_INIT_CAPACITY 16
 #define ENTRIES_MAX_LOAD_FACTOR 0.75
 #define ENTRIES_MIN_LOAD_FACTOR 0.10
@@ -20,25 +20,19 @@ typedef struct _ui_target_list{
     size_t capacity;
 }UI_TARGET_LIST;
 
-typedef struct _ui_navigation_entry{
+typedef struct _ui_state_entry{
     ContextId context;
     UiPurpose purpose;
     UI_TARGET_LIST targets;
     EntryState state;
-}UI_NAVIGATION_ENTRY;
+}UI_STATE_ENTRY;
 
-typedef struct _ui_navigation{
-    UI_NAVIGATION_ENTRY* entries;
+typedef struct _ui_state{
+    UI_STATE_ENTRY* entries;
     size_t count;
     size_t capacity;
     
     size_t borrow_count;
-}UI_NAVIGATION;
-
-typedef struct _ui_state{
-    ContextId current;
-
-    UI_NAVIGATION navigation;
 }UI_STATE;
 
 typedef struct _ui_layer{
@@ -83,39 +77,39 @@ static size_t entries_hash_key(ContextId context, UiPurpose purpose, size_t entr
     return (size_t)h & (entries_capacity - 1);
 }
 
-static int entries_resize(UI_NAVIGATION* navigation, size_t new_capacity)
+static int entries_resize(UI_STATE* state, size_t new_capacity)
 {
-    if(!navigation || new_capacity == 0)
+    if(!state || new_capacity == 0)
         return -1;
 
-    UI_NAVIGATION_ENTRY *old_entries = navigation->entries;
-    size_t old_capacity = navigation->capacity;
+    UI_STATE_ENTRY *old_entries = state->entries;
+    size_t old_capacity = state->capacity;
 
-    UI_NAVIGATION_ENTRY *new_entries = calloc(new_capacity, sizeof(UI_NAVIGATION_ENTRY));
+    UI_STATE_ENTRY *new_entries = calloc(new_capacity, sizeof(UI_STATE_ENTRY));
 
     if (!new_entries)
         return -1;
 
-    navigation->entries = new_entries;
-    navigation->capacity = new_capacity;
-    navigation->count = 0;
+    state->entries = new_entries;
+    state->capacity = new_capacity;
+    state->count = 0;
 
     for (size_t i = 0; i < old_capacity; i++) {
-        UI_NAVIGATION_ENTRY *old = &old_entries[i];
+        UI_STATE_ENTRY *old = &old_entries[i];
 
         if (old->state != ENTRY_OCCUPIED) 
             continue;
 
-        size_t index = entries_hash_key(old->context, old->purpose, navigation->capacity);
+        size_t index = entries_hash_key(old->context, old->purpose, state->capacity);
 
-        for (size_t j = 0; j < navigation->capacity; j++) {
-            size_t pos = (index + j) % navigation->capacity;
-            UI_NAVIGATION_ENTRY *entry = &navigation->entries[pos];
+        for (size_t j = 0; j < state->capacity; j++) {
+            size_t pos = (index + j) % state->capacity;
+            UI_STATE_ENTRY *entry = &state->entries[pos];
 
             if (entry->state != ENTRY_OCCUPIED) {
                 *entry = *old;
                 entry->state = ENTRY_OCCUPIED;
-                navigation->count++;
+                state->count++;
                 break;
             }
         }
@@ -125,24 +119,24 @@ static int entries_resize(UI_NAVIGATION* navigation, size_t new_capacity)
     return 0;
 }
 
-static bool entries_create(UI_NAVIGATION* navigation, size_t capacity)
+static bool entries_create(UI_STATE* state, size_t capacity)
 {
     if (capacity == 0){
         capacity = ENTRIES_INIT_CAPACITY;
     }
 
-    navigation->entries =
-        calloc(capacity, sizeof(UI_NAVIGATION_ENTRY));
+    state->entries =
+        calloc(capacity, sizeof(UI_STATE_ENTRY));
 
-    if (!navigation->entries) {
+    if (!state->entries) {
         return false;
     }
 
-    navigation->capacity = capacity;
-    navigation->count = 0;
-    navigation->borrow_count = 0;
-    for(size_t i = 0; i< navigation->capacity; i++){
-        UI_NAVIGATION_ENTRY* entry = &navigation->entries[i];
+    state->capacity = capacity;
+    state->count = 0;
+    state->borrow_count = 0;
+    for(size_t i = 0; i< state->capacity; i++){
+        UI_STATE_ENTRY* entry = &state->entries[i];
         ui_layer_nav_target_list_destroy(&entry->targets);
     }
 
@@ -172,8 +166,7 @@ UI_STATE* ui_layer_state_init(UI_LAYER* ui_layer){
     if(!state)
         return NULL;
 
-    state->current = (ContextId)nav_cx_root_return(ui_layer->app_intrf);
-    if(entries_create(&state->navigation, ENTRIES_INIT_CAPACITY) != true){
+    if(entries_create(state, ENTRIES_INIT_CAPACITY) != true){
         ui_layer_state_clear(state);
         return NULL;
     }
@@ -183,15 +176,14 @@ UI_STATE* ui_layer_state_init(UI_LAYER* ui_layer){
 void ui_layer_state_clear(UI_STATE* state){
     if(!state)
         return;
-    UI_NAVIGATION* navigation = &state->navigation;
-    if(navigation->entries){
-        for(size_t i = 0; i < navigation->capacity; i++){
-            UI_NAVIGATION_ENTRY* entry = &navigation->entries[i];
+    if(state->entries){
+        for(size_t i = 0; i < state->capacity; i++){
+            UI_STATE_ENTRY* entry = &state->entries[i];
             ui_layer_nav_target_list_destroy(&entry->targets);
         }
-        free(navigation->entries);
-        navigation->capacity = 0;
-        navigation->count = 0;
+        free(state->entries);
+        state->capacity = 0;
+        state->count = 0;
     }
     free(state);
 }
@@ -212,63 +204,60 @@ void ui_layer_destroy(UI_LAYER* ui_layer, UI_STATE **states, size_t states_count
     }
 }
 
-bool ui_layer_nav_set(UI_STATE* state, ContextId context, UiPurpose purpose, size_t capacity){
+bool ui_layer_state_entry_set(UI_STATE* state, ContextId context, UiPurpose purpose, size_t capacity){
     if(!state)
         return false;
-    UI_NAVIGATION* navigation = &state->navigation;
-    if (!navigation)
+
+    if(state->borrow_count != 0)
         return false;
 
-    if(navigation->borrow_count != 0)
-        return false;
-
-    size_t index = entries_hash_key(context, purpose, navigation->capacity);
+    size_t index = entries_hash_key(context, purpose, state->capacity);
     /*
      * Resize before inserting if necessary.
      */
-    if ((double)(navigation->count + 1) / navigation->capacity >
+    if ((double)(state->count + 1) / state->capacity >
         ENTRIES_MAX_LOAD_FACTOR) {
 
          // Prevent size_t overflow.
-        if (navigation->capacity > SIZE_MAX / 2)
+        if (state->capacity > SIZE_MAX / 2)
             return false;
 
-        size_t new_capacity = navigation->capacity * 2;
+        size_t new_capacity = state->capacity * 2;
 
-        if (entries_resize(navigation, new_capacity) != 0)
+        if (entries_resize(state, new_capacity) != 0)
             return false;
 
          // Capacity changed, so the bucket index must
          // be recalculated.
-        index = entries_hash_key(context, purpose, navigation->capacity);
+        index = entries_hash_key(context, purpose, state->capacity);
     }
 
     size_t deleted_index = SIZE_MAX;
 
-    for (size_t i = 0; i < navigation->capacity; i++) {
-        UI_NAVIGATION_ENTRY *entry =
-            &navigation->entries[(index + i) % navigation->capacity];
+    for (size_t i = 0; i < state->capacity; i++) {
+        UI_STATE_ENTRY *entry =
+            &state->entries[(index + i) % state->capacity];
 
         if (entry->state == ENTRY_EMPTY) {
             /*
              * Reuse the first deleted slot, if one was found.
              */
             if (deleted_index != SIZE_MAX)
-                entry = &navigation->entries[deleted_index];
+                entry = &state->entries[deleted_index];
 
             if(!ui_layer_nav_target_list_init(&entry->targets, capacity))
                 return false;
             entry->context = context;
             entry->purpose = purpose;
             entry->state = ENTRY_OCCUPIED;
-            navigation->count++;
+            state->count++;
 
             return true;
         }
 
         if (entry->state == ENTRY_DELETED) {
             if (deleted_index == SIZE_MAX)
-                deleted_index = (index + i) % navigation->capacity;
+                deleted_index = (index + i) % state->capacity;
 
             continue;
         }
@@ -290,21 +279,18 @@ bool ui_layer_nav_set(UI_STATE* state, ContextId context, UiPurpose purpose, siz
     return false;
 }
 
-bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose){
+bool ui_layer_state_entry_remove(UI_STATE *state, ContextId context, UiPurpose purpose){
     if(!state)
         return false;
 
-    UI_NAVIGATION* navigation = &state->navigation;
-    if (!navigation)
+
+    if(state->borrow_count != 0)
         return false;
 
-    if(navigation->borrow_count != 0)
-        return false;
+    size_t index = entries_hash_key(context, purpose, state->capacity); 
 
-    size_t index = entries_hash_key(context, purpose, navigation->capacity); 
-
-    for (size_t i = 0; i < navigation->capacity; ++i) {
-        UI_NAVIGATION_ENTRY *entry = &navigation->entries[index];
+    for (size_t i = 0; i < state->capacity; ++i) {
+        UI_STATE_ENTRY *entry = &state->entries[index];
 
         if (entry->state == ENTRY_EMPTY) {
             /*
@@ -321,16 +307,16 @@ bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose){
              * probe sequence for entries that were inserted later.
              */
             entry->state = ENTRY_DELETED;
-            navigation->count--;
+            state->count--;
             ui_layer_nav_target_list_destroy(&entry->targets);
 
             /*
              * Shrink the table if it has become sparse.
              */
-            if (navigation->capacity > ENTRIES_INIT_CAPACITY &&
-                (double)navigation->count / navigation->capacity < ENTRIES_MIN_LOAD_FACTOR) {
+            if (state->capacity > ENTRIES_INIT_CAPACITY &&
+                (double)state->count / state->capacity < ENTRIES_MIN_LOAD_FACTOR) {
 
-                size_t new_capacity = navigation->capacity / 2;
+                size_t new_capacity = state->capacity / 2;
 
                 if (new_capacity < ENTRIES_INIT_CAPACITY)
                     new_capacity = ENTRIES_INIT_CAPACITY;
@@ -339,7 +325,7 @@ bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose){
                  * Failure to shrink is not an error.
                  * The existing table remains valid.
                  */
-                (void)entries_resize(navigation, new_capacity);
+                (void)entries_resize(state, new_capacity);
             }
 
             return true;
@@ -349,7 +335,7 @@ bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose){
          * ENTRY_DELETED and non-matching EMPTY_OCCUPIED entries
          * continue the probe sequence.
          */
-        index = (index + 1) % navigation->capacity;
+        index = (index + 1) % state->capacity;
     }
 
     return false;
@@ -362,20 +348,19 @@ bool ui_layer_nav_remove(UI_STATE *state, ContextId context, UiPurpose purpose){
 UI_TARGET_LIST* ui_layer_nav_target_list_begin(UI_STATE *state, ContextId context, UiPurpose purpose){ 
     if (!state)
         return NULL;
-    UI_NAVIGATION *navigation = &state->navigation;
 
-    size_t index = entries_hash_key(context, purpose, navigation->capacity); 
+    size_t index = entries_hash_key(context, purpose, state->capacity); 
 
-    for (size_t i = 0; i < navigation->capacity; i++) {
-        size_t pos = (index + i) % navigation->capacity;
-        UI_NAVIGATION_ENTRY *entry = &navigation->entries[pos];
+    for (size_t i = 0; i < state->capacity; i++) {
+        size_t pos = (index + i) % state->capacity;
+        UI_STATE_ENTRY *entry = &state->entries[pos];
 
         if (entry->state == ENTRY_EMPTY){
             return NULL;
         }
 
         if (entry->state == ENTRY_OCCUPIED && entry->context == context && entry->purpose == purpose){
-            navigation->borrow_count++;
+            state->borrow_count++;
 
             return &entry->targets;
         }
@@ -483,11 +468,12 @@ bool ui_layer_nav_target_list_clear(UI_TARGET_LIST* targets){
 void ui_layer_nav_target_list_end(UI_STATE *state){
     if(!state)
         return;
-    UI_NAVIGATION* navigation = &state->navigation;
-    navigation->borrow_count--;
+    state->borrow_count--;
 }
 // TARGET_LIST operations END
 // --------------------------------------------------
+
+// UI LAYER Functions for the user interface
 
 void ui_layer_update_cycle(UI_LAYER* ui_layer){
     if(!ui_layer)
@@ -495,23 +481,57 @@ void ui_layer_update_cycle(UI_LAYER* ui_layer){
     nav_update(ui_layer->app_intrf);
 }
 
-ContextId ui_layer_state_current_return(UI_STATE* state){
-    if (!state)
+ContextId ui_layer_state_root_return(UI_LAYER* ui_layer){
+    if (!ui_layer)
         return CONTEXT_ID_INVALID;
 
-    return state->current;
+    return nav_cx_root_return(ui_layer->app_intrf); 
 }
 
-const char* ui_layer_contextid_name_return(UI_LAYER* ui_layer, ContextId context){
-    if(!ui_layer)
+bool ui_layer_context_valid(UI_LAYER *ui_layer, ContextId context)
+{
+    if (!ui_layer)
+        return false;
+
+    return nav_cx_is_valid(ui_layer->app_intrf, context);
+}
+
+const char *ui_layer_context_name_return(UI_LAYER *ui_layer, ContextId context)
+{
+    if (!ui_layer)
         return NULL;
 
-    return nav_cx_display_name_return(ui_layer->app_intrf, context);
+    return nav_cx_name_return(ui_layer->app_intrf, context);
 }
 
-ContextId ui_layer_contextid_children_get_first(UI_LAYER* ui_layer, ContextId parent){
-    if(!ui_layer)
+uint32_t ui_layer_context_flags_return(UI_LAYER *ui_layer, ContextId context)
+{
+    if (!ui_layer)
+        return 0;
+
+    return nav_cx_flags_return(ui_layer->app_intrf, context);
+}
+
+size_t ui_layer_context_children_count(UI_LAYER *ui_layer, ContextId context)
+{
+    if (!ui_layer)
+        return 0;
+
+    return nav_cx_children_count(ui_layer->app_intrf, context);
+}
+
+ContextId ui_layer_context_child_at(UI_LAYER *ui_layer, ContextId parent, size_t index)
+{
+    if (!ui_layer)
         return CONTEXT_ID_INVALID;
 
-    return nav_cx_children_get_first(ui_layer->app_intrf, parent);
+    return nav_cx_child_at(ui_layer->app_intrf, parent, index);
+}
+
+ContextId ui_layer_context_parent_return(UI_LAYER *ui_layer, ContextId context)
+{
+    if (!ui_layer)
+        return CONTEXT_ID_INVALID;
+
+    return nav_cx_parent_return(ui_layer->app_intrf, context);
 }
