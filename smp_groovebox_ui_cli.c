@@ -285,8 +285,6 @@ int main() {
         // show the state_root info
         InterfaceContextInfo cx_root_info;
         if(helper_context_info_get(ui_layer, id_root, &cx_root_info)){
-            printf(" --- %s --- \n", cx_root_info.name);
-
             for(size_t i = 0; i < cx_root_info.child_count; i++){
                 ContextId root_child =
                     ui_layer_context_child_at(ui_layer, id_root, i);

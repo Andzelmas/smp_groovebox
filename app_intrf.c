@@ -1,40 +1,3 @@
-/*
-   Using from ui:
-   After initiating the APP_INTRF with app_intrf_init(),
-   run a loop.
-   In the loop first call the nav_update function, then
-   Retrieve CX* contexts (these cant be saved, they must be retrieved
-   each loop cycle!).
-   Check if the returned CX* are not NULL !!!!
-   Display the contexts to the user.
-   Let the user interact with the displayed interface by calling the
-   various nav_ functions.
-   In principal the context structure could be traversed without cx_selected.
-   However, since the various CX* has to be retrieved each cycle after
-   nav_update cx_selected is the only way to remember what the user did.
-*/
-
-/*
-    The INTRF layer is for creating the app_data structure
-    Also, it allows UI to communicate with app_data
-    For this reason no temporary cx's should be created -
-    for on screen keyboards, info dialogs, lists of files when choosing a sample
-    and similar the UI is responsible.
-*/
-
-/*
-    Contexts should be added or removed only on initialization or when a
-    context becomes dirty.
-    App_data should only add or remove anything on initialization or
-    if the user specificaly wants to do that - when he/she interacts with
-    "buttons". These contexts are with the flag INTRF_FLAG_INTERACT and should
-    make the context dirty after manipulating the data.
-    For example: Data functions that populate/create a plugin list should only
-    be called when the user interacts with a "refresh" or similar button (when
-    data_invoke function is called). Or when the app is initialized, but NOT when
-    the user is navigating (not when data_child_return function is called).
-*/
-
 #include "app_intrf.h"
 #include "util_funcs/hash_table.h"
 #include <stdint.h>
@@ -47,13 +10,6 @@
 #include <sys/types.h>
 
 // TODO TODAY.
-// CONTEXT UNIQUE IDS implementation.
-// Start with returning of the communications with unique ids. Might be good
-// idea to implement this using uistates, hashmaps. The UI layer could be a
-// separate api, that user can use by default or create their own.
-
-// MAIN IDEA: contexts is the World, uilayer is the user view of the World.
-
 //  use events, uilayer removes all references of the
 //  contextid when it gets an event from the context layer that it was removed.
 //  This way tombstones will not increase the memory. Each uistate has to have a
@@ -63,16 +19,16 @@
 // structs/functions ALSO instead of dirty functions, all data that can be
 // returned to context should have a generation number Context can get
 // generation number and if it is not equal to the current generation number it
-// can remove and repopulate this contexts' (but not the context itself)
-// children.
+// can remove and repopulate this context and its children
 // SO remove all _USER_DATA and _FLAGS from types.h. If UI needs to get flags
-// these should be in app_intrf.h. All functions that return string should
-// return const char* instead of return_string in arguments. Then, wont need to
-// synchronize defines between layer because of string lengths
+// these should be in app_intrf.h.
+// All functions that return string should return const char* instead of
+// return_string in arguments. Then, wont need to synchronize defines between
+// layer because of string lengths
+
 /*
 struct DataObject {
     const DataOps *ops;   // how to operate on it
-    DataId id;            // identity
     void *user_data;      // where the actual state lives
 };
 
@@ -87,29 +43,29 @@ typedef struct {
     DataCapabilities capabilities;
 
     DataIterator *(*children)(void *user_data);
-    uint16_t (*flags)(void *user_data);
     bool (*name)(void *user_data, char *buffer, size_t buffer_len);
 } DataOps;
 
-static const DataOps directory_ops = {
+static const DataOps clap_plugins_ops = {
     .capabilities = DATA_CAP_CHILDREN | DATA_CAP_NAME,
-    .children = directory_children,
-    .flags = directory_flags,
-    .name = directory_name,
+    .children = clap_plugins_children;,
+    .name = clap_plugins_name;,
 };
 
-static DataIterator *directory_children(void* user_data)
+static DataIterator *clap_plugins_children(void* user_data)
 {
-    Directory *dir = (Directory *)user_data;
+    APP_INFO* app_data = (APP_INFO *)user_data;
+    ...
+    void* clap_plugin = clap_plug_plugin_return(app_data->clap_plug_data, idx);
+
 
     ...
 }
 
 // in functions that return DataObjects:
 DataObject result = {
-    .ops = &directory_ops,
-    .id = id,
-    .user_data = existing_directory_data
+    .ops = &clap_plugins_ops;,
+    .user_data = (void*)app_data
 };
 
 //this is for the context layer to use
@@ -118,13 +74,6 @@ DataIterator *data_children(void* user_data)
     return object->ops->children(user_data);
 }
 */
-
-// The UI can then separate showing names of contexts; current context; selected
-// contexts; last_visited; currently visited etc. And: actions of the context
-// (add, remove, rename, etc.). It can even show separatly the actions for the
-// current context and its selected children. also, this way there can be
-// multiply ui states (named groups now) and they can even appear/disappear
-// dynamically.
 
 // NEW INKOVE:
 //  Action type will say "this context can be entered and has children", "this
@@ -418,10 +367,7 @@ void ui_rename_selected(Context *ctx)
 }
 */
 
-// Introduce connected CX* to app_intrf. 
 // Implement Port connectivity, test sound. 
-// Also will need memory slots per group (arrays of CX* per group). This will be useful for port connectivity so user
-// can select many ports (put them into memory slots) and then disconnect or connect with one button.
 // AFTER TODAY. Implement Params: Must be able to
 // change amount of params during runtime Remove unecessary various log
 // conversion methods in params, instead use the string callback function (like
@@ -435,12 +381,6 @@ void ui_rename_selected(Context *ctx)
  root as dirty so app_intrf recreates its structure. saving and loading
  separate contexts (plugins, trk and similar) should work the same. user
  should be able to set a file to load on startup.
-*/
-
-/*
-   TODO one ui implementation to try is similar to cli programs:
-   couple commands to interact with interface, for example 'ls' to list context children
-   just to show that wildly different ui interfaces are possible
 */
 
 /*
