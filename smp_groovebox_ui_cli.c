@@ -266,11 +266,10 @@ int main() {
     ContextId state_main_current = id_root;
     // which idx in the state_main_current children array is the UI_PURPOSE_HOVERED
     size_t state_main_hovered_idx = 0;
+
     // this array will contain all of the states
     size_t states_count = 2;
     UI_STATE* states_all[2] = {state_main, state_root};
-    // init the hovered purpose on the state_main_current ContextId
-    state_main_hovered_idx = helper_nav_context_purpose_set(ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED);
 
     // currently focused state
     UI_STATE* state_current = state_main;
@@ -333,23 +332,22 @@ int main() {
         int input = getchar();
         unsigned int exit = 0;
 
-        // TODO navigation should be in abstracted functions
         switch (input) {
         case 'J':
             break;
         case 'K':
             break;
         case 'j':
-            helper_nav_context_scroll(ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED, &state_main_hovered_idx, true);
+            helper_nav_context_scroll(ui_layer, state_current, state_main_current, UI_PURPOSE_HOVERED, &state_main_hovered_idx, true);
             break;
         case 'k':
-            helper_nav_context_scroll(ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED, &state_main_hovered_idx, false);
+            helper_nav_context_scroll(ui_layer, state_current, state_main_current, UI_PURPOSE_HOVERED, &state_main_hovered_idx, false);
             break;
         case 'l':
-            helper_nav_context_enter(ui_layer, state_main, &state_main_current, UI_PURPOSE_HOVERED);
+            helper_nav_context_enter(ui_layer, state_current, &state_main_current, UI_PURPOSE_HOVERED);
             break;
         case 'h':
-            helper_nav_context_exit(ui_layer, state_main, &state_main_current, UI_PURPOSE_HOVERED);
+            helper_nav_context_exit(ui_layer, state_current, &state_main_current, UI_PURPOSE_HOVERED);
             break;
         case 'q':
             exit = 1;
