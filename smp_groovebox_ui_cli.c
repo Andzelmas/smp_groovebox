@@ -273,6 +273,8 @@ int main() {
 
     // currently focused state
     UI_STATE* state_current = state_main;
+    ContextId* state_current_context_current = &state_main_current;
+    size_t *state_current_hovered_idx = &state_main_hovered_idx;
 
     while (1) {
         // erase the terminal
@@ -338,16 +340,24 @@ int main() {
         case 'K':
             break;
         case 'j':
-            helper_nav_context_scroll(ui_layer, state_current, state_main_current, UI_PURPOSE_HOVERED, &state_main_hovered_idx, true);
+            helper_nav_context_scroll(
+                ui_layer, state_current, *state_current_context_current,
+                UI_PURPOSE_HOVERED, state_current_hovered_idx, true);
             break;
         case 'k':
-            helper_nav_context_scroll(ui_layer, state_current, state_main_current, UI_PURPOSE_HOVERED, &state_main_hovered_idx, false);
+            helper_nav_context_scroll(
+                ui_layer, state_current, *state_current_context_current,
+                UI_PURPOSE_HOVERED, state_current_hovered_idx, false);
             break;
         case 'l':
-            helper_nav_context_enter(ui_layer, state_current, &state_main_current, UI_PURPOSE_HOVERED);
+            helper_nav_context_enter(ui_layer, state_current,
+                                     state_current_context_current,
+                                     UI_PURPOSE_HOVERED);
             break;
         case 'h':
-            helper_nav_context_exit(ui_layer, state_current, &state_main_current, UI_PURPOSE_HOVERED);
+            helper_nav_context_exit(ui_layer, state_current,
+                                    state_current_context_current,
+                                    UI_PURPOSE_HOVERED);
             break;
         case 'q':
             exit = 1;
