@@ -1,3 +1,4 @@
+#include "app_intrf.h"
 #include "ui_layer.h"
 #include "util_funcs/log_funcs.h"
 #include <stdint.h>
@@ -115,6 +116,127 @@ static bool helper_target_list_add_resize(UI_TARGET_LIST* target_list, ContextId
     return true;
 }
 
+// select previous child of parent (or next if next true).
+// cur_idx - address of the current index in the parent children array
+static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, ContextId parent, UiPurpose purpose, size_t* cur_idx, bool next){
+    if(!ui_layer)
+        return;
+    if(!state)
+        return;
+    if(!cur_idx)
+        return;
+
+    UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, parent, purpose);
+    if(!target_list)
+        return;
+
+    int old_idx = (int)*cur_idx;
+    int new_idx = 0;
+    if (!next)
+        new_idx = old_idx - 1;
+    else
+        new_idx = old_idx + 1;
+
+    InterfaceContextInfo cx_info;
+    if(helper_context_info_get(ui_layer, parent, &cx_info)){
+        if(new_idx < 0){
+            new_idx = (int)cx_info.child_count - 1;
+        }
+        if(new_idx >= (int)cx_info.child_count){
+            new_idx = 0;
+        }
+
+        ContextId new_context = ui_layer_context_child_at(ui_layer, parent, (size_t)new_idx);
+
+        if(new_context != CONTEXT_ID_INVALID){
+            *cur_idx = (size_t)new_idx;
+            helper_target_list_add_reset_on_full(target_list, new_context);
+        }
+    }
+
+    ui_layer_nav_target_list_end(state);
+}
+
+// find the target ContextId for parent + purpose and return the index for the target in the parent children array
+// if the parent + purpose does not exist create it and add the first child to the purpose on the parent
+static size_t helper_nav_context_purpose_set(UI_LAYER* ui_layer, UI_STATE* state, ContextId parent, UiPurpose purpose){
+    if(!ui_layer)
+        return 0;
+    if(parent == CONTEXT_ID_INVALID)
+        return 0;
+    InterfaceContextInfo state_main_current_info;
+    if(helper_context_info_get(ui_layer, parent, &state_main_current_info)){
+        if(state_main_current_info.child_count > 0){
+            UI_TARGET_LIST* selected_target = ui_layer_nav_target_list_begin(state, parent, purpose);
+            if (selected_target) {
+                size_t return_idx = 0;
+                ContextId cur_purpose = ui_layer_nav_target_list_get(selected_target, 0);
+                for(size_t i = 0; i < state_main_current_info.child_count; i ++){
+                    ContextId cur_child = ui_layer_context_child_at(ui_layer, parent, i);
+                    if(cur_child == cur_purpose){
+                       return_idx = i;
+                       break;
+                    }
+                }
+                ui_layer_nav_target_list_end(state);
+                return return_idx;
+            }
+            else{
+                ui_layer_state_entry_set(state, parent, purpose, 1);
+                UI_TARGET_LIST* targets = ui_layer_nav_target_list_begin(state, parent, purpose);
+                if(targets){
+                    ContextId new_purpose = ui_layer_context_child_at(ui_layer, parent, 0);
+                    if(new_purpose != CONTEXT_ID_INVALID){
+                        helper_target_list_add_reset_on_full(targets, new_purpose);
+                    }
+                    return 0;
+                    ui_layer_nav_target_list_end(state);
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+// change the parent to the ContextId saved in the purpose on the *parent
+static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, ContextId* parent, UiPurpose purpose){
+    if(!ui_layer)
+        return;
+    if(!state)
+        return;
+    if(!parent)
+        return;
+
+    UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, *parent, purpose);
+
+    if(!target_list)
+        return;
+
+    ContextId cx_curr = ui_layer_nav_target_list_get(target_list, 0);
+    if(cx_curr != CONTEXT_ID_INVALID){
+        *parent = cx_curr;
+    }
+
+    ui_layer_nav_target_list_end(state);
+}
+
+// change the parent to the parents parent
+static void helper_nav_context_exit(UI_LAYER* ui_layer, UI_STATE* state, ContextId* parent, UiPurpose purpose){
+    if(!ui_layer)
+        return;
+    if(!state)
+        return;
+    if(!parent)
+        return;
+
+    ContextId cx_parent = ui_layer_context_parent_return(ui_layer, *parent);
+    if(cx_parent != CONTEXT_ID_INVALID){
+        *parent = cx_parent;
+    }
+
+}
+
 static void helper_program_destroy(UI_LAYER* ui_layer, UI_STATE** states, size_t states_capacity){
     ui_layer_destroy(ui_layer, states, states_capacity);
 
@@ -142,35 +264,20 @@ int main() {
     UI_STATE* state_main = ui_layer_state_init(ui_layer);
     // current ContextId of the state_main;
     ContextId state_main_current = id_root;
+    // which idx in the state_main_current children array is the UI_PURPOSE_HOVERED
+    size_t state_main_hovered_idx = 0;
     // this array will contain all of the states
     size_t states_count = 2;
     UI_STATE* states_all[2] = {state_main, state_root};
     // init the hovered purpose on the state_main_current ContextId
-    if (!ui_layer_state_entry_set(state_main, state_main_current , UI_PURPOSE_HOVERED, 1)) {
-        helper_program_destroy(ui_layer, states_all, states_count);
-    }
-    // initialize the state_main hovered ContextId to the first child of the root context
-    // TODO these will need to be abstracted into a helper function
-    InterfaceContextInfo state_main_current_info;
-    if(helper_context_info_get(ui_layer, state_main_current, &state_main_current_info)){
-        if(state_main_current_info.child_count > 0){
-            UI_TARGET_LIST* selected_target = ui_layer_nav_target_list_begin(state_main, state_main_current, UI_PURPOSE_HOVERED);
-            if (selected_target) {
-                helper_target_list_add_reset_on_full(
-                    selected_target,
-                    ui_layer_context_child_at(ui_layer, state_main_current, 0));
-                ui_layer_nav_target_list_end(state_main);
-            }
-        }
-    }
-
+    state_main_hovered_idx = helper_nav_context_purpose_set(ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED);
 
     // currently focused state
     UI_STATE* state_current = state_main;
 
     while (1) {
         // erase the terminal
-        //printf("\033[2J\033[H");
+        printf("\033[2J\033[H");
         // update the interface, of course should be in a loop
         ui_layer_update_cycle(ui_layer);
 
@@ -194,7 +301,12 @@ int main() {
         }
 
         // show the state_main info
+        // first update state_main_current and state_main_hovered_idx if navigation changed these
+        state_main_hovered_idx = helper_nav_context_purpose_set(ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED); 
+
+        InterfaceContextInfo state_main_current_info;
         if(helper_context_info_get(ui_layer, state_main_current, &state_main_current_info)){
+            printf("----| %s |----\n", state_main_current_info.name);
             // get the selected ContextId
             UI_TARGET_LIST* selected_target = ui_layer_nav_target_list_begin(state_main, state_main_current, UI_PURPOSE_HOVERED);
             ContextId state_main_id_hovered = CONTEXT_ID_INVALID;
@@ -207,10 +319,11 @@ int main() {
                 ContextId cur_child = ui_layer_context_child_at(ui_layer, state_main_current, i);
                 if(helper_context_info_get(ui_layer, cur_child, &state_main_current_child_info)){
                     if(cur_child == state_main_id_hovered){
-                        printf("| >%s |", state_main_current_child_info.name);
+                        state_main_hovered_idx = i;
+                        printf(">%s\n", state_main_current_child_info.name);
                     }
                     else{
-                        printf("| %s |", state_main_current_child_info.name);
+                        printf("%s\n", state_main_current_child_info.name);
                     }
                 }
             }
@@ -227,12 +340,16 @@ int main() {
         case 'K':
             break;
         case 'j':
+            helper_nav_context_scroll(ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED, &state_main_hovered_idx, true);
             break;
         case 'k':
+            helper_nav_context_scroll(ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED, &state_main_hovered_idx, false);
             break;
         case 'l':
+            helper_nav_context_enter(ui_layer, state_main, &state_main_current, UI_PURPOSE_HOVERED);
             break;
         case 'h':
+            helper_nav_context_exit(ui_layer, state_main, &state_main_current, UI_PURPOSE_HOVERED);
             break;
         case 'q':
             exit = 1;
