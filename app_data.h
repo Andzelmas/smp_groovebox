@@ -1,6 +1,7 @@
 #pragma once
 #include "structs.h"
 #include "types.h"
+#include "data_object.h"
 #include <stdatomic.h>
 // sampler context
 #include "contexts/sampler.h"
@@ -18,35 +19,22 @@ enum AppPluginType {
 // this is the struct for the data on the whole app
 typedef struct _app_info APP_INFO;
 
-// initialize the app_data, user_data_type returns USER_DATA_T_ROOT type, flags
-// are the root/main context flags the function returns APP_INFO* cast to void*
-void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
-               char *root_name, int root_name_len);
+// initialize the app_data and return the root DataObject. On failure the
+// returned object's .ops is NULL. root_obj.user_data is the APP_INFO* cast to
+// void*, kept by the caller for app_data_update / app_stop_and_clean.
+DataObject app_init(void);
 
-// get the idx child of the parent_data, if idx is out of bounds return NULL
-// return_type is the type of the returned user_data, to know what to cast void*
-// user_data to, flags are for the UI side of things return_name will be unique,
-// but only among the children in parent_data
-// ALL DATA THAT THIS FUNCTION GETS SHOULD BE CREATED on initialization or in app_data_invoke()
-// For example plugin lists, preset lists and the like should be created in plugin contexts,
-// when initializing the plugin context or a specific plugin or when the
-// user asks to "refresh" these lists.
-void *app_data_child_return(void *parent_data, uint16_t parent_type,
-                            uint16_t *return_type, uint32_t *return_flags,
-                            char *return_name, int return_name_len,
-                            unsigned int idx);
-
-// invoke the user_data, this is a callback for "buttons"
-void app_data_invoke(void *user_data, uint16_t user_data_type,
-                     const char *file);
-
-// check if the user_data is dirty and the context needs to be recreated
-bool app_data_is_dirty(void *user_data, uint16_t user_data_type);
+// check if the data behind obj is no longer in sync and the context (and its
+// children) needs to be recreated.
+// TEMPORARY BRIDGE: this still dispatches on the ops table inside app_data.c.
+// It will be replaced by a generation / removal notification system.
+bool app_data_is_dirty(const DataObject *obj);
 
 // Reads the rt_to_ui buffer and saves any context param values to their
-// ui_params arrays. Might do some additional updating
-void app_data_update(void *user_data, uint16_t user_data_type);
+// ui_params arrays. Might do some additional updating. root_user_data is the
+// root DataObject's user_data (APP_INFO*).
+void app_data_update(void *root_user_data);
 
 // pause the [audio-thread] processing with a mutex and clean memory of the
-// app_data
-void app_stop_and_clean(void *user_data, uint16_t type);
+// app_data. root_user_data is the root DataObject's user_data (APP_INFO*).
+void app_stop_and_clean(void *root_user_data);

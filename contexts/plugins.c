@@ -43,6 +43,10 @@
 #endif
 // maximum instances of plugins
 #define MAX_INSTANCES 5
+// size of the single plugin display name buffer (PLUG_PLUG.name). Internal to
+// this module - the name leaves as a const char* so callers need no matching
+// define.
+#define PLUG_PLUGIN_NAME_MAX 128
 // buffer cycles for ui, for example to get the buffer_size we midi_buf_size *
 // N_BUFFER_CYCLES
 #define N_BUFFER_CYCLES 4
@@ -242,6 +246,9 @@ typedef struct _plug_plug {
     unsigned int plug_instance_activated;
     // the instance id to link it to cx
     int id;
+    // display name ("id_pluginname"), owned by this struct, built once at load
+    // by plug_load_and_activate() and handed out by plug_plugin_name()
+    char name[PLUG_PLUGIN_NAME_MAX];
     // audio backend midi container
     JACK_MIDI_CONT *midi_cont;
     // array of available ports for the plugin
@@ -1087,6 +1094,17 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
     return 0;
 }
 
+// build the display name ("id_pluginname") into plug->name. Called once when the
+// plugin is loaded; plug_plugin_name() just returns the stored string after.
+static void plug_set_display_name(PLUG_PLUG *plug) {
+    if (!plug || !plug->plug)
+        return;
+    LilvNode *name_node = lilv_plugin_get_name(plug->plug);
+    snprintf(plug->name, sizeof(plug->name), "%d_%s", plug->id,
+             lilv_node_as_string(name_node));
+    lilv_node_free(name_node);
+}
+
 int plug_load_and_activate(void *plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM*)plugin_item;
     if (!plugin_list_item)
@@ -1339,6 +1357,8 @@ int plug_load_and_activate(void *plugin_item) {
     lilv_instance_activate(plug->plug_instance);
     plug->plug_instance_activated = 1;
     plug->plug_data = plug_data;
+    // build the display name once, now that plug->plug and plug->id are set
+    plug_set_display_name(plug);
     // wait for the plugin to start processing
     context_sub_wait_for_start(plug_data->control_data, (void *)plug);
     plug_data->plugins_dirty = true;
@@ -1365,20 +1385,14 @@ void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx){
     return (void *)cur_plug;
 }
 
-int plug_plugin_name(void *plug, char *return_name, unsigned int return_name_len){
+const char *plug_plugin_name(void *plug){
     PLUG_PLUG *cur_plug = (PLUG_PLUG*)plug;
     if(!cur_plug)
-        return -1;
+        return NULL;
     if(!cur_plug->plug_instance)
-        return -1;
+        return NULL;
 
-    LilvNode *name_node = lilv_plugin_get_name(cur_plug->plug);
-    const char *name_string = lilv_node_as_string(name_node);
-
-    snprintf(return_name, return_name_len, "%d_%s", cur_plug->id, name_string);
-
-    lilv_node_free(name_node);
-    return 1;
+    return cur_plug->name;
 }
 
 bool plug_plugins_is_dirty(PLUG_INFO *plug_data){

@@ -40,8 +40,5 @@ uint64_t nav_cx_parent_return(APP_INTRF *app_intrf, uint64_t context);
 // return the address of the string of the context name
 const char *nav_cx_name_return(APP_INTRF *app_intrf, uint64_t context);
 
-// return flags of the context
-uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, uint64_t context);
-
 // check if the context is valid or not anymore
 bool nav_cx_is_valid(APP_INTRF *app_intrf, uint64_t context);

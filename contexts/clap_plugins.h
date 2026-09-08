@@ -81,9 +81,10 @@ int clap_plug_load_and_activate(void* plugin_item);
 // return the plugin user_data
 void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx);
 
-// return the name of a plugin, returned name will be id_name format
-int clap_plug_plugin_name(void *plug, char *return_name,
-                                 unsigned int return_name_len);
+// return the plugin display name ("id_name" format) from user_data.
+// the returned string is owned by the plugin and stays valid until the plugin
+// is removed. returns NULL on error.
+const char *clap_plug_plugin_name(void *plug);
 
 // return if the plugins array is dirty - if it changed
 bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data);

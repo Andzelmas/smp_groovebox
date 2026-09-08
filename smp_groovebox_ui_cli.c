@@ -13,7 +13,6 @@
 typedef struct {
     // BORROWED STRING ADDRESS
     const char *name;
-    uint32_t flags;
     size_t child_count;
 } InterfaceContextInfo;
 
@@ -57,9 +56,6 @@ static bool helper_context_info_get( UI_LAYER *ui_layer, ContextId context, Inte
     if (!cx_name)
         return false;
     info->name = cx_name;
-
-    info->flags =
-        ui_layer_context_flags_return(ui_layer, context);
 
     info->child_count =
         ui_layer_context_children_count(ui_layer, context);

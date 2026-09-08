@@ -84,8 +84,6 @@ bool ui_layer_context_valid(UI_LAYER *ui_layer, ContextId context);
 // return the address of the context name
 const char *ui_layer_context_name_return(UI_LAYER *ui_layer, ContextId context);
 
-uint32_t ui_layer_context_flags_return(UI_LAYER *ui_layer, ContextId context);
-
 // how many children the context has
 size_t ui_layer_context_children_count(UI_LAYER *ui_layer, ContextId context);
 

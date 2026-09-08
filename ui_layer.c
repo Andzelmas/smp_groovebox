@@ -503,14 +503,6 @@ const char *ui_layer_context_name_return(UI_LAYER *ui_layer, ContextId context)
     return nav_cx_name_return(ui_layer->app_intrf, context);
 }
 
-uint32_t ui_layer_context_flags_return(UI_LAYER *ui_layer, ContextId context)
-{
-    if (!ui_layer)
-        return 0;
-
-    return nav_cx_flags_return(ui_layer->app_intrf, context);
-}
-
 size_t ui_layer_context_children_count(UI_LAYER *ui_layer, ContextId context)
 {
     if (!ui_layer)

@@ -54,58 +54,6 @@
 //This can be realloced later
 #define PTR_ARRAY_COUNT 25
 
-enum userDataTypes {
-    // the root data, void* user_data casts to APP_INFO* struct
-    // the Plugins context
-    USER_DATA_T_ROOT = 1,
-
-    // data that contains lv2 plugins, user_data casts to APP_INFO*
-    USER_DATA_T_PLUGINS_LV2 = 2,
-    // lv2 plugin data type
-    USER_DATA_T_PLUG_LV2 = 3,
-    // lv2 plugin list item to load the plugin 
-    USER_DATA_T_PLUGINS_LV2_LIST_ITEM = 4,
-
-    // data that contains clap plugins, user_data casts to APP_INFO*
-    USER_DATA_T_PLUGINS_CLAP = 5,
-    // clap plugin data type
-    USER_DATA_T_PLUG_CLAP = 6,
-    // clap plugin list item to load the plugin
-    USER_DATA_T_PLUGINS_CLAP_LIST_ITEM = 7,
-
-    // the Sampler context
-    // sampler data type, user_data casts to APP_INFO*
-    USER_DATA_T_SAMPLER = 8,
-    // single sample
-    USER_DATA_T_SAMPLE = 9,
-
-    // the Synth context
-    // built in synth, user_data casts to APP_INFO*
-    USER_DATA_T_SYNTH = 10,
-    // single oscillator in the synth
-    USER_DATA_T_OSC = 11,
-
-    // the Trk, audio backend context
-    // audio backend data, user_data casts to APP_INFO*
-    USER_DATA_T_JACK = 12
-};
-
-enum intrfFlags {
-    // context that contains other contexts, this
-    // will be the most common context
-    INTRF_FLAG_CONTAINER = 1 << 0,
-    // the parent of all contexts on the app, exiting
-    // this context closes the app
-    INTRF_FLAG_ROOT = 1 << 1,
-    // the user can interact with the context not only to see its
-    // children, but to for example press a button
-    INTRF_FLAG_INTERACT = 1 << 2,
-    // Name of this context is dynamic (for example a parameter
-    // name) It should be returned not from cx->short_name but with
-    // a special data function
-    INTRF_FLAG_DISPLAY_NAME_DYN = 1 << 3,
-};
-
 // enum for context types
 // TODO userDataTypes replaces these, will need to delete
 enum appContextTypes {

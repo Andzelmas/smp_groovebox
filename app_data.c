@@ -175,13 +175,189 @@ static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
     return 0;
 }
 
-void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
-               char *root_name, int root_name_len) {
+/* ----------------------------------------------------------------------------
+ * DataObject adapter tables.
+ *
+ * app_data is the single place that knows how to map program state onto the
+ * DataObject contract. The context modules (plugins.c, clap_plugins.c, ...)
+ * stay unaware of DataObject: they only expose their own domain API and this
+ * file adapts it.
+ * ------------------------------------------------------------------------- */
+
+// plain container with a constant name and no children (Sampler, Synth, Trk).
+// user_data is the display name string itself.
+static size_t leaf_container_child_count(void *user_data) {
+    (void)user_data;
+    return 0;
+}
+static bool leaf_container_child_at(void *user_data, size_t idx,
+                                    DataObject *out) {
+    (void)user_data;
+    (void)idx;
+    (void)out;
+    return false;
+}
+static const char *leaf_container_name(void *user_data) {
+    return (const char *)user_data;
+}
+static const DataOps leaf_container_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = leaf_container_child_count,
+    .child_at = leaf_container_child_at,
+    .name = leaf_container_name,
+};
+
+// single loaded lv2 plugin. user_data is the PLUG_PLUG* from plug_plugin_return.
+static size_t lv2_plugin_child_count(void *user_data) {
+    (void)user_data;
+    return 0;
+}
+static bool lv2_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
+    (void)user_data;
+    (void)idx;
+    (void)out;
+    return false;
+}
+// plug_plugin_name already matches DataOps.name (const char *(*)(void *))
+static const DataOps lv2_plugin_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = lv2_plugin_child_count,
+    .child_at = lv2_plugin_child_at,
+    .name = plug_plugin_name,
+};
+
+// container of the loaded lv2 plugins. user_data is PLUG_INFO*.
+static size_t lv2_plugins_child_count(void *user_data) {
+    size_t count = 0;
+    while (plug_plugin_return((PLUG_INFO *)user_data, (unsigned int)count))
+        count++;
+    return count;
+}
+static bool lv2_plugins_child_at(void *user_data, size_t idx, DataObject *out) {
+    void *plug = plug_plugin_return((PLUG_INFO *)user_data, (unsigned int)idx);
+    if (!plug)
+        return false;
+    out->ops = &lv2_plugin_ops;
+    out->user_data = plug;
+    return true;
+}
+static const char *lv2_plugins_name(void *user_data) {
+    (void)user_data;
+    return PLUGINS_LV2_NAME;
+}
+static const DataOps lv2_plugins_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = lv2_plugins_child_count,
+    .child_at = lv2_plugins_child_at,
+    .name = lv2_plugins_name,
+};
+
+// single loaded clap plugin. user_data is the plugin handle from
+// clap_plug_plugin_return.
+static size_t clap_plugin_child_count(void *user_data) {
+    (void)user_data;
+    return 0;
+}
+static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
+    (void)user_data;
+    (void)idx;
+    (void)out;
+    return false;
+}
+// clap_plug_plugin_name already matches DataOps.name (const char *(*)(void *))
+static const DataOps clap_plugin_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = clap_plugin_child_count,
+    .child_at = clap_plugin_child_at,
+    .name = clap_plug_plugin_name,
+};
+
+// container of the loaded clap plugins. user_data is CLAP_PLUG_INFO*.
+static size_t clap_plugins_child_count(void *user_data) {
+    size_t count = 0;
+    while (clap_plug_plugin_return((CLAP_PLUG_INFO *)user_data,
+                                   (unsigned int)count))
+        count++;
+    return count;
+}
+static bool clap_plugins_child_at(void *user_data, size_t idx, DataObject *out) {
+    void *plug =
+        clap_plug_plugin_return((CLAP_PLUG_INFO *)user_data, (unsigned int)idx);
+    if (!plug)
+        return false;
+    out->ops = &clap_plugin_ops;
+    out->user_data = plug;
+    return true;
+}
+static const char *clap_plugins_name(void *user_data) {
+    (void)user_data;
+    return PLUGINS_CLAP_NAME;
+}
+static const DataOps clap_plugins_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = clap_plugins_child_count,
+    .child_at = clap_plugins_child_at,
+    .name = clap_plugins_name,
+};
+
+// root object. user_data is APP_INFO*.
+static size_t root_child_count(void *user_data) {
+    (void)user_data;
+    return 5;
+}
+static bool root_child_at(void *user_data, size_t idx, DataObject *out) {
+    APP_INFO *app_data = (APP_INFO *)user_data;
+    if (!app_data)
+        return false;
+    switch (idx) {
+    case 0:
+        out->ops = &leaf_container_ops;
+        out->user_data = (void *)SAMPLER_NAME;
+        return true;
+    case 1:
+        out->ops = &lv2_plugins_ops;
+        out->user_data = app_data->plug_data;
+        return true;
+    case 2:
+        out->ops = &clap_plugins_ops;
+        out->user_data = app_data->clap_plug_data;
+        return true;
+    case 3:
+        out->ops = &leaf_container_ops;
+        out->user_data = (void *)SYNTH_NAME;
+        return true;
+    case 4:
+        out->ops = &leaf_container_ops;
+        out->user_data = (void *)TRK_NAME;
+        return true;
+    default:
+        return false;
+    }
+}
+static const char *root_name(void *user_data) {
+    (void)user_data;
+    return APP_NAME;
+}
+static const DataOps root_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = root_child_count,
+    .child_at = root_child_at,
+    .name = root_name,
+};
+
+// dispatch table for the temporary app_data_is_dirty bridge
+static bool lv2_plugins_is_dirty(void *user_data) {
+    return plug_plugins_is_dirty((PLUG_INFO *)user_data);
+}
+static bool clap_plugins_is_dirty(void *user_data) {
+    return clap_plug_plugins_is_dirty((CLAP_PLUG_INFO *)user_data);
+}
+
+DataObject app_init(void) {
+    const DataObject invalid = {0};
     APP_INFO *app_data = (APP_INFO *)malloc(sizeof(APP_INFO));
     if (!app_data)
-        return NULL;
-
-    snprintf(root_name, root_name_len, "%s", APP_NAME);
+        return invalid;
 
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
@@ -191,7 +367,7 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
     app_data->control_data = context_sub_init(rt_funcs_struct, ui_funcs_struct);
     if (!app_data->control_data) {
         free(app_data);
-        return NULL;
+        return invalid;
     }
     // init the members to NULLS
     app_data->smp_data = NULL;
@@ -207,7 +383,7 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
         jack_initialize(app_data, APP_NAME, trk_audio_process_rt);
     if (!app_data->trk_jack) {
         clean_memory(app_data);
-        return NULL;
+        return invalid;
     }
 
     uint32_t buffer_size =
@@ -229,7 +405,7 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
     // processes for example)
     if (app_jack_activate(app_data->trk_jack) != 0) {
         clean_memory(app_data);
-        return NULL;
+        return invalid;
     }
     /*initiate the sampler it will be empty initialy*/
     /*-----------------------------------------------*/
@@ -239,7 +415,7 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
     if (!app_data->smp_data) {
         // clean app_data
         clean_memory(app_data);
-        return NULL;
+        return invalid;
     }
     /*--------------------------------------------------*/
     // Init the plugin data object, it will not run any plugins yet
@@ -248,7 +424,7 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
         plug_init(buffer_size, samplerate, &plug_errors, app_data->trk_jack);
     if (!app_data->plug_data) {
         clean_memory(app_data);
-        return NULL;
+        return invalid;
     }
 
     clap_plug_status_t clap_plug_errors = 0;
@@ -257,7 +433,7 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
                        app_data->trk_jack);
     if (!(app_data->clap_plug_data)) {
         clean_memory(app_data);
-        return NULL;
+        return invalid;
     }
 
     // initiate the Synth data
@@ -265,13 +441,13 @@ void *app_init(uint16_t *user_data_type, uint32_t *return_flags,
                                       "Synth", 1, app_data->trk_jack);
     if (!app_data->synth_data) {
         clean_memory(app_data);
-        return NULL;
+        return invalid;
     }
     // now unpause the jack function again
     context_sub_wait_for_start(app_data->control_data, (void *)app_data);
-    *user_data_type = USER_DATA_T_ROOT;
-    *return_flags = (INTRF_FLAG_ROOT | INTRF_FLAG_CONTAINER);
-    return (void *)app_data;
+
+    DataObject root = {.ops = &root_ops, .user_data = (void *)app_data};
+    return root;
 }
 
 // Get the parameter container for the context
@@ -300,138 +476,22 @@ static PRM_CONTAIN *app_get_context_param_container(APP_INFO *app_data,
     return NULL;
 }
 
-void *app_data_child_return(void *parent_data, uint16_t parent_type,
-                            uint16_t *return_type, uint32_t *return_flags,
-                            char *return_name, int return_name_len,
-                            unsigned int idx) {
-    if (!parent_data)
-        return NULL;
-
-    // ROOT CONTEXT
-    if (parent_type == USER_DATA_T_ROOT) {
-        APP_INFO *app_data = (APP_INFO *)parent_data;
-        switch (idx) {
-        case 0:
-            *return_type = USER_DATA_T_SAMPLER;
-            snprintf(return_name, return_name_len, "%s", SAMPLER_NAME);
-            *return_flags = (INTRF_FLAG_CONTAINER);
-            return (void *)app_data;
-        case 1:
-            *return_type = USER_DATA_T_PLUGINS_LV2;
-            snprintf(return_name, return_name_len, "%s", PLUGINS_LV2_NAME);
-            *return_flags = (INTRF_FLAG_CONTAINER);
-            return (void *)app_data;
-        case 2:
-            *return_type = USER_DATA_T_PLUGINS_CLAP;
-            snprintf(return_name, return_name_len, "%s", PLUGINS_CLAP_NAME);
-            *return_flags = (INTRF_FLAG_CONTAINER);
-            return (void *)app_data;
-        case 3:
-            *return_type = USER_DATA_T_SYNTH;
-            snprintf(return_name, return_name_len, "%s", SYNTH_NAME);
-            *return_flags = (INTRF_FLAG_CONTAINER);
-            return (void *)app_data;
-        case 4:
-            *return_type = USER_DATA_T_JACK;
-            snprintf(return_name, return_name_len, "%s", TRK_NAME);
-            *return_flags = (INTRF_FLAG_CONTAINER);
-            return (void *)app_data;
-        }
-    }
-
-    // PLUGINS context
-    //----------------------------------------------------------------------------------------------------
-    // LV2 PLUGINS
-    if (parent_type == USER_DATA_T_PLUGINS_LV2) {
-        APP_INFO *app_data = (APP_INFO *)parent_data;
-        // List lv2 plugins, that the user laoded
-        void *lv2_plugin = plug_plugin_return(app_data->plug_data, idx);
-        if (lv2_plugin) {
-            if (plug_plugin_name(lv2_plugin, return_name, return_name_len) !=
-                -1) {
-                *return_flags = (INTRF_FLAG_CONTAINER);
-                *return_type = USER_DATA_T_PLUG_LV2;
-                return lv2_plugin;
-            }
-        }
-    }
-
-    // lv2 single plugin context
-    if (parent_type == USER_DATA_T_PLUG_LV2){
-    }
-
-    // CLAP PLUGINS
-    if (parent_type == USER_DATA_T_PLUGINS_CLAP) {
-        APP_INFO *app_data = (APP_INFO *)parent_data;
-        void *clap_plugin =
-            clap_plug_plugin_return(app_data->clap_plug_data, idx);
-        if (clap_plugin) {
-            if (clap_plug_plugin_name(clap_plugin, return_name,
-                                      return_name_len) != -1) {
-                *return_flags = (INTRF_FLAG_CONTAINER);
-                *return_type = USER_DATA_T_PLUG_CLAP;
-                return clap_plugin;
-            }
-        }
-    }
-
-    // single CLAP plugin context 
-    if (parent_type == USER_DATA_T_PLUG_CLAP){
-    }
-
-    //----------------------------------------------------------------------------------------------------
-
-    return NULL;
-}
-
-void app_data_invoke(void *user_data, uint16_t user_data_type,
-                     const char *file) {
-    if (!user_data)
-        return;
-    // PLUGINS context
-    //----------------------------------------------------------------------------------------------------
-    // LV2 PLUGINS
-    //user pressed to load a lv2 plugin from a plugin list item
-    if (user_data_type == USER_DATA_T_PLUGINS_LV2_LIST_ITEM){
-        plug_load_and_activate(user_data);
-    }
-
-    // CLAP PLUGINS
-    //user pressed to load a clap plugin from a plugin list item
-    if (user_data_type == USER_DATA_T_PLUGINS_CLAP_LIST_ITEM){
-        clap_plug_load_and_activate(user_data);
-    }
-    //----------------------------------------------------------------------------------------------------
-}
-
-bool app_data_is_dirty(void *user_data, uint16_t user_data_type) {
-    if (!user_data)
+bool app_data_is_dirty(const DataObject *obj) {
+    if (!data_obj_valid(obj))
         return false;
-    // PLUGINS context
-    //----------------------------------------------------------------------------------------------------
-    // LV2 PLUGINS
-    // check if lv2 plugins are dirty (if new plugins where added or removed)
-    if (user_data_type == USER_DATA_T_PLUGINS_LV2) {
-        APP_INFO *app_data = (APP_INFO *)user_data;
-        return plug_plugins_is_dirty(app_data->plug_data);
-    }
-
-    // CLAP PLUGINS
-    // check if clap plugins are dirty (if new plugins where added or removed)
-    if (user_data_type == USER_DATA_T_PLUGINS_CLAP) {
-        APP_INFO *app_data = (APP_INFO *)user_data;
-        return clap_plug_plugins_is_dirty(app_data->clap_plug_data);
-    }
-    //----------------------------------------------------------------------------------------------------
+    // TEMPORARY BRIDGE: dispatch on the known ops tables until the
+    // generation / removal notification system replaces this.
+    if (obj->ops == &lv2_plugins_ops)
+        return lv2_plugins_is_dirty(obj->user_data);
+    if (obj->ops == &clap_plugins_ops)
+        return clap_plugins_is_dirty(obj->user_data);
     return false;
 }
 
-void app_data_update(void *user_data, uint16_t user_data_type) {
-    if (user_data_type != USER_DATA_T_ROOT)
+void app_data_update(void *root_user_data) {
+    if (!root_user_data)
         return;
-    if (!user_data)
-        return;
-    APP_INFO *app_data = (APP_INFO *)user_data;
+    APP_INFO *app_data = (APP_INFO *)root_user_data;
     // read app_data messages from [audio-thread] on the [main-thread]
     context_sub_process_ui(app_data->control_data);
     // read messages for jack from rt thread on [main-thread]
@@ -447,13 +507,11 @@ void app_data_update(void *user_data, uint16_t user_data_type) {
     synth_read_rt_to_ui_messages(app_data->synth_data);
 }
 
-void app_stop_and_clean(void *user_data, uint16_t type) {
-    if (type != USER_DATA_T_ROOT)
+void app_stop_and_clean(void *root_user_data) {
+    if (!root_user_data)
         return;
-    if (!user_data)
-        return;
-    APP_INFO *app_data = (APP_INFO *)user_data;
-    context_sub_wait_for_stop(app_data->control_data, user_data);
+    APP_INFO *app_data = (APP_INFO *)root_user_data;
+    context_sub_wait_for_stop(app_data->control_data, root_user_data);
 
     clean_memory(app_data);
 }

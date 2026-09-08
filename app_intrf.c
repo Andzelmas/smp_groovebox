@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "app_data.h"
+#include "data_object.h"
 #include "types.h"
 #include "util_funcs/log_funcs.h"
 #include <stdio.h>
@@ -14,67 +15,6 @@
 //  contextid when it gets an event from the context layer that it was removed.
 //  This way tombstones will not increase the memory. Each uistate has to have a
 //  separate cursor that reads the context layer events.
-
-// Instead of app_data switch types implement typed opaque data + operation
-// structs/functions ALSO instead of dirty functions, all data that can be
-// returned to context should have a generation number Context can get
-// generation number and if it is not equal to the current generation number it
-// can remove and repopulate this context and its children
-// SO remove all _USER_DATA and _FLAGS from types.h. If UI needs to get flags
-// these should be in app_intrf.h.
-// All functions that return string should return const char* instead of
-// return_string in arguments. Then, wont need to synchronize defines between
-// layer because of string lengths
-
-/*
-struct DataObject {
-    const DataOps *ops;   // how to operate on it
-    void *user_data;      // where the actual state lives
-};
-
-typedef enum {
-    DATA_CAP_NAME        = 1 << 0,
-    DATA_CAP_CHILDREN    = 1 << 1,
-    DATA_CAP_ACTIONS     = 1 << 2,
-    DATA_CAP_RENAME      = 1 << 3,
-} DataCapabilities;
-
-typedef struct {
-    DataCapabilities capabilities;
-
-    DataIterator *(*children)(void *user_data);
-    bool (*name)(void *user_data, char *buffer, size_t buffer_len);
-} DataOps;
-
-static const DataOps clap_plugins_ops = {
-    .capabilities = DATA_CAP_CHILDREN | DATA_CAP_NAME,
-    .children = clap_plugins_children;,
-    .name = clap_plugins_name;,
-};
-
-static DataIterator *clap_plugins_children(void* user_data)
-{
-    APP_INFO* app_data = (APP_INFO *)user_data;
-    ...
-    void* clap_plugin = clap_plug_plugin_return(app_data->clap_plug_data, idx);
-
-
-    ...
-}
-
-// in functions that return DataObjects:
-DataObject result = {
-    .ops = &clap_plugins_ops;,
-    .user_data = (void*)app_data
-};
-
-//this is for the context layer to use
-DataIterator *data_children(void* user_data)
-{
-    return object->ops->children(user_data);
-}
-*/
-
 // NEW INKOVE:
 //  Action type will say "this context can be entered and has children", "this
 //  context can be invoked", "this context can be removed", "this context can be
@@ -410,15 +350,13 @@ typedef struct _cx_uniqueid{
 }CX_ID;
 
 typedef struct _cx {
-    // name for display
-    char short_name[MAX_PARAM_NAME_LENGTH];
     CX_ID uid; //unique context id
     int idx; // index number of this CX in the cx_parent cx_children array
-    uint16_t user_data_type;
-    void *user_data; // user_data for this cx, that the data layer uses. IT IS
-                     // FORBIDDEN TO FREE OR MODIFY THIS IN ANY OTHER WAY
+    // the data layer object this cx represents. ops is static, user_data is
+    // borrowed and MUST NOT be freed or modified here. The display name is not
+    // stored, it is read live from data_name(&data) in nav_cx_name_return().
+    DataObject data;
     struct _cx *cx_parent;
-    uint32_t flags;
 
     //contexts array of children
     struct _cx_array cx_children;
@@ -429,26 +367,17 @@ typedef struct _app_intrf {
     CX_ID next_uid; //uniqueid for the next context
     HashTable* cx_hashtable; //hash table that links cx_id->key to a context
 
-    uint16_t main_user_data_type; // type for the main user_data struct, the
-                                  // same type is in cx_root->user_data_type
-    void *main_user_data; // main user_data struct for convenience, the same
-                          // struct is in cx_root->user_data
-    // return the idx child for the parent_user_data. Will return NULL if idx
-    // is out of bounds flags returns the flags for this context from the data
-    // return_name returns unique name among the parent_user_data children
-    void *(*data_child_return)(void *parent_user_data, uint16_t parent_type,
-                               uint16_t *return_type, uint32_t *flags,
-                               char *return_name, int return_name_len,
-                               unsigned int idx);
+    void *main_user_data; // the root DataObject's user_data, kept for the
+                          // data_update / data_destroy calls
     // data function that updates its internal structures every cycle, should
     // be called first before any navigation
-    void (*data_update)(void *main_user_data, uint16_t main_user_data_type);
-    // check this user_data for dirty, if it is dirty, need to remove all of
+    void (*data_update)(void *root_user_data);
+    // check this data object for dirty, if it is dirty, need to remove all of
     // its children cx and create them again.
-    bool (*data_is_dirty)(void *user_data, uint16_t type);
-    // destroy the whole data, user_data is the data from the cx_root CX. Used
-    // when closing the app
-    void (*data_destroy)(void *user_data, uint16_t type);
+    bool (*data_is_dirty)(const DataObject *obj);
+    // destroy the whole data. root_user_data is the root DataObject's
+    // user_data. Used when closing the app
+    void (*data_destroy)(void *root_user_data);
 } APP_INTRF;
 
 // pop the child from the context structure 
@@ -537,23 +466,16 @@ static int app_intrf_cx_children_push(APP_INTRF *app_intrf, CX *child) {
 // create a new cx and return it.
 // will be added to the parent_cx child array if parent_cx is given.
 static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
-                               void *user_data, uint16_t user_data_type,
-                               uint32_t flags, const char *short_name) {
+                               DataObject data) {
     if (!app_intrf)
         return NULL;
-    if (!user_data)
+    if (!data_obj_valid(&data))
         return NULL;
-    if (flags == 0)
-        return NULL;
-    if (!short_name) {
-        return NULL;
-    }
 
     CX *new_cx = calloc(1, sizeof(CX));
     if (!new_cx)
         return NULL;
 
-    new_cx->flags = flags;
     new_cx->uid.id = app_intrf->next_uid.id;
     new_cx->uid.gen = app_intrf->next_uid.gen;
     new_cx->uid.key = ht_make_key(new_cx->uid.id, new_cx->uid.gen);
@@ -562,11 +484,8 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     new_cx->cx_children.count = 0;
     new_cx->cx_children.count_max = PTR_ARRAY_COUNT;
     new_cx->cx_parent = parent_cx;
-    new_cx->user_data = user_data;
-    new_cx->user_data_type = user_data_type;
+    new_cx->data = data;
     new_cx->idx = -1;
-
-    snprintf(new_cx->short_name, MAX_PARAM_NAME_LENGTH, "%s", short_name);
 
     if (new_cx->cx_parent) {
         // add this cx to the parent cx array
@@ -592,21 +511,12 @@ static void app_intrf_cx_children_create(APP_INTRF *app_intrf, CX *parent_cx) {
         return;
 
     // create children
-    unsigned int iter = 0;
-    uint16_t child_type = 0;
-    uint32_t child_flags = 0;
-    char child_name[MAX_PARAM_NAME_LENGTH];
-    void *child_data = app_intrf->data_child_return(
-        parent_cx->user_data, parent_cx->user_data_type, &child_type,
-        &child_flags, child_name, MAX_PARAM_NAME_LENGTH, iter);
-
-    while (child_data) {
-        app_intrf_cx_create(app_intrf, parent_cx, child_data, child_type,
-                            child_flags, child_name);
-        iter += 1;
-        child_data = app_intrf->data_child_return(
-            parent_cx->user_data, parent_cx->user_data_type, &child_type,
-            &child_flags, child_name, MAX_PARAM_NAME_LENGTH, iter);
+    size_t child_count = data_child_count(&parent_cx->data);
+    for (size_t iter = 0; iter < child_count; iter++) {
+        DataObject child_data;
+        if (!data_child_at(&parent_cx->data, iter, &child_data))
+            continue;
+        app_intrf_cx_create(app_intrf, parent_cx, child_data);
     }
     // create children for parent_cx children
     for (unsigned int i = 0; i < parent_cx->cx_children.count; i++) {
@@ -622,15 +532,9 @@ APP_INTRF *app_intrf_init() {
 
     // initiate the app_intrf functions for data manipulation
     //--------------------------------------------------
-    app_intrf->data_child_return = app_data_child_return;
     app_intrf->data_update = app_data_update;
     app_intrf->data_is_dirty = app_data_is_dirty;
     app_intrf->data_destroy = app_stop_and_clean;
-
-    if (!app_intrf->data_child_return) {
-        app_intrf_destroy(app_intrf);
-        return NULL;
-    }
     //--------------------------------------------------
     app_intrf->next_uid.gen = 0;
     app_intrf->next_uid.id = 1;
@@ -640,20 +544,15 @@ APP_INTRF *app_intrf_init() {
         return NULL;
     }
 
-    uint32_t root_flags = 0;
-    char root_name[MAX_PARAM_NAME_LENGTH];
-
-    app_intrf->main_user_data =
-        app_init(&(app_intrf->main_user_data_type), &root_flags, root_name,
-                 MAX_PARAM_NAME_LENGTH);
-    if (!app_intrf->main_user_data || root_flags == 0) {
+    DataObject root_obj = app_init();
+    if (!data_obj_valid(&root_obj)) {
         app_intrf_destroy(app_intrf);
         return NULL;
     }
+    app_intrf->main_user_data = root_obj.user_data;
+
     // create the cx_root
-    app_intrf->cx_root = app_intrf_cx_create(
-        app_intrf, NULL, app_intrf->main_user_data,
-        app_intrf->main_user_data_type, root_flags, root_name);
+    app_intrf->cx_root = app_intrf_cx_create(app_intrf, NULL, root_obj);
     if (!app_intrf->cx_root) {
         app_intrf_destroy(app_intrf);
         return NULL;
@@ -711,8 +610,7 @@ void app_intrf_destroy(APP_INTRF *app_intrf) {
         return;
     // clean the data
     if (app_intrf->data_destroy)
-        app_intrf->data_destroy(app_intrf->main_user_data,
-                                app_intrf->main_user_data_type);
+        app_intrf->data_destroy(app_intrf->main_user_data);
 
     //TEMP FOR TESTING printout all contexts ids and gens
     app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root, app_intrf->cx_root, 0, print_id_gen);
@@ -732,7 +630,7 @@ static void app_intrf_cx_check_dirty(APP_INTRF *app_intrf, CX *cur_cx) {
     if (!cur_cx)
         return;
     // check if the context is dirty
-    if (!app_intrf->data_is_dirty(cur_cx->user_data, cur_cx->user_data_type))
+    if (!app_intrf->data_is_dirty(&cur_cx->data))
         return;
     // if it is remove all children recursively
     // but leave the cur_cx context 
@@ -749,8 +647,7 @@ void nav_update(APP_INTRF *app_intrf) {
     if (!app_intrf)
         return;
     if (app_intrf->data_update)
-        app_intrf->data_update(app_intrf->main_user_data,
-                               app_intrf->main_user_data_type);
+        app_intrf->data_update(app_intrf->main_user_data);
     // iterate the whole structure and check if any CX are dirty
     app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root,
                                   app_intrf->cx_root, 0,
@@ -788,23 +685,10 @@ const char *nav_cx_name_return(APP_INTRF *app_intrf, uint64_t context)
     if (!cx)
         return NULL;
 
-    return cx->short_name;
-}
-
-uint32_t nav_cx_flags_return(APP_INTRF *app_intrf, uint64_t context)
-{
-    if (!app_intrf)
-        return 0;
-
-    if (context == 0)
-        return 0;
-
-    CX *cx = ht_get(app_intrf->cx_hashtable, context);
-
-    if (!cx)
-        return 0;
-
-    return cx->flags;
+    // read live from the data layer. The returned string is owned by the data
+    // layer and only valid until that data changes or goes away - callers must
+    // copy if they need to keep it.
+    return data_name(&cx->data);
 }
 
 size_t nav_cx_children_count(APP_INTRF *app_intrf, uint64_t context)

@@ -29,6 +29,11 @@ const char *clap_paths[3] = {"/usr/lib/clap/", "~/.clap/", NULL};
 // how many clap plugins can there be in the plugin array
 #define MAX_INSTANCES 5
 
+// size of the single plugin display name buffer (CLAP_PLUG_PLUG.name). Internal
+// to this module - the name leaves as a const char* so callers need no matching
+// define.
+#define CLAP_PLUGIN_NAME_MAX 128
+
 // size for the event lists
 #define EVENT_LIST_SIZE 2048
 #define EVENT_LIST_ITEMS 50
@@ -95,6 +100,9 @@ typedef struct _clap_plug_note_port {
 // the single clap plugin struct
 typedef struct _clap_plug_plug {
     int id; // plugin id on the clap_plug_info plugin array
+    // display name ("id_pluginname"), owned by this struct, built once at load
+    // by clap_plug_load_and_activate() and handed out by clap_plug_plugin_name()
+    char name[CLAP_PLUGIN_NAME_MAX];
     char plugin_id[MAX_UNIQUE_ID_STRING]; // unique plugin id that is from the
                                           // clap_plugin_descriptor. Used rarely
                                           // (now to match if preset container
@@ -1798,6 +1806,15 @@ bool clap_plug_plugin_list_is_dirty(CLAP_PLUG_INFO* plug_data){
     return is_dirty;
 }
 
+// build the display name ("id_pluginname") into plug->name. Called once when the
+// plugin is loaded; clap_plug_plugin_name() just returns the stored string after.
+static void clap_plug_set_display_name(CLAP_PLUG_PLUG *plug) {
+    if (!plug || !plug->plug_inst || !plug->plug_inst->desc)
+        return;
+    snprintf(plug->name, sizeof(plug->name), "%d_%s", plug->id,
+             plug->plug_inst->desc->name);
+}
+
 int clap_plug_load_and_activate(void* plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
     if (!plugin_list_item)
@@ -1962,6 +1979,9 @@ int clap_plug_load_and_activate(void* plugin_item) {
         return -1;
     }
 
+    // build the display name once, now that plug->plug_inst and plug->id are set
+    clap_plug_set_display_name(plug);
+
     // start processing the plugin
     context_sub_activate_start_process_msg(plug_data->control_data,
                                            (void *)plug, is_audio_thread);
@@ -1991,20 +2011,17 @@ void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx){
     return (void *)cur_plug;
 }
 
-int clap_plug_plugin_name(void *plug, char *return_name, unsigned int return_name_len){
+const char *clap_plug_plugin_name(void *plug){
     CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG*)plug;
     if(!cur_plug)
-        return -1;
+        return NULL;
     if(!cur_plug->plug_entry)
-        return -1;
+        return NULL;
     CLAP_PLUG_INFO *plug_data = cur_plug->plug_data;
     if (!plug_data)
-        return -1;
+        return NULL;
 
-    const char *name_string = cur_plug->plug_inst->desc->name;
-    snprintf(return_name, return_name_len, "%d_%s", cur_plug->id, name_string);
-
-    return 1;
+    return cur_plug->name;
 }
 
 bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data){
