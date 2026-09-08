@@ -1,0 +1,59 @@
+Phase 0 — bring the sampler up to the plugin modules' surface
+
+Already done for plugins.c / clap_plugins.c (reference, no work): *_plugin_name returns const char * from a struct-owned buffer built once at load by a *_set_display_name() helper; buffer sized by a module-private define (PLUG_PLUGIN_NAME_MAX / CLAP_PLUGIN_NAME_MAX); the getter is a pure return; app_data.c has lv2_plugins_ops/lv2_plugin_ops/clap_plugins_ops/clap_plugin_ops with child_count/child_at/name.
+
+Sampler module (sampler.c / sampler.h):
+
+Display-name buffer. #define SMP_SAMPLE_NAME_MAX 128 (module-private). Add char name[SMP_SAMPLE_NAME_MAX] to SMP_SMP.
+Name helper. static void smp_set_display_name(SMP_SMP *smp) — format "%d_%s" from smp->id and the basename of smp->file_path (strrchr(path,'/')). Call it in smp_add, at the tail where the sample is fully loaded (file_path set, before return smp_id).
+Name accessor. const char *smp_sample_name(void *smp) — null-check (file_path/buffer), return ((SMP_SMP*)smp)->name;. Declare in sampler.h.
+By-index accessor. void *smp_sample_return(SMP_INFO *smp_data, unsigned int idx) — walk samples[0..MAX_SAMPLES-1] skipping empty slots (file_path == NULL), return the idx-th occupied SMP_SMP* or NULL past the end. Declare in sampler.h.
+Change flag. Add bool samples_dirty to SMP_INFO; set it in smp_add (on success) and smp_remove_sample. Add bool smp_samples_is_dirty(SMP_INFO *smp_data) (read-and-clear).
+
+app_data (app_data.c):
+
+sample_ops (single sample): capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN, child_count → 0, child_at → false, name → smp_sample_name.
+sampler_ops (container): capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN, name → SAMPLER_NAME, child_count → probe smp_sample_return until NULL, child_at → wrap smp_sample_return(idx) into { &sample_ops, smp }.
+Wire into root. In root_child_at, case 0: replace the leaf_container_ops / SAMPLER_NAME entry with { &sampler_ops, app_data->smp_data }.
+Bridge (temporary). Add a obj->ops == &sampler_ops branch to app_data_is_dirty → smp_samples_is_dirty (so the sample list refreshes under the current dirty mechanism until Phase B/C).
+
+Checkpoint: builds, runs. Sampler now lists its loaded samples as contexts, same as the plugin lists, under the existing dirty-rebuild mechanism.
+
+Phase A — one identity type, minted by the data layer (behavior unchanged)
+Shared id type. New ids.h (dependency-free): typedef uint64_t ContextId;, #define CONTEXT_ID_NULL ((ContextId)0), and a debug macro ASSERT_CTXID(id) that checks the namespace bits are in range (NDEBUG → no-op). Every layer includes this; remove the per-layer renaming — no more bare uint64_t in app_intrf, no DataId→ContextId swap in ui_layer.
+Contract. data_object.h: add mandatory ContextId (*id)(void *user_data); to DataOps; add static inline ContextId data_id(const DataObject *o).
+LV2 module uid. uint32_t next_plug_uid on PLUG_INFO, uint32_t uid on PLUG_PLUG; plug->uid = ++plug_data->next_plug_uid in plug_load_and_activate; uint32_t plug_plugin_uid(void *plug).
+CLAP module uid. Same in clap_plugins.c → uint32_t clap_plug_plugin_uid(void *plug).
+Sampler module uid. uint32_t next_smp_uid on SMP_INFO, uint32_t uid on SMP_SMP; smp->uid = ++smp_data->next_smp_uid in smp_add (next to the smp_set_display_name call); uint32_t smp_sample_uid(void *smp).
+Compose keys in app_data. namespaces DATA_NS_SINGLETON, DATA_NS_LV2_PLUG, DATA_NS_CLAP_PLUG, DATA_NS_SAMPLE; #define MAKE_ID(ns, local) (((ContextId)(ns) << 56) | (ContextId)(local)); singleton constants SID_ROOT, SID_SAMPLER, SID_LV2_LIST, SID_CLAP_LIST, SID_SYNTH, SID_TRK.
+id fn per ops table. root_id, sampler_id, sample_id (MAKE_ID(DATA_NS_SAMPLE, smp_sample_uid(ud))), lv2_plugins_id, lv2_plugin_id, clap_plugins_id, clap_plugin_id, leaf_container_id. Wire .id into every table.
+leaf_container gains identity. Change its user_data from a bare name string to a static const struct { const char *name; ContextId id; } per singleton (Synth, Trk — Sampler is now sampler_ops); leaf_container_name / leaf_container_id read from it.
+app_intrf adopts it. CX: replace CX_ID uid with ContextId data_id. At create: cx->data_id = data_id(&cx->data); ht_set(table, cx->data_id, cx);. Delete APP_INTRF.next_uid and all id/gen minting; drop the next_uid fiddling in app_intrf_cx_check_dirty.
+Dumb hashtable. Remove ht_make_key from hash_table.c/.h; callers pass ContextId directly. ht_* keep taking uint64_t.
+
+Checkpoint: builds, runs, identical behavior. Old app_data_is_dirty + app_intrf_cx_check_dirty + whole-tree walk still active.
+
+Phase B/C — events + id-diff reconcile (land together)
+Data event type. data_object.h (or data_events.h): typedef enum { DATA_EVENT_CHILDREN_CHANGED, DATA_EVENT_CHANGED } DataEventType;, typedef struct { DataEventType type; ContextId id; } DataEvent;.
+Producer. app_data: DataEvent ring buffer + bool app_data_poll_event(void *root_user_data, DataEvent *out). In app_data_update, when a module's dirty flag flips (plug, clap, smp), push DATA_EVENT_CHILDREN_CHANGED{ <that list's ContextId> }. Make plug_plugins_is_dirty / clap_plug_plugins_is_dirty / smp_samples_is_dirty module-internal callers only.
+Delete the bridge. Remove public app_data_is_dirty and its obj->ops == comparisons (all three).
+Reconcile primitive. app_intrf_cx_resync(APP_INTRF *, CX *parent_cx):
+have = { child->data_id } over parent_cx->cx_children — read the cached field, never data_id(&child->data)
+want = { data_id(&child) } for each data_child_at(&parent_cx->data, i), i in 0..data_child_count
+want − have: app_intrf_cx_create + app_intrf_cx_children_create
+have − want: cx_subtree_free
+in both: untouched
+Subtree free. cx_subtree_free(APP_INTRF *, CX *) — post-order: free each child's subtree, then unlink from parent + ht_remove + free self. Delete app_intrf_cx_children_iterate and its top_cx / leave_top params; point app_intrf_destroy at cx_subtree_free(cx_root).
+Drain function. app_intrf_process_data_events(APP_INTRF *): loop app_data_poll_event → CHILDREN_CHANGED: resolve CX by id, app_intrf_cx_resync (skip if not materialized); CHANGED: flag CX for display refresh.
+New nav_update. data_update(main_user_data) → app_intrf_process_data_events(app_intrf). Delete app_intrf_cx_check_dirty and the iterate(root, root, 0, check_dirty) call.
+
+Checkpoint: no whole-tree polling, no sibling rebuild, top_cx/leave_top gone. Add/remove a plugin or sample touches only that list's CX and that object's subtree; sibling ContextIds survive.
+
+Phase D — synchronous-reconcile invariant
+When the action/command dispatch lands, every app_intrf handler that reaches into app_data calls app_intrf_process_data_events(app_intrf) before returning to ui_layer. That function only mutates the CX tree and appends CxEvents — never calls up into ui_layer.
+Invariant: step 27 + "CX caches data_id, reconcile never re-resolves it." Under it, ui_layer may hold stale ContextIds freely (ht_get → NULL). Fixed-array storage additionally makes a borrowed pointer held across a mutating call a stale-read, not a UAF; if sampler/param storage becomes malloc'd + freed, keep that discipline strict or have ops resolve the ContextId through the module (dead → NULL) instead of storing a raw user_data.
+Phase E — context → ui events
+Type. typedef enum { CX_ADDED, CX_REMOVED, CX_CHANGED } CxEventType;, typedef struct { CxEventType type; ContextId id; } CxEvent;. Ring buffer in APP_INTRF.
+Emit. app_intrf_cx_resync pushes CX_ADDED / CX_REMOVED; the CHANGED handler pushes CX_CHANGED.
+Cursor API. bool nav_poll_event(APP_INTRF *, NavCursor *cursor, CxEvent *out) with a caller-owned NavCursor; ring wrapped past a cursor → signal "full resync".
+ui_layer consumes. Each UI_STATE / view owns a NavCursor; drain per render, prune dead ContextIds from UI_TARGET_LIST etc.; on overflow rebuild that view from nav_cx_root_return down. nav_cx_is_valid stays a plain lookup.
