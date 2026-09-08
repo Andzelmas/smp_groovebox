@@ -474,7 +474,6 @@ void ui_layer_nav_target_list_end(UI_STATE *state){
 // --------------------------------------------------
 
 // UI LAYER Functions for the user interface
-
 void ui_layer_update_cycle(UI_LAYER* ui_layer){
     if(!ui_layer)
         return;
