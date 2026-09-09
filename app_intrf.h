@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "types.h"
 #include "ids.h"
+#include "cx_events.h"
 #include <stdbool.h>
 
 // Interface for building the data layer structure.
@@ -43,3 +44,15 @@ const char *nav_cx_name_return(APP_INTRF *app_intrf, ContextId context);
 
 // check if the context is valid or not anymore
 bool nav_cx_is_valid(APP_INTRF *app_intrf, ContextId context);
+
+// EVENTS - the context layer's change log. A ui view uses one NavCursor to
+// react to structural changes (contexts added / removed / changed) instead of
+// re-scanning the whole tree.
+
+// attach cursor at the current head of the log: it will see only future events.
+void nav_cursor_init(APP_INTRF *app_intrf, NavCursor *cursor);
+
+// pop the next event after cursor's position, advancing the cursor.
+// NAV_POLL_OVERFLOW means the cursor fell behind and was reset - rebuild.
+NavPollResult nav_poll_event(APP_INTRF *app_intrf, NavCursor *cursor,
+                             CxEvent *out);

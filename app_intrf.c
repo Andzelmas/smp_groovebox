@@ -5,6 +5,7 @@
 #include "app_data.h"
 #include "data_object.h"
 #include "data_events.h"
+#include "cx_events.h"
 #include "types.h"
 #include "util_funcs/log_funcs.h"
 #include <stdio.h>
@@ -359,6 +360,11 @@ typedef struct _cx {
     struct _cx_array cx_children;
 } CX;
 
+// size of the context layer's change log. Sized generously because ui views
+// consume it at their own pace; a view that falls behind gets NAV_POLL_OVERFLOW
+// and rebuilds.
+#define APP_INTRF_CX_EVENT_RING 256
+
 typedef struct _app_intrf {
     CX *cx_root;
     HashTable* cx_hashtable; //hash table that links ContextId -> CX*
@@ -373,7 +379,32 @@ typedef struct _app_intrf {
     // destroy the whole data. root_user_data is the root DataObject's
     // user_data. Used when closing the app
     void (*data_destroy)(void *root_user_data);
+
+    // context layer change log (see cx_events.h). cx_seq is the last assigned
+    // sequence number (0 = nothing emitted); the slot for sequence s is
+    // (s - 1) % APP_INTRF_CX_EVENT_RING.
+    struct {
+        uint64_t seq;
+        CxEvent ev;
+    } cx_ring[APP_INTRF_CX_EVENT_RING];
+    uint64_t cx_seq;
+    // emits are off during the initial tree build and during teardown (no
+    // views can be listening then, and it would just churn the ring).
+    bool cx_emit_enabled;
 } APP_INTRF;
+
+// append one event to the change log. Overwrites the oldest slot silently;
+// consumers detect that they missed events via their cursor (NAV_POLL_OVERFLOW).
+static void app_intrf_emit(APP_INTRF *app_intrf, CxEventType type, ContextId id,
+                           ContextId parent, size_t index) {
+    if (!app_intrf || !app_intrf->cx_emit_enabled)
+        return;
+    uint64_t seq = ++app_intrf->cx_seq;
+    size_t slot = (size_t)((seq - 1) % APP_INTRF_CX_EVENT_RING);
+    app_intrf->cx_ring[slot].seq = seq;
+    app_intrf->cx_ring[slot].ev = (CxEvent){
+        .type = type, .id = id, .parent = parent, .index = index};
+}
 
 // pop the child from the context structure 
 static void app_intrf_cx_children_pop(APP_INTRF* app_intrf, CX* cx_rem){
@@ -555,6 +586,8 @@ APP_INTRF *app_intrf_init() {
     // and create the cx_root children recursively
     app_intrf_cx_children_create(app_intrf, app_intrf->cx_root);
 
+    // the tree is built; from here on structural changes are logged for the ui
+    app_intrf->cx_emit_enabled = true;
     return app_intrf;
 }
 
@@ -567,6 +600,11 @@ static void cx_subtree_free(APP_INTRF *app_intrf, CX *cur_cx) {
         return;
     while (cur_cx->cx_children.count > 0)
         cx_subtree_free(app_intrf, cur_cx->cx_children.contexts[0]);
+    // post-order: children have already emitted their CX_REMOVED
+    app_intrf_emit(app_intrf, CX_REMOVED, cur_cx->data_id,
+                   cur_cx->cx_parent ? cur_cx->cx_parent->data_id
+                                     : CONTEXT_ID_NULL,
+                   cur_cx->idx >= 0 ? (size_t)cur_cx->idx : 0);
     app_intrf_cx_children_pop(app_intrf, cur_cx);
 }
 
@@ -610,8 +648,14 @@ static void app_intrf_cx_resync(APP_INTRF *app_intrf, CX *parent_cx) {
         if (have)
             continue;
         CX *created = app_intrf_cx_create(app_intrf, parent_cx, dobj);
-        if (created)
+        if (created) {
             app_intrf_cx_children_create(app_intrf, created);
+            // announce the new node only (its subtree, if any, is materialised
+            // fresh and no view could be tracking those ids yet)
+            app_intrf_emit(app_intrf, CX_ADDED, created->data_id,
+                           parent_cx->data_id,
+                           created->idx >= 0 ? (size_t)created->idx : 0);
+        }
     }
 }
 
@@ -630,8 +674,12 @@ static void app_intrf_process_data_events(APP_INTRF *app_intrf) {
             app_intrf_cx_resync(app_intrf, cx);
             break;
         case DATA_EVENT_CHANGED:
-            // presentation-only; nav_cx_name_return reads live so there is
-            // nothing structural to do. Phase E will forward this to the ui.
+            // presentation-only (name/value); nothing structural. forward it so
+            // ui views can refresh what they draw for this context.
+            app_intrf_emit(app_intrf, CX_CHANGED, cx->data_id,
+                           cx->cx_parent ? cx->cx_parent->data_id
+                                         : CONTEXT_ID_NULL,
+                           cx->idx >= 0 ? (size_t)cx->idx : 0);
             break;
         }
     }
@@ -640,6 +688,7 @@ static void app_intrf_process_data_events(APP_INTRF *app_intrf) {
 void app_intrf_destroy(APP_INTRF *app_intrf) {
     if (!app_intrf)
         return;
+    app_intrf->cx_emit_enabled = false; // no events during teardown
     // clean the data
     if (app_intrf->data_destroy)
         app_intrf->data_destroy(app_intrf->main_user_data);
@@ -754,4 +803,34 @@ ContextId nav_cx_parent_return(APP_INTRF *app_intrf, ContextId context) {
         return CONTEXT_ID_NULL;
 
     return cx->cx_parent->data_id;
+}
+
+void nav_cursor_init(APP_INTRF *app_intrf, NavCursor *cursor) {
+    if (!cursor)
+        return;
+    // start just past the newest event: the view sees only future changes
+    cursor->next_seq = app_intrf ? app_intrf->cx_seq + 1 : 1;
+}
+
+NavPollResult nav_poll_event(APP_INTRF *app_intrf, NavCursor *cursor,
+                             CxEvent *out) {
+    if (!app_intrf || !cursor || !out)
+        return NAV_POLL_EMPTY;
+
+    if (cursor->next_seq > app_intrf->cx_seq)
+        return NAV_POLL_EMPTY; // caught up (or nothing has been emitted yet)
+
+    // oldest sequence still retained in the ring
+    uint64_t oldest = (app_intrf->cx_seq > APP_INTRF_CX_EVENT_RING)
+                          ? app_intrf->cx_seq - APP_INTRF_CX_EVENT_RING + 1
+                          : 1;
+    if (cursor->next_seq < oldest) {
+        cursor->next_seq = app_intrf->cx_seq + 1; // resync from the head
+        return NAV_POLL_OVERFLOW;
+    }
+
+    size_t slot = (size_t)((cursor->next_seq - 1) % APP_INTRF_CX_EVENT_RING);
+    *out = app_intrf->cx_ring[slot].ev;
+    cursor->next_seq += 1;
+    return NAV_POLL_EVENT;
 }

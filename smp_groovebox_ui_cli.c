@@ -1,6 +1,4 @@
-#include "app_intrf.h"
 #include "ui_layer.h"
-#include "util_funcs/log_funcs.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -237,18 +235,17 @@ static void helper_nav_context_exit(UI_LAYER* ui_layer, UI_STATE* state, Context
 static void helper_program_destroy(UI_LAYER* ui_layer, UI_STATE** states, size_t states_capacity){
     ui_layer_destroy(ui_layer, states, states_capacity);
 
-    log_append_logfile("Cleaned everything, closing the app \n");
+    printf("\nCleaned everything, closing the up\n");
     disableRawMode();
 }
 
 int main() {
     enableRawMode();
-    log_clear_logfile();
     UI_LAYER* ui_layer = ui_layer_init();
 
     // if ui_layer failed to initialize analyze the error write it and exit
     if (!ui_layer) {
-        log_append_logfile("Could not start the ui_layer\n");
+        printf("\nCould not start the ui_layer\n");
         exit(1);
     }
 
@@ -279,30 +276,24 @@ int main() {
         // update the interface, of course should be in a loop
         ui_layer_update_cycle(ui_layer);
 
-        // show the state_root info
-        InterfaceContextInfo cx_root_info;
-        if(helper_context_info_get(ui_layer, id_root, &cx_root_info)){
-            for(size_t i = 0; i < cx_root_info.child_count; i++){
-                ContextId root_child =
-                    ui_layer_context_child_at(ui_layer, id_root, i);
-                if (root_child != CONTEXT_ID_INVALID) {
-                    InterfaceContextInfo cx_root_child_info;
-                    if(helper_context_info_get(ui_layer, root_child, &cx_root_child_info)){
-                        printf("| %lu_%s |", i, cx_root_child_info.name);
-                    }
-                }
-                if(i == cx_root_info.child_count - 1)
-                    printf("\n--------------------\n");
+        // let each view react to contexts that appeared / were removed
+        for (size_t si = 0; si < states_count; si++) {
+            UiReconcileResult rr =
+                ui_layer_state_reconcile(ui_layer, states_all[si]);
+            if (rr == UI_RECONCILE_REBUILD && states_all[si] == state_main) {
+                // the view's cursor fell behind - fall back to the root
+                state_main_current = id_root;
+                state_main_hovered_idx = 0;
             }
         }
 
         // show the state_main info
-        // first update state_main_current and state_main_hovered_idx if navigation changed these
+        // first update state_main_current and state_main_hovered_idx if user inputs changed these
         state_main_hovered_idx = helper_nav_context_purpose_set(ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED); 
 
         InterfaceContextInfo state_main_current_info;
         if(helper_context_info_get(ui_layer, state_main_current, &state_main_current_info)){
-            printf("----| %s |----\n", state_main_current_info.name);
+            printf("----| %s |----\n\n", state_main_current_info.name);
             // get the selected ContextId
             UI_TARGET_LIST* selected_target = ui_layer_nav_target_list_begin(state_main, state_main_current, UI_PURPOSE_HOVERED);
             ContextId state_main_id_hovered = CONTEXT_ID_INVALID;
@@ -325,6 +316,24 @@ int main() {
             }
         }
         
+        // show the state_root info
+        printf("\n");
+        InterfaceContextInfo cx_root_info;
+        if(helper_context_info_get(ui_layer, id_root, &cx_root_info)){
+            for(size_t i = 0; i < cx_root_info.child_count; i++){
+                ContextId root_child =
+                    ui_layer_context_child_at(ui_layer, id_root, i);
+                if (root_child != CONTEXT_ID_INVALID) {
+                    InterfaceContextInfo cx_root_child_info;
+                    if(helper_context_info_get(ui_layer, root_child, &cx_root_child_info)){
+                        printf("| %lu_%s |", i, cx_root_child_info.name);
+                    }
+                }
+                if(i == cx_root_info.child_count - 1)
+                    printf("\n");
+            }
+        }
+
         // get user inputs
         int input = getchar();
         unsigned int exit = 0;

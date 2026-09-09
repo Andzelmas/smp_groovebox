@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include "ids.h"
+#include "cx_events.h"
 
 // ContextId cannot be 0; kept as an alias for the shared sentinel
 #define CONTEXT_ID_INVALID CONTEXT_ID_NULL
@@ -24,6 +25,27 @@ typedef enum{
     UI_TARGET_LIST_ADD_FULL = 2,
     UI_TARGET_LIST_ADD_ERROR = 3
 }UiTargetListAddResult;
+
+// what to do with a stored ContextId when the context it names is removed.
+// the zero value (UI_STALE_REMOVE) is the default for every list and entry, so
+// a view that does nothing still gets its tombstones cleaned.
+typedef enum{
+    UI_STALE_REMOVE = 0,     // drop the item / remove the whole entry
+    UI_STALE_FIRST_SIBLING,  // re-point to the removed id's parent's first child
+    UI_STALE_NEXT_SIBLING,   // ...to the child now at the removed id's index
+    UI_STALE_PREV_SIBLING,   // ...to the child before the removed id's index
+    UI_STALE_TO_SOURCE,      // re-point to the parent context itself
+    UI_STALE_CLEAR,          // empty the list (for an entry: keep it, clear targets)
+}UiStaleMode;
+
+typedef struct{ UiStaleMode mode; }UiStalePolicy;
+
+// result of ui_layer_state_reconcile
+typedef enum{
+    UI_RECONCILE_OK = 0,   // no change relevant to this view
+    UI_RECONCILE_CHANGED,  // this view was touched - redraw it
+    UI_RECONCILE_REBUILD,  // the cursor overflowed - re-derive the view from root
+}UiReconcileResult;
 
 // init the ui_layer struct
 UI_LAYER* ui_layer_init();
@@ -70,7 +92,27 @@ ContextId ui_layer_nav_target_list_get(UI_TARGET_LIST* targets, size_t idx);
 bool ui_layer_nav_target_list_resize(UI_TARGET_LIST* targets, size_t new_capacity);
 // lower the borrow_count of the state, indicating that it is safe to change the hash table
 void ui_layer_nav_target_list_end(UI_STATE* state);
-// -------------------------------------------------- 
+// --------------------------------------------------
+
+// STALE-CONTEXT RECONCILIATION
+// --------------------------------------------------
+// set the policy applied to a target list's items when one becomes stale
+bool ui_layer_target_list_set_stale_policy(UI_TARGET_LIST* targets, UiStalePolicy policy);
+// set the policy applied to a (source,purpose) entry when its source becomes stale
+bool ui_layer_state_entry_set_stale_policy(UI_STATE* state, ContextId source, UiPurpose purpose, UiStalePolicy policy);
+
+// drain this state's cursor of context-layer events and apply the declared
+// stale policies. call once per cycle per state, after ui_layer_update_cycle.
+UiReconcileResult ui_layer_state_reconcile(UI_LAYER* ui_layer, UI_STATE* state);
+
+// raw escape hatch: pop the next context-layer event for this state and let the
+// caller react however it wants (via the UI_TARGET_LIST operations above). use
+// this OR ui_layer_state_reconcile for a given state, not both - they share the
+// state's cursor.
+NavPollResult ui_layer_state_poll_event(UI_LAYER* ui_layer, UI_STATE* state, CxEvent* out);
+// remove every occurrence of id from a target list. returns how many were removed.
+size_t ui_layer_target_list_remove_id(UI_TARGET_LIST* targets, ContextId id);
+// --------------------------------------------------
 
 // user should call this each cycle
 void ui_layer_update_cycle(UI_LAYER* ui_layer);
