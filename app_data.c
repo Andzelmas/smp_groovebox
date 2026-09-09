@@ -19,6 +19,10 @@
 #include <threads.h>
 static thread_local bool is_audio_thread = false;
 
+// size of the data event queue drained by the context layer each nav_update.
+// only a few events are produced per cycle, so this only needs slack.
+#define APP_DATA_EVENT_RING 64
+
 typedef struct _app_info {
     // the smapler data
     SMP_INFO *smp_data;
@@ -41,7 +45,28 @@ typedef struct _app_info {
     CXCONTROL *control_data;
     unsigned int is_processing; // is the main jack function processing, should
                                 // be touched only on [audio-thread]
+
+    // data event queue (main thread only: produced in app_data_update, drained
+    // by app_data_poll_event). single producer / single consumer, no locking.
+    DataEvent event_ring[APP_DATA_EVENT_RING];
+    size_t event_head; // next slot to write
+    size_t event_tail; // next slot to read
 } APP_INFO;
+
+// push one event; on a full ring drop the oldest (a missed CHILDREN_CHANGED is
+// recoverable - the next one re-syncs the same parent against current state).
+static void app_data_push_event(APP_INFO *app_data, DataEventType type,
+                                ContextId id) {
+    if (!app_data)
+        return;
+    size_t next = (app_data->event_head + 1) % APP_DATA_EVENT_RING;
+    if (next == app_data->event_tail)
+        app_data->event_tail =
+            (app_data->event_tail + 1) % APP_DATA_EVENT_RING;
+    app_data->event_ring[app_data->event_head].type = type;
+    app_data->event_ring[app_data->event_head].id = id;
+    app_data->event_head = next;
+}
 
 // clean memory, without pausing the [audio-thread]
 static int clean_memory(APP_INFO *app_data) {
@@ -504,17 +529,6 @@ static const DataOps root_ops = {
     .name = root_name,
 };
 
-// dispatch table for the temporary app_data_is_dirty bridge
-static bool sampler_is_dirty(void *user_data) {
-    return smp_samples_is_dirty((SMP_INFO *)user_data);
-}
-static bool lv2_plugins_is_dirty(void *user_data) {
-    return plug_plugins_is_dirty((PLUG_INFO *)user_data);
-}
-static bool clap_plugins_is_dirty(void *user_data) {
-    return clap_plug_plugins_is_dirty((CLAP_PLUG_INFO *)user_data);
-}
-
 DataObject app_init(void) {
     const DataObject invalid = {0};
     APP_INFO *app_data = (APP_INFO *)malloc(sizeof(APP_INFO));
@@ -538,6 +552,8 @@ DataObject app_init(void) {
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
     app_data->is_processing = 0;
+    app_data->event_head = 0;
+    app_data->event_tail = 0;
 
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/
@@ -638,18 +654,15 @@ static PRM_CONTAIN *app_get_context_param_container(APP_INFO *app_data,
     return NULL;
 }
 
-bool app_data_is_dirty(const DataObject *obj) {
-    if (!data_obj_valid(obj))
+bool app_data_poll_event(void *root_user_data, DataEvent *out) {
+    APP_INFO *app_data = (APP_INFO *)root_user_data;
+    if (!app_data || !out)
         return false;
-    // TEMPORARY BRIDGE: dispatch on the known ops tables until the
-    // generation / removal notification system replaces this.
-    if (obj->ops == &sampler_ops)
-        return sampler_is_dirty(obj->user_data);
-    if (obj->ops == &lv2_plugins_ops)
-        return lv2_plugins_is_dirty(obj->user_data);
-    if (obj->ops == &clap_plugins_ops)
-        return clap_plugins_is_dirty(obj->user_data);
-    return false;
+    if (app_data->event_tail == app_data->event_head)
+        return false;
+    *out = app_data->event_ring[app_data->event_tail];
+    app_data->event_tail = (app_data->event_tail + 1) % APP_DATA_EVENT_RING;
+    return true;
 }
 
 void app_data_update(void *root_user_data) {
@@ -669,6 +682,19 @@ void app_data_update(void *root_user_data) {
     // read messages from the rt thread on the [main-thread] for the synth
     // context
     synth_read_rt_to_ui_messages(app_data->synth_data);
+
+    // now that all rt->ui messages are drained, turn each module's "my list
+    // changed" flag into a CHILDREN_CHANGED event for that list's context.
+    // (the synth has no such flag - its oscillators are fixed.)
+    if (smp_samples_is_dirty(app_data->smp_data))
+        app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
+                            MAKE_ID(DATA_NS_SINGLETON, SID_SAMPLER));
+    if (plug_plugins_is_dirty(app_data->plug_data))
+        app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
+                            MAKE_ID(DATA_NS_SINGLETON, SID_LV2_LIST));
+    if (clap_plug_plugins_is_dirty(app_data->clap_plug_data))
+        app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
+                            MAKE_ID(DATA_NS_SINGLETON, SID_CLAP_LIST));
 }
 
 void app_stop_and_clean(void *root_user_data) {

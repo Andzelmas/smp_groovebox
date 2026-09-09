@@ -4,6 +4,7 @@
 #include <string.h>
 #include "app_data.h"
 #include "data_object.h"
+#include "data_events.h"
 #include "types.h"
 #include "util_funcs/log_funcs.h"
 #include <stdio.h>
@@ -367,9 +368,8 @@ typedef struct _app_intrf {
     // data function that updates its internal structures every cycle, should
     // be called first before any navigation
     void (*data_update)(void *root_user_data);
-    // check this data object for dirty, if it is dirty, need to remove all of
-    // its children cx and create them again.
-    bool (*data_is_dirty)(const DataObject *obj);
+    // pop the next queued data event. returns false when the queue is empty.
+    bool (*data_poll_event)(void *root_user_data, DataEvent *out);
     // destroy the whole data. root_user_data is the root DataObject's
     // user_data. Used when closing the app
     void (*data_destroy)(void *root_user_data);
@@ -386,17 +386,17 @@ static void app_intrf_cx_children_pop(APP_INTRF* app_intrf, CX* cx_rem){
         if (parent->cx_children.count > 0) {
             int child_idx = -1;
             //find the cx_rem in its parent children array
-            for (int i = 0; i < parent->cx_children.count; i++){
+            for (unsigned int i = 0; i < parent->cx_children.count; i++){
                 CX* curr_cx = parent->cx_children.contexts[i];
                 if(curr_cx == cx_rem){
-                    child_idx = i;
+                    child_idx = (int)i;
                     break;
                 }
             }
             if (child_idx != -1) {
                 // Remove the child_idx cx from the parent cx_children array
                 unsigned int nmemb = parent->cx_children.count - 1;
-                for (int i = child_idx; i < nmemb; i++) {
+                for (unsigned int i = (unsigned int)child_idx; i < nmemb; i++) {
                     parent->cx_children.contexts[i] =
                         parent->cx_children.contexts[i + 1];
                 }
@@ -530,7 +530,7 @@ APP_INTRF *app_intrf_init() {
     // initiate the app_intrf functions for data manipulation
     //--------------------------------------------------
     app_intrf->data_update = app_data_update;
-    app_intrf->data_is_dirty = app_data_is_dirty;
+    app_intrf->data_poll_event = app_data_poll_event;
     app_intrf->data_destroy = app_stop_and_clean;
     //--------------------------------------------------
     app_intrf->cx_hashtable = ht_create(32);
@@ -558,46 +558,83 @@ APP_INTRF *app_intrf_init() {
     return app_intrf;
 }
 
-// iterate from root_cx through the children recursively and call the void user func
-// ok to use callback to remove cx but not to create (untested)
-// root_cx - the cx from which to start iterating
-// top_cx - should be same as root_cx, so iterating func knows the top cx
-// leave_top - if 1, do not call callback_func for the top level cx
-static void app_intrf_cx_children_iterate(
-    APP_INTRF *app_intrf, CX *root_cx, CX *top_cx, unsigned int leave_top,
-    void(callback_func)(APP_INTRF *app_intrf, CX *cur_cx)) {
-
-    if (!root_cx)
+// free cur_cx and its whole subtree, post-order: each child's subtree first,
+// then unlink cur_cx from its parent, drop it from the hashtable, and free it.
+// freeing a child removes it from cur_cx->cx_children (shifting the rest down),
+// so we keep freeing index 0 until the array is empty.
+static void cx_subtree_free(APP_INTRF *app_intrf, CX *cur_cx) {
+    if (!app_intrf || !cur_cx)
         return;
-    //init_count is necessary in case the callback_func changes the cx_children.count
-    //for example when the cx are being removed with the callback_func
-    unsigned int init_count = root_cx->cx_children.count;
-    unsigned int iter = 0;
-    while(iter < root_cx->cx_children.count){
-        CX *cur_cx = root_cx->cx_children.contexts[iter];
-        unsigned int go_inside = 1;
-
-        if (go_inside == 1)
-            app_intrf_cx_children_iterate(app_intrf, cur_cx, top_cx, leave_top,
-                                          callback_func);
-
-        iter += 1;
-        if(init_count != root_cx->cx_children.count){
-            iter = 0;
-            init_count = root_cx->cx_children.count;
-        }
-    }
-    
-    // dont run the callback_func on the top cx
-    if(leave_top == 1 && root_cx == top_cx)
-        return;
-    callback_func(app_intrf, root_cx);
+    while (cur_cx->cx_children.count > 0)
+        cx_subtree_free(app_intrf, cur_cx->cx_children.contexts[0]);
+    app_intrf_cx_children_pop(app_intrf, cur_cx);
 }
 
-//TEMP FUNC for testing
-//print the ContextId per context
-static void print_id_gen(APP_INTRF* app_intrf, CX* cur_cx){
-    printf("key: %"PRIu64"\n", cur_cx->data_id);
+// re-sync parent_cx's direct children against the data layer, by identity:
+//  - free the subtree of each CX whose data child is gone,
+//  - create a CX (and materialise its subtree) for each data child not present,
+//  - leave the rest untouched, so their ContextIds stay valid.
+// only touches one level; deeper changes arrive as their own events.
+static void app_intrf_cx_resync(APP_INTRF *app_intrf, CX *parent_cx) {
+    if (!app_intrf || !parent_cx)
+        return;
+
+    size_t n = data_child_count(&parent_cx->data);
+
+    // pass 1: drop CX whose data child is gone. walk backwards so the index
+    // shift on removal does not make us skip an entry.
+    for (int i = (int)parent_cx->cx_children.count - 1; i >= 0; i--) {
+        CX *child = parent_cx->cx_children.contexts[i];
+        bool still_there = false;
+        for (size_t j = 0; j < n && !still_there; j++) {
+            DataObject dobj;
+            if (data_child_at(&parent_cx->data, j, &dobj) &&
+                data_id(&dobj) == child->data_id)
+                still_there = true;
+        }
+        if (!still_there)
+            cx_subtree_free(app_intrf, child);
+    }
+
+    // pass 2: create CX for data children not yet materialised.
+    for (size_t j = 0; j < n; j++) {
+        DataObject dobj;
+        if (!data_child_at(&parent_cx->data, j, &dobj))
+            continue;
+        ContextId cid = data_id(&dobj);
+        bool have = false;
+        for (unsigned int i = 0;
+             i < parent_cx->cx_children.count && !have; i++)
+            if (parent_cx->cx_children.contexts[i]->data_id == cid)
+                have = true;
+        if (have)
+            continue;
+        CX *created = app_intrf_cx_create(app_intrf, parent_cx, dobj);
+        if (created)
+            app_intrf_cx_children_create(app_intrf, created);
+    }
+}
+
+// drain the data layer's event queue and reconcile the CX tree. synchronous:
+// once this returns the tree matches the data layer.
+static void app_intrf_process_data_events(APP_INTRF *app_intrf) {
+    if (!app_intrf || !app_intrf->data_poll_event)
+        return;
+    DataEvent ev;
+    while (app_intrf->data_poll_event(app_intrf->main_user_data, &ev)) {
+        CX *cx = ht_get(app_intrf->cx_hashtable, ev.id);
+        if (!cx)
+            continue; // not materialised (or already gone) - nothing to do
+        switch (ev.type) {
+        case DATA_EVENT_CHILDREN_CHANGED:
+            app_intrf_cx_resync(app_intrf, cx);
+            break;
+        case DATA_EVENT_CHANGED:
+            // presentation-only; nav_cx_name_return reads live so there is
+            // nothing structural to do. Phase E will forward this to the ui.
+            break;
+        }
+    }
 }
 
 void app_intrf_destroy(APP_INTRF *app_intrf) {
@@ -607,33 +644,12 @@ void app_intrf_destroy(APP_INTRF *app_intrf) {
     if (app_intrf->data_destroy)
         app_intrf->data_destroy(app_intrf->main_user_data);
 
-    //TEMP FOR TESTING printout all contexts ids and gens
-    app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root, app_intrf->cx_root, 0, print_id_gen);
-    // remove the cx structure
-    app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root,
-                                  app_intrf->cx_root, 0,
-                                  app_intrf_cx_children_pop);
+    // remove the cx structure (cx_root has no parent - pop just frees it)
+    if (app_intrf->cx_root)
+        cx_subtree_free(app_intrf, app_intrf->cx_root);
 
     ht_destroy(app_intrf->cx_hashtable, NULL);
     free(app_intrf);
-}
-
-// Check if cur_cx is dirty, if it is, remove and create its children
-static void app_intrf_cx_check_dirty(APP_INTRF *app_intrf, CX *cur_cx) {
-    if (!app_intrf)
-        return;
-    if (!cur_cx)
-        return;
-    // check if the context is dirty
-    if (!app_intrf->data_is_dirty(&cur_cx->data))
-        return;
-    // if it is remove all children recursively
-    // but leave the cur_cx context
-    app_intrf_cx_children_iterate(app_intrf, cur_cx, cur_cx, 1,
-                                  app_intrf_cx_children_pop);
-    // create the children inside cur_cx again. recreated objects carry fresh
-    // data-layer uids, so their ContextIds cannot collide with the removed ones.
-    app_intrf_cx_children_create(app_intrf, cur_cx);
 }
 
 // functions for the ui layer
@@ -642,10 +658,7 @@ void nav_update(APP_INTRF *app_intrf) {
         return;
     if (app_intrf->data_update)
         app_intrf->data_update(app_intrf->main_user_data);
-    // iterate the whole structure and check if any CX are dirty
-    app_intrf_cx_children_iterate(app_intrf, app_intrf->cx_root,
-                                  app_intrf->cx_root, 0,
-                                  app_intrf_cx_check_dirty);
+    app_intrf_process_data_events(app_intrf);
 }
 
 ContextId nav_cx_root_return(APP_INTRF* app_intrf){

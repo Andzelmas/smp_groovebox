@@ -2,6 +2,7 @@
 #include "structs.h"
 #include "types.h"
 #include "data_object.h"
+#include "data_events.h"
 #include <stdatomic.h>
 // sampler context
 #include "contexts/sampler.h"
@@ -24,11 +25,9 @@ typedef struct _app_info APP_INFO;
 // void*, kept by the caller for app_data_update / app_stop_and_clean.
 DataObject app_init(void);
 
-// check if the data behind obj is no longer in sync and the context (and its
-// children) needs to be recreated.
-// TEMPORARY BRIDGE: this still dispatches on the ops table inside app_data.c.
-// It will be replaced by a generation / removal notification system.
-bool app_data_is_dirty(const DataObject *obj);
+// pop the next queued data event into *out. returns false when the queue is
+// empty. drained by the context layer once per nav_update, after app_data_update.
+bool app_data_poll_event(void *root_user_data, DataEvent *out);
 
 // Reads the rt_to_ui buffer and saves any context param values to their
 // ui_params arrays. Might do some additional updating. root_user_data is the
