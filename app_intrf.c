@@ -343,14 +343,10 @@ typedef struct _cx_array{
     struct _cx **contexts;
 } CX_ARRAY;
 
-typedef struct _cx_uniqueid{
-    uint32_t id;
-    uint32_t gen;
-    uint64_t key;
-}CX_ID;
-
 typedef struct _cx {
-    CX_ID uid; //unique context id
+    // identity minted by the data layer, stable for this object's lifetime.
+    // also the hash table key.
+    ContextId data_id;
     int idx; // index number of this CX in the cx_parent cx_children array
     // the data layer object this cx represents. ops is static, user_data is
     // borrowed and MUST NOT be freed or modified here. The display name is not
@@ -364,8 +360,7 @@ typedef struct _cx {
 
 typedef struct _app_intrf {
     CX *cx_root;
-    CX_ID next_uid; //uniqueid for the next context
-    HashTable* cx_hashtable; //hash table that links cx_id->key to a context
+    HashTable* cx_hashtable; //hash table that links ContextId -> CX*
 
     void *main_user_data; // the root DataObject's user_data, kept for the
                           // data_update / data_destroy calls
@@ -422,7 +417,7 @@ static void app_intrf_cx_children_pop(APP_INTRF* app_intrf, CX* cx_rem){
 
     //remove the cx_rem
     if(cx_rem->cx_children.contexts)free(cx_rem->cx_children.contexts);
-    ht_remove(app_intrf->cx_hashtable, cx_rem->uid.key);
+    ht_remove(app_intrf->cx_hashtable, cx_rem->data_id);
     free(cx_rem);
 
 }
@@ -472,14 +467,16 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     if (!data_obj_valid(&data))
         return NULL;
 
+    ContextId cx_id = data_id(&data);
+    if (cx_id == CONTEXT_ID_NULL)
+        return NULL; // every context must have an identity from the data layer
+    ASSERT_CTXID(cx_id); // debug: a well-formed id carries a non-zero namespace
+
     CX *new_cx = calloc(1, sizeof(CX));
     if (!new_cx)
         return NULL;
 
-    new_cx->uid.id = app_intrf->next_uid.id;
-    new_cx->uid.gen = app_intrf->next_uid.gen;
-    new_cx->uid.key = ht_make_key(new_cx->uid.id, new_cx->uid.gen);
-    app_intrf->next_uid.id += 1;
+    new_cx->data_id = cx_id;
     new_cx->cx_children.contexts = NULL;
     new_cx->cx_children.count = 0;
     new_cx->cx_children.count_max = PTR_ARRAY_COUNT;
@@ -496,7 +493,7 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     }
 
     // put the new CX into the hashtable
-    if(ht_set(app_intrf->cx_hashtable, new_cx->uid.key, (void*)new_cx) != 0){
+    if(ht_set(app_intrf->cx_hashtable, new_cx->data_id, (void*)new_cx) != 0){
         app_intrf_cx_children_pop(app_intrf, new_cx);
         return NULL;
     }
@@ -536,8 +533,6 @@ APP_INTRF *app_intrf_init() {
     app_intrf->data_is_dirty = app_data_is_dirty;
     app_intrf->data_destroy = app_stop_and_clean;
     //--------------------------------------------------
-    app_intrf->next_uid.gen = 0;
-    app_intrf->next_uid.id = 1;
     app_intrf->cx_hashtable = ht_create(32);
     if(!app_intrf->cx_hashtable){
         app_intrf_destroy(app_intrf);
@@ -600,9 +595,9 @@ static void app_intrf_cx_children_iterate(
 }
 
 //TEMP FUNC for testing
-//print the id and gen per context
+//print the ContextId per context
 static void print_id_gen(APP_INTRF* app_intrf, CX* cur_cx){
-    printf("key: %"PRIu64"\n", cur_cx->uid.key);
+    printf("key: %"PRIu64"\n", cur_cx->data_id);
 }
 
 void app_intrf_destroy(APP_INTRF *app_intrf) {
@@ -633,12 +628,11 @@ static void app_intrf_cx_check_dirty(APP_INTRF *app_intrf, CX *cur_cx) {
     if (!app_intrf->data_is_dirty(&cur_cx->data))
         return;
     // if it is remove all children recursively
-    // but leave the cur_cx context 
+    // but leave the cur_cx context
     app_intrf_cx_children_iterate(app_intrf, cur_cx, cur_cx, 1,
                                   app_intrf_cx_children_pop);
-    // create the children inside cur_cx again
-    app_intrf->next_uid.gen += 1;
-    app_intrf->next_uid.id = 1;
+    // create the children inside cur_cx again. recreated objects carry fresh
+    // data-layer uids, so their ContextIds cannot collide with the removed ones.
     app_intrf_cx_children_create(app_intrf, cur_cx);
 }
 
@@ -654,17 +648,17 @@ void nav_update(APP_INTRF *app_intrf) {
                                   app_intrf_cx_check_dirty);
 }
 
-uint64_t nav_cx_root_return(APP_INTRF* app_intrf){
-    if(!app_intrf)return 0;
+ContextId nav_cx_root_return(APP_INTRF* app_intrf){
+    if(!app_intrf)return CONTEXT_ID_NULL;
 
-    return app_intrf->cx_root->uid.key; 
+    return app_intrf->cx_root->data_id;
 }
 
-bool nav_cx_is_valid(APP_INTRF *app_intrf, uint64_t context) {
+bool nav_cx_is_valid(APP_INTRF *app_intrf, ContextId context) {
     if (!app_intrf)
         return false;
 
-    if (context == 0)
+    if (context == CONTEXT_ID_NULL)
         return false;
 
     CX *cx = ht_get(app_intrf->cx_hashtable, context);
@@ -672,12 +666,12 @@ bool nav_cx_is_valid(APP_INTRF *app_intrf, uint64_t context) {
     return cx != NULL;
 }
 
-const char *nav_cx_name_return(APP_INTRF *app_intrf, uint64_t context)
+const char *nav_cx_name_return(APP_INTRF *app_intrf, ContextId context)
 {
     if (!app_intrf)
         return NULL;
 
-    if (context == 0)
+    if (context == CONTEXT_ID_NULL)
         return NULL;
 
     CX *cx = ht_get(app_intrf->cx_hashtable, context);
@@ -691,12 +685,12 @@ const char *nav_cx_name_return(APP_INTRF *app_intrf, uint64_t context)
     return data_name(&cx->data);
 }
 
-size_t nav_cx_children_count(APP_INTRF *app_intrf, uint64_t context)
+size_t nav_cx_children_count(APP_INTRF *app_intrf, ContextId context)
 {
     if (!app_intrf)
         return 0;
 
-    if (context == 0)
+    if (context == CONTEXT_ID_NULL)
         return 0;
 
     CX *cx = ht_get(app_intrf->cx_hashtable, context);
@@ -707,46 +701,44 @@ size_t nav_cx_children_count(APP_INTRF *app_intrf, uint64_t context)
     return (size_t)cx->cx_children.count;
 }
 
-uint64_t nav_cx_child_at(APP_INTRF *app_intrf, uint64_t parent,
+ContextId nav_cx_child_at(APP_INTRF *app_intrf, ContextId parent,
                           size_t index)
 {
-    if (!app_intrf) return 0;
+    if (!app_intrf) return CONTEXT_ID_NULL;
 
-    if (parent == 0)
-        return 0;
+    if (parent == CONTEXT_ID_NULL)
+        return CONTEXT_ID_NULL;
 
     CX *parent_cx = ht_get(app_intrf->cx_hashtable, parent);
 
     if (!parent_cx)
-        return 0;
+        return CONTEXT_ID_NULL;
 
     if (index >= parent_cx->cx_children.count)
-        return 0;
+        return CONTEXT_ID_NULL;
 
     CX *child = parent_cx->cx_children.contexts[index];
 
     if (!child)
-        return 0;
+        return CONTEXT_ID_NULL;
 
-    return child->uid.key;
+    return child->data_id;
 }
 
-uint64_t
-nav_cx_parent_return(APP_INTRF *app_intrf, uint64_t context)
-{
+ContextId nav_cx_parent_return(APP_INTRF *app_intrf, ContextId context) {
     if (!app_intrf)
-        return 0;
+        return CONTEXT_ID_NULL;
 
-    if (context == 0)
-        return 0;
+    if (context == CONTEXT_ID_NULL)
+        return CONTEXT_ID_NULL;
 
     CX *cx = ht_get(app_intrf->cx_hashtable, context);
 
     if (!cx)
-        return 0;
+        return CONTEXT_ID_NULL;
 
     if (!cx->cx_parent)
-        return 0;
+        return CONTEXT_ID_NULL;
 
-    return cx->cx_parent->uid.key;
+    return cx->cx_parent->data_id;
 }

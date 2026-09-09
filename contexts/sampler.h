@@ -45,6 +45,9 @@ void* smp_sample_return(SMP_INFO* smp_data, unsigned int idx);
 //smp_sample_return. The string is owned by the sample and stays valid until the
 //sample is removed. Returns NULL on error.
 const char* smp_sample_name(void* smp);
+//return the sample's monotonic identity uid (0 on error). Assigned at load,
+//never reused for a different sample.
+uint32_t smp_sample_uid(void* smp);
 //return (and clear) whether the samples array changed since the last call
 bool smp_samples_is_dirty(SMP_INFO* smp_data);
 //stop processing the sample and remove it

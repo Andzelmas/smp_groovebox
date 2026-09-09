@@ -184,27 +184,56 @@ static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
  * file adapts it.
  * ------------------------------------------------------------------------- */
 
-// plain container with a constant name and no children (Trk).
-// user_data is the display name string itself.
-static size_t leaf_container_child_count(void *user_data) {
+/* Identity composition. A ContextId is 8 bits of namespace (which module /
+ * whether it is a singleton) in the top byte, plus a local part below: a
+ * fixed constant for singletons, a module uid for the rest. app_data is the
+ * only place this is assembled; every layer above treats the ContextId as
+ * opaque. Namespaces start at 1 so a real id always has a non-zero namespace. */
+enum {
+    DATA_NS_SINGLETON = 1,
+    DATA_NS_SAMPLE = 2,
+    DATA_NS_LV2_PLUG = 3,
+    DATA_NS_CLAP_PLUG = 4,
+    DATA_NS_SYNTH_OSC = 5,
+};
+#define MAKE_ID(ns, local)                                                      \
+    (((ContextId)(ns) << CTXID_NS_SHIFT) | (ContextId)(uint32_t)(local))
+
+// local part for the DATA_NS_SINGLETON namespace (one per singleton context)
+enum {
+    SID_ROOT = 1,
+    SID_SAMPLER,
+    SID_LV2_LIST,
+    SID_CLAP_LIST,
+    SID_SYNTH,
+    SID_TRK,
+};
+
+// the Trk container: constant name, no children. user_data is unused.
+static size_t trk_child_count(void *user_data) {
     (void)user_data;
     return 0;
 }
-static bool leaf_container_child_at(void *user_data, size_t idx,
-                                    DataObject *out) {
+static bool trk_child_at(void *user_data, size_t idx, DataObject *out) {
     (void)user_data;
     (void)idx;
     (void)out;
     return false;
 }
-static const char *leaf_container_name(void *user_data) {
-    return (const char *)user_data;
+static const char *trk_name(void *user_data) {
+    (void)user_data;
+    return TRK_NAME;
 }
-static const DataOps leaf_container_ops = {
+static ContextId trk_id(void *user_data) {
+    (void)user_data;
+    return MAKE_ID(DATA_NS_SINGLETON, SID_TRK);
+}
+static const DataOps trk_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
-    .child_count = leaf_container_child_count,
-    .child_at = leaf_container_child_at,
-    .name = leaf_container_name,
+    .id = trk_id,
+    .child_count = trk_child_count,
+    .child_at = trk_child_at,
+    .name = trk_name,
 };
 
 // single loaded sample. user_data is the SMP_SMP* from smp_sample_return.
@@ -218,9 +247,13 @@ static bool sample_child_at(void *user_data, size_t idx, DataObject *out) {
     (void)out;
     return false;
 }
+static ContextId sample_id(void *user_data) {
+    return MAKE_ID(DATA_NS_SAMPLE, smp_sample_uid(user_data));
+}
 // smp_sample_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps sample_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = sample_id,
     .child_count = sample_child_count,
     .child_at = sample_child_at,
     .name = smp_sample_name,
@@ -245,8 +278,13 @@ static const char *sampler_name(void *user_data) {
     (void)user_data;
     return SAMPLER_NAME;
 }
+static ContextId sampler_id(void *user_data) {
+    (void)user_data;
+    return MAKE_ID(DATA_NS_SINGLETON, SID_SAMPLER);
+}
 static const DataOps sampler_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = sampler_id,
     .child_count = sampler_child_count,
     .child_at = sampler_child_at,
     .name = sampler_name,
@@ -263,9 +301,13 @@ static bool lv2_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
     (void)out;
     return false;
 }
+static ContextId lv2_plugin_id(void *user_data) {
+    return MAKE_ID(DATA_NS_LV2_PLUG, plug_plugin_uid(user_data));
+}
 // plug_plugin_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps lv2_plugin_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = lv2_plugin_id,
     .child_count = lv2_plugin_child_count,
     .child_at = lv2_plugin_child_at,
     .name = plug_plugin_name,
@@ -290,8 +332,13 @@ static const char *lv2_plugins_name(void *user_data) {
     (void)user_data;
     return PLUGINS_LV2_NAME;
 }
+static ContextId lv2_plugins_id(void *user_data) {
+    (void)user_data;
+    return MAKE_ID(DATA_NS_SINGLETON, SID_LV2_LIST);
+}
 static const DataOps lv2_plugins_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = lv2_plugins_id,
     .child_count = lv2_plugins_child_count,
     .child_at = lv2_plugins_child_at,
     .name = lv2_plugins_name,
@@ -309,9 +356,13 @@ static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
     (void)out;
     return false;
 }
+static ContextId clap_plugin_id(void *user_data) {
+    return MAKE_ID(DATA_NS_CLAP_PLUG, clap_plug_plugin_uid(user_data));
+}
 // clap_plug_plugin_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps clap_plugin_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = clap_plugin_id,
     .child_count = clap_plugin_child_count,
     .child_at = clap_plugin_child_at,
     .name = clap_plug_plugin_name,
@@ -338,8 +389,13 @@ static const char *clap_plugins_name(void *user_data) {
     (void)user_data;
     return PLUGINS_CLAP_NAME;
 }
+static ContextId clap_plugins_id(void *user_data) {
+    (void)user_data;
+    return MAKE_ID(DATA_NS_SINGLETON, SID_CLAP_LIST);
+}
 static const DataOps clap_plugins_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = clap_plugins_id,
     .child_count = clap_plugins_child_count,
     .child_at = clap_plugins_child_at,
     .name = clap_plugins_name,
@@ -357,9 +413,13 @@ static bool osc_child_at(void *user_data, size_t idx, DataObject *out) {
     (void)out;
     return false;
 }
+static ContextId osc_id(void *user_data) {
+    return MAKE_ID(DATA_NS_SYNTH_OSC, synth_osc_uid(user_data));
+}
 // synth_osc_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps osc_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = osc_id,
     .child_count = osc_child_count,
     .child_at = osc_child_at,
     .name = synth_osc_name,
@@ -382,8 +442,13 @@ static const char *synth_name(void *user_data) {
     (void)user_data;
     return SYNTH_NAME;
 }
+static ContextId synth_id(void *user_data) {
+    (void)user_data;
+    return MAKE_ID(DATA_NS_SINGLETON, SID_SYNTH);
+}
 static const DataOps synth_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = synth_id,
     .child_count = synth_child_count,
     .child_at = synth_child_at,
     .name = synth_name,
@@ -416,8 +481,8 @@ static bool root_child_at(void *user_data, size_t idx, DataObject *out) {
         out->user_data = app_data->synth_data;
         return true;
     case 4:
-        out->ops = &leaf_container_ops;
-        out->user_data = (void *)TRK_NAME;
+        out->ops = &trk_ops;
+        out->user_data = app_data->trk_jack;
         return true;
     default:
         return false;
@@ -427,8 +492,13 @@ static const char *root_name(void *user_data) {
     (void)user_data;
     return APP_NAME;
 }
+static ContextId root_id(void *user_data) {
+    (void)user_data;
+    return MAKE_ID(DATA_NS_SINGLETON, SID_ROOT);
+}
 static const DataOps root_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = root_id,
     .child_count = root_child_count,
     .child_at = root_child_at,
     .name = root_name,

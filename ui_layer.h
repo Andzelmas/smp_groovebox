@@ -3,11 +3,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
+#include "ids.h"
 
-// contextid cannot be 0
-#define CONTEXT_ID_INVALID 0
+// ContextId cannot be 0; kept as an alias for the shared sentinel
+#define CONTEXT_ID_INVALID CONTEXT_ID_NULL
 
-typedef uint64_t ContextId;
 typedef uint32_t UiPurpose;
 
 typedef struct _ui_target_list UI_TARGET_LIST;

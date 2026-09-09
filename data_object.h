@@ -1,14 +1,15 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include "ids.h"
 
 // The contract shared by the data layer (app_data.c) and the context layer
 // (app_intrf.c). The data layer describes each piece of program state as a
 // DataObject: an opaque handle plus a static table of operations. The context
 // layer never switches on a type tag, it only calls through the ops table.
 //
-// This header has no dependency on the rest of the program on purpose, so the
-// context/ui layers can be reused with a different data layer.
+// This header depends only on ids.h (also dependency-free), so the context/ui
+// layers can be reused with a different data layer.
 
 typedef struct DataObject DataObject;
 typedef struct DataOps DataOps;
@@ -28,6 +29,11 @@ typedef enum {
 struct DataOps {
     // bitmask of DataCapabilities
     unsigned int capabilities;
+
+    // MANDATORY (not capability-gated). Return this object's identity: stable
+    // while the object lives, program-unique, and never reused for a different
+    // object. Must not return CONTEXT_ID_NULL.
+    ContextId (*id)(void *user_data);
 
     // DATA_CAP_CHILDREN
     // how many children this object currently has
@@ -83,4 +89,10 @@ static inline const char *data_name(const DataObject *obj) {
     if (!data_obj_has(obj, DATA_CAP_NAME) || !obj->ops->name)
         return NULL;
     return obj->ops->name(obj->user_data);
+}
+
+static inline ContextId data_id(const DataObject *obj) {
+    if (!data_obj_valid(obj) || !obj->ops->id)
+        return CONTEXT_ID_NULL;
+    return obj->ops->id(obj->user_data);
 }

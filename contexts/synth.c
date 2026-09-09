@@ -145,7 +145,7 @@ typedef struct _synth_data{
     //Synth_Osc 0 is reserved for the metronome
     SYNTH_OSC* osc_array;
     //how many oscilators we have
-    unsigned int num_osc;
+    size_t num_osc;
     //midi container that holds the notes, velocities etc.
     JACK_MIDI_CONT* midi_cont;
     //this is the audio backend object to send to the audio functions
@@ -242,7 +242,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	return NULL;
     }
     //fill the semitone to frequency multiplier convert table with values
-    for(int i = 0; i < math_range_table_get_len(synth_data->semi_to_freq_table); i++){
+    for(unsigned int i = 0; i < math_range_table_get_len(synth_data->semi_to_freq_table); i++){
 	PARAM_T cur_semitones = math_range_table_get_value(synth_data->semi_to_freq_table, i);
 	PARAM_T cur_freq_ratio = exp_range_ratio(12.0, cur_semitones);
 	math_range_table_enter_value(synth_data->semi_to_freq_table, i, cur_freq_ratio);
@@ -254,7 +254,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	return NULL;
     }
     //fill the midivel to amp table with values
-    for(int i = 0; i < math_range_table_get_len(synth_data->log_curve); i++){
+    for(unsigned int i = 0; i < math_range_table_get_len(synth_data->log_curve); i++){
 	PARAM_T cur_val = math_range_table_get_value(synth_data->log_curve, i);
 	PARAM_T cur_log = 0.0;
 	if(cur_val > 0.0){
@@ -271,7 +271,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	return NULL;
     }
     //fill the amp exponential table
-    for(int i = 0; i < math_range_table_get_len(synth_data->amp_to_exp); i++){
+    for(unsigned int i = 0; i < math_range_table_get_len(synth_data->amp_to_exp); i++){
 	PARAM_T cur_amp = math_range_table_get_value(synth_data->amp_to_exp, i);
 	PARAM_T cur_exp = pow(2.0, cur_amp * (10.0) - 10.0);
 	if(cur_amp == 0) cur_exp = 0.0;
@@ -314,7 +314,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
         synth_clean_memory(synth_data);
         return NULL;
     }
-    for (int i = 0; i < synth_data->num_osc; i++) {
+    for (unsigned int i = 0; i < synth_data->num_osc; i++) {
         SYNTH_OSC *cur_osc = &(synth_data->osc_array[i]);
         cur_osc->synth_data = synth_data;
         cur_osc->name = NULL;
@@ -347,7 +347,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	    synth_clean_memory(synth_data);
 	    return NULL;
 	}
-	sprintf(cur_osc->name, "Osc_%u", i);
+	snprintf(cur_osc->name, 6, "Osc_%u", i);
 	
 	//create the oscillator ports
 	cur_osc->num_ports = SYNTH_OUTS + SYNTH_IN_MIDI;
@@ -357,7 +357,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	    return NULL;
 	}
 
-	for(int j = 0; j < cur_osc->num_ports; j++){
+	for(unsigned int j = 0; j < cur_osc->num_ports; j++){
 	    SYNTH_PORT* cur_port = &(cur_osc->ports[j]);
 	    
 	    unsigned int name_len = strlen(cx_name);
@@ -373,7 +373,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 		    synth_clean_memory(synth_data);
 		    return NULL;
 		}
-		sprintf(cur_port->port_name, "%s|%s|midi_in", cx_name, cur_osc->name, i);
+		snprintf(cur_port->port_name, name_len, "%s|%s|midi_in", cx_name, cur_osc->name);
 	    }
 	    if(j==1){
 		cur_port->port_flow = PORT_FLOW_OUTPUT;
@@ -384,7 +384,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 		    synth_clean_memory(synth_data);
 		    return NULL;
 		}
-		sprintf(cur_port->port_name, "%s|%s|out_L", cx_name, cur_osc->name, i);
+		snprintf(cur_port->port_name, name_len, "%s|%s|out_L", cx_name, cur_osc->name);
 	    }
 	    if(j==2){
 		cur_port->port_flow = PORT_FLOW_OUTPUT;
@@ -395,7 +395,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 		    synth_clean_memory(synth_data);
 		    return NULL;
 		}
-		sprintf(cur_port->port_name, "%s|%s|out_R", cx_name, cur_osc->name, i);
+		snprintf(cur_port->port_name, name_len, "%s|%s|out_R", cx_name, cur_osc->name);
 	    }
 	}
 	
@@ -408,7 +408,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 		synth_clean_memory(synth_data);
 		return NULL;
 	    }
-	    sprintf(cur_osc->name, "Mtr");
+	    snprintf(cur_osc->name, 4, "Mtr");
 	    //change the ports
 	    synth_clean_ports(synth_data, &(cur_osc->ports), cur_osc->num_ports);
 	    cur_osc->num_ports = SYNTH_OUTS;
@@ -418,7 +418,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 		return NULL;
 	    }
 
-	    for(int j = 0; j < cur_osc->num_ports; j++){
+	    for(unsigned int j = 0; j < cur_osc->num_ports; j++){
 		SYNTH_PORT* cur_port = &(cur_osc->ports[j]);
 		cur_port->id = j;
 		unsigned int name_len = strlen(cx_name);
@@ -432,7 +432,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 			synth_clean_memory(synth_data);
 			return NULL;
 		    }
-		    sprintf(cur_port->port_name, "%s|%s|out_L", cx_name, cur_osc->name);
+		    snprintf(cur_port->port_name, name_len, "%s|%s|out_L", cx_name, cur_osc->name);
 		}
 		if(j==1){
 		    cur_port->port_flow = PORT_FLOW_OUTPUT;
@@ -443,7 +443,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 			synth_clean_memory(synth_data);
 			return NULL;
 		    }
-		    sprintf(cur_port->port_name, "%s|%s|out_R", cx_name, cur_osc->name);
+		    snprintf(cur_port->port_name, name_len, "%s|%s|out_R", cx_name, cur_osc->name);
 		}
 	    }
 	}
@@ -453,7 +453,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	    synth_clean_memory(synth_data);
 	    return NULL;
 	}
-	for(int j = 0; j < cur_osc->num_voices; j++){
+	for(unsigned int j = 0; j < cur_osc->num_voices; j++){
 	    SYNTH_VOICE* cur_voice = &(cur_osc->osc_voices[j]);
 	    cur_voice->vco_amp_L = params_init_interpolated_val(1.0, (unsigned int)(0.002 * synth_data->samplerate));
 	    cur_voice->vco_amp_R = params_init_interpolated_val(1.0, (unsigned int)(0.002 * synth_data->samplerate));
@@ -471,8 +471,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 
 	cur_osc->params = params_init_param_container(10, (char* [10]){"Amp", "Freq", "Spread", "Wobble", "Octave", "Table", "A", "D", "S", "R"},
 						      (PARAM_T [10]){0.8, 0, 0, 0, 0, 0, 0.0, 0.0, 1.0, 0.001},
-						      (PARAM_T [10]){0.00001, -12, 0, 0, ((MAX_SEMITONES - 12)/12)*-1, 0, 0.0, 0.0, 0.0, 0.0},
-						      (PARAM_T [10]){1, 12, 1, 1, (MAX_SEMITONES - 12)/12, 3, 5.0, 5.0, 1.0, 5.0},
+						      (PARAM_T [10]){0.00001, -12, 0, 0, ((MAX_SEMITONES - 12) / 12.0) * -1, 0, 0.0, 0.0, 0.0, 0.0},
+						      (PARAM_T [10]){1, 12, 1, 1, (MAX_SEMITONES - 12) / 12.0, 3, 5.0, 5.0, 1.0, 5.0},
 						      (PARAM_T [10]){0.01, 0.1, 0.01, 0.05, 1, 1, 0.1, 0.1, 0.01, 0.1},
 						      (unsigned char [10]){DB_Return_Type, Float_type, Float_type, Float_type, Int_type, String_Return_Type,
 							  Curve_Float_Return_Type, Curve_Float_Return_Type, Float_type, Curve_Float_Return_Type},
@@ -502,7 +502,7 @@ int synth_activate_backend_ports(SYNTH_DATA* synth_data, SYNTH_OSC* osc){
     if(!synth_data)return -1;
     if(!synth_data->audio_backend)return -1;
     if(!osc->ports)return -1;
-    for(int i = 0; i < osc->num_ports; i++){
+    for(unsigned int i = 0; i < osc->num_ports; i++){
 	SYNTH_PORT* cur_port = &(osc->ports[i]);
 	cur_port->sys_port = app_jack_create_port_on_client(synth_data->audio_backend, cur_port->port_type,
 								cur_port->port_flow, cur_port->port_name);
@@ -613,7 +613,7 @@ static void synth_process_osc_voices(SYNTH_DATA* synth_data, SYNTH_OSC* osc, NFR
     PARAM_T vco_s = param_get_value(osc->params, 8, 0, 0, 1);
     PARAM_T vco_r = param_get_value(osc->params, 9, 1, 0, 1);
 
-    for(int i = 0; i < osc->num_voices; i++){
+    for(unsigned int i = 0; i < osc->num_voices; i++){
 	SYNTH_VOICE* cur_voice = &(osc->osc_voices[i]);
 	if(!cur_voice)continue;
 	if(!cur_voice->osc_table)continue;
@@ -649,7 +649,7 @@ static void synth_process_osc_voices(SYNTH_DATA* synth_data, SYNTH_OSC* osc, NFR
 	midi_amp = math_range_table_convert_value(synth_data->log_curve, midi_amp);
 	
 	//process the wavetable, get buffer
-	for(int j = 0; j < nframes; j++){     
+	for(unsigned int j = 0; j < nframes; j++){     
 	    //add the octaves and semitones
 	    PARAM_T octaves_semitones = octave_in * 12;
 	    PARAM_T freq_final = freq * math_range_table_convert_value(synth_data->semi_to_freq_table, octaves_semitones + freq_in);
@@ -784,7 +784,7 @@ static void synth_stop_osc_rt(SYNTH_OSC* osc, MIDI_DATA_T vel, MIDI_DATA_T note,
     if(!osc->osc_voices)return;
     //go through voices and stop them all or just the voice that was played with the note
     //dont reset the stopped voices, because they will reset themselfs when adsr goes to 0
-    for(int i = 0; i < osc->num_voices; i++){
+    for(unsigned int i = 0; i < osc->num_voices; i++){
 	SYNTH_VOICE* cur_voice = &(osc->osc_voices[i]);
 	if(!cur_voice)continue;
 	if(stop_all == 1){
@@ -827,7 +827,7 @@ int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes){
     if(!synth_data)return -1;
     if(!synth_data->audio_backend)return -1;
     if(!synth_data->osc_array)return -1;
-    if(synth_data->num_osc <=0 ) return -1;
+    if(synth_data->num_osc == 0 ) return -1;
 
     //if there is a metronome process it
     if(synth_data->with_metronome == 1){
@@ -849,7 +849,7 @@ int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes){
     }
 
     //here we process all the oscillators except the metronome, if there is a metronome
-    int i = 0;
+    unsigned int i = 0;
     if(synth_data->with_metronome == 1) i = 1;
     for(; i < synth_data->num_osc; i++){
 	if(i >= synth_data->num_osc) continue;
@@ -859,11 +859,11 @@ int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes){
 	SYNTH_PORT* midi_port = &(cur_osc->ports[0]);
 	void* midi_buffer = app_jack_get_buffer_rt(midi_port->sys_port, nframes);
 	app_jack_return_notes_vels_rt(midi_buffer, synth_data->midi_cont);
-	for(int cur_frame = 0; cur_frame < nframes; cur_frame++){
+	for(unsigned int cur_frame = 0; cur_frame < nframes; cur_frame++){
 	    MIDI_DATA_T this_vel = 0;
 	    MIDI_DATA_T this_type = 0;
 	    MIDI_DATA_T this_pitch = 0;	    
-	    for(int i = 0; i < synth_data->midi_cont->num_events; i++){
+	    for(unsigned int i = 0; i < synth_data->midi_cont->num_events; i++){
 		if(synth_data->midi_cont->nframe_nums[i] != cur_frame)continue;
 		this_vel = synth_data->midi_cont->vel_trig[i];
 		this_type = synth_data->midi_cont->types[i];
@@ -902,6 +902,14 @@ const char* synth_osc_name(void* osc){
     return cur_osc->name;
 }
 
+uint32_t synth_osc_uid(void* osc){
+    SYNTH_OSC* cur_osc = (SYNTH_OSC*)osc;
+    if(!cur_osc)return 0;
+    //oscillators are fixed at init and never removed, so the slot number is a
+    //permanent identity on its own - no monotonic counter needed
+    return (uint32_t)(cur_osc->id + 1);
+}
+
 size_t synth_return_osc_num(SYNTH_DATA* synth_data){
     if(!synth_data)return 0;
     return synth_data->num_osc;
@@ -910,7 +918,7 @@ size_t synth_return_osc_num(SYNTH_DATA* synth_data){
 static int synth_clean_ports(SYNTH_DATA* synth_data, SYNTH_PORT** osc_ports, unsigned int num_ports){
     if(!synth_data)return -1;
     if(!osc_ports)return -1;
-    for(int i = 0; i < num_ports; i++){
+    for(unsigned int i = 0; i < num_ports; i++){
 	SYNTH_PORT* ports = *osc_ports;
 	SYNTH_PORT* cur_port = &(ports[i]);
 	if(cur_port->port_name)free(cur_port->port_name);
@@ -928,7 +936,7 @@ static int synth_clean_osc(SYNTH_DATA* synth_data, SYNTH_OSC* synth_osc){
     if(synth_osc->params)param_clean_param_container(synth_osc->params);
     synth_osc->params = NULL;
     if(synth_osc->osc_voices){
-	for(int i = 0; i < synth_osc->num_voices; i++){
+	for(unsigned int i = 0; i < synth_osc->num_voices; i++){
 	    SYNTH_VOICE* cur_voice = &(synth_osc->osc_voices[i]);
 	    if(cur_voice){
 		if(cur_voice->vco_amp_L)free(cur_voice->vco_amp_L);
@@ -958,7 +966,7 @@ int synth_clean_memory(SYNTH_DATA* synth_data){
 	free(synth_data->midi_cont);
     }
     if(synth_data->osc_array){
-	for(int i = 0; i < synth_data->num_osc; i++){
+	for(unsigned int i = 0; i < synth_data->num_osc; i++){
 	    synth_clean_osc(synth_data, &(synth_data->osc_array[i]));
 	}
 	free(synth_data->osc_array);

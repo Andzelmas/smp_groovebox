@@ -29,6 +29,9 @@ void* synth_osc_return(SYNTH_DATA* synth_data, unsigned int osc_num);
 //return the display name for a handle from synth_osc_return. Owned by the synth,
 //valid while the synth exists. NULL on error.
 const char* synth_osc_name(void* osc);
+//return the oscillator's identity uid (0 on error). Oscillators are fixed, so
+//this is just the (stable) slot number.
+uint32_t synth_osc_uid(void* osc);
 //clean the ports
 static int synth_clean_ports(SYNTH_DATA* synth_data, SYNTH_PORT** osc_ports, unsigned int num_ports);
 //clean one oscillator

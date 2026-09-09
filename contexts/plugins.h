@@ -75,6 +75,10 @@ void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx);
 // is removed. returns NULL on error.
 const char *plug_plugin_name(void *plug);
 
+// return the plugin's monotonic identity uid (0 on error). Assigned at load,
+// never reused for a different plugin.
+uint32_t plug_plugin_uid(void *plug);
+
 // chechk if the plugins array changed (became dirty)
 bool plug_plugins_is_dirty(PLUG_INFO *plug_data);
 

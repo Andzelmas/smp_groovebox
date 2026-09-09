@@ -86,6 +86,10 @@ void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx);
 // is removed. returns NULL on error.
 const char *clap_plug_plugin_name(void *plug);
 
+// return the plugin's monotonic identity uid (0 on error). Assigned at load,
+// never reused for a different plugin.
+uint32_t clap_plug_plugin_uid(void *plug);
+
 // return if the plugins array is dirty - if it changed
 bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data);
 

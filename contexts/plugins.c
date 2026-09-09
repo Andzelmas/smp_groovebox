@@ -243,8 +243,11 @@ typedef struct _plug_plug {
     // if the plugin instance is activated (if it is when cleaning needs to be
     // deactivated
     unsigned int plug_instance_activated;
-    // the instance id to link it to cx
+    // the instance id to link it to cx (slot index, reused)
     int id;
+    // monotonic per-module id, assigned at load, never reused. Identity for the
+    // context/ui layers (see plug_plugin_uid).
+    uint32_t uid;
     // display name, owned by this struct, built once at load by
     // plug_load_and_activate() and handed out by plug_plugin_name()
     char name[PLUG_PLUGIN_NAME_MAX];
@@ -296,6 +299,8 @@ typedef struct _plug_info {
     struct _plug_plug plugins[MAX_INSTANCES];
     // did the plugins array change?
     bool plugins_dirty;
+    // monotonic counter for PLUG_PLUG.uid, never reset
+    uint32_t next_plug_uid;
     // sample_rate
     float sample_rate;
     // block_length
@@ -739,6 +744,7 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
 
     // init the plugin instances to shell
     plug_data->plugins_dirty = false;
+    plug_data->next_plug_uid = 0;
     for (int i = 0; i < MAX_INSTANCES; i++) {
         PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->is_processing = 0;
@@ -1348,6 +1354,8 @@ int plug_load_and_activate(void *plugin_item) {
     lilv_instance_activate(plug->plug_instance);
     plug->plug_instance_activated = 1;
     plug->plug_data = plug_data;
+    // assign the identity uid once, at load
+    plug->uid = ++plug_data->next_plug_uid;
     // build the display name once, now that plug->plug and plug->id are set
     plug_set_display_name(plug);
     // wait for the plugin to start processing
@@ -1383,6 +1391,13 @@ const char *plug_plugin_name(void *plug){
         return NULL;
 
     return cur_plug->name;
+}
+
+uint32_t plug_plugin_uid(void *plug){
+    PLUG_PLUG *cur_plug = (PLUG_PLUG*)plug;
+    if(!cur_plug)
+        return 0;
+    return cur_plug->uid;
 }
 
 bool plug_plugins_is_dirty(PLUG_INFO *plug_data){

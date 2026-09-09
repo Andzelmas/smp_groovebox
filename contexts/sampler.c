@@ -27,8 +27,11 @@
 static thread_local bool is_audio_thread = false;
 
 typedef struct _smp_smp{
-    //the note id, used to link to the cx struct
+    //the note id, used to link to the cx struct (slot index, reused)
     int id;
+    //monotonic per-module id, assigned at load, never reused. Identity for the
+    //context/ui layers (see smp_sample_uid)
+    uint32_t uid;
     //display name, owned by this struct, built once at load by smp_add() and
     //handed out by smp_sample_name()
     char name[SMP_SAMPLE_NAME_MAX];
@@ -89,6 +92,8 @@ typedef struct _smp_info{
     CXCONTROL* control_data;
     //did the samples array change (a sample was added or removed)
     bool samples_dirty;
+    //monotonic counter for SMP_SMP.uid, never reset
+    uint32_t next_smp_uid;
 }SMP_INFO;
 
 //functions for thread safe string messages
@@ -225,6 +230,7 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 	}	
     }
     smp_data->samples_dirty = false;
+    smp_data->next_smp_uid = 0;
     for(int i = 0; i < (MAX_SAMPLES+1); i++){
 	 SMP_SMP* samp = &(smp_data->samples[i]);
 	 samp->buffer = NULL;
@@ -327,6 +333,8 @@ int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
     }
 
     strcpy(cur_smp->file_path, samp_path);
+    //assign the identity uid once, at load
+    cur_smp->uid = ++smp_data->next_smp_uid;
     //build the display name once, now that file_path and id are set
     smp_set_display_name(cur_smp);
     //now this sample can start processing
@@ -464,6 +472,12 @@ const char* smp_sample_name(void* smp){
     if(!cur_smp)return NULL;
     if(!cur_smp->file_path)return NULL;
     return cur_smp->name;
+}
+
+uint32_t smp_sample_uid(void* smp){
+    SMP_SMP* cur_smp = (SMP_SMP*)smp;
+    if(!cur_smp)return 0;
+    return cur_smp->uid;
 }
 
 bool smp_samples_is_dirty(SMP_INFO* smp_data){

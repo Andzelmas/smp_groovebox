@@ -267,10 +267,6 @@ void* ht_remove(HashTable *ht, uint64_t key)
     return NULL;
 }
 
-uint64_t ht_make_key(uint32_t num_1, uint32_t num_2){
-    return ((uint64_t) num_2 << 32) | num_1;
-}
-
 void ht_destroy(HashTable *ht, void(user_destroy_func)(void* user_data))
 {
     if (!ht)

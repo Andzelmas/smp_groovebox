@@ -98,7 +98,11 @@ typedef struct _clap_plug_note_port {
 
 // the single clap plugin struct
 typedef struct _clap_plug_plug {
-    int id; // plugin id on the clap_plug_info plugin array
+    int id; // plugin id on the clap_plug_info plugin array (slot index, reused)
+
+    // monotonic per-module id, assigned at load, never reused. Identity for the
+    // context/ui layers (see clap_plug_plugin_uid).
+    uint32_t uid;
     // display name, owned by this struct, built once at load by
     // clap_plug_load_and_activate() and handed out by clap_plug_plugin_name()
     char name[CLAP_PLUGIN_NAME_MAX];
@@ -152,6 +156,7 @@ typedef struct _clap_plug_info {
     // for the UI.
     struct _clap_plug_plug plugins[MAX_INSTANCES];
     bool plugins_dirty; //did plugins array change?
+    uint32_t next_plug_uid; //monotonic counter for CLAP_PLUG_PLUG.uid, never reset
     SAMPLE_T sample_rate;
     // for clap there can be min and max buffer sizes, for not changing buffer
     // sizes set as the same
@@ -1602,6 +1607,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
 
     // init the plugins array
     plug_data->plugins_dirty = false;
+    plug_data->next_plug_uid = 0;
     for (int i = 0; i < (MAX_INSTANCES); i++) {
         CLAP_PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->clap_host_info = clap_info_host;
@@ -1970,6 +1976,8 @@ int clap_plug_load_and_activate(void* plugin_item) {
         return -1;
     }
 
+    // assign the identity uid once, at load
+    plug->uid = ++plug_data->next_plug_uid;
     // build the display name once, now that plug->plug_inst and plug->id are set
     clap_plug_set_display_name(plug);
 
@@ -2011,6 +2019,13 @@ const char *clap_plug_plugin_name(void *plug){
         return NULL;
 
     return cur_plug->name;
+}
+
+uint32_t clap_plug_plugin_uid(void *plug){
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG*)plug;
+    if(!cur_plug)
+        return 0;
+    return cur_plug->uid;
 }
 
 bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data){

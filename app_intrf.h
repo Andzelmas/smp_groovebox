@@ -1,12 +1,13 @@
 #pragma once
 #include <stdint.h>
 #include "types.h"
+#include "ids.h"
 #include <stdbool.h>
 
 // Interface for building the data layer structure.
 // This structure can be safely presented to the user
-// CX structs are found using unique ids (for the lifetime of the program)
-// and a hash map and links the ids to the cx*
+// CX structs are found by their ContextId (minted by the data layer, stable
+// for the object's lifetime) through a hash map.
 
 // single context struct, that has info like name, user data etc.
 typedef struct _cx CX;
@@ -25,20 +26,20 @@ void app_intrf_destroy(APP_INTRF *app_intrf);
 // all the contexts still represent valid data
 void nav_update(APP_INTRF *app_intrf);
 
-// return the key of the top context, that has no parent
-uint64_t nav_cx_root_return(APP_INTRF *app_intrf);
+// return the ContextId of the top context, that has no parent
+ContextId nav_cx_root_return(APP_INTRF *app_intrf);
 
 // return how many children a context has
-size_t nav_cx_children_count(APP_INTRF *app_intrf, uint64_t context);
+size_t nav_cx_children_count(APP_INTRF *app_intrf, ContextId context);
 
 // return a cx in the index of the parent array
-uint64_t nav_cx_child_at(APP_INTRF *app_intrf, uint64_t parent, size_t index);
+ContextId nav_cx_child_at(APP_INTRF *app_intrf, ContextId parent, size_t index);
 
 // return the parent of the context
-uint64_t nav_cx_parent_return(APP_INTRF *app_intrf, uint64_t context);
+ContextId nav_cx_parent_return(APP_INTRF *app_intrf, ContextId context);
 
 // return the address of the string of the context name
-const char *nav_cx_name_return(APP_INTRF *app_intrf, uint64_t context);
+const char *nav_cx_name_return(APP_INTRF *app_intrf, ContextId context);
 
 // check if the context is valid or not anymore
-bool nav_cx_is_valid(APP_INTRF *app_intrf, uint64_t context);
+bool nav_cx_is_valid(APP_INTRF *app_intrf, ContextId context);
