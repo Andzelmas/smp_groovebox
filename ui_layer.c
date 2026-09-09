@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "ui_layer.h"
 #include "app_intrf.h"
 #include <stdbool.h>

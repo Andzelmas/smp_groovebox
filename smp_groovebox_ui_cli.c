@@ -165,6 +165,7 @@ static size_t helper_nav_context_purpose_set(UI_LAYER* ui_layer, UI_STATE* state
         if(state_main_current_info.child_count > 0){
             UI_TARGET_LIST* selected_target = ui_layer_nav_target_list_begin(state, parent, purpose);
             if (selected_target) {
+
                 size_t return_idx = 0;
                 ContextId cur_purpose = ui_layer_nav_target_list_get(selected_target, 0);
                 for(size_t i = 0; i < state_main_current_info.child_count; i ++){
@@ -185,8 +186,8 @@ static size_t helper_nav_context_purpose_set(UI_LAYER* ui_layer, UI_STATE* state
                     if(new_purpose != CONTEXT_ID_INVALID){
                         helper_target_list_add_reset_on_full(targets, new_purpose);
                     }
-                    return 0;
                     ui_layer_nav_target_list_end(state);
+                    return 0;
                 }
             }
         }
