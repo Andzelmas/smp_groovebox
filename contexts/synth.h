@@ -21,12 +21,14 @@ PRM_CONTAIN* synth_param_return_param_container(SYNTH_DATA* synth_data, int osc_
 
 //activate the audio ports
 int synth_activate_backend_ports(SYNTH_DATA* synth_data, SYNTH_OSC* osc);
-//return the parameter container for the osc_num oscillator
-PRM_CONTAIN* synth_return_param_container(SYNTH_DATA* synth_data, unsigned int osc_num);
-//return the name of the osc_num oscillators
-const char* synth_return_osc_name(SYNTH_DATA* synth_data, unsigned int osc_num);
 //return how many oscillators there are
-int synth_return_osc_num(SYNTH_DATA* synth_data);
+size_t synth_return_osc_num(SYNTH_DATA* synth_data);
+//return the osc_num-th oscillator as an opaque handle (NULL if out of range).
+//borrowed - do not free. Used as the DataObject user_data for one oscillator.
+void* synth_osc_return(SYNTH_DATA* synth_data, unsigned int osc_num);
+//return the display name for a handle from synth_osc_return. Owned by the synth,
+//valid while the synth exists. NULL on error.
+const char* synth_osc_name(void* osc);
 //clean the ports
 static int synth_clean_ports(SYNTH_DATA* synth_data, SYNTH_PORT** osc_ports, unsigned int num_ports);
 //clean one oscillator

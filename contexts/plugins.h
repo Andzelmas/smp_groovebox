@@ -70,7 +70,7 @@ int plug_load_and_activate(void *plugin_item);
 // return user_data for a single plugin
 void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx);
 
-// return the plugin display name ("id_name" format) from user_data.
+// return the plugin display name from user_data.
 // the returned string is owned by the plugin and stays valid until the plugin
 // is removed. returns NULL on error.
 const char *plug_plugin_name(void *plug);

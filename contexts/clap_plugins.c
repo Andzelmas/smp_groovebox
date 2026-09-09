@@ -6,7 +6,6 @@
 #include "../util_funcs/ring_buffer.h"
 #include "../util_funcs/string_funcs.h"
 #include "../util_funcs/uniform_buffer.h"
-#include "../util_funcs/array_utils.h"
 #include "context_control.h"
 #include <clap/clap.h>
 #include <dirent.h>
@@ -100,8 +99,8 @@ typedef struct _clap_plug_note_port {
 // the single clap plugin struct
 typedef struct _clap_plug_plug {
     int id; // plugin id on the clap_plug_info plugin array
-    // display name ("id_pluginname"), owned by this struct, built once at load
-    // by clap_plug_load_and_activate() and handed out by clap_plug_plugin_name()
+    // display name, owned by this struct, built once at load by
+    // clap_plug_load_and_activate() and handed out by clap_plug_plugin_name()
     char name[CLAP_PLUGIN_NAME_MAX];
     char plugin_id[MAX_UNIQUE_ID_STRING]; // unique plugin id that is from the
                                           // clap_plugin_descriptor. Used rarely
@@ -148,12 +147,10 @@ typedef struct _clap_plug_plug {
 
 // the main clap struct
 typedef struct _clap_plug_info {
-    struct _clap_plug_plug
-        plugins[MAX_INSTANCES]; // array with single clap plugins
-    // there can be gaps in the plugins array when plugins are added 
-    // and removed. UI requests plugins by idx, iterating in order 0...n
-    // so this array of loaded plugin indices is necassary for UI
-    unsigned int plugins_idx[MAX_INSTANCES];
+    // array with single clap plugins. there can be gaps (a plugin removed from
+    // the middle); clap_plug_plugin_return() walks the occupied slots in order
+    // for the UI.
+    struct _clap_plug_plug plugins[MAX_INSTANCES];
     bool plugins_dirty; //did plugins array change?
     SAMPLE_T sample_rate;
     // for clap there can be min and max buffer sizes, for not changing buffer
@@ -1095,9 +1092,6 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
 
     plug->plug_inst_id = -1;
     plug_data->plugins_dirty = true;
-    // update the plugins_idx array so it only holds the 
-    // loaded plugins indices
-    arr_u_idx_array_member_remove(plug_data->plugins_idx, MAX_INSTANCES, plug->id);
 
     return 0;
 }
@@ -1609,8 +1603,6 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     // init the plugins array
     plug_data->plugins_dirty = false;
     for (int i = 0; i < (MAX_INSTANCES); i++) {
-        plug_data->plugins_idx[i] = MAX_INSTANCES;
-
         CLAP_PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->clap_host_info = clap_info_host;
         plug->id = i;
@@ -1806,13 +1798,12 @@ bool clap_plug_plugin_list_is_dirty(CLAP_PLUG_INFO* plug_data){
     return is_dirty;
 }
 
-// build the display name ("id_pluginname") into plug->name. Called once when the
-// plugin is loaded; clap_plug_plugin_name() just returns the stored string after.
+// build the display name into plug->name. Called once when the plugin is
+// loaded; clap_plug_plugin_name() just returns the stored string after.
 static void clap_plug_set_display_name(CLAP_PLUG_PLUG *plug) {
     if (!plug || !plug->plug_inst || !plug->plug_inst->desc)
         return;
-    snprintf(plug->name, sizeof(plug->name), "%d_%s", plug->id,
-             plug->plug_inst->desc->name);
+    snprintf(plug->name, sizeof(plug->name), "%s", plug->plug_inst->desc->name);
 }
 
 int clap_plug_load_and_activate(void* plugin_item) {
@@ -1988,27 +1979,25 @@ int clap_plug_load_and_activate(void* plugin_item) {
 
     plug_data->plugins_dirty = true;
 
-    // insert the plugin id into the plugins_idx indices array
-    arr_u_idx_array_member_insert(plug_data->plugins_idx, MAX_INSTANCES, plug->id);
-
     return plug->id;
 }
 
 void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx){
     if(!plug_data)
         return NULL;
-    if(idx >= MAX_INSTANCES)
-        return NULL;
 
-    // since there can be gaps in plug_data->plugins
-    // get the plugin id from the indices array
-    unsigned int plug_id = plug_data->plugins_idx[idx];
-    if (plug_id >= MAX_INSTANCES) return NULL;
-
-    CLAP_PLUG_PLUG *cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_inst)
-        return NULL;
-    return (void *)cur_plug;
+    // the plugins array can have gaps, walk the occupied slots in order and
+    // return the idx-th one; NULL once idx is past the last occupied slot
+    unsigned int found = 0;
+    for(unsigned int i = 0; i < MAX_INSTANCES; i++){
+        CLAP_PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
+        if (!cur_plug->plug_inst)
+            continue;
+        if (found == idx)
+            return (void *)cur_plug;
+        found++;
+    }
+    return NULL;
 }
 
 const char *clap_plug_plugin_name(void *plug){

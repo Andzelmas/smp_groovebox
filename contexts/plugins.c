@@ -36,7 +36,6 @@
 #include "../jack_funcs/jack_funcs.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/string_funcs.h"
-#include "../util_funcs/array_utils.h"
 // a simple macro to get the max of the two values
 #ifndef MAX
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
@@ -246,8 +245,8 @@ typedef struct _plug_plug {
     unsigned int plug_instance_activated;
     // the instance id to link it to cx
     int id;
-    // display name ("id_pluginname"), owned by this struct, built once at load
-    // by plug_load_and_activate() and handed out by plug_plugin_name()
+    // display name, owned by this struct, built once at load by
+    // plug_load_and_activate() and handed out by plug_plugin_name()
     char name[PLUG_PLUGIN_NAME_MAX];
     // audio backend midi container
     JACK_MIDI_CONT *midi_cont;
@@ -292,12 +291,9 @@ typedef struct _plug_info {
     PLUG_URIDS urids;
     // lilv world object
     LilvWorld *lv_world;
-    // array of plugins
+    // array of plugins. there can be gaps (a plugin removed from the middle);
+    // plug_plugin_return() walks the occupied slots in order for the UI.
     struct _plug_plug plugins[MAX_INSTANCES];
-    // there can be gaps in the plugins array when plugins are added 
-    // and removed. UI requests plugins by idx, iterating in order 0...n
-    // so this array of loaded plugin indices is necassary for UI
-    unsigned int plugins_idx[MAX_INSTANCES];
     // did the plugins array change?
     bool plugins_dirty;
     // sample_rate
@@ -441,9 +437,6 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     cur_plug->plug = NULL;
     cur_plug->plug_data = NULL;
     plug_data->plugins_dirty = true;
-
-    //update the loaded plugin indices array
-    arr_u_idx_array_member_remove(plug_data->plugins_idx, MAX_INSTANCES, cur_plug->id);
 
     return 0;
 }
@@ -747,8 +740,6 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     // init the plugin instances to shell
     plug_data->plugins_dirty = false;
     for (int i = 0; i < MAX_INSTANCES; i++) {
-        plug_data->plugins_idx[i] = MAX_INSTANCES;
-
         PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->is_processing = 0;
         plug->midi_cont = NULL;
@@ -1094,13 +1085,13 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
     return 0;
 }
 
-// build the display name ("id_pluginname") into plug->name. Called once when the
-// plugin is loaded; plug_plugin_name() just returns the stored string after.
+// build the display name into plug->name. Called once when the plugin is
+// loaded; plug_plugin_name() just returns the stored string after.
 static void plug_set_display_name(PLUG_PLUG *plug) {
     if (!plug || !plug->plug)
         return;
     LilvNode *name_node = lilv_plugin_get_name(plug->plug);
-    snprintf(plug->name, sizeof(plug->name), "%d_%s", plug->id,
+    snprintf(plug->name, sizeof(plug->name), "%s",
              lilv_node_as_string(name_node));
     lilv_node_free(name_node);
 }
@@ -1363,26 +1354,25 @@ int plug_load_and_activate(void *plugin_item) {
     context_sub_wait_for_start(plug_data->control_data, (void *)plug);
     plug_data->plugins_dirty = true;
 
-    // add the loaded plugin id to the plugins indices array
-    arr_u_idx_array_member_insert(plug_data->plugins_idx, MAX_INSTANCES, plug->id);
     return plug->id;
 }
 
 void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx){
     if(!plug_data)
         return NULL;
-    if(idx >= MAX_INSTANCES)
-        return NULL;
 
-    // Need to check the plugins indices are for idx
-    // since the plugins array can have gaps
-    unsigned int plug_id = plug_data->plugins_idx[idx];
-    if(plug_id >= MAX_INSTANCES) return NULL;
-
-    PLUG_PLUG *cur_plug = &(plug_data->plugins[plug_id]);
-    if(!cur_plug->plug_instance)
-        return NULL;
-    return (void *)cur_plug;
+    // the plugins array can have gaps, walk the occupied slots in order and
+    // return the idx-th one; NULL once idx is past the last occupied slot
+    unsigned int found = 0;
+    for(unsigned int i = 0; i < MAX_INSTANCES; i++){
+        PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
+        if(!cur_plug->plug_instance)
+            continue;
+        if(found == idx)
+            return (void *)cur_plug;
+        found++;
+    }
+    return NULL;
 }
 
 const char *plug_plugin_name(void *plug){

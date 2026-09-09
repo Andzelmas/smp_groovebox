@@ -1,6 +1,7 @@
 #pragma once
 #include "params.h"
 #include "../types.h"
+#include <stdbool.h>
 
 enum SmpStatus{
     smp_data_malloc_fail = -1,
@@ -37,6 +38,15 @@ PRM_CONTAIN* smp_param_return_param_container(SMP_INFO* smp_data, int smp_id);
 
 //copy to new malloced string and return the file path of the sample
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id);
+//return the idx-th loaded sample (walking occupied slots in order), NULL past
+//the end. The returned SMP_SMP* is borrowed - do not free or modify it.
+void* smp_sample_return(SMP_INFO* smp_data, unsigned int idx);
+//return the sample display name (the file basename) from a SMP_SMP* returned by
+//smp_sample_return. The string is owned by the sample and stays valid until the
+//sample is removed. Returns NULL on error.
+const char* smp_sample_name(void* smp);
+//return (and clear) whether the samples array changed since the last call
+bool smp_samples_is_dirty(SMP_INFO* smp_data);
 //stop processing the sample and remove it
 int smp_stop_and_remove_sample(SMP_INFO* smp_data, int idx);
 //clean the memory

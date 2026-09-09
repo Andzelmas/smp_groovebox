@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <threads.h>
@@ -19,12 +20,18 @@
 #define OUTS 2
 //number of midi in ports for the samples
 #define IN_MIDI 1
+//size of the single sample display name buffer (SMP_SMP.name). Internal to this
+//module - the name leaves as a const char* so callers need no matching define.
+#define SMP_SAMPLE_NAME_MAX 128
 
 static thread_local bool is_audio_thread = false;
 
 typedef struct _smp_smp{
     //the note id, used to link to the cx struct
     int id;
+    //display name, owned by this struct, built once at load by smp_add() and
+    //handed out by smp_sample_name()
+    char name[SMP_SAMPLE_NAME_MAX];
     //the file path of the sample
     char* file_path;
     //the sample sample rate
@@ -80,7 +87,9 @@ typedef struct _smp_info{
     JACK_MIDI_CONT* midi_cont;
     //control_data struct to control sys messages between [audio-thread] and [main-thread] (stop processing sample, start processing sample and etc.)
     CXCONTROL* control_data;
-}SMP_INFO; 
+    //did the samples array change (a sample was added or removed)
+    bool samples_dirty;
+}SMP_INFO;
 
 //functions for thread safe string messages
 //this can be called only on [main-thread]
@@ -151,12 +160,15 @@ static int smp_remove_sample(SMP_INFO* smp_data, unsigned int idx){
     if(cur_smp->params)param_clean_param_container(cur_smp->params);
     cur_smp->params = NULL;
 
+    cur_smp->name[0] = '\0';
     cur_smp->chans = 0;
     cur_smp->midi_vel = (SAMPLE_T)1.0;
     cur_smp->offset = 0;
     cur_smp->playing = 0;
     cur_smp->samplerate = 0;
     cur_smp->samples_loaded = 0;
+
+    smp_data->samples_dirty = true;
 
     return 0;
 }
@@ -212,12 +224,14 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 	    smp_data->ports[i].port_name = "sampler|out_R";	    
 	}	
     }
+    smp_data->samples_dirty = false;
     for(int i = 0; i < (MAX_SAMPLES+1); i++){
 	 SMP_SMP* samp = &(smp_data->samples[i]);
 	 samp->buffer = NULL;
 	 samp->chans = 0;
 	 samp->file_path = NULL;
 	 samp->id = i;
+	 samp->name[0] = '\0';
 	 samp->midi_vel = (SAMPLE_T)1.0;
 	 samp->offset = 0;
 	 samp->params = NULL;
@@ -250,6 +264,16 @@ int smp_activate_backend_ports(SMP_INFO* smp_data){
 						     cur_port->port_flow, cur_port->port_name);
     }
     return 0;
+}
+
+//build the display name (the file basename) into smp->name. Called once when
+//the sample is loaded; smp_sample_name() just returns the stored string after.
+static void smp_set_display_name(SMP_SMP *smp){
+    if(!smp || !smp->file_path)
+	return;
+    const char *base = strrchr(smp->file_path, '/');
+    base = base ? base + 1 : smp->file_path;
+    snprintf(smp->name, sizeof(smp->name), "%s", base);
 }
 
 int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
@@ -303,8 +327,11 @@ int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
     }
 
     strcpy(cur_smp->file_path, samp_path);
+    //build the display name once, now that file_path and id are set
+    smp_set_display_name(cur_smp);
     //now this sample can start processing
     context_sub_wait_for_start(smp_data->control_data, (void*)cur_smp);
+    smp_data->samples_dirty = true;
     return smp_id;
 }
 
@@ -414,6 +441,36 @@ char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){
     if(!ret_name)return NULL;
     strcpy(ret_name, cur_smp->file_path);
     return ret_name;
+}
+
+void* smp_sample_return(SMP_INFO* smp_data, unsigned int idx){
+    if(!smp_data)return NULL;
+    //the samples array can have gaps, walk the occupied slots in order and
+    //return the idx-th one; NULL once idx is past the last occupied slot
+    unsigned int found = 0;
+    for (unsigned int i = 0; i < MAX_SAMPLES; i++) {
+        SMP_SMP *cur_smp = &(smp_data->samples[i]);
+        if (!cur_smp->file_path)
+            continue;
+        if (found == idx)
+            return (void *)cur_smp;
+        found++;
+    }
+    return NULL;
+}
+
+const char* smp_sample_name(void* smp){
+    SMP_SMP* cur_smp = (SMP_SMP*)smp;
+    if(!cur_smp)return NULL;
+    if(!cur_smp->file_path)return NULL;
+    return cur_smp->name;
+}
+
+bool smp_samples_is_dirty(SMP_INFO* smp_data){
+    if(!smp_data)return false;
+    bool is_dirty = smp_data->samples_dirty;
+    smp_data->samples_dirty = false;
+    return is_dirty;
 }
 
 int smp_stop_and_remove_sample(SMP_INFO* smp_data, int idx){

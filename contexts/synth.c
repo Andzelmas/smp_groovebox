@@ -73,6 +73,9 @@ typedef struct _synth_voice{
 
 typedef struct _synth_osc{
     int id;
+    //back pointer to the owning synth, so an oscillator handle carries its
+    //context (used as the DataObject user_data for a single oscillator)
+    SYNTH_DATA* synth_data;
     //trigger, that can be used to track various oscillator behaviour
     //for example for metronome osc this is used to test if the oscillator needs to be played
     //starts at -1, when the osc is initialized for the first time
@@ -305,39 +308,41 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	return NULL;
     }
 
-    synth_data->osc_array = (SYNTH_OSC*)calloc(synth_data->num_osc, sizeof(SYNTH_OSC));
-    if(!synth_data->osc_array){
-	synth_clean_memory(synth_data);
-	return NULL;
+    synth_data->osc_array =
+        (SYNTH_OSC *)calloc(synth_data->num_osc, sizeof(SYNTH_OSC));
+    if (!synth_data->osc_array) {
+        synth_clean_memory(synth_data);
+        return NULL;
     }
-    for(int i = 0; i < synth_data->num_osc; i++){
-	SYNTH_OSC* cur_osc = &(synth_data->osc_array[i]);
-	cur_osc->name = NULL;
-	cur_osc->triang_osc = synth_data->triang_osc;
-	cur_osc->sqr_osc = synth_data->sqr_osc;
-	cur_osc->saw_osc = synth_data->saw_osc;
-	cur_osc->sin_osc = synth_data->sin_osc;
-	cur_osc->id = i;
-	cur_osc->trig = -1;    
-	cur_osc->last_voice = 0;
-	cur_osc->num_ports = 0;
-	cur_osc->params = NULL;
-	cur_osc->osc_voices = NULL;
-	cur_osc->ports = NULL;
-	cur_osc->buffer_L = NULL;
-	cur_osc->buffer_R = NULL;
-	cur_osc->name = NULL;
-	cur_osc->num_ports = 0;
-	cur_osc->ports = NULL;
-	cur_osc->num_voices = MAX_SYNTH_VOICES;	
-	//initiate the buffer
-	cur_osc->buffer_L = calloc(synth_data->buffer_size, sizeof(SAMPLE_T));
-	cur_osc->buffer_R = calloc(synth_data->buffer_size, sizeof(SAMPLE_T));
-	if(!cur_osc->buffer_L || !cur_osc->buffer_R){
-	    synth_clean_memory(synth_data);
-	    return NULL;
-	}
-	cur_osc->name = malloc(sizeof(char) * 6);
+    for (int i = 0; i < synth_data->num_osc; i++) {
+        SYNTH_OSC *cur_osc = &(synth_data->osc_array[i]);
+        cur_osc->synth_data = synth_data;
+        cur_osc->name = NULL;
+        cur_osc->triang_osc = synth_data->triang_osc;
+        cur_osc->sqr_osc = synth_data->sqr_osc;
+        cur_osc->saw_osc = synth_data->saw_osc;
+        cur_osc->sin_osc = synth_data->sin_osc;
+        cur_osc->id = i;
+        cur_osc->trig = -1;
+        cur_osc->last_voice = 0;
+        cur_osc->num_ports = 0;
+        cur_osc->params = NULL;
+        cur_osc->osc_voices = NULL;
+        cur_osc->ports = NULL;
+        cur_osc->buffer_L = NULL;
+        cur_osc->buffer_R = NULL;
+        cur_osc->name = NULL;
+        cur_osc->num_ports = 0;
+        cur_osc->ports = NULL;
+        cur_osc->num_voices = MAX_SYNTH_VOICES;
+        // initiate the buffer
+        cur_osc->buffer_L = calloc(synth_data->buffer_size, sizeof(SAMPLE_T));
+        cur_osc->buffer_R = calloc(synth_data->buffer_size, sizeof(SAMPLE_T));
+        if (!cur_osc->buffer_L || !cur_osc->buffer_R) {
+            synth_clean_memory(synth_data);
+            return NULL;
+        }
+        cur_osc->name = malloc(sizeof(char) * 6);
 	if(!cur_osc->name){
 	    synth_clean_memory(synth_data);
 	    return NULL;
@@ -481,7 +486,7 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 
 	synth_activate_backend_ports(synth_data, cur_osc);
     }
-    
+
     return synth_data;   
 }
 
@@ -846,7 +851,7 @@ int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes){
     //here we process all the oscillators except the metronome, if there is a metronome
     int i = 0;
     if(synth_data->with_metronome == 1) i = 1;
-    for(i; i < synth_data->num_osc; i++){
+    for(; i < synth_data->num_osc; i++){
 	if(i >= synth_data->num_osc) continue;
 	SYNTH_OSC* cur_osc = &(synth_data->osc_array[i]);
 	//get the notes to the midi container
@@ -885,24 +890,20 @@ int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes){
     return 0;
 }
 
-PRM_CONTAIN* synth_return_param_container(SYNTH_DATA* synth_data, unsigned int osc_num){
+void* synth_osc_return(SYNTH_DATA* synth_data, unsigned int osc_num){
     if(!synth_data)return NULL;
     if(osc_num >= synth_data->num_osc)return NULL;
-    SYNTH_OSC* cur_osc = &(synth_data->osc_array[osc_num]);
-    if(!cur_osc)return NULL;
-    return cur_osc->params;
+    return (void*)&(synth_data->osc_array[osc_num]);
 }
 
-const char* synth_return_osc_name(SYNTH_DATA* synth_data, unsigned int osc_num){
-    if(!synth_data)return NULL;
-    if(osc_num >= synth_data->num_osc)return NULL;
-    SYNTH_OSC* cur_osc = &(synth_data->osc_array[osc_num]);
+const char* synth_osc_name(void* osc){
+    SYNTH_OSC* cur_osc = (SYNTH_OSC*)osc;
     if(!cur_osc)return NULL;
     return cur_osc->name;
 }
 
-int synth_return_osc_num(SYNTH_DATA* synth_data){
-    if(!synth_data)return -1;
+size_t synth_return_osc_num(SYNTH_DATA* synth_data){
+    if(!synth_data)return 0;
     return synth_data->num_osc;
 }
 
@@ -918,6 +919,8 @@ static int synth_clean_ports(SYNTH_DATA* synth_data, SYNTH_PORT** osc_ports, uns
 	}
     }
     free(*osc_ports);
+
+    return 0;
 }
 
 static int synth_clean_osc(SYNTH_DATA* synth_data, SYNTH_OSC* synth_osc){
@@ -944,6 +947,8 @@ static int synth_clean_osc(SYNTH_DATA* synth_data, SYNTH_OSC* synth_osc){
     synth_osc->ports = NULL;
     if(synth_osc->name)free(synth_osc->name);
     synth_osc->name = NULL;
+
+    return 0;
 }
 
 int synth_clean_memory(SYNTH_DATA* synth_data){

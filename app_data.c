@@ -184,7 +184,7 @@ static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
  * file adapts it.
  * ------------------------------------------------------------------------- */
 
-// plain container with a constant name and no children (Sampler, Synth, Trk).
+// plain container with a constant name and no children (Trk).
 // user_data is the display name string itself.
 static size_t leaf_container_child_count(void *user_data) {
     (void)user_data;
@@ -205,6 +205,51 @@ static const DataOps leaf_container_ops = {
     .child_count = leaf_container_child_count,
     .child_at = leaf_container_child_at,
     .name = leaf_container_name,
+};
+
+// single loaded sample. user_data is the SMP_SMP* from smp_sample_return.
+static size_t sample_child_count(void *user_data) {
+    (void)user_data;
+    return 0;
+}
+static bool sample_child_at(void *user_data, size_t idx, DataObject *out) {
+    (void)user_data;
+    (void)idx;
+    (void)out;
+    return false;
+}
+// smp_sample_name already matches DataOps.name (const char *(*)(void *))
+static const DataOps sample_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = sample_child_count,
+    .child_at = sample_child_at,
+    .name = smp_sample_name,
+};
+
+// container of the loaded samples. user_data is SMP_INFO*.
+static size_t sampler_child_count(void *user_data) {
+    size_t count = 0;
+    while (smp_sample_return((SMP_INFO *)user_data, (unsigned int)count))
+        count++;
+    return count;
+}
+static bool sampler_child_at(void *user_data, size_t idx, DataObject *out) {
+    void *smp = smp_sample_return((SMP_INFO *)user_data, (unsigned int)idx);
+    if (!smp)
+        return false;
+    out->ops = &sample_ops;
+    out->user_data = smp;
+    return true;
+}
+static const char *sampler_name(void *user_data) {
+    (void)user_data;
+    return SAMPLER_NAME;
+}
+static const DataOps sampler_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = sampler_child_count,
+    .child_at = sampler_child_at,
+    .name = sampler_name,
 };
 
 // single loaded lv2 plugin. user_data is the PLUG_PLUG* from plug_plugin_return.
@@ -300,6 +345,50 @@ static const DataOps clap_plugins_ops = {
     .name = clap_plugins_name,
 };
 
+// single synth oscillator. user_data is the handle from synth_osc_return - it
+// represents "oscillator number N" on the synth, not a SYNTH_OSC* pointer.
+static size_t osc_child_count(void *user_data) {
+    (void)user_data;
+    return 0;
+}
+static bool osc_child_at(void *user_data, size_t idx, DataObject *out) {
+    (void)user_data;
+    (void)idx;
+    (void)out;
+    return false;
+}
+// synth_osc_name already matches DataOps.name (const char *(*)(void *))
+static const DataOps osc_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = osc_child_count,
+    .child_at = osc_child_at,
+    .name = synth_osc_name,
+};
+
+// container of the synth oscillators. user_data is SYNTH_DATA*. Oscillators are
+// fixed at init (never added/removed), so there are no gaps to walk.
+static size_t synth_child_count(void *user_data) {
+    return synth_return_osc_num((SYNTH_DATA *)user_data);
+}
+static bool synth_child_at(void *user_data, size_t idx, DataObject *out) {
+    void *osc = synth_osc_return((SYNTH_DATA *)user_data, (unsigned int)idx);
+    if (!osc)
+        return false;
+    out->ops = &osc_ops;
+    out->user_data = osc;
+    return true;
+}
+static const char *synth_name(void *user_data) {
+    (void)user_data;
+    return SYNTH_NAME;
+}
+static const DataOps synth_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .child_count = synth_child_count,
+    .child_at = synth_child_at,
+    .name = synth_name,
+};
+
 // root object. user_data is APP_INFO*.
 static size_t root_child_count(void *user_data) {
     (void)user_data;
@@ -311,8 +400,8 @@ static bool root_child_at(void *user_data, size_t idx, DataObject *out) {
         return false;
     switch (idx) {
     case 0:
-        out->ops = &leaf_container_ops;
-        out->user_data = (void *)SAMPLER_NAME;
+        out->ops = &sampler_ops;
+        out->user_data = app_data->smp_data;
         return true;
     case 1:
         out->ops = &lv2_plugins_ops;
@@ -323,8 +412,8 @@ static bool root_child_at(void *user_data, size_t idx, DataObject *out) {
         out->user_data = app_data->clap_plug_data;
         return true;
     case 3:
-        out->ops = &leaf_container_ops;
-        out->user_data = (void *)SYNTH_NAME;
+        out->ops = &synth_ops;
+        out->user_data = app_data->synth_data;
         return true;
     case 4:
         out->ops = &leaf_container_ops;
@@ -346,6 +435,9 @@ static const DataOps root_ops = {
 };
 
 // dispatch table for the temporary app_data_is_dirty bridge
+static bool sampler_is_dirty(void *user_data) {
+    return smp_samples_is_dirty((SMP_INFO *)user_data);
+}
 static bool lv2_plugins_is_dirty(void *user_data) {
     return plug_plugins_is_dirty((PLUG_INFO *)user_data);
 }
@@ -481,6 +573,8 @@ bool app_data_is_dirty(const DataObject *obj) {
         return false;
     // TEMPORARY BRIDGE: dispatch on the known ops tables until the
     // generation / removal notification system replaces this.
+    if (obj->ops == &sampler_ops)
+        return sampler_is_dirty(obj->user_data);
     if (obj->ops == &lv2_plugins_ops)
         return lv2_plugins_is_dirty(obj->user_data);
     if (obj->ops == &clap_plugins_ops)
