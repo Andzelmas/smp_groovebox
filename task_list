@@ -8,3 +8,215 @@ Cursor API. bool nav_poll_event(APP_INTRF *, NavCursor *cursor, CxEvent *out) wi
 ui_layer consumes. Each UI_STATE / view owns a NavCursor; drain per render, prune dead ContextIds from UI_TARGET_LIST etc.; on overflow rebuild that view from nav_cx_root_return down. nav_cx_is_valid stays a plain lookup.
 
 Not really a phase — it's an invariant for later. Once there's a UI-driven mutation path (a "load plugin" action calling into app_data), every such app_intrf handler must call app_intrf_process_data_events() before returning to ui_layer, so the tree (and the CxEvents) are up to date synchronously. Today nothing wires plugin-loading to a UI action, so there's nothing to enforce yet — it's a one-line rule to apply when the action/command system lands.
+
+================================================================================
+AGREED ARCHITECTURE — actions / args / execute  (design locked, not yet built)
+================================================================================
+
+LAYERING (unchanged rules)
+- data_object.h + new data_actions.h are the dependency-free contract.
+- app_data.c is the only "map": holds every ops table + adapters, delegates to
+  context modules. Context modules stay DataObject/DataOps-ignorant.
+- app_intrf.c exposes nav_cx_* pass-throughs keyed by ContextId, resolves
+  ContextId -> CX -> &cx->data, calls through ops. Knows no specific action.
+- ui_layer / cli.c call the nav_cx_* functions.
+
+FIVE DECISIONS (settled)
+1. data_actions.h is its own header, included by data_object.h (mirrors
+   data_events.h). DataOps references its types.
+2. Enumeration calls carry arg_index AND a const DataActionReq *partial (the
+   half-filled request the UI is already assembling) so "arg B depends on arg A"
+   just works. Supersedes the standalone arg_index point.
+3. DataAction.enabled is wired now; return true initially, add module
+   predicates (smp_can_remove, ...) lazily. CONNECT.enabled = false when no
+   source or no target ports exist.
+4. Drop DATA_CAP_RENAME. DATA_CAP_ACTIONS gates the whole action group;
+   per-action `enabled` expresses availability.
+5. Strings in DataActionReq (and the targets[] array) are borrowed for the
+   duration of the action_do call only; the module copies what it keeps.
+   Document in the header like name().
+
+IDENTITY / KEYS
+- One composition rule everywhere: MAKE_ID(namespace, local), 8-bit ns in top
+  byte (CTXID_NS_SHIFT), like ContextId.
+- DataListId = MAKE_LIST_ID(list_ns, LID_* constant). List kinds are STATIC ->
+  compile-time constants (LID_*), NOT counter-allocated. No next_*_uid for
+  lists. A genuinely per-instance list composes an owner id into the local part
+  (e.g. MAKE_LIST_ID(DATA_LIST_NS_PORTS, osc_uid)); the starter actions don't.
+- DataChoice.value is ALSO namespaced: MAKE_ID(list_ns, item_key). item_key is
+  the module's natural STABLE key (hash of LV2/CLAP URI; hash of JACK port name;
+  plain index for an immutable list). Not a positional index. Reuse an existing
+  per-slot uid only when there is no natural key.
+- Two-level staleness in action_do:
+    * wrong list  -> CTXID_NS(value) != arg's list namespace -> ERR_INVALID
+    * stale item  -> key no longer resolves in the live list -> ERR_STALE
+                     (UI re-pulls the list)
+  Lists that share a namespace (contextual port lists): action_do additionally
+  re-derives the full DataListId from (target ctx + arg) and confirms membership.
+
+data_actions.h  (contract)
+    typedef uint64_t DataListId;               // opaque, namespaced
+    #define DATA_LIST_NONE ((DataListId)0)
+
+    typedef enum {
+        DATA_ACTION_REMOVE,
+        DATA_ACTION_ADD_CHOICE,
+        DATA_ACTION_ADD_FILE_PATH,
+        DATA_ACTION_CONNECT,                    // generic bipartite toggle-connect
+        // rename / value-change slot in later
+    } DataActionType;
+
+    typedef enum {
+        DATA_ARG_STRING, DATA_ARG_PATH,
+        DATA_ARG_CHOICE, DATA_ARG_MULTI_CHOICE,
+        // DATA_ARG_INT, DATA_ARG_DOUBLE later
+    } DataArgKind;
+
+    typedef enum { DATA_ACTION_STYLE_NORMAL, DATA_ACTION_STYLE_DANGEROUS } DataActionStyle;
+
+    typedef enum {
+        DATA_ACTION_OK = 0,
+        DATA_ACTION_ERR_INVALID,      // bad ctx / action / args / wrong list
+        DATA_ACTION_ERR_NOT_ALLOWED,  // action present but not enabled
+        DATA_ACTION_ERR_STALE,        // key was valid, item now gone
+        DATA_ACTION_ERR_DATA,         // module rejected (file won't load, link failed)
+    } DataActionResult;
+
+    typedef struct {                  // one entry in a context's action menu
+        DataActionType type;
+        const char *label;            // borrowed, static in data layer
+        const char *tooltip;
+        bool enabled;
+        DataActionStyle style;
+    } DataAction;
+
+    typedef struct {                  // one input an action needs
+        const char *name;             // "path", "source", "targets"
+        const char *label;
+        DataArgKind kind;
+        bool required;
+        DataListId list;              // set for CHOICE / MULTI_CHOICE, else DATA_LIST_NONE
+    } DataArgSpec;
+
+    typedef struct {                  // one option for a (MULTI_)CHOICE arg
+        uint64_t value;               // MAKE_ID(list_ns, stable item_key)
+        const char *label;            // borrowed, valid while the module's list lives
+        uint32_t flags;               // bit 0: linked to partial->connect.source
+                                      // (0 for catalogue lists)
+    } DataChoice;
+
+    typedef struct {                  // filled-in request to execute
+        DataActionType type;
+        union {
+            struct { uint64_t choice_value; }                              add_choice;
+            struct { const char *path; }                                   add_file_path;
+            struct { uint64_t source;                                      // MAKE_ID(domain_ns, key)
+                     const uint64_t *targets; size_t target_count; }       connect;
+            // remove: no payload
+        };
+    } DataActionReq;
+
+DataOps additions  (all DATA_CAP_ACTIONS-gated)
+    size_t (*action_list)(void *ud, DataAction *out, size_t cap);
+    size_t (*action_args)(void *ud, DataActionType t, DataArgSpec *out, size_t cap);
+    size_t (*list_count)(void *ud, DataActionType t, size_t arg_index,
+                         const DataActionReq *partial);
+    bool   (*list_at)   (void *ud, DataActionType t, size_t arg_index,
+                         const DataActionReq *partial, size_t idx, DataChoice *out);
+    DataActionResult (*action_do)(void *ud, const DataActionReq *req, ContextId *out_new);
+  list_count may return 0 = "unknown, page until list_at returns false".
+  No nav_cx_connections / DataConnection: current wiring rides on the target
+  list's flags bit (per-source granularity; a full patchbay dump is a
+  client-side loop over the source list).
+
+app_intrf nav API  (ContextId-keyed pass-throughs)
+    size_t          nav_cx_actions   (APP_INTRF*, ContextId, DataAction*, size_t cap);
+    size_t          nav_cx_action_args(APP_INTRF*, ContextId, DataActionType,
+                                       DataArgSpec*, size_t cap);
+    size_t          nav_cx_list_count(APP_INTRF*, ContextId, DataActionType,
+                                      size_t arg_index, const DataActionReq *partial);
+    bool            nav_cx_list_at   (APP_INTRF*, ContextId, DataActionType,
+                                      size_t arg_index, const DataActionReq *partial,
+                                      size_t idx, DataChoice*);
+    DataActionResult nav_cx_action_do(APP_INTRF*, ContextId, const DataActionReq*,
+                                      ContextId *out_new);
+  nav_cx_action_do, after the data layer returns:
+    1. app_intrf_process_data_events(app_intrf)  (drains DataEvent ring, resync,
+       emits CxEvents) -- the Phase D synchronous-reconcile invariant.
+    2. if *out_new set, resolve it to a live CX (resync just made it) and return it.
+    3. return the DataActionResult unchanged (one type end to end).
+  All interface buffers are caller stack. Only heap that moves is inside the
+  module when the action genuinely creates state (loading a plugin).
+
+THE THREE STARTER ACTIONS
+  context (ops table)            action                 arg(s)                        action_do delegates to
+  a sample / a plugin item       DATA_ACTION_REMOVE     none                          smp_remove_sample / plug_remove / clap_plug_remove
+  the LV2 list / CLAP list       DATA_ACTION_ADD_CHOICE 1x CHOICE (catalogue list)    plug_load_and_activate(uid) -> *out_new = MAKE_ID(DATA_NS_LV2_PLUG, uid)
+  the sampler list               DATA_ACTION_ADD_FILE_PATH 1x PATH                    smp_add(path) -> *out_new = MAKE_ID(DATA_NS_SAMPLE, uid)
+  "add" actions sit on the container context, "remove" on the item.
+
+PORT CONNECTIVITY  (folded into DATA_ACTION_CONNECT, generic from the start)
+- Ports/connections are NOT contexts and NOT in the CX tree. They are live
+  lists, like the plugin catalogue -- externally driven, churny (MIDI hotplug,
+  sources appearing/leaving). Tree nodes here caused real problems before.
+- Generic bipartite connect: pick one `source` from list A, pick many `targets`
+  from list B that depends on `source`, apply a toggle.
+- Domain discriminator = CTXID_NS(req.connect.source). First (only) domain =
+  JACK ports, DATA_LIST_NS_PORTS. Future domains (modulation, buses, MIDI
+  routing) = new DATA_LIST_NS_* + a case in the hosting ops table; ZERO
+  contract change. No per-link scalar, no relationship-type bag -- a domain
+  that needs those earns its own action.
+- Hosted on the Trk context (already owns trk_jack). No SID_ROUTING singleton.
+  CONNECT may appear in other ops tables later, like REMOVE.
+- Args: arg0 `source` CHOICE list LID_PORTS_OUT (all output ports, live via
+  app_jack_port_names). arg1 `targets` MULTI_CHOICE, list depends on arg0:
+  empty until a source is chosen, then type-filtered (audio<->audio,
+  midi<->midi via jack_port_type) and each row's flags bit 0 = "already linked
+  to source".
+- item_key = hash(JACK port name) (globally unique, stable across hotplug).
+  value = MAKE_ID(DATA_LIST_NS_PORTS, hash(name)). Data layer keeps a
+  name<->hash map (or re-scans + hashes to match; small N).
+- action_do(CONNECT): per target -> linked already ? app_jack_disconnect_ports
+  : app_jack_connect_ports. Toggle = "option a": the UI selects only the
+  targets it wants to CHANGE (matches "connecting an existing connection
+  disconnects it"). Return OK if all took, ERR_DATA if any failed; UI re-pulls
+  the target list either way. (Option b, "selected = desired set, action_do
+  diffs", can be added behind a payload flag later.)
+- "Keep the connect window open" = UI loops nav_cx_action_do(CONNECT) +
+  re-pull; nothing below the UI is stateful about the session.
+- Optional refresh nudge: a JACK port-registration / graph-order callback sets
+  ports_dirty -> app_data_update emits DATA_EVENT_CHANGED{ Trk id } ->
+  CX_CHANGED{ Trk id } -> connectivity UI_STATE re-pulls. CX_CHANGED, not
+  ADDED/REMOVED: no resync, no structural churn. Not needed for v1 if the CLI
+  re-pulls each frame while the window is open.
+
+NAMESPACES / CONSTANTS TO ADD
+  DATA_NS_*        : (existing SINGLETON/SAMPLE/LV2_PLUG/CLAP_PLUG/SYNTH_OSC)
+  DATA_LIST_NS_*   : DATA_LIST_NS_CATALOG, DATA_LIST_NS_PORTS
+  LID_*           : LID_LV2_CATALOG, LID_CLAP_CATALOG, LID_PORTS_OUT
+  SID_*           : (no SID_ROUTING -- CONNECT lives on Trk)
+
+EXTENSIBILITY BOUNDARY
+  The UI only ever learns argument KINDS (STRING/PATH/CHOICE/MULTI_CHOICE, later
+  INT/DOUBLE), never action types. New action reusing existing kinds -> one
+  enum value + one case in the relevant ops table, ZERO UI change. A new arg
+  KIND is the only thing that touches the UI. A genuinely new interaction shape
+  (neither "enter a scalar" nor "pick from an enumerable list") is the only
+  thing that would justify a new DataOps pointer -- explicit > clever.
+
+BUILD ORDER
+  1. data_actions.h + DataOps fields + DATA_CAP_ACTIONS + inline data_action_*
+     wrappers in data_object.h.
+  2. app_intrf nav_cx_* pass-throughs + the Phase D reconcile step in
+     nav_cx_action_do.
+  3. sample_ops / sampler_ops: REMOVE + ADD_FILE_PATH. Prove item + container
+     path end to end in the CLI (menu -> per-kind prompt -> req -> action_do ->
+     next reconcile shows CX_ADDED/REMOVED).
+  4. lv2_plugins_ops / clap_plugins_ops: ADD_CHOICE. Proves single CHOICE + a
+     catalogue list.
+  5. Trk: DATA_ACTION_CONNECT. Brings MULTI_CHOICE + the partial-dependent
+     target list + the flags bit + hash(port name) keys + the JACK link/unlink
+     toggle + optional ports_dirty -> DATA_EVENT_CHANGED wiring.
+  6. CLI: context-menu loop; for Trk, stay open across many CONNECT calls,
+     re-pulling the target list each round.
+
