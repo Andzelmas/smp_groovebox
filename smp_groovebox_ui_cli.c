@@ -151,9 +151,13 @@ static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, Conte
     ui_layer_nav_target_list_end(state);
 }
 
-// find the target ContextId for parent + purpose and return the index for the target in the parent children array
-// if the parent + purpose does not exist create it and add the first child to the purpose on the parent
-static size_t helper_nav_context_purpose_set(UI_LAYER* ui_layer, UI_STATE* state, ContextId parent, UiPurpose purpose){
+// find the parent + purpose on the state and return the target ContextId
+// if the parent + purpose does not exist create it (capacity 1) and add the
+// first child as the target ContextId 
+static size_t
+helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
+                                      ContextId parent, UiPurpose purpose,
+                                      UiStalePolicy stale_policy) {
     if(!ui_layer)
         return 0;
     if(parent == CONTEXT_ID_INVALID)
@@ -179,6 +183,8 @@ static size_t helper_nav_context_purpose_set(UI_LAYER* ui_layer, UI_STATE* state
             else{
                 ui_layer_state_entry_set(state, parent, purpose, 1);
                 UI_TARGET_LIST* targets = ui_layer_nav_target_list_begin(state, parent, purpose);
+                ui_layer_target_list_set_stale_policy(targets, stale_policy);
+
                 if(targets){
                     ContextId new_purpose = ui_layer_context_child_at(ui_layer, parent, 0);
                     if(new_purpose != CONTEXT_ID_INVALID){
@@ -289,7 +295,9 @@ int main() {
 
         // show the state_main info
         // first update state_main_current and state_main_hovered_idx if user inputs changed these
-        state_main_hovered_idx = helper_nav_context_purpose_set(ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED); 
+        state_main_hovered_idx = helper_nav_context_single_purpose_set(
+            ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED,
+            (UiStalePolicy){.mode = UI_STALE_PREV_SIBLING});
 
         InterfaceContextInfo state_main_current_info;
         if(helper_context_info_get(ui_layer, state_main_current, &state_main_current_info)){

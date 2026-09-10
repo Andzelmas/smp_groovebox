@@ -3,6 +3,10 @@ CC=gcc
 #name of the binary filename
 FILE=build/smp_sampler
 
+# user interfaces, choose one
+UI_DEFAULT = smp_groovebox_ui_cli.c
+UI_CLI = smp_groovebox_ui_cli.c
+
 #include dirs
 #INCDIR = -I$(PORTSDIR)/include
 INCDIR = -I/usr/include
@@ -23,13 +27,11 @@ SRC = $(UTIL_FUNCS) contexts/sampler.c contexts/plugins.c contexts/clap_plugins.
 #Remote dir for the source code
 PI_DIR = ~/Audio/Source/smp_groovebox/
 
-MAIN_SRC = smp_groovebox_ui_cli.c
-MAIN_CLI_SRC = smp_groovebox_ui_cli.c
 
 create_smp_sampler: make_dir
-	$(CC) -g -x c -o $(FILE) $(MAIN_SRC) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
+	$(CC) -g -x c -o $(FILE) $(UI_DEFAULT) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
 build_sanitize: make_dir
-	$(CC) -g -fsanitize=thread -x c -o $(FILE) $(MAIN_CLI_SRC) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
+	$(CC) -g -fsanitize=thread -x c -o $(FILE) $(UI_CLI) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
 run:
 	(cd build && ./smp_sampler)
 run_valgrind:

@@ -38,7 +38,9 @@ typedef enum{
     UI_STALE_CLEAR,          // empty the list (for an entry: keep it, clear targets)
 }UiStaleMode;
 
-typedef struct{ UiStaleMode mode; }UiStalePolicy;
+typedef struct {
+    UiStaleMode mode;
+} UiStalePolicy;
 
 // result of ui_layer_state_reconcile
 typedef enum{
