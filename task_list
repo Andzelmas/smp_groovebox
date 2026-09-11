@@ -24,9 +24,15 @@ LAYERING (unchanged rules)
 FIVE DECISIONS (settled)
 1. data_actions.h is its own header, included by data_object.h (mirrors
    data_events.h). DataOps references its types.
-2. Enumeration calls carry arg_index AND a const DataActionReq *partial (the
-   half-filled request the UI is already assembling) so "arg B depends on arg A"
-   just works. Supersedes the standalone arg_index point.
+2. Enumeration calls (list_count/list_at) take the DataListId itself (the
+   value the caller already got back in DataArgSpec.list - forwarded
+   unchanged, not re-derived from a (type, arg_index) pair) AND a const
+   DataActionReq *partial (the half-filled request the UI is already
+   assembling) so "list content depends on an earlier arg's value" just
+   works. No arg_index / DataActionType param needed on these two calls:
+   DataListId alone identifies which list, and partial->type already carries
+   the action when anything needs it. Supersedes the standalone arg_index
+   point.
 3. DataAction.enabled is wired now; return true initially, add module
    predicates (smp_can_remove, ...) lazily. CONNECT.enabled = false when no
    source or no target ports exist.
@@ -119,10 +125,9 @@ data_actions.h  (contract)
 DataOps additions  (all DATA_CAP_ACTIONS-gated)
     size_t (*action_list)(void *ud, DataAction *out, size_t cap);
     size_t (*action_args)(void *ud, DataActionType t, DataArgSpec *out, size_t cap);
-    size_t (*list_count)(void *ud, DataActionType t, size_t arg_index,
-                         const DataActionReq *partial);
-    bool   (*list_at)   (void *ud, DataActionType t, size_t arg_index,
-                         const DataActionReq *partial, size_t idx, DataChoice *out);
+    size_t (*list_count)(void *ud, DataListId list, const DataActionReq *partial);
+    bool   (*list_at)   (void *ud, DataListId list, const DataActionReq *partial,
+                         size_t idx, DataChoice *out);
     DataActionResult (*action_do)(void *ud, const DataActionReq *req, ContextId *out_new);
   list_count may return 0 = "unknown, page until list_at returns false".
   No nav_cx_connections / DataConnection: current wiring rides on the target
@@ -133,10 +138,10 @@ app_intrf nav API  (ContextId-keyed pass-throughs)
     size_t          nav_cx_actions   (APP_INTRF*, ContextId, DataAction*, size_t cap);
     size_t          nav_cx_action_args(APP_INTRF*, ContextId, DataActionType,
                                        DataArgSpec*, size_t cap);
-    size_t          nav_cx_list_count(APP_INTRF*, ContextId, DataActionType,
-                                      size_t arg_index, const DataActionReq *partial);
-    bool            nav_cx_list_at   (APP_INTRF*, ContextId, DataActionType,
-                                      size_t arg_index, const DataActionReq *partial,
+    size_t          nav_cx_list_count(APP_INTRF*, ContextId, DataListId list,
+                                      const DataActionReq *partial);
+    bool            nav_cx_list_at   (APP_INTRF*, ContextId, DataListId list,
+                                      const DataActionReq *partial,
                                       size_t idx, DataChoice*);
     DataActionResult nav_cx_action_do(APP_INTRF*, ContextId, const DataActionReq*,
                                       ContextId *out_new);

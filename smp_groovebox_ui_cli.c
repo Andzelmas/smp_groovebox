@@ -62,10 +62,12 @@ static bool helper_context_info_get( UI_LAYER *ui_layer, ContextId context, Inte
 }
 
 // Add add_id, if the array is full reset the array and start from beginning
-static bool helper_target_list_add_reset_on_full(UI_TARGET_LIST* target_list, ContextId add_id){
+static bool helper_target_list_add_reset_on_full(UI_LAYER* ui_layer, UI_TARGET_LIST* target_list, ContextId add_id){
     if (!target_list)
         return false;
-    if (add_id == CONTEXT_ID_INVALID)
+    if(!ui_layer)
+        return false;
+    if (!ui_layer_context_valid(ui_layer, add_id))
         return false;
 
     UiTargetListAddResult add_result =
@@ -84,10 +86,12 @@ static bool helper_target_list_add_reset_on_full(UI_TARGET_LIST* target_list, Co
     return true;
 }
 // Helper function to add a add_id, if the array is full, double its size
-static bool helper_target_list_add_resize(UI_TARGET_LIST* target_list, ContextId add_id){
+static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* target_list, ContextId add_id){
+    if(!ui_layer)
+        return false;
     if (!target_list)
         return false;
-    if (add_id == CONTEXT_ID_INVALID)
+    if (!ui_layer_context_valid(ui_layer, add_id))
         return false;
 
     UiTargetListAddResult add_result =
@@ -144,23 +148,23 @@ static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, Conte
 
         if(new_context != CONTEXT_ID_INVALID){
             *cur_idx = (size_t)new_idx;
-            helper_target_list_add_reset_on_full(target_list, new_context);
+            helper_target_list_add_reset_on_full(ui_layer, target_list, new_context);
         }
     }
 
     ui_layer_nav_target_list_end(state);
 }
 
-// find the parent + purpose on the state and return the target ContextId
-// if the parent + purpose does not exist create it (capacity 1) and add the
-// first child as the target ContextId 
+// find the parent + purpose on the state and return the target ContextId index
+// in the parent child array if the parent + purpose does not exist create it
+// (capacity 1) and add the first child as the target ContextId
 static size_t
 helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
                                       ContextId parent, UiPurpose purpose,
                                       UiStalePolicy stale_policy) {
     if(!ui_layer)
         return 0;
-    if(parent == CONTEXT_ID_INVALID)
+    if(!ui_layer_context_valid(ui_layer, parent))
         return 0;
     InterfaceContextInfo state_main_current_info;
     if(helper_context_info_get(ui_layer, parent, &state_main_current_info)){
@@ -188,7 +192,7 @@ helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
                 if(targets){
                     ContextId new_purpose = ui_layer_context_child_at(ui_layer, parent, 0);
                     if(new_purpose != CONTEXT_ID_INVALID){
-                        helper_target_list_add_reset_on_full(targets, new_purpose);
+                        helper_target_list_add_reset_on_full(ui_layer, targets, new_purpose);
                     }
                     ui_layer_nav_target_list_end(state);
                     return 0;
@@ -208,6 +212,8 @@ static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, Contex
         return;
     if(!parent)
         return;
+    if(!ui_layer_context_valid(ui_layer, *parent))
+        return;
 
     UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, *parent, purpose);
 
@@ -215,7 +221,7 @@ static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, Contex
         return;
 
     ContextId cx_curr = ui_layer_nav_target_list_get(target_list, 0);
-    if(cx_curr != CONTEXT_ID_INVALID){
+    if(ui_layer_context_valid(ui_layer, cx_curr)){
         *parent = cx_curr;
     }
 
@@ -230,9 +236,11 @@ static void helper_nav_context_exit(UI_LAYER* ui_layer, UI_STATE* state, Context
         return;
     if(!parent)
         return;
+    if(!ui_layer_context_valid(ui_layer, *parent))
+        return;
 
     ContextId cx_parent = ui_layer_context_parent_return(ui_layer, *parent);
-    if(cx_parent != CONTEXT_ID_INVALID){
+    if(ui_layer_context_valid(ui_layer, cx_parent)){
         *parent = cx_parent;
     }
 
