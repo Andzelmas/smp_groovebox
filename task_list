@@ -1,13 +1,6 @@
 Phase D — synchronous-reconcile invariant
 When the action/command dispatch lands, every app_intrf handler that reaches into app_data calls app_intrf_process_data_events(app_intrf) before returning to ui_layer. That function only mutates the CX tree and appends CxEvents — never calls up into ui_layer.
 Invariant: step 27 + "CX caches data_id, reconcile never re-resolves it." Under it, ui_layer may hold stale ContextIds freely (ht_get → NULL). Fixed-array storage additionally makes a borrowed pointer held across a mutating call a stale-read, not a UAF; if sampler/param storage becomes malloc'd + freed, keep that discipline strict or have ops resolve the ContextId through the module (dead → NULL) instead of storing a raw user_data.
-Phase E — context → ui events
-Type. typedef enum { CX_ADDED, CX_REMOVED, CX_CHANGED } CxEventType;, typedef struct { CxEventType type; ContextId id; } CxEvent;. Ring buffer in APP_INTRF.
-Emit. app_intrf_cx_resync pushes CX_ADDED / CX_REMOVED; the CHANGED handler pushes CX_CHANGED.
-Cursor API. bool nav_poll_event(APP_INTRF *, NavCursor *cursor, CxEvent *out) with a caller-owned NavCursor; ring wrapped past a cursor → signal "full resync".
-ui_layer consumes. Each UI_STATE / view owns a NavCursor; drain per render, prune dead ContextIds from UI_TARGET_LIST etc.; on overflow rebuild that view from nav_cx_root_return down. nav_cx_is_valid stays a plain lookup.
-
-Not really a phase — it's an invariant for later. Once there's a UI-driven mutation path (a "load plugin" action calling into app_data), every such app_intrf handler must call app_intrf_process_data_events() before returning to ui_layer, so the tree (and the CxEvents) are up to date synchronously. Today nothing wires plugin-loading to a UI action, so there's nothing to enforce yet — it's a one-line rule to apply when the action/command system lands.
 
 ================================================================================
 AGREED ARCHITECTURE — actions / args / execute  (design locked, not yet built)
@@ -146,19 +139,60 @@ app_intrf nav API  (ContextId-keyed pass-throughs)
     DataActionResult nav_cx_action_do(APP_INTRF*, ContextId, const DataActionReq*,
                                       ContextId *out_new);
   nav_cx_action_do, after the data layer returns:
-    1. app_intrf_process_data_events(app_intrf)  (drains DataEvent ring, resync,
-       emits CxEvents) -- the Phase D synchronous-reconcile invariant.
-    2. if *out_new set, resolve it to a live CX (resync just made it) and return it.
+    1. app_intrf_sync(app_intrf) -- the Phase D synchronous-reconcile
+       invariant. Shared with nav_update: data_update() first (action_do only
+       flips a module's dirty flag, e.g. smp_add's samples_dirty -
+       app_data_update is what turns a dirty flag into a DataEvent, so it has
+       to run here rather than waiting for the next per-frame nav_update),
+       then app_intrf_process_data_events (drains the DataEvent ring, resync,
+       emits CxEvents).
+    2. if *out_new was set, only hand it back once ht_get() on it succeeds
+       (the resync above is what materialises it) - defensive, else it stays
+       CONTEXT_ID_NULL rather than naming a dangling id.
     3. return the DataActionResult unchanged (one type end to end).
   All interface buffers are caller stack. Only heap that moves is inside the
   module when the action genuinely creates state (loading a plugin).
+  [DONE - app_intrf.c/.h, nav_cx_actions/nav_cx_action_args/nav_cx_list_count/
+   nav_cx_list_at/nav_cx_action_do are pure ContextId->CX->&cx->data
+   pass-throughs, no action-specific logic in app_intrf.]
 
 THE THREE STARTER ACTIONS
   context (ops table)            action                 arg(s)                        action_do delegates to
-  a sample / a plugin item       DATA_ACTION_REMOVE     none                          smp_remove_sample / plug_remove / clap_plug_remove
+  a sample / a plugin item       DATA_ACTION_REMOVE     none                          smp_stop_and_remove_sample / plug_remove / clap_plug_remove
   the LV2 list / CLAP list       DATA_ACTION_ADD_CHOICE 1x CHOICE (catalogue list)    plug_load_and_activate(uid) -> *out_new = MAKE_ID(DATA_NS_LV2_PLUG, uid)
   the sampler list               DATA_ACTION_ADD_FILE_PATH 1x PATH                    smp_add(path) -> *out_new = MAKE_ID(DATA_NS_SAMPLE, uid)
   "add" actions sit on the container context, "remove" on the item.
+  [DONE for sampler - sample_ops (REMOVE) + sampler_ops (ADD_FILE_PATH) in
+   app_data.c. sampler.c/.h gained: SMP_SMP.smp_data back-pointer (set in
+   smp_init, mirrors PLUG_PLUG.plug_data / SYNTH_OSC.synth_data) so an
+   action_do that only has the SMP_SMP* can reach its SMP_INFO*;
+   smp_stop_and_remove_sample now takes (void* smp) instead of (SMP_INFO*,
+   int idx) and reaches its SMP_INFO* via the back-pointer - one function, not
+   a same-but-for-void* twin (was smp_stop_and_remove_sample_self, merged in).
+   smp_add's return type now matches smp_sample_uid's: uint32_t, the new
+   sample's identity uid (>0) on success, 0 on failure (was int, uid on
+   success / negative smp_status_t codes on failure - dropped once nothing
+   read the distinct codes; app_data's check is now uid == 0, not <= 0)
+   - sampler_action_do composes *out_new straight from the return value, no
+   extra lookup needed (a smp_sample_return_by_id(SMP_INFO*, int id) helper
+   existed briefly for that lookup, removed once smp_add returned the uid
+   directly). ui_layer gained matching pass-throughs
+   (ui_layer_context_actions/_action_args/_list_count/_list_at/_action_do,
+   mirroring the existing ui_layer_context_* wrappers) - these stay, they are
+   plumbing, not UI. The CLI-side menu (key 'a'/'A', helper_context_menu_run,
+   helper_action_arg_prompt, cooked/raw toggling) was removed at the user's
+   request - they are implementing the UI side themselves for this step;
+   smp_groovebox_ui_cli.c is back to its pre-actions shape plus one small
+   factor-out (helper_purpose_get, the begin/get/end idiom, applied in
+   helper_nav_context_enter and the state_main_id_hovered read). Actions are
+   fully wired and testable from app_intrf/ui_layer down - just not yet
+   exposed by this particular CLI.
+   plugins.c/clap_plugins.c still need the same back-pointer-based
+   *_remove treatment for step 4 (plug_stop_and_remove_plug(void*) already
+   exists and fits, no rename needed; clap_plugins.c has the plug_data
+   back-pointer but no self-contained remove function yet - name it
+   consistently, no _self/_by_x twin, per the no-parallel-signature-twins
+   preference).]
 
 PORT CONNECTIVITY  (folded into DATA_ACTION_CONNECT, generic from the start)
 - Ports/connections are NOT contexts and NOT in the CX tree. They are live
@@ -210,11 +244,11 @@ EXTENSIBILITY BOUNDARY
   thing that would justify a new DataOps pointer -- explicit > clever.
 
 BUILD ORDER
-  1. data_actions.h + DataOps fields + DATA_CAP_ACTIONS + inline data_action_*
-     wrappers in data_object.h.
-  2. app_intrf nav_cx_* pass-throughs + the Phase D reconcile step in
-     nav_cx_action_do.
-  3. sample_ops / sampler_ops: REMOVE + ADD_FILE_PATH. Prove item + container
+  1. [DONE] data_actions.h + DataOps fields + DATA_CAP_ACTIONS + inline
+     data_action_* wrappers in data_object.h.
+  2. [DONE] app_intrf nav_cx_* pass-throughs + the Phase D reconcile step in
+     nav_cx_action_do (app_intrf_sync, shared with nav_update).
+  3. [DONE] sample_ops / sampler_ops: REMOVE + ADD_FILE_PATH. Prove item + container
      path end to end in the CLI (menu -> per-kind prompt -> req -> action_do ->
      next reconcile shows CX_ADDED/REMOVED).
   4. lv2_plugins_ops / clap_plugins_ops: ADD_CHOICE. Proves single CHOICE + a

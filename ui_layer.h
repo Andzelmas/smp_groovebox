@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include "ids.h"
 #include "cx_events.h"
+#include "data_actions.h"
 
 // ContextId cannot be 0; kept as an alias for the shared sentinel
 #define CONTEXT_ID_INVALID CONTEXT_ID_NULL
@@ -136,3 +137,27 @@ ContextId ui_layer_context_child_at(UI_LAYER *ui_layer, ContextId parent, size_t
 
 // return the context parent
 ContextId ui_layer_context_parent_return(UI_LAYER *ui_layer, ContextId context);
+
+// ACTIONS - thin pass-throughs to app_intrf's nav_cx_* (see data_actions.h
+// for the full contract and struct docs, and app_intrf.h for the flow).
+// fill *out with up to cap available actions for context.
+size_t ui_layer_context_actions(UI_LAYER *ui_layer, ContextId context,
+                                DataAction *out, size_t cap);
+// fill *out with up to cap argument specs the given action needs.
+size_t ui_layer_context_action_args(UI_LAYER *ui_layer, ContextId context,
+                                    DataActionType type, DataArgSpec *out,
+                                    size_t cap);
+// how many options `list` currently has.
+size_t ui_layer_context_list_count(UI_LAYER *ui_layer, ContextId context,
+                                   DataListId list,
+                                   const DataActionReq *partial);
+// fill *out with option idx of `list`.
+bool ui_layer_context_list_at(UI_LAYER *ui_layer, ContextId context,
+                              DataListId list, const DataActionReq *partial,
+                              size_t idx, DataChoice *out);
+// execute an action on context. See nav_cx_action_do (app_intrf.h) for the
+// synchronous-reconcile / out_new contract.
+DataActionResult ui_layer_context_action_do(UI_LAYER *ui_layer,
+                                            ContextId context,
+                                            const DataActionReq *req,
+                                            ContextId *out_new);

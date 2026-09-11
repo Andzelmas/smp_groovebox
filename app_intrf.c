@@ -18,6 +18,8 @@
 // change amount of params during runtime Remove unecessary various log
 // conversion methods in params, instead use the string callback function (like
 // in clap plugin parameters)
+// TODO.
+// Get rid of types.h if possible, and structs.h if not needed and logical too.
 
 /*
  TODO SAVING should be on the app_data layer. Implemented with the DataAction
@@ -389,6 +391,19 @@ static void app_intrf_process_data_events(APP_INTRF *app_intrf) {
     }
 }
 
+// run one synchronous cycle: pull fresh state from the data layer, then
+// drain its event queue and reconcile the CX tree against it. Shared by
+// nav_update (per-frame) and nav_cx_action_do (the Phase D invariant - an
+// action's structural change must be visible, as a materialised CX and as a
+// CxEvent, before nav_cx_action_do returns to the caller).
+static void app_intrf_sync(APP_INTRF *app_intrf) {
+    if (!app_intrf)
+        return;
+    if (app_intrf->data_update)
+        app_intrf->data_update(app_intrf->main_user_data);
+    app_intrf_process_data_events(app_intrf);
+}
+
 void app_intrf_destroy(APP_INTRF *app_intrf) {
     if (!app_intrf)
         return;
@@ -407,11 +422,7 @@ void app_intrf_destroy(APP_INTRF *app_intrf) {
 
 // functions for the ui layer
 void nav_update(APP_INTRF *app_intrf) {
-    if (!app_intrf)
-        return;
-    if (app_intrf->data_update)
-        app_intrf->data_update(app_intrf->main_user_data);
-    app_intrf_process_data_events(app_intrf);
+    app_intrf_sync(app_intrf);
 }
 
 ContextId nav_cx_root_return(APP_INTRF* app_intrf){
@@ -537,4 +548,84 @@ NavPollResult nav_poll_event(APP_INTRF *app_intrf, NavCursor *cursor,
     *out = app_intrf->cx_ring[slot].ev;
     cursor->next_seq += 1;
     return NAV_POLL_EVENT;
+}
+
+// ACTIONS - pure pass-throughs: resolve context to its CX, call through to
+// the DataObject. app_intrf knows no specific action, arg or list; see
+// data_actions.h for the contract these all share end to end.
+
+size_t nav_cx_actions(APP_INTRF *app_intrf, ContextId context, DataAction *out,
+                      size_t cap) {
+    if (!app_intrf || context == CONTEXT_ID_NULL)
+        return 0;
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+    if (!cx)
+        return 0;
+    return data_action_list(&cx->data, out, cap);
+}
+
+size_t nav_cx_action_args(APP_INTRF *app_intrf, ContextId context,
+                          DataActionType type, DataArgSpec *out, size_t cap) {
+    if (!app_intrf || context == CONTEXT_ID_NULL)
+        return 0;
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+    if (!cx)
+        return 0;
+    return data_action_args(&cx->data, type, out, cap);
+}
+
+size_t nav_cx_list_count(APP_INTRF *app_intrf, ContextId context,
+                         DataListId list, const DataActionReq *partial) {
+    if (!app_intrf || context == CONTEXT_ID_NULL)
+        return 0;
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+    if (!cx)
+        return 0;
+    return data_list_count(&cx->data, list, partial);
+}
+
+bool nav_cx_list_at(APP_INTRF *app_intrf, ContextId context, DataListId list,
+                    const DataActionReq *partial, size_t idx,
+                    DataChoice *out) {
+    if (!out)
+        return false;
+    out->value = 0;
+    out->label = NULL;
+    out->flags = 0;
+    if (!app_intrf || context == CONTEXT_ID_NULL)
+        return false;
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+    if (!cx)
+        return false;
+    return data_list_at(&cx->data, list, partial, idx, out);
+}
+
+DataActionResult nav_cx_action_do(APP_INTRF *app_intrf, ContextId context,
+                                  const DataActionReq *req,
+                                  ContextId *out_new) {
+    if (out_new)
+        *out_new = CONTEXT_ID_NULL;
+    if (!app_intrf || context == CONTEXT_ID_NULL || !req)
+        return DATA_ACTION_ERR_INVALID;
+    CX *cx = ht_get(app_intrf->cx_hashtable, context);
+    if (!cx)
+        return DATA_ACTION_ERR_INVALID;
+
+    ContextId new_id = CONTEXT_ID_NULL;
+    DataActionResult result = data_action_do(&cx->data, req, &new_id);
+
+    // Phase D: synchronously reconcile before returning to the caller, so
+    // the CX tree, its change log, and out_new below are already consistent
+    // with whatever the action just did.
+    app_intrf_sync(app_intrf);
+
+    // only hand new_id back once it actually resolves to a materialised CX -
+    // the resync above is what creates it. Defensive: if for some reason it
+    // didn't (e.g. the action's container wasn't the one that changed),
+    // *out_new stays CONTEXT_ID_NULL rather than naming a dangling id.
+    if (out_new && new_id != CONTEXT_ID_NULL &&
+        ht_get(app_intrf->cx_hashtable, new_id))
+        *out_new = new_id;
+
+    return result;
 }

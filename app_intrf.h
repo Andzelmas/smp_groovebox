@@ -3,6 +3,7 @@
 #include "types.h"
 #include "ids.h"
 #include "cx_events.h"
+#include "data_actions.h"
 #include <stdbool.h>
 
 // Interface for building the data layer structure.
@@ -56,3 +57,44 @@ void nav_cursor_init(APP_INTRF *app_intrf, NavCursor *cursor);
 // NAV_POLL_OVERFLOW means the cursor fell behind and was reset - rebuild.
 NavPollResult nav_poll_event(APP_INTRF *app_intrf, NavCursor *cursor,
                              CxEvent *out);
+
+// ACTIONS - see data_actions.h for the full contract and struct docs. Three
+// step flow, every buffer caller-owned (stack array or a single struct),
+// nothing here allocates:
+//   nav_cx_actions      -> menu of what can be done to `context`
+//   nav_cx_action_args  -> what inputs the chosen action needs
+//   nav_cx_list_count/  -> for a CHOICE/MULTI_CHOICE arg, its options. `list`
+//     nav_cx_list_at       is the DataListId from that arg's DataArgSpec,
+//                          forwarded unchanged. `partial` is the request
+//                          built so far, so a later arg's list can depend on
+//                          an earlier arg's value (e.g. a CONNECT action's
+//                          target list is filtered by the chosen source).
+//   nav_cx_action_do    -> execute
+
+// fill *out with up to cap available actions for context.
+size_t nav_cx_actions(APP_INTRF *app_intrf, ContextId context,
+                      DataAction *out, size_t cap);
+
+// fill *out with up to cap argument specs the given action needs.
+size_t nav_cx_action_args(APP_INTRF *app_intrf, ContextId context,
+                          DataActionType type, DataArgSpec *out, size_t cap);
+
+// how many options `list` currently has. May return 0 to mean "unknown, page
+// with nav_cx_list_at until it returns false" instead of "empty".
+size_t nav_cx_list_count(APP_INTRF *app_intrf, ContextId context,
+                         DataListId list, const DataActionReq *partial);
+
+// fill *out with option idx of `list`. returns false (and leaves *out
+// zeroed) if idx is out of range.
+bool nav_cx_list_at(APP_INTRF *app_intrf, ContextId context, DataListId list,
+                    const DataActionReq *partial, size_t idx,
+                    DataChoice *out);
+
+// execute an action on context. Synchronously reconciles the CX tree and its
+// change log before returning (the Phase D invariant), so the tree and
+// *out_new below are already consistent with whatever the action just did.
+// On success that creates a new context, *out_new is set to its ContextId;
+// otherwise (including on failure) *out_new is left CONTEXT_ID_NULL.
+DataActionResult nav_cx_action_do(APP_INTRF *app_intrf, ContextId context,
+                                  const DataActionReq *req,
+                                  ContextId *out_new);

@@ -275,13 +275,44 @@ static bool sample_child_at(void *user_data, size_t idx, DataObject *out) {
 static ContextId sample_id(void *user_data) {
     return MAKE_ID(DATA_NS_SAMPLE, smp_sample_uid(user_data));
 }
+// DATA_CAP_ACTIONS: a loaded sample can only be removed. No args, no lists -
+// action_args/list_count/list_at stay unset (NULL), which the data_object.h
+// wrappers already treat as "0 args" / "empty list".
+static size_t sample_action_list(void *user_data, DataAction *out,
+                                 size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataAction){
+        .type = DATA_ACTION_REMOVE,
+        .label = "Remove",
+        .tooltip = "Remove this sample",
+        .enabled = true,
+        .style = DATA_ACTION_STYLE_DANGEROUS,
+    };
+    return 1;
+}
+static DataActionResult sample_action_do(void *user_data,
+                                         const DataActionReq *req,
+                                         ContextId *out_new) {
+    (void)out_new; // REMOVE creates nothing
+    if (!req || req->type != DATA_ACTION_REMOVE)
+        return DATA_ACTION_ERR_INVALID;
+    if (!user_data)
+        return DATA_ACTION_ERR_INVALID;
+    if (smp_stop_and_remove_sample(user_data) != 0)
+        return DATA_ACTION_ERR_DATA;
+    return DATA_ACTION_OK;
+}
 // smp_sample_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps sample_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
     .id = sample_id,
     .child_count = sample_child_count,
     .child_at = sample_child_at,
     .name = smp_sample_name,
+    .action_list = sample_action_list,
+    .action_do = sample_action_do,
 };
 
 // container of the loaded samples. user_data is SMP_INFO*.
@@ -307,12 +338,67 @@ static ContextId sampler_id(void *user_data) {
     (void)user_data;
     return MAKE_ID(DATA_NS_SINGLETON, SID_SAMPLER);
 }
+// DATA_CAP_ACTIONS: the sampler list can add a sample from a file path. One
+// PATH arg, no list - list_count/list_at stay unset.
+static size_t sampler_action_list(void *user_data, DataAction *out,
+                                  size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataAction){
+        .type = DATA_ACTION_ADD_FILE_PATH,
+        .label = "Add sample",
+        .tooltip = "Load a sample from a file",
+        .enabled = true,
+        .style = DATA_ACTION_STYLE_NORMAL,
+    };
+    return 1;
+}
+static size_t sampler_action_args(void *user_data, DataActionType type,
+                                  DataArgSpec *out, size_t cap) {
+    (void)user_data;
+    if (type != DATA_ACTION_ADD_FILE_PATH)
+        return 0;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataArgSpec){
+        .name = "path",
+        .label = "File path",
+        .kind = DATA_ARG_PATH,
+        .required = true,
+        .list = DATA_LIST_NONE,
+    };
+    return 1;
+}
+static DataActionResult sampler_action_do(void *user_data,
+                                          const DataActionReq *req,
+                                          ContextId *out_new) {
+    SMP_INFO *smp_data = (SMP_INFO *)user_data;
+    if (!smp_data || !req || req->type != DATA_ACTION_ADD_FILE_PATH)
+        return DATA_ACTION_ERR_INVALID;
+    const char *path = req->add_file_path.path;
+    if (!path || !path[0])
+        return DATA_ACTION_ERR_INVALID;
+
+    // smp_add returns the new sample's identity uid (always > 0) on success,
+    // 0 on failure.
+    uint32_t uid = smp_add(smp_data, path, -1);
+    if (uid == 0)
+        return DATA_ACTION_ERR_DATA;
+
+    if (out_new)
+        *out_new = MAKE_ID(DATA_NS_SAMPLE, uid);
+    return DATA_ACTION_OK;
+}
 static const DataOps sampler_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
     .id = sampler_id,
     .child_count = sampler_child_count,
     .child_at = sampler_child_at,
     .name = sampler_name,
+    .action_list = sampler_action_list,
+    .action_args = sampler_action_args,
+    .action_do = sampler_action_do,
 };
 
 // single loaded lv2 plugin. user_data is the PLUG_PLUG* from plug_plugin_return.

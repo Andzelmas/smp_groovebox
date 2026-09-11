@@ -777,3 +777,57 @@ ContextId ui_layer_context_parent_return(UI_LAYER *ui_layer, ContextId context)
 
     return nav_cx_parent_return(ui_layer->app_intrf, context);
 }
+
+size_t ui_layer_context_actions(UI_LAYER *ui_layer, ContextId context,
+                                DataAction *out, size_t cap)
+{
+    if (!ui_layer)
+        return 0;
+
+    return nav_cx_actions(ui_layer->app_intrf, context, out, cap);
+}
+
+size_t ui_layer_context_action_args(UI_LAYER *ui_layer, ContextId context,
+                                    DataActionType type, DataArgSpec *out,
+                                    size_t cap)
+{
+    if (!ui_layer)
+        return 0;
+
+    return nav_cx_action_args(ui_layer->app_intrf, context, type, out, cap);
+}
+
+size_t ui_layer_context_list_count(UI_LAYER *ui_layer, ContextId context,
+                                   DataListId list,
+                                   const DataActionReq *partial)
+{
+    if (!ui_layer)
+        return 0;
+
+    return nav_cx_list_count(ui_layer->app_intrf, context, list, partial);
+}
+
+bool ui_layer_context_list_at(UI_LAYER *ui_layer, ContextId context,
+                              DataListId list, const DataActionReq *partial,
+                              size_t idx, DataChoice *out)
+{
+    if (!ui_layer)
+        return false;
+
+    return nav_cx_list_at(ui_layer->app_intrf, context, list, partial, idx,
+                          out);
+}
+
+DataActionResult ui_layer_context_action_do(UI_LAYER *ui_layer,
+                                            ContextId context,
+                                            const DataActionReq *req,
+                                            ContextId *out_new)
+{
+    if (!ui_layer) {
+        if (out_new)
+            *out_new = CONTEXT_ID_INVALID;
+        return DATA_ACTION_ERR_INVALID;
+    }
+
+    return nav_cx_action_do(ui_layer->app_intrf, context, req, out_new);
+}

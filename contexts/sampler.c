@@ -29,6 +29,10 @@ static thread_local bool is_audio_thread = false;
 typedef struct _smp_smp{
     //the note id, used to link to the cx struct (slot index, reused)
     int id;
+    //back-pointer to the owning SMP_INFO, set once at smp_init. Lets a
+    //function that only has a SMP_SMP*, reach the container without app_data
+    //having to pass it separately (see smp_stop_and_remove_sample).
+    SMP_INFO* smp_data;
     //monotonic per-module id, assigned at load, never reused. Identity for the
     //context/ui layers (see smp_sample_uid)
     uint32_t uid;
@@ -237,6 +241,7 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 	 samp->chans = 0;
 	 samp->file_path = NULL;
 	 samp->id = i;
+	 samp->smp_data = smp_data;
 	 samp->name[0] = '\0';
 	 samp->midi_vel = (SAMPLE_T)1.0;
 	 samp->offset = 0;
@@ -282,65 +287,77 @@ static void smp_set_display_name(SMP_SMP *smp){
     snprintf(smp->name, sizeof(smp->name), "%s", base);
 }
 
-int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id){
-    if(!smp_data)return -1;
-    if(in_id >= MAX_SAMPLES)return -1;
+uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {
+    if (!smp_data)
+        return 0;
+    if (in_id >= MAX_SAMPLES)
+        return 0;
     int smp_id = in_id;
-    //find empty sample if id is -1
-    if(smp_id == -1){
-	for(int i = 0; i < (MAX_SAMPLES+1); i++){
-	    SMP_SMP* cur_smp = &(smp_data->samples[i]);
-	    if(cur_smp->file_path)continue;
-	    smp_id = cur_smp->id;
-	    break;
-	}
+    // find empty sample if id is -1
+    if (smp_id == -1) {
+        for (int i = 0; i < (MAX_SAMPLES + 1); i++) {
+            SMP_SMP *cur_smp = &(smp_data->samples[i]);
+            if (cur_smp->file_path)
+                continue;
+            smp_id = cur_smp->id;
+            break;
+        }
     }
-    if(smp_id == -1 || smp_id >= MAX_SAMPLES)return -1;
-    //remove sample if this sample slot is occupied for some reason
-    smp_stop_and_remove_sample(smp_data, smp_id);
-    
+    if (smp_id == -1 || smp_id >= MAX_SAMPLES)
+        return 0;
+    // remove sample if this sample slot is occupied for some reason
+    smp_stop_and_remove_sample(&smp_data->samples[smp_id]);
+
     SMP_SMP *cur_smp = &(smp_data->samples[smp_id]);
-    //init the sample parameters to default values
-    cur_smp->params = params_init_param_container(NUM_PARAMS, (char*[1]){"Note"}, (PARAM_T[1]){40}, (PARAM_T[1]){0},
-						  (PARAM_T[1]){127}, (PARAM_T[1]){1}, (unsigned char[1]){Uchar_type}, NULL, NULL);
-    
-    //TODO samplerate is not needed, when we load sample to memory we also need to convert it to the system
-    //sample rate, when system sample rate changes, the jack callback of samplerate change
-    //calls a function in app_data to change variables on various structs that depend on the samplerate
-    //one of those members is the cur_smp->buffer- the app_data function will call the function in
-    //smp_data to adapt the buffer to the new sample rate.
+    // init the sample parameters to default values
+    cur_smp->params = params_init_param_container(
+        NUM_PARAMS, (char *[1]){"Note"}, (PARAM_T[1]){40}, (PARAM_T[1]){0},
+        (PARAM_T[1]){127}, (PARAM_T[1]){1}, (unsigned char[1]){Uchar_type},
+        NULL, NULL);
+
+    // TODO samplerate is not needed, when we load sample to memory we also need
+    // to convert it to the system sample rate, when system sample rate changes,
+    // the jack callback of samplerate change calls a function in app_data to
+    // change variables on various structs that depend on the samplerate one of
+    // those members is the cur_smp->buffer- the app_data function will call the
+    // function in smp_data to adapt the buffer to the new sample rate.
     SF_INFO samp_props;
-    //load sample to memory, remember that sample channels can differ
+    // load sample to memory, remember that sample channels can differ
     int load_err = 0;
-    load_err = load_wav_mem(&samp_props, SINGLE_READ_SAMPLE_B,
-			    samp_path, &cur_smp->buffer);
-    //if could not load the file, free memory this sample will not be loaded
-    if(load_err<0){
-	smp_stop_and_remove_sample(smp_data, smp_id);
-        return sample_load_memory_failed;
+    load_err = load_wav_mem(&samp_props, SINGLE_READ_SAMPLE_B, samp_path,
+                            &cur_smp->buffer);
+    // if could not load the file, free memory this sample will not be loaded
+    if (load_err < 0) {
+        smp_stop_and_remove_sample(cur_smp);
+        return 0;
     }
-    //if the buffer was loaded succesfuly the load_err will contain the number of samples loaded
+    // if the buffer was loaded succesfuly the load_err will contain the number
+    // of samples loaded
     cur_smp->samples_loaded = load_err;
-    //write the samplerate and number of channels
+    // write the samplerate and number of channels
     cur_smp->samplerate = samp_props.samplerate;
     cur_smp->chans = samp_props.channels;
 
-    //malloc the file_path of the sample
-    cur_smp->file_path = (char*)malloc(sizeof(char) * (strlen(samp_path)+1));
-    if(!cur_smp->file_path){
-	smp_stop_and_remove_sample(smp_data, smp_id);
-	return -1;
+    // malloc the file_path of the sample
+    cur_smp->file_path = (char *)malloc(sizeof(char) * (strlen(samp_path) + 1));
+    if (!cur_smp->file_path) {
+        smp_stop_and_remove_sample(cur_smp);
+        return 0;
     }
 
     strcpy(cur_smp->file_path, samp_path);
-    //assign the identity uid once, at load
+    // assign the identity uid once, at load
     cur_smp->uid = ++smp_data->next_smp_uid;
-    //build the display name once, now that file_path and id are set
+    // build the display name once, now that file_path and id are set
     smp_set_display_name(cur_smp);
-    //now this sample can start processing
-    context_sub_wait_for_start(smp_data->control_data, (void*)cur_smp);
+    // now this sample can start processing
+    context_sub_wait_for_start(smp_data->control_data, (void *)cur_smp);
     smp_data->samples_dirty = true;
-    return smp_id;
+    // return the identity uid, not the (reused) slot index - callers that
+    // created this sample need the uid to build its ContextId. Doubles as the
+    // success signal: uid is assigned from a counter starting at 1, so it is
+    // never 0 here, and every failure path above returns 0.
+    return cur_smp->uid;
 }
 
 int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
@@ -487,12 +504,18 @@ bool smp_samples_is_dirty(SMP_INFO* smp_data){
     return is_dirty;
 }
 
-int smp_stop_and_remove_sample(SMP_INFO* smp_data, int idx){
-    if(idx >= MAX_SAMPLES || idx < 0)return -1;
-    SMP_SMP* cur_smp = &(smp_data->samples[idx]);
+//stop processing the sample and remove it. smp is a SMP_SMP* (e.g. from
+//smp_sample_return, or app_data's per-sample DataObject.user_data) - the
+//owning SMP_INFO* is reached through the smp_data back-pointer, set once at
+//smp_init.
+int smp_stop_and_remove_sample(void* smp){
+    SMP_SMP* cur_smp = (SMP_SMP*)smp;
+    if(!cur_smp)return -1;
+    if(!cur_smp->smp_data)return -1;
+    SMP_INFO* smp_data = cur_smp->smp_data;
     //stop processing the sample
     context_sub_wait_for_stop(smp_data->control_data, (void*)cur_smp);
-    return smp_remove_sample(smp_data, idx);
+    return smp_remove_sample(smp_data, (unsigned int)cur_smp->id);
 }
 
 int smp_clean_memory(SMP_INFO *smp_data){

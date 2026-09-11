@@ -204,6 +204,24 @@ helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
     return 0;
 }
 
+// return the (single) ContextId saved for parent+purpose on state, or
+// CONTEXT_ID_INVALID if there is none. Factors the begin/get/end idiom used
+// in several places below.
+static ContextId helper_purpose_get(UI_LAYER* ui_layer, UI_STATE* state, ContextId parent, UiPurpose purpose){
+    if(!ui_layer)
+        return CONTEXT_ID_INVALID;
+    if(!state)
+        return CONTEXT_ID_INVALID;
+
+    UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, parent, purpose);
+    if(!target_list)
+        return CONTEXT_ID_INVALID;
+
+    ContextId id = ui_layer_nav_target_list_get(target_list, 0);
+    ui_layer_nav_target_list_end(state);
+    return id;
+}
+
 // change the parent to the ContextId saved in the purpose on the *parent
 static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, ContextId* parent, UiPurpose purpose){
     if(!ui_layer)
@@ -215,17 +233,10 @@ static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, Contex
     if(!ui_layer_context_valid(ui_layer, *parent))
         return;
 
-    UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, *parent, purpose);
-
-    if(!target_list)
-        return;
-
-    ContextId cx_curr = ui_layer_nav_target_list_get(target_list, 0);
+    ContextId cx_curr = helper_purpose_get(ui_layer, state, *parent, purpose);
     if(ui_layer_context_valid(ui_layer, cx_curr)){
         *parent = cx_curr;
     }
-
-    ui_layer_nav_target_list_end(state);
 }
 
 // change the parent to the parents parent
@@ -311,12 +322,8 @@ int main() {
         if(helper_context_info_get(ui_layer, state_main_current, &state_main_current_info)){
             printf("----| %s |----\n\n", state_main_current_info.name);
             // get the selected ContextId
-            UI_TARGET_LIST* selected_target = ui_layer_nav_target_list_begin(state_main, state_main_current, UI_PURPOSE_HOVERED);
-            ContextId state_main_id_hovered = CONTEXT_ID_INVALID;
-            if(selected_target){
-                state_main_id_hovered = ui_layer_nav_target_list_get(selected_target, 0);
-                ui_layer_nav_target_list_end(state_main);
-            }
+            ContextId state_main_id_hovered = helper_purpose_get(
+                ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED);
             for(size_t i = 0; i < state_main_current_info.child_count; i++){
                 InterfaceContextInfo state_main_current_child_info;
                 ContextId cur_child = ui_layer_context_child_at(ui_layer, state_main_current, i);

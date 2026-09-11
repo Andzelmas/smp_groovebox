@@ -24,9 +24,10 @@ int smp_read_rt_to_ui_messages(SMP_INFO* smp_data);
 SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate, smp_status_t *status, void* audio_backend);
 //create ports in ports[n]->sys_port
 int smp_activate_backend_ports(SMP_INFO* smp_data);
-//the function that adds a new sample and gets its buffer from a file to memory
-//if succesfull returns the id of the new sample
-int smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id);
+//the function that adds a new sample and gets its buffer from a file to memory.
+//on success returns the new sample's identity uid (always > 0, matching
+//smp_sample_uid); on failure returns 0.
+uint32_t smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id);
 //process the samples and return summed audio buffer
 //uses one callback to get_buffer from the sys_ports and another to get_notes from the midi sys_port
 int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes);
@@ -50,7 +51,8 @@ const char* smp_sample_name(void* smp);
 uint32_t smp_sample_uid(void* smp);
 //return (and clear) whether the samples array changed since the last call
 bool smp_samples_is_dirty(SMP_INFO* smp_data);
-//stop processing the sample and remove it
-int smp_stop_and_remove_sample(SMP_INFO* smp_data, int idx);
+//stop processing the sample and remove it. smp is a SMP_SMP* (e.g. from
+//smp_sample_return) - its owning SMP_INFO* is reached internally.
+int smp_stop_and_remove_sample(void* smp);
 //clean the memory
 int smp_clean_memory(SMP_INFO *smp_data);
