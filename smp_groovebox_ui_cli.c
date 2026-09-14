@@ -9,6 +9,7 @@
 
 #define SELECTED_DIST 10 // further away contexts from cx_selected will not be displayed
 #define ACTION_LIST_COUNT 5 // maximum possible actions for a context when returning DataAction
+#define STATES_COUNT 2 // how many states on this program
 
 // convenient struct to hold info about a retrieved ContextId
 typedef struct _context_intrf_info{
@@ -17,6 +18,7 @@ typedef struct _context_intrf_info{
     size_t child_count;
 } CONTEXT_INTRF_INFO;
 
+#define CONTEXT_ACTIONS_COUNT 2 // how many CONTEXT_ACTIONS_INFO object the program holds
 // convenient struct to hold info about a ContextId actions
 typedef struct _context_actions_info{
     DataAction action_list[ACTION_LIST_COUNT];
@@ -384,8 +386,7 @@ int main() {
     size_t state_main_hovered_idx = 0;
 
     // this array will contain all of the states
-    size_t states_count = 2;
-    UI_STATE* states_all[2] = {state_main, state_root};
+    UI_STATE* states_all[STATES_COUNT] = {state_main, state_root};
 
     // currently focused state
     UI_STATE* state_current = state_main;
@@ -394,6 +395,8 @@ int main() {
 
     // navigation mode
     size_t ui_nav_mode = UI_MODE_STANDARD;
+    // last mode changing input
+    int last_input = 0; 
 
     while (1) {
         // erase the terminal
@@ -401,8 +404,12 @@ int main() {
         // update the interface, of course should be in a loop
         ui_layer_update_cycle(ui_layer);
 
+        printf("\e[22m");
+        if(ui_nav_mode == UI_MODE_ACTION)
+            printf("\e[2m");
+
         // let each view react to contexts that appeared / were removed
-        for (size_t si = 0; si < states_count; si++) {
+        for (size_t si = 0; si < STATES_COUNT; si++) {
             UiReconcileResult rr =
                 ui_layer_state_reconcile(ui_layer, states_all[si]);
             if (rr == UI_RECONCILE_REBUILD && states_all[si] == state_main) {
@@ -444,18 +451,18 @@ int main() {
                "---------------------------------------\n");
         // generate letters that user can use to initiate the actions
         // and print the action names
-        CONTEXT_ACTIONS_INFO cx_action_infos[2] = {0};
+        CONTEXT_ACTIONS_INFO cx_action_infos[CONTEXT_ACTIONS_COUNT] = {0};
         helper_actions_list_add(ui_layer, state_current,
                                 *state_current_context_current, cx_action_infos,
-                                2, 0);
+                                CONTEXT_ACTIONS_COUNT, 0);
 
         ContextId state_current_context_hovered = helper_purpose_get(
             ui_layer, state_current, *state_current_context_current,
             UI_PURPOSE_HOVERED);
         helper_actions_list_add(ui_layer, state_current,
                                 state_current_context_hovered, cx_action_infos,
-                                2, 1);
-        for (size_t i = 0; i < 2; i++) {
+                                CONTEXT_ACTIONS_COUNT, 1);
+        for (size_t i = 0; i < CONTEXT_ACTIONS_COUNT; i++) {
             CONTEXT_ACTIONS_INFO cur_cx_action_info = cx_action_infos[i];
             CONTEXT_INTRF_INFO action_context_info;
             if (helper_context_info_get(ui_layer,
@@ -465,7 +472,14 @@ int main() {
             }
             for (size_t j = 0; j < cur_cx_action_info.action_count; j++) {
                 DataAction cur_action = cur_cx_action_info.action_list[j];
+                if ((char)last_input ==
+                        cur_cx_action_info.action_char_init[j] &&
+                    ui_nav_mode == UI_MODE_ACTION) {
+                    printf("\e[22m");
+                }
                 helper_string_print_underline(cur_action.label, cur_cx_action_info.action_char_init[j]);
+                if( ui_nav_mode == UI_MODE_ACTION)
+                    printf("\e[2m");
             }
         }
         printf("\n-------------------------------------------------------------"
@@ -495,8 +509,11 @@ int main() {
         if(input == '\e')
             ui_nav_mode = UI_MODE_STANDARD;
         // if the user pressed a action init key, go to action initialize mode
-        if (helper_actions_char_return(cx_action_infos, 2, NULL, 0, input) > 0)
+        if (helper_actions_char_return(cx_action_infos, CONTEXT_ACTIONS_COUNT,
+                                       NULL, 0, input) > 0) {
             ui_nav_mode = UI_MODE_ACTION;
+            last_input = input;
+        }
 
         unsigned int exit = 0;
 
@@ -536,7 +553,7 @@ int main() {
         }
     }
 
-    helper_program_destroy(ui_layer, states_all, states_count);
+    helper_program_destroy(ui_layer, states_all, STATES_COUNT);
 
     return 0;
 }
