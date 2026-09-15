@@ -9,7 +9,10 @@
 
 #define SELECTED_DIST 10 // further away contexts from cx_selected will not be displayed
 #define ACTION_LIST_COUNT 5 // maximum possible actions for a context when returning DataAction
+#define ACTION_ARG_COUNT 4 // maximum possible DataArgSpec for a single DataAction
 #define STATES_COUNT 2 // how many states on this program
+#define ACTION_SOURCES_COUNT 2 // contexts whose actions are gathered: current + hovered
+#define MAX_ACTION_CANDIDATES (ACTION_LIST_COUNT * ACTION_SOURCES_COUNT)
 
 // convenient struct to hold info about a retrieved ContextId
 typedef struct _context_intrf_info{
@@ -18,18 +21,23 @@ typedef struct _context_intrf_info{
     size_t child_count;
 } CONTEXT_INTRF_INFO;
 
-#define CONTEXT_ACTIONS_COUNT 2 // how many CONTEXT_ACTIONS_INFO object the program holds
-// convenient struct to hold info about a ContextId actions
-typedef struct _context_actions_info{
-    DataAction action_list[ACTION_LIST_COUNT];
-    size_t action_count;
-    char action_char_init[ACTION_LIST_COUNT];
+// one (context, action) pair still reachable this drill round, plus where in
+// its own label the next letter search should resume from if it survives
+// another narrow.
+typedef struct _action_candidate{
     ContextId actions_context;
-} CONTEXT_ACTIONS_INFO;
+    DataAction action;
+    size_t label_pos;   // resume position for the NEXT round's letter search
+    size_t letter_pos;  // where in the label THIS round's letter was found
+    char letter;         // this round's activation key, '\0' = unreachable
+                         // (disabled action, or its label ran out of letters)
+} ACTION_CANDIDATE;
 
 struct termios orig_termios;
+struct termios raw_termios;
 
-// reserved letters for navigation
+// reserved letters for navigation. Only enforced while picking round-0
+// letters (see helper_action_candidates_assign_letters) 
 static char reserved_letters[] = {'J','K','j','k','h','l','q', '\0'};
 
 static void disableRawMode() {
@@ -38,9 +46,18 @@ static void disableRawMode() {
 static void enableRawMode() {
     tcgetattr(STDIN_FILENO, &orig_termios);
     atexit(disableRawMode);
-    struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON);
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    raw_termios = orig_termios;
+    raw_termios.c_lflag &= ~(ECHO | ICANON);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw_termios);
+}
+// toggle to cooked/echo mode for an action's argument prompts, then back to
+// raw for the normal nav loop. Unlike enableRawMode these do not touch
+// atexit - they are called once per resolved action, not once per program.
+static void enterCookedMode() {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+}
+static void enterRawModeAgain() {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw_termios);
 }
 
 enum UiPurpose{
@@ -206,12 +223,15 @@ helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
             else{
                 ui_layer_state_entry_set(state, parent, purpose, 1);
                 UI_TARGET_LIST* targets = ui_layer_nav_target_list_begin(state, parent, purpose);
-                ui_layer_target_list_set_stale_policy(targets, stale_policy);
 
                 if(targets){
-                    ContextId new_purpose = ui_layer_context_child_at(ui_layer, parent, 0);
-                    if(ui_layer_context_valid(ui_layer, new_purpose)){
-                        helper_target_list_add_reset_on_full(ui_layer, targets, new_purpose);
+                    ui_layer_target_list_set_stale_policy(targets,
+                                                          stale_policy);
+                    ContextId new_purpose =
+                        ui_layer_context_child_at(ui_layer, parent, 0);
+                    if (ui_layer_context_valid(ui_layer, new_purpose)) {
+                        helper_target_list_add_reset_on_full(ui_layer, targets,
+                                                             new_purpose);
                     }
                     ui_layer_nav_target_list_end(state);
                     return 0;
@@ -276,70 +296,130 @@ static void helper_nav_context_exit(UI_LAYER* ui_layer, UI_STATE* state, Context
 
 }
 
-// add a CONTEXT_ACTIONS_INFO to the context_actions_insert_id in the context_actions array
-// also set the action_char_init to a char with which the user can initiate the action
-static void helper_actions_list_add(UI_LAYER *ui_layer, UI_STATE *state,
-                                      ContextId context,
-                                      CONTEXT_ACTIONS_INFO *context_actions, size_t context_actions_cap,
-                                      size_t context_actions_insert_id) {
-    if(!ui_layer || !state)
+// append ctx's actions (if any) to candidates[*count..), each starting with
+// label_pos/letter_pos 0 and letter '\0' - unassigned until
+// helper_action_candidates_assign_letters runs over the whole gathered set.
+static void helper_action_candidates_gather(UI_LAYER *ui_layer, ContextId ctx,
+                                            ACTION_CANDIDATE *candidates,
+                                            size_t cap, size_t *count) {
+    if (!ui_layer || !candidates || !count)
         return;
-    if(!ui_layer_context_valid(ui_layer, context))
+    if (!ui_layer_context_valid(ui_layer, ctx))
         return;
-    CONTEXT_ACTIONS_INFO *curr_action_info =
-        &context_actions[context_actions_insert_id];
-    curr_action_info->action_count = ui_layer_context_actions(
-        ui_layer, context, curr_action_info->action_list, ACTION_LIST_COUNT);
-    if(curr_action_info->action_count > 0)
-        curr_action_info->actions_context = context;
+    if (*count >= cap)
+        return;
 
-    // find letters for action initialization
-    for(size_t i = 0; i < curr_action_info->action_count; i++){
-        DataAction* cur_action = &curr_action_info->action_list[i];
-        curr_action_info->action_char_init[i] = '\0';
-        size_t secondary_idx = 0;
-        // find the letter_init
-        for(size_t j = 0; j < strlen(cur_action->label); j++){
-            char cur_char = cur_action->label[j];
-            size_t k = 0;
-            char target_char = reserved_letters[k];
-            bool found = false;
-            while(target_char != '\0'){
-                if(cur_char == target_char){
-                    found = true;
-                    break;
-                }
-                target_char = reserved_letters[k];
-                k++;
-            }
-            if(!found){
-                curr_action_info->action_char_init[i] = cur_char;
-                break;
-            }
+    DataAction actions[ACTION_LIST_COUNT];
+    size_t action_count =
+        ui_layer_context_actions(ui_layer, ctx, actions, ACTION_LIST_COUNT);
+    for (size_t i = 0; i < action_count && *count < cap; i++) {
+        ACTION_CANDIDATE *cand = &candidates[*count];
+        cand->actions_context = ctx;
+        cand->action = actions[i];
+        cand->label_pos = 0;
+        cand->letter_pos = 0;
+        cand->letter = '\0';
+        (*count)++;
+    }
+}
+
+// pure: for each candidate, pick the round's activation letter by scanning
+// its label from label_pos onward for the first usable character. Disabled
+// actions, and a label with nothing left to try from label_pos, get letter
+// '\0' (never reachable by a keypress). Several candidates CAN land on the
+// same letter in one round by design - a matching keypress narrows to that
+// group and this function runs again for just them, continuing each one's
+// scan from just past the letter that matched (see
+// helper_action_candidates_filter_matching).
+static void helper_action_candidates_assign_letters(ACTION_CANDIDATE *candidates,
+                                                     size_t count,
+                                                     bool respect_nav_keys) {
+    if (!candidates)
+        return;
+    for (size_t i = 0; i < count; i++) {
+        ACTION_CANDIDATE *cand = &candidates[i];
+        cand->letter = '\0';
+        if (!cand->action.enabled)
+            continue;
+        const char *label = cand->action.label;
+        if (!label)
+            continue;
+        size_t len = strlen(label);
+        for (size_t j = cand->label_pos; j < len; j++) {
+            char cur_char = label[j];
+            if (respect_nav_keys && strchr(reserved_letters, cur_char))
+                continue;
+            cand->letter = cur_char;
+            cand->letter_pos = j;
+            break;
         }
     }
 }
 
-// return how many actions are activated with the init_char
-// if out and out_cap is given, return the DataActions in question
-static size_t helper_actions_char_return(CONTEXT_ACTIONS_INFO* actions_infos, size_t actions_cap, DataAction* out, size_t out_cap, char init_char){
-    if(!actions_infos || actions_cap == 0)
+// keep only the candidates whose current letter == key, compacting the
+// array in place; advances each survivor's label_pos to just past the
+// letter that matched, ready for the next assign_letters call. Returns how
+// many survived. On 0 matches, candidates/*count are left untouched - there
+// is nothing to narrow, the caller decides what an unmatched key means.
+static size_t helper_action_candidates_filter_matching(ACTION_CANDIDATE *candidates,
+                                                        size_t *count, char key) {
+    if (!candidates || !count)
         return 0;
-    size_t actions_amount = 0;
+
+    size_t matched = 0;
+    for (size_t i = 0; i < *count; i++) {
+        if (candidates[i].letter != '\0' && candidates[i].letter == key)
+            matched++;
+    }
+    if (matched == 0)
+        return 0;
+
     size_t insert_idx = 0;
-    for(size_t i = 0; i < actions_cap; i++){
-        CONTEXT_ACTIONS_INFO cur_info = actions_infos[i];
-        for(size_t j = 0; j < cur_info.action_count; j++){
-            if(cur_info.action_char_init[j] == init_char){
-                if(insert_idx < out_cap && out){
-                    out[insert_idx] = cur_info.action_list[j];
-                    insert_idx++;
-                }
-                actions_amount++;
-            }
+    for (size_t i = 0; i < *count; i++) {
+        if (candidates[i].letter == '\0' || candidates[i].letter != key)
+            continue;
+        ACTION_CANDIDATE survivor = candidates[i];
+        survivor.label_pos = survivor.letter_pos + 1;
+        candidates[insert_idx] = survivor;
+        insert_idx++;
+    }
+    *count = insert_idx;
+    return insert_idx;
+}
+
+// drop any candidate whose context vanished since it was gathered (a
+// structural change landed between drill rounds - unlikely in this
+// single-user cli, but cheap to guard against). Returns the surviving count.
+static size_t helper_action_candidates_revalidate(UI_LAYER *ui_layer,
+                                                   ACTION_CANDIDATE *candidates,
+                                                   size_t count) {
+    if (!candidates)
+        return 0;
+    size_t insert_idx = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!ui_layer_context_valid(ui_layer, candidates[i].actions_context))
+            continue;
+        if (insert_idx != i)
+            candidates[insert_idx] = candidates[i];
+        insert_idx++;
+    }
+    return insert_idx;
+}
+
+// is the context among the canditates
+// in other words does the context have any actions (will return true if has disabled actions)
+static bool helper_action_canditates_has_source(ACTION_CANDIDATE* canditates, size_t count, ContextId context){
+    if(!canditates || count == 0)
+        return false;
+
+    for(size_t i = 0; i < count; i ++){
+        ACTION_CANDIDATE cur_canditate = canditates[i];
+        if(cur_canditate.actions_context == context){
+            return true;
         }
     }
-    return actions_amount;
+
+    return false;
 }
 
 static void helper_string_print_underline(const char* string, char char_underline){
@@ -354,6 +434,99 @@ static void helper_string_print_underline(const char* string, char char_underlin
             printf("%c", cur_char);
         }
     }
+}
+
+// prompt for one arg of spec->kind, filling *req accordingly. path_buf is
+// caller-owned scratch that must stay alive for the action_do call, since
+// DataActionReq.add_file_path.path only borrows it. Each kind decides its
+// own terminal mode - STRING/PATH is a cooked-mode text line; a future
+// CHOICE/MULTI_CHOICE picker will most likely stay in raw mode (letter-
+// driven, like the action picker itself), so the toggle lives here per kind
+// rather than being forced on the whole arg loop by the caller. Returns
+// false if the kind isn't supported by this cli yet, or input failed.
+static bool helper_action_arg_prompt(DataArgSpec* spec, DataActionReq* req, char* path_buf, size_t path_buf_size){
+    switch(spec->kind){
+    case DATA_ARG_STRING:
+    case DATA_ARG_PATH: {
+        enterCookedMode();
+        printf("%s: ", spec->label ? spec->label : spec->name);
+        fflush(stdout);
+        bool ok = fgets(path_buf, (int)path_buf_size, stdin) != NULL;
+        if(ok){
+            size_t len = strlen(path_buf);
+            if(len > 0 && path_buf[len - 1] == '\n')
+                path_buf[len - 1] = '\0';
+            if(spec->kind == DATA_ARG_PATH)
+                req->add_file_path.path = path_buf;
+        }
+        enterRawModeAgain();
+        return ok;
+    }
+    default:
+        // DATA_ARG_CHOICE / DATA_ARG_MULTI_CHOICE need a real picker.
+        printf("(this cli does not support that argument kind yet)\n");
+        return false;
+    }
+}
+
+// the drill narrowed to exactly one candidate - collect whatever arguments
+// its action needs (each arg prompt decides its own terminal mode, see
+// helper_action_arg_prompt) and execute it. Writes a one-line result into
+// msg (shown at the top of the next frame); msg[0] is left '\0' if there is
+// nothing to report. Returns the ContextId of whatever the action created
+// (e.g. the new sample from ADD_FILE_PATH), or CONTEXT_ID_INVALID if it
+// created nothing or failed - forwarded straight from
+// ui_layer_context_action_do's out_new. Not consumed by any caller yet, but
+// costs nothing to hand back and is exactly the hook a future "hover what
+// you just created" would need.
+static ContextId helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
+                                       char *msg, size_t msg_cap) {
+    if (!msg || msg_cap == 0)
+        return CONTEXT_ID_INVALID;
+    msg[0] = '\0';
+    if (!ui_layer || !chosen)
+        return CONTEXT_ID_INVALID;
+
+    const char *label = chosen->action.label ? chosen->action.label : "action";
+    DataActionReq req = {.type = chosen->action.type};
+    DataArgSpec specs[ACTION_ARG_COUNT];
+    size_t arg_count = ui_layer_context_action_args(
+        ui_layer, chosen->actions_context, chosen->action.type, specs,
+        ACTION_ARG_COUNT);
+
+    char path_buf[512];
+    bool ok = true;
+    if (arg_count > 0)
+        printf("\n-- %s --\n", label);
+    for (size_t i = 0; i < arg_count && ok; i++)
+        ok = helper_action_arg_prompt(&specs[i], &req, path_buf, sizeof(path_buf));
+
+    if (!ok) {
+        snprintf(msg, msg_cap, "%s: cancelled.", label);
+        return CONTEXT_ID_INVALID;
+    }
+
+    ContextId out_new = CONTEXT_ID_INVALID;
+    DataActionResult result =
+        ui_layer_context_action_do(ui_layer, chosen->actions_context, &req, &out_new);
+    switch (result) {
+    case DATA_ACTION_OK:
+        snprintf(msg, msg_cap, "%s: done.", label);
+        break;
+    case DATA_ACTION_ERR_INVALID:
+        snprintf(msg, msg_cap, "%s: invalid request.", label);
+        break;
+    case DATA_ACTION_ERR_NOT_ALLOWED:
+        snprintf(msg, msg_cap, "%s: not allowed right now.", label);
+        break;
+    case DATA_ACTION_ERR_STALE:
+        snprintf(msg, msg_cap, "%s: choice no longer valid, try again.", label);
+        break;
+    case DATA_ACTION_ERR_DATA:
+        snprintf(msg, msg_cap, "%s: rejected (could not load or apply).", label);
+        break;
+    }
+    return out_new;
 }
 
 static void helper_program_destroy(UI_LAYER* ui_layer, UI_STATE** states, size_t states_capacity){
@@ -395,18 +568,18 @@ int main() {
 
     // navigation mode
     size_t ui_nav_mode = UI_MODE_STANDARD;
-    // last mode changing input
-    int last_input = 0; 
+    // action candidates for the current drill round. Only meaningful while
+    // ui_nav_mode == UI_MODE_ACTION; UI_MODE_STANDARD rebuilds this fresh
+    ACTION_CANDIDATE candidates[MAX_ACTION_CANDIDATES] = {0};
+    size_t candidate_count = 0;
+    // result of the last resolved action, shown once at the top of the frame
+    char action_status_msg[128] = {0};
 
     while (1) {
         // erase the terminal
         printf("\033[2J\033[H");
         // update the interface, of course should be in a loop
         ui_layer_update_cycle(ui_layer);
-
-        printf("\e[22m");
-        if(ui_nav_mode == UI_MODE_ACTION)
-            printf("\e[2m");
 
         // let each view react to contexts that appeared / were removed
         for (size_t si = 0; si < STATES_COUNT; si++) {
@@ -415,28 +588,31 @@ int main() {
             if (rr == UI_RECONCILE_REBUILD && states_all[si] == state_main) {
                 // the view's cursor fell behind - fall back to the root
                 state_main_current = id_root;
-                state_main_hovered_idx = 0;
             }
         }
 
         // show the state_main info
-        // first update state_main_current and state_main_hovered_idx if user inputs changed these
+        // first update state_main_hovered_idx if user inputs or the
+        // _state_reconcile changed the state_main_current
         state_main_hovered_idx = helper_nav_context_single_purpose_set(
             ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED,
             (UiStalePolicy){.mode = UI_STALE_PREV_SIBLING});
+        ContextId state_main_id_hovered = helper_purpose_get(
+            ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED);
+
+
+        printf("\e[22m");
+        if(ui_nav_mode == UI_MODE_ACTION)
+            printf("\e[2m");
 
         CONTEXT_INTRF_INFO state_main_current_info;
         if(helper_context_info_get(ui_layer, state_main_current, &state_main_current_info)){
             printf("----| %s |----\n\n", state_main_current_info.name);
-            // get the selected ContextId
-            ContextId state_main_id_hovered = helper_purpose_get(
-                ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED);
             for(size_t i = 0; i < state_main_current_info.child_count; i++){
                 CONTEXT_INTRF_INFO state_main_current_child_info;
                 ContextId cur_child = ui_layer_context_child_at(ui_layer, state_main_current, i);
                 if(helper_context_info_get(ui_layer, cur_child, &state_main_current_child_info)){
-                    if(cur_child == state_main_id_hovered){
-                        state_main_hovered_idx = i;
+                    if(cur_child == state_main_id_hovered && state_current == state_main){
                         printf(">%s\n", state_main_current_child_info.name);
                     }
                     else{
@@ -446,43 +622,66 @@ int main() {
             }
         }
 
-        // show possible actions for the current state contexts
-        printf("\n-------------------------------------------------------------"
-               "---------------------------------------\n");
-        // generate letters that user can use to initiate the actions
-        // and print the action names
-        CONTEXT_ACTIONS_INFO cx_action_infos[CONTEXT_ACTIONS_COUNT] = {0};
-        helper_actions_list_add(ui_layer, state_current,
-                                *state_current_context_current, cx_action_infos,
-                                CONTEXT_ACTIONS_COUNT, 0);
+        // --------------------------------------------------
+        // Actions for the state_current
 
+        // action candidates: either keep drilling the previous round
+        // (revalidating first, in case something acted on disappeared
+        // between rounds) or, in standard mode, rebuild round 0 fresh from
+        // the live current + hovered contexts every frame.
         ContextId state_current_context_hovered = helper_purpose_get(
             ui_layer, state_current, *state_current_context_current,
             UI_PURPOSE_HOVERED);
-        helper_actions_list_add(ui_layer, state_current,
-                                state_current_context_hovered, cx_action_infos,
-                                CONTEXT_ACTIONS_COUNT, 1);
-        for (size_t i = 0; i < CONTEXT_ACTIONS_COUNT; i++) {
-            CONTEXT_ACTIONS_INFO cur_cx_action_info = cx_action_infos[i];
-            CONTEXT_INTRF_INFO action_context_info;
-            if (helper_context_info_get(ui_layer,
-                                        cur_cx_action_info.actions_context,
-                                        &action_context_info)) {
-                printf("%s: ", action_context_info.name);
-            }
-            for (size_t j = 0; j < cur_cx_action_info.action_count; j++) {
-                DataAction cur_action = cur_cx_action_info.action_list[j];
-                if ((char)last_input ==
-                        cur_cx_action_info.action_char_init[j] &&
-                    ui_nav_mode == UI_MODE_ACTION) {
+        bool need_gather = true;
+        if (ui_nav_mode == UI_MODE_ACTION) {
+            candidate_count = helper_action_candidates_revalidate(
+                ui_layer, candidates, candidate_count);
+            if (candidate_count > 0)
+                need_gather = false;
+            else
+                ui_nav_mode = UI_MODE_STANDARD;
+        }
+        if (need_gather) {
+            candidate_count = 0;
+            helper_action_candidates_gather(ui_layer, *state_current_context_current,
+                                            candidates, MAX_ACTION_CANDIDATES,
+                                            &candidate_count);
+            helper_action_candidates_gather(ui_layer, state_current_context_hovered,
+                                            candidates, MAX_ACTION_CANDIDATES,
+                                            &candidate_count);
+            helper_action_candidates_assign_letters(candidates, candidate_count,
+                                                    true);
+        }
+        // show possible actions for the current drill round
+        printf("\n-------------------------------------------------------------"
+               "---------------------------------------\n");
+
+        ContextId action_sources[ACTION_SOURCES_COUNT] = {*state_current_context_current,
+                                                           state_current_context_hovered};
+        for (size_t s = 0; s < ACTION_SOURCES_COUNT; s++) {
+            ContextId src = action_sources[s];
+            CONTEXT_INTRF_INFO src_info;
+            if (!helper_context_info_get(ui_layer, src, &src_info))
+                continue;
+            if (helper_action_canditates_has_source(candidates, candidate_count,
+                                                    src))
+                printf("%s: ", src_info.name);
+            for (size_t i = 0; i < candidate_count; i++) {
+                if (candidates[i].actions_context != src)
+                    continue;
+                if (ui_nav_mode == UI_MODE_ACTION)
                     printf("\e[22m");
-                }
-                helper_string_print_underline(cur_action.label, cur_cx_action_info.action_char_init[j]);
-                if( ui_nav_mode == UI_MODE_ACTION)
+                helper_string_print_underline(candidates[i].action.label,
+                                              candidates[i].letter);
+                if (!candidates[i].action.enabled)
+                    printf(" (disabled)");
+                printf(" ");
+                if (ui_nav_mode == UI_MODE_ACTION)
                     printf("\e[2m");
             }
         }
-        printf("\n-------------------------------------------------------------"
+        printf("\n");
+        printf("-------------------------------------------------------------"
                "---------------------------------------\n");
 
         // show the state_root info
@@ -503,54 +702,74 @@ int main() {
             }
         }
 
+        // system messages
+        printf("\nMessages:\n");
+        if (action_status_msg[0])
+            printf("%s\n", action_status_msg);
+
         // get user inputs
         int input = getchar();
-        // if user pressed ESC return to standard mode from any other mode
-        if(input == '\e')
-            ui_nav_mode = UI_MODE_STANDARD;
-        // if the user pressed a action init key, go to action initialize mode
-        if (helper_actions_char_return(cx_action_infos, CONTEXT_ACTIONS_COUNT,
-                                       NULL, 0, input) > 0) {
-            ui_nav_mode = UI_MODE_ACTION;
-            last_input = input;
-        }
-
         unsigned int exit = 0;
 
-        if (ui_nav_mode == UI_MODE_STANDARD) {
-            switch (input) {
-            case 'J':
-                break;
-            case 'K':
-                break;
-            case 'j':
-                helper_nav_context_scroll(
-                    ui_layer, state_current, *state_current_context_current,
-                    UI_PURPOSE_HOVERED, state_current_hovered_idx, true);
-                break;
-            case 'k':
-                helper_nav_context_scroll(
-                    ui_layer, state_current, *state_current_context_current,
-                    UI_PURPOSE_HOVERED, state_current_hovered_idx, false);
-                break;
-            case 'l':
-                helper_nav_context_enter(ui_layer, state_current,
-                                         state_current_context_current,
-                                         UI_PURPOSE_HOVERED);
-                break;
-            case 'h':
-                helper_nav_context_exit(ui_layer, state_current,
-                                        state_current_context_current,
-                                        UI_PURPOSE_HOVERED);
-                break;
-            case 'q':
-                exit = 1;
-                break;
+        if (input == '\e') {
+            // cancel any drill in progress, back to standard navigation
+            ui_nav_mode = UI_MODE_STANDARD;
+            candidate_count = 0;
+            action_status_msg[0] = '\0';
+        } else {
+            size_t matches = helper_action_candidates_filter_matching(
+                candidates, &candidate_count, (char)input);
+            if (matches == 1) {
+                helper_action_resolve(ui_layer, &candidates[0],
+                                      action_status_msg,
+                                      sizeof(action_status_msg));
+                candidate_count = 0;
+                ui_nav_mode = UI_MODE_STANDARD;
+            } else if (matches > 1) {
+                ui_nav_mode = UI_MODE_ACTION;
+                helper_action_candidates_assign_letters(candidates,
+                                                        candidate_count, false);
+            } else if (ui_nav_mode == UI_MODE_STANDARD) {
+                // not an action letter this round - ordinary navigation.
+                // nothing matched, so candidates/candidate_count are
+                // untouched (still this frame's round-0 set).
+                switch (input) {
+                case 'J':
+                    break;
+                case 'K':
+                    break;
+                case 'j':
+                    helper_nav_context_scroll(
+                        ui_layer, state_current, *state_current_context_current,
+                        UI_PURPOSE_HOVERED, state_current_hovered_idx, true);
+                    break;
+                case 'k':
+                    helper_nav_context_scroll(
+                        ui_layer, state_current, *state_current_context_current,
+                        UI_PURPOSE_HOVERED, state_current_hovered_idx, false);
+                    break;
+                case 'l':
+                    helper_nav_context_enter(ui_layer, state_current,
+                                             state_current_context_current,
+                                             UI_PURPOSE_HOVERED);
+                    break;
+                case 'h':
+                    helper_nav_context_exit(ui_layer, state_current,
+                                            state_current_context_current,
+                                            UI_PURPOSE_HOVERED);
+                    break;
+                case 'q':
+                    exit = 1;
+                    break;
+                }
             }
-
-            if (exit == 1)
-                break;
+            // else: ui_nav_mode == UI_MODE_ACTION and the key matched
+            // nothing - navigation is disabled here, so it is simply
+            // ignored; candidates/letters stay exactly as they were.
         }
+
+        if (exit == 1)
+            break;
     }
 
     helper_program_destroy(ui_layer, states_all, STATES_COUNT);
