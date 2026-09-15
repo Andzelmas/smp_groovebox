@@ -32,6 +32,15 @@ typedef struct _jack_info{
     int rt_tick;
     //control_data for sys messages, for jack currently only uses the [thread-safe] messaging system, since this does not have any subcontexts
     CXCONTROL* control_data;
+    //set (true) by app_jack_port_registration_cb, on JACK's own notification
+    //thread, whenever a port is registered/unregistered anywhere on the
+    //system (not just by this client) - read-and-cleared by
+    //app_jack_ports_changed on [main-thread]. 
+    atomic_bool ports_changed;
+    //same as ports_changed, but set by app_jack_port_connect_cb whenever any
+    //two ports are connected/disconnected (including by another program) -
+    //read-and-cleared by app_jack_connections_changed.
+    atomic_bool connections_changed;
 }JACK_INFO;
 //ticks per beat, since user should not set these anyway
 double time_ticks_per_beat = 1920.0;
@@ -40,6 +49,27 @@ static int app_jack_sys_send_msg(void* user_data, const char* msg){
     JACK_INFO* jack_data = (JACK_INFO*)user_data;
     log_append_logfile("%s", msg);
     return 0;
+}
+
+//JACK notification-thread callbacks (see jack_set_port_registration_callback /
+//jack_set_port_connect_callback below). JACK's own docs say these run on a
+//separate non-RT thread, not [audio-thread] and not [main-thread] - so these
+//stay deliberately trivial: just flip an atomic flag, touch nothing else.
+//does not return what changed, just that ports changed
+static void app_jack_port_registration_cb(jack_port_id_t port, int registered, void* arg){
+    (void)port;
+    (void)registered;
+    JACK_INFO* jack_data = (JACK_INFO*)arg;
+    if(!jack_data)return;
+    atomic_store(&jack_data->ports_changed, true);
+}
+static void app_jack_port_connect_cb(jack_port_id_t a, jack_port_id_t b, int connect, void* arg){
+    (void)a;
+    (void)b;
+    (void)connect;
+    JACK_INFO* jack_data = (JACK_INFO*)arg;
+    if(!jack_data)return;
+    atomic_store(&jack_data->connections_changed, true);
 }
 
 JACK_INFO* jack_initialize(void *arg, const char *client_name,
@@ -51,6 +81,8 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
     }
     jack_data->rt_tick = 0;
     jack_data->control_data = NULL;
+    atomic_init(&jack_data->ports_changed, false);
+    atomic_init(&jack_data->connections_changed, false);
 
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
@@ -92,7 +124,16 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
     
     //set the callback function that updates the *pos struct that holds beat, bar, tick etc information
     jack_set_timebase_callback(jack_data->client, 0, timebbt_callback_rt, jack_data);
-    
+
+    //call this function whenever any port is registered or unregistered
+    //anywhere on the system (not just this client's own ports) - must be
+    //set before jack_activate(), same as the callbacks above
+    jack_set_port_registration_callback(jack_data->client, app_jack_port_registration_cb, jack_data);
+    //call this function whenever any two ports are connected or disconnected,
+    //including by another program (e.g. a patchbay) - same pre-activate
+    //requirement
+    jack_set_port_connect_callback(jack_data->client, app_jack_port_connect_cb, jack_data);
+
     /*write some jack client attributes to the jack_data struct*/
     //sample rate of the server
     jack_data->sample_rate = jack_get_sample_rate(jack_data->client);
@@ -372,6 +413,20 @@ int app_jack_disconnect_all_ports(JACK_INFO* jack_data, unsigned int type_patter
     }
     free(ports);
     return return_val;
+}
+
+//return (and clear) whether any port was registered/unregistered anywhere on
+//the system since the last call 
+bool app_jack_ports_changed(JACK_INFO* jack_data){
+    if(!jack_data)return false;
+    return atomic_exchange(&jack_data->ports_changed, false);
+}
+
+//same as app_jack_ports_changed, for any port connect/disconnect (including
+//by another program) since the last call.
+bool app_jack_connections_changed(JACK_INFO* jack_data){
+    if(!jack_data)return false;
+    return atomic_exchange(&jack_data->connections_changed, false);
 }
 
 int app_jack_is_port(JACK_INFO* jack_data, const char* port_name){

@@ -1,6 +1,7 @@
 #pragma once
 #include <jack/jack.h>
 #include <jack/midiport.h>
+#include <stdbool.h>
 #include "../structs.h"
 #include "../contexts/params.h"
 //struct to keep midi events info
@@ -72,6 +73,17 @@ int app_jack_midi_events_write_rt(void* buffer, jack_nframes_t time, const jack_
 void app_jack_return_notes_vels_rt(void* midi_in, JACK_MIDI_CONT* midi_cont);
 //disconnect ports belonging to this client
 int app_jack_disconnect_all_ports(JACK_INFO* jack_data, unsigned int type_pattern, unsigned long flags);
+
+//return (and clear) whether any port was registered/unregistered anywhere on
+//the system since the last call - a coarse hint to go re-poll the live port
+//list, not which port. Fed by jack_set_port_registration_callback.
+bool app_jack_ports_changed(JACK_INFO* jack_data);
+//return (and clear) whether any two ports were connected/disconnected
+//anywhere on the system since the last call (including by another program) -
+//same coarse-hint shape as app_jack_ports_changed. Fed by
+//jack_set_port_connect_callback.
+bool app_jack_connections_changed(JACK_INFO* jack_data);
+
 //check if port with the port_name exists on the client
 int app_jack_is_port(JACK_INFO* jack_data, const char* port_name);
 //disconnect two ports

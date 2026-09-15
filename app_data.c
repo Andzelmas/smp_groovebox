@@ -1080,6 +1080,13 @@ void app_data_update(void *root_user_data) {
     if (clap_plug_plugins_is_dirty(app_data->clap_plug_data))
         app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_CLAP_PLUGINS));
+
+    // ports/connections are never materialised into the CX tree (see Trk)
+    bool ports_changed = app_jack_ports_changed(app_data->trk_jack);
+    bool connections_changed = app_jack_connections_changed(app_data->trk_jack);
+    if (ports_changed || connections_changed)
+        app_data_push_event(app_data, DATA_EVENT_CHANGED,
+                            MAKE_ID(DATA_NS_SINGLETON, SID_TRK));
 }
 
 void app_stop_and_clean(void *root_user_data) {

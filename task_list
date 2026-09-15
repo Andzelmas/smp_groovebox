@@ -226,11 +226,34 @@ PORT CONNECTIVITY  (folded into DATA_ACTION_CONNECT, generic from the start)
   diffs", can be added behind a payload flag later.)
 - "Keep the connect window open" = UI loops nav_cx_action_do(CONNECT) +
   re-pull; nothing below the UI is stateful about the session.
-- Optional refresh nudge: a JACK port-registration / graph-order callback sets
-  ports_dirty -> app_data_update emits DATA_EVENT_CHANGED{ Trk id } ->
-  CX_CHANGED{ Trk id } -> connectivity UI_STATE re-pulls. CX_CHANGED, not
-  ADDED/REMOVED: no resync, no structural churn. Not needed for v1 if the CLI
-  re-pulls each frame while the window is open.
+- Refresh nudge [DONE, ahead of the rest of step 5]: jack_set_port_registration_
+  callback / jack_set_port_connect_callback registered in jack_initialize()
+  (must be pre jack_activate() - JACK requires this; same spot as the existing
+  sample_rate/timebase callbacks). Each just flips an atomic_bool on JACK_INFO
+  (ports_changed / connections_changed - two, one per callback) from JACK's own
+  notification thread (not [audio-thread], not [main-thread] - callbacks stay
+  trivial on purpose). app_jack_ports_changed / app_jack_connections_changed
+  (atomic_exchange read-and-clear, unlike the plain is_dirty style elsewhere -
+  this one is genuinely written from a second thread) drained every
+  app_data_update, pushing ONE DATA_EVENT_CHANGED{ Trk id } if either fired
+  (both read unconditionally, not via || - short-circuiting would skip
+  clearing the second). -> CX_CHANGED{ Trk id }, no resync, no structural
+  churn (ports/connections were never CX children of Trk to begin with).
+  Deliberately coarse, matching every other CX_CHANGED in the system (no
+  payload for "which port" - see data-object-layering memory for the reasoning
+  the user and assistant settled on: a finer signal would only save the port-
+  enumeration call, not the N per-port connection checks, so it's not worth
+  breaking CxEvent's uniform "re-read whatever you show for this id" contract
+  for). Scales naturally if Trk grows more properties later (e.g. the
+  previously-removed timestamp) - same DATA_EVENT_CHANGED{ Trk id }, same
+  "re-check everything you display for Trk" response, no new event shape
+  needed per property.
+  Rejected along the way: a bespoke nav_ports_generation()/
+  ui_layer_ports_generation() pass-through pair (mirroring data_poll_event) -
+  correctly called out as breaking app_intrf's generic-across-all-contexts
+  design by adding JACK-specific surface to it. DATA_EVENT_CHANGED already
+  existed for exactly this and needed zero app_intrf.c/.h or ui_layer.c/.h
+  changes once used as designed.
 
 NAMESPACES / CONSTANTS TO ADD
   DATA_NS_*        : (existing SINGLETON/SAMPLE/LV2_PLUG/CLAP_PLUG/SYNTH_OSC)
