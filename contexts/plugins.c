@@ -73,7 +73,6 @@ typedef struct _plugin_list_item {
 
 // the plugin list containing the plugin list items
 typedef struct _plugin_list {
-    bool dirty; // if dirty == 0 it means the plugin_list was recreated
     unsigned int plugin_list_count;
     PLUGIN_LIST_ITEM *plugin_list;
 } PLUGIN_LIST;
@@ -730,7 +729,6 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_data->posFrame = 0;
     plug_data->bpm = 120.0f;
     plug_data->isPlaying = 0;
-    plug_data->plugin_list.dirty = false;
     plug_data->plugin_list.plugin_list_count = 0;
     plug_data->plugin_list.plugin_list = NULL;
 
@@ -867,8 +865,13 @@ int plug_plugin_list_init(PLUG_INFO *plug_data) {
         iter += 1;
     }
     return_plugin_list->plugin_list_count = plugins_list_size;
-    return_plugin_list->dirty = true;
     return 1;
+}
+
+unsigned int plug_plugin_list_count(PLUG_INFO *plug_data) {
+    if (!plug_data)
+        return 0;
+    return plug_data->plugin_list.plugin_list_count;
 }
 
 void *plug_plugin_list_item_get(PLUG_INFO *plug_data, unsigned int idx) {
@@ -881,25 +884,18 @@ void *plug_plugin_list_item_get(PLUG_INFO *plug_data, unsigned int idx) {
     return (void *)cur_plug_list_item;
 }
 
-int plug_plugin_list_item_name(void *plug_list_item, char *return_name,
-                               unsigned int return_name_len) {
-    if (!plug_list_item)
-        return -1;
+const char *plug_plugin_list_item_name(void *plug_list_item) {
     PLUGIN_LIST_ITEM *cur_plug_list_item = (PLUGIN_LIST_ITEM *)plug_list_item;
-    if (!cur_plug_list_item->plug_data)
-        return -1;
-    snprintf(return_name, return_name_len, "%s",
-             cur_plug_list_item->plugin_short_name);
-    return 1;
+    if (!cur_plug_list_item)
+        return NULL;
+    return cur_plug_list_item->plugin_short_name;
 }
 
-bool plug_plugin_list_is_dirty(PLUG_INFO *plug_data) {
-    if (!plug_data)
-        return false;
-    PLUGIN_LIST *list = &(plug_data->plugin_list);
-    bool is_dirty = list->dirty;
-    list->dirty = false;
-    return is_dirty;
+const char *plug_plugin_list_item_path(void *plug_list_item) {
+    PLUGIN_LIST_ITEM *cur_plug_list_item = (PLUGIN_LIST_ITEM *)plug_list_item;
+    if (!cur_plug_list_item)
+        return NULL;
+    return cur_plug_list_item->plugin_path;
 }
 
 void *plug_plugin_presets_iterate(PLUG_INFO *plug_data, unsigned int idx,
@@ -1102,16 +1098,16 @@ static void plug_set_display_name(PLUG_PLUG *plug) {
     lilv_node_free(name_node);
 }
 
-int plug_load_and_activate(void *plugin_item) {
+uint32_t plug_load_and_activate(void *plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM*)plugin_item;
     if (!plugin_list_item)
-        return -1;
+        return 0;
     PLUG_INFO *plug_data = plugin_list_item->plug_data;
     if (!plug_data) {
-        return -1;
+        return 0;
     }
     if (!plug_data->lv_world) {
-        return -1;
+        return 0;
     }
 
     const LilvPlugin *plugins = lilv_world_get_all_plugins(plug_data->lv_world);
@@ -1119,7 +1115,7 @@ int plug_load_and_activate(void *plugin_item) {
     const LilvPlugin *plugin = lilv_plugins_get_by_uri(plugins, name_uri);
     lilv_node_free(name_uri);
     if (!plugin) {
-        return -1;
+        return 0;
     }
     int plug_id = -1;
     // find next empty plugin and fill it in
@@ -1132,7 +1128,7 @@ int plug_load_and_activate(void *plugin_item) {
     }
 
     if (plug_id == -1 || plug_id >= MAX_INSTANCES)
-        return -1;
+        return 0;
 
     PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
     // just in case clean the plugin up
@@ -1172,7 +1168,7 @@ int plug_load_and_activate(void *plugin_item) {
     plug->feature_list = (const LV2_Feature **)calloc(1, sizeof(features));
     if (!plug->feature_list) {
         plug_stop_and_remove_plug((void*)plug);
-        return -1;
+        return 0;
     }
     memcpy(plug->feature_list, features, sizeof(features));
     // instantiate and activate the plugin
@@ -1203,7 +1199,7 @@ int plug_load_and_activate(void *plugin_item) {
     // create the ports on audio_client from the sys_ports
     if (plug_activate_backend_ports(plug_data, plug) != 0) {
         plug_stop_and_remove_plug((void*)plug);
-        return -1;
+        return 0;
     }
 
     //--------------------------------------------------
@@ -1347,7 +1343,7 @@ int plug_load_and_activate(void *plugin_item) {
     plug->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
     if (!plug->midi_cont) {
         plug_stop_and_remove_plug((void*)plug);
-        return -1;
+        return 0;
     }
 
     // activate the plugin instance
@@ -1362,7 +1358,7 @@ int plug_load_and_activate(void *plugin_item) {
     context_sub_wait_for_start(plug_data->control_data, (void *)plug);
     plug_data->plugins_dirty = true;
 
-    return plug->id;
+    return plug->uid;
 }
 
 void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx){

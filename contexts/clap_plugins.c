@@ -53,7 +53,6 @@ typedef struct _plugin_list_item {
 
 // struct that holds the PLUGIN_LIST_ITEMS
 typedef struct _plugin_list {
-    bool dirty;
     // maximum size of the plugin_list that is currently allocated -
     // before a realloc is needed
     unsigned int size_max;
@@ -1681,7 +1680,6 @@ int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
     if(!plugin_list->plugin_list)return -1;
     plugin_list->size_curr = 0;
     plugin_list->size_max = PTR_ARRAY_COUNT;
-    plugin_list->dirty = false;
 
     DIR *d;
     struct dirent *dir = NULL;
@@ -1768,9 +1766,14 @@ int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
         iter += 1;
         clap_path = clap_paths[iter];
     }
-    plugin_list->dirty = true;
 
     return 1;
+}
+
+unsigned int clap_plug_plugin_list_count(CLAP_PLUG_INFO *plug_data) {
+    if (!plug_data)
+        return 0;
+    return plug_data->clap_plugin_list.size_curr;
 }
 
 void *clap_plug_plugin_list_item_get(CLAP_PLUG_INFO *plug_data, unsigned int idx){
@@ -1783,25 +1786,18 @@ void *clap_plug_plugin_list_item_get(CLAP_PLUG_INFO *plug_data, unsigned int idx
     return (void*)cur_plugin_list_item;
 }
 
-int clap_plug_plugin_list_item_name(void *plugin_item, char *return_name,
-                                    unsigned int return_name_len) {
-    if (!plugin_item)
-        return -1;
+const char *clap_plug_plugin_list_item_name(void *plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
-    if (!plugin_list_item->plug_data)
-        return -1;
-
-    snprintf(return_name, return_name_len, "%s", plugin_list_item->short_name);
-    return 1;
+    if (!plugin_list_item)
+        return NULL;
+    return plugin_list_item->short_name;
 }
 
-bool clap_plug_plugin_list_is_dirty(CLAP_PLUG_INFO* plug_data){
-    if(!plug_data)
-        return false;
-    PLUGIN_LIST *plugin_list = &(plug_data->clap_plugin_list);
-    bool is_dirty = plugin_list->dirty;
-    plugin_list->dirty = false;
-    return is_dirty;
+const char *clap_plug_plugin_list_item_path(void *plugin_item) {
+    PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
+    if (!plugin_list_item)
+        return NULL;
+    return plugin_list_item->path;
 }
 
 // build the display name into plug->name. Called once when the plugin is
@@ -1812,13 +1808,13 @@ static void clap_plug_set_display_name(CLAP_PLUG_PLUG *plug) {
     snprintf(plug->name, sizeof(plug->name), "%s", plug->plug_inst->desc->name);
 }
 
-int clap_plug_load_and_activate(void* plugin_item) {
+uint32_t clap_plug_load_and_activate(void* plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
     if (!plugin_list_item)
-        return -1;
+        return 0;
     CLAP_PLUG_INFO* plug_data = plugin_list_item->plug_data;
     if (!plug_data)
-        return -1;
+        return 0;
 
     // find an empty slot in the plugins array and create the
     // plugin there
@@ -1834,7 +1830,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
 
     // if id is not in range an error occured or there is no space for the plugin
     if (id < 0 || id >= MAX_INSTANCES)
-        return -1;
+        return 0;
 
     CLAP_PLUG_PLUG *plug = &(plug_data->plugins[id]);
     // if id is in the possible range, clean the slot just in case its occupied
@@ -1856,7 +1852,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
                              "Could not create entry point for %s plugin\n",
                              plug->plug_path);
         clap_plug_plug_stop_and_clean((void*)plug);
-        return -1;
+        return 0;
     }
 
     plug->plug_inst_id = plugin_list_item->plug_inst_id;
@@ -1871,7 +1867,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
                              "Could not get plugin %s descriptor\n",
                              plug->plug_path);
         clap_plug_plug_stop_and_clean((void*)plug);
-        return -1;
+        return 0;
     }
     if (plug_desc->name) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
@@ -1910,7 +1906,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
                              clap_plug_return_is_audio_thread(),
                              "Failed to create %s plugin\n", plug->plug_path);
         clap_plug_plug_stop_and_clean((void*)plug);
-        return -1;
+        return 0;
     }
 
     plug->plug_inst = plug_inst;
@@ -1921,7 +1917,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
                              clap_plug_return_is_audio_thread(),
                              "Failed to init %s plugin\n", plug->plug_path);
         clap_plug_plug_stop_and_clean((void*)plug);
-        return -1;
+        return 0;
     }
 
     // Create the ports
@@ -1935,7 +1931,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
                              "Failed to create %s plugin audio ports\n",
                              plug->plug_path);
         clap_plug_plug_stop_and_clean((void*)plug);
-        return -1;
+        return 0;
     }
 
     // Initiate the event lists
@@ -1952,7 +1948,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
             plug_data->control_data, (void *)plug_data, is_audio_thread,
             "Failed to create %s plugin clap event structs\n", plug->plug_path);
         clap_plug_plug_stop_and_clean((void*)plug);
-        return -1;
+        return 0;
     }
 
     // Initiate the note ports on the audio client backend
@@ -1964,7 +1960,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
                              "Failed to create %s plugin note ports\n",
                              plug->plug_path);
         clap_plug_plug_stop_and_clean((void*)plug);
-        return -1;
+        return 0;
     }
     // create the parameter cotainer
     if (clap_plug_params_create(plug_data, plug->id) != 0) {
@@ -1973,7 +1969,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
             clap_plug_return_is_audio_thread(),
             "Failed to create %s plugin parameters container\n", plug->plug_path);
         clap_plug_plug_stop_and_clean((void*)plug);
-        return -1;
+        return 0;
     }
 
     // assign the identity uid once, at load
@@ -1987,7 +1983,7 @@ int clap_plug_load_and_activate(void* plugin_item) {
 
     plug_data->plugins_dirty = true;
 
-    return plug->id;
+    return plug->uid;
 }
 
 void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx){

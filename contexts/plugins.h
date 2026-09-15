@@ -26,15 +26,21 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
 // free it and create it again
 int plug_plugin_list_init(PLUG_INFO *plug_data);
 
+// return how many plugins are in the catalogue built by plug_plugin_list_init
+unsigned int plug_plugin_list_count(PLUG_INFO *plug_data);
+
 // return an item from the the plugin list, it can be used to load a plugin
 void *plug_plugin_list_item_get(PLUG_INFO *plug_data, unsigned int idx);
 
-// return the name of the plugin from the plugin list
-int plug_plugin_list_item_name(void *plug_list_item, char *return_name,
-                               unsigned int return_name_len);
+// return the display name of the plugin list item. The string is owned by
+// the catalogue entry and stays valid until the next plug_plugin_list_init.
+// Returns NULL on error.
+const char *plug_plugin_list_item_name(void *plug_list_item);
 
-// return true if the plugin_list was updated/recreated
-bool plug_plugin_list_is_dirty(PLUG_INFO *plug_data);
+// return the URI of the plugin list item (its stable identity - see
+// plug_load_and_activate). Same lifetime as plug_plugin_list_item_name.
+// Returns NULL on error.
+const char *plug_plugin_list_item_path(void *plug_list_item);
 
 // presets functions --------------------------------------------------
 // get the preset struct for the plugin (right now it is simply a char* of the
@@ -64,8 +70,9 @@ int plug_load_preset(PLUG_INFO *plug_data, unsigned int plug_id,
 int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data);
 int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data);
 
-// initialize a plugin instance
-int plug_load_and_activate(void *plugin_item);
+// initialize a plugin instance. On success returns its identity uid (always
+// > 0, matching plug_plugin_uid); on failure returns 0.
+uint32_t plug_load_and_activate(void *plugin_item);
 
 // return user_data for a single plugin
 void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx);

@@ -65,18 +65,27 @@ PRM_CONTAIN *clap_plug_param_return_param_container(CLAP_PLUG_INFO *plug_data,
 // it contains all the plugins on the system available to the user
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data);
 
+// return how many plugins are in the catalogue built by
+// clap_plug_plugin_list_init
+unsigned int clap_plug_plugin_list_count(CLAP_PLUG_INFO *plug_data);
+
 // get one item from the plugin_list
 void *clap_plug_plugin_list_item_get(CLAP_PLUG_INFO *plug_data, unsigned int idx);
 
-// get the short name of the plugin from the plugin_list
-int clap_plug_plugin_list_item_name(void *plugin_item, char *return_name,
-                                    unsigned int return_name_len); 
+// return the display name of the plugin list item. The string is owned by
+// the catalogue entry and stays valid until the next
+// clap_plug_plugin_list_init. Returns NULL on error.
+const char *clap_plug_plugin_list_item_name(void *plugin_item);
 
-// return if the plugin_list has been changed or not
-bool clap_plug_plugin_list_is_dirty(CLAP_PLUG_INFO* plug_data);
+// return the path of the plugin list item (its stable identity - see
+// clap_plug_load_and_activate). Same lifetime as
+// clap_plug_plugin_list_item_name. Returns NULL on error.
+const char *clap_plug_plugin_list_item_path(void *plugin_item);
 
-// initiate and load plugin from the plugin_list_item 
-int clap_plug_load_and_activate(void* plugin_item);
+// initiate and load plugin from the plugin_list_item. On success returns its
+// identity uid (always > 0, matching clap_plug_plugin_uid); on failure
+// returns 0.
+uint32_t clap_plug_load_and_activate(void* plugin_item);
 
 // return the plugin user_data
 void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx);

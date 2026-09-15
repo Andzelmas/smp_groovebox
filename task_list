@@ -37,7 +37,10 @@ FIVE DECISIONS (settled)
 
 IDENTITY / KEYS
 - One composition rule everywhere: MAKE_ID(namespace, local), 8-bit ns in top
-  byte (CTXID_NS_SHIFT), like ContextId.
+  byte (CTXID_NS_SHIFT), like ContextId. local is masked to the low 56 bits
+  (CTXID_LOCAL_MASK), not truncated to 32 - uid-based locals are unaffected
+  (always << 2^32), but a hash-derived local (item_key below) keeps its full
+  width instead of losing 24 bits for nothing. [DONE in step 4]
 - DataListId = MAKE_LIST_ID(list_ns, LID_* constant). List kinds are STATIC ->
   compile-time constants (LID_*), NOT counter-allocated. No next_*_uid for
   lists. A genuinely per-instance list composes an owner id into the local part
@@ -251,8 +254,52 @@ BUILD ORDER
   3. [DONE] sample_ops / sampler_ops: REMOVE + ADD_FILE_PATH. Prove item + container
      path end to end in the CLI (menu -> per-kind prompt -> req -> action_do ->
      next reconcile shows CX_ADDED/REMOVED).
-  4. lv2_plugins_ops / clap_plugins_ops: ADD_CHOICE. Proves single CHOICE + a
-     catalogue list.
+  4. [DONE] lv2_plugins_ops / clap_plugins_ops: REMOVE (item) + ADD_CHOICE
+     (container). Proves single CHOICE + a catalogue list.
+     [lv2_plugin_ops / clap_plugin_ops: REMOVE via the already-self-contained
+     plug_stop_and_remove_plug(void*) / clap_plug_plug_stop_and_clean(void*)
+     (clap already had this - the earlier task_list note claiming it didn't
+     was wrong, found it on inspection: no new remove function was needed).
+     lv2_plugins_ops / clap_plugins_ops: ADD_CHOICE, one CHOICE arg, list =
+     MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG / LID_CLAP_CATALOG).
+     Catalogue built once at app_init via plug_plugin_list_init /
+     clap_plug_plugin_list_init (previously dead code, no callers) - an empty
+     system-wide catalogue is not a startup failure. list_at's DataChoice.value
+     = MAKE_ID(DATA_LIST_NS_CATALOG, fnv1a64(item's URI/path)) - a new static
+     FNV-1a 64-bit hash in app_data.c, per the "stable natural key, not a
+     positional index" rule; action_do re-derives the same hash over a linear
+     scan of the (small) catalogue to resolve the pick, ERR_INVALID on wrong
+     namespace / ERR_STALE if not found (two-level staleness as designed).
+     Widened after the fact: MAKE_ID/MAKE_LIST_ID used to truncate local to
+     (uint32_t) before shifting in the namespace, even though 56 bits are
+     available below the namespace byte (CTXID_NS_SHIFT=56) - fine for
+     uid-based locals (always << 2^32) but wasted almost all of a hash's
+     collision resistance for nothing. Now CTXID_LOCAL_MASK = 2^56-1 and both
+     macros mask instead of truncate; fnv1a32 -> fnv1a64 to actually use the
+     extra width. Both list_at and action_do mask their hash the same way
+     (value & CTXID_LOCAL_MASK) before comparing, since MAKE_ID already
+     dropped the top 8 bits when composing the stored value. Still
+     probabilistic (FNV is not cryptographic), just negligible at this width
+     for any realistic catalogue/port-list size - not a formal guarantee.
+     PLUGIN_LIST.dirty / plug_plugin_list_is_dirty / clap_..._is_dirty
+     removed (had zero callers - list_count/list_at always read the
+     catalogue live, so nothing needed a "did it change" signal; a future
+     rescan action, if one lands, just calls *_list_init again directly - a
+     stale DataChoice.value from before the rescan is already caught by the
+     existing ERR_STALE path in action_do, no dirty flag required). Do NOT
+     confuse with plugins_dirty / plug_plugins_is_dirty on PLUG_INFO /
+     CLAP_PLUG_INFO (the LOADED plugins list, materialised into the CX tree)
+     - that one is real, still wired into app_data_update -> DataEvent, kept.
+     plug_load_and_activate / clap_plug_load_and_activate changed from
+     int (slot index) to uint32_t (uid, 0 on failure) - same fix as smp_add
+     in step 3, applied the moment each got a real caller (both were dead
+     code before this). plug_plugin_list_item_name / clap_..._item_name
+     changed from snprintf-into-caller-buffer to a direct const char* return
+     (the Name-return convention from earlier phases, applied now that they
+     have a real caller too); new plug_plugin_list_item_path /
+     clap_..._item_path (same pointer-return shape) and
+     plug_plugin_list_count / clap_..._list_count (small accessors the
+     module didn't expose yet, added per the established rule).]
   5. Trk: DATA_ACTION_CONNECT. Brings MULTI_CHOICE + the partial-dependent
      target list + the flags bit + hash(port name) keys + the JACK link/unlink
      toggle + optional ports_dirty -> DATA_EVENT_CHANGED wiring.
