@@ -90,6 +90,8 @@ int app_jack_is_port(JACK_INFO* jack_data, const char* port_name);
 int app_jack_disconnect_ports(JACK_INFO* jack_data, const char* source_port, const char* dest_port);
 //connect two ports together
 int app_jack_connect_ports(JACK_INFO* jack_data, const char* source_port, const char* dest_port);
+//is source_port currently connected to dest_port?
+bool app_jack_ports_connected(JACK_INFO* jack_data, const char* source_port, const char* dest_port);
 //return the size allowed for the port name
 int app_jack_port_name_size();
 //return the name of a single port

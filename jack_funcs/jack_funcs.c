@@ -454,22 +454,56 @@ const char** app_jack_port_names(JACK_INFO *jack_data, const char* port_name_pat
 				 unsigned int type_pattern,
 				 unsigned long flags){
 
-    const char* type = NULL;
-    switch(type_pattern){
+    const char *type = NULL;
+    switch (type_pattern) {
     case PORT_TYPE_AUDIO:
-	type = JACK_DEFAULT_AUDIO_TYPE;
-	break;
+        type = JACK_DEFAULT_AUDIO_TYPE;
+        break;
     case PORT_TYPE_MIDI:
-	type = JACK_DEFAULT_MIDI_TYPE;
-	break;
+        type = JACK_DEFAULT_MIDI_TYPE;
+        break;
+    case PORT_TYPE_UNKNOWN:
+        // NULL is jack_get_ports()'s own "match any type" wildcard -
+        // PORT_TYPE_UNKNOWN is otherwise unused by this function, so it doubles
+        // as "give me everything"
+        type = NULL;
+        break;
     default:
-	type = JACK_DEFAULT_AUDIO_TYPE;
+        type = JACK_DEFAULT_AUDIO_TYPE;
     }
-    
+
     return jack_get_ports(jack_data->client, port_name_pattern, type, flags);
 }
 
+//is source_port currently connected to dest_port? walks source_port's live
+//connection list
+bool app_jack_ports_connected(JACK_INFO *jack_data, const char *source_port,
+                              const char *dest_port) {
+    if (!jack_data)
+        return false;
+    if (!jack_data->client)
+        return false;
+    if (!source_port || !dest_port)
+        return false;
 
+    jack_port_t *port = jack_port_by_name(jack_data->client, source_port);
+    if (!port)
+        return false;
+
+    const char **connections = jack_port_get_connections(port);
+    if (!connections)
+        return false;
+
+    bool found = false;
+    for (unsigned int i = 0; connections[i]; i++) {
+        if (strcmp(connections[i], dest_port) == 0) {
+            found = true;
+            break;
+        }
+    }
+    free(connections);
+    return found;
+}
 
 int sample_rate_change(jack_nframes_t new_sample_rate, void *arg){
     JACK_INFO *jack_data = (JACK_INFO*) arg;

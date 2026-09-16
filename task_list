@@ -323,9 +323,57 @@ BUILD ORDER
      clap_..._item_path (same pointer-return shape) and
      plug_plugin_list_count / clap_..._list_count (small accessors the
      module didn't expose yet, added per the established rule).]
-  5. Trk: DATA_ACTION_CONNECT. Brings MULTI_CHOICE + the partial-dependent
+  5. [DONE] Trk: DATA_ACTION_CONNECT. Brings MULTI_CHOICE + the partial-dependent
      target list + the flags bit + hash(port name) keys + the JACK link/unlink
-     toggle + optional ports_dirty -> DATA_EVENT_CHANGED wiring.
+     toggle. The ports_dirty -> DATA_EVENT_CHANGED wiring landed earlier as its
+     own step, ahead of this one (see the refresh-nudge note above).
+     [trk_ops gained DATA_CAP_ACTIONS: action_list (CONNECT, "Connect"),
+     action_args (arg0 "source" CHOICE/LID_PORTS_OUT, arg1 "targets"
+     MULTI_CHOICE/LID_PORTS_IN), list_count (always 0 - "unknown, page via
+     list_at" per the contract's own allowance; a real count would mean
+     scanning once to count then again to fetch, for no benefit), list_at,
+     action_do. Two new app_data.c-local helpers do the real work, shared by
+     list_at and action_do:
+       trk_resolve_port(jack_data, key, flow, name_buf, name_buf_size, out_type)
+         - tries PORT_TYPE_AUDIO then PORT_TYPE_MIDI (not a single "any type"
+           query) so it can report which type matched (out_type, optional -
+           list_at needs it for target-type-filtering, action_do doesn't and
+           passes NULL). key is already the masked low-56-bit local part
+           (value & CTXID_LOCAL_MASK) of a connect.source/targets[i]/
+           DataChoice.value. Returns false (do not treat as ERR_INVALID, the
+           value's namespace was fine) if no currently-live port's hashed name
+           matches - the ERR_STALE case.
+       trk_enumerate_at(jack_data, type_pattern, flow, linked_against, idx, out)
+         - the idx-th port of one app_jack_port_names() call, hashed into
+           DataChoice.value the same way the catalogue does (MAKE_ID(
+           DATA_LIST_NS_PORTS, fnv1a64(name))), DATA_CHOICE_LINKED bit set iff
+           linked_against is non-NULL and app_jack_ports_connected() says so
+           (NULL for LID_PORTS_OUT - the source list itself has no "linked"
+           concept). label points at trk_port_name_buf, a single module-static
+           scratch buffer - valid only until the NEXT list_count/list_at call
+           on this ops table (standard "transient formatted string" C idiom,
+           strerror()/ctime()-shaped, not a caching hazard - see the comment
+           above it in app_data.c). Used for both LID_PORTS_OUT
+           (type_pattern=PORT_TYPE_UNKNOWN i.e. any type, linked_against=NULL)
+           and LID_PORTS_IN (type_pattern=the resolved source's type,
+           linked_against=the resolved source's name).
+     LID_PORTS_OUT needed app_jack_port_names' PORT_TYPE_UNKNOWN case fixed to
+     map to jack_get_ports()'s own NULL "any type" wildcard (it silently fell
+     into the AUDIO default before - harmless until now since nothing asked
+     for "any type" before this). New app_jack_ports_connected(jack_data,
+     source_port, dest_port) in jack_funcs.c (walks jack_port_get_connections,
+     same JACK call app_jack_disconnect_all_ports already uses, just not
+     exposed as a reusable query before). action_do's toggle: per target,
+     already linked ? app_jack_disconnect_ports : app_jack_connect_ports;
+     ERR_DATA if any target's resolve or connect/disconnect call failed, OK
+     otherwise (matches "option a" from the design above - selected targets
+     are toggled, not treated as a desired-set diff). No new remove/DataAction
+     needed for disconnecting a specific pair - re-selecting an already-linked
+     target in the same CONNECT call disconnects it.]
   6. CLI: context-menu loop; for Trk, stay open across many CONNECT calls,
-     re-pulling the target list each round.
+     re-pulling the target list each round. Not yet implemented - the CLI's
+     CHOICE/MULTI_CHOICE arg prompt still stubs "not supported yet"
+     (helper_action_arg_prompt in smp_groovebox_ui_cli.c); data/context/
+     ui_layer plumbing for CONNECT is fully wired and testable independent of
+     any particular CLI.
 
