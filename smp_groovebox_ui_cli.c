@@ -436,79 +436,71 @@ static void helper_string_print_underline(const char* string, char char_underlin
     }
 }
 
-// prompt for one arg of spec->kind, filling *req accordingly. path_buf is
-// caller-owned scratch that must stay alive for the action_do call, since
-// DataActionReq.add_file_path.path only borrows it. Each kind decides its
-// own terminal mode - STRING/PATH is a cooked-mode text line; a future
-// CHOICE/MULTI_CHOICE picker will most likely stay in raw mode (letter-
-// driven, like the action picker itself), so the toggle lives here per kind
-// rather than being forced on the whole arg loop by the caller. Returns
-// false if the kind isn't supported by this cli yet, or input failed.
-static bool helper_action_arg_prompt(DataArgSpec* spec, DataActionReq* req, char* path_buf, size_t path_buf_size){
-    switch(spec->kind){
-    case DATA_ARG_STRING:
-    case DATA_ARG_PATH: {
-        enterCookedMode();
-        printf("%s: ", spec->label ? spec->label : spec->name);
-        fflush(stdout);
-        bool ok = fgets(path_buf, (int)path_buf_size, stdin) != NULL;
-        if(ok){
-            size_t len = strlen(path_buf);
-            if(len > 0 && path_buf[len - 1] == '\n')
-                path_buf[len - 1] = '\0';
-            if(spec->kind == DATA_ARG_PATH)
-                req->add_file_path.path = path_buf;
+typedef enum {
+    LIST_STEP_CONTINUE,   // cursor moved or just redrawn, keep looping
+    LIST_STEP_SELECTED,   // l on a valid row - *out filled
+    LIST_STEP_CANCELLED,  // h or ESC
+} ListStepResult;
+
+// one render + one keypress against a live DataChoice list: j/k move
+// *cursor (probing the neighbouring index and wrapping on list_at's false -
+// list_at's own false return is the only "no more rows" signal used here,
+// list_count is never needed), l selects the highlighted row into *out,
+// h/ESC cancel. *cursor is caller-owned, so it survives across calls -
+// including across a mode switch that later resumes the same list (see
+// helper_action_do_connect). This is the one primitive every list-based
+// action interaction below is built from.
+static ListStepResult helper_choice_list_step(UI_LAYER *ui_layer, ContextId context,
+                                              DataListId list,
+                                              const DataActionReq *partial,
+                                              const char *title, const char *status,
+                                              size_t *cursor, DataChoice *out) {
+    printf("\033[2J\033[H-- %s (j/k move, l select, h/ESC back) --\n\n",
+          title ? title : "");
+
+    DataChoice row;
+    bool any = false;
+    for (size_t i = 0;
+         ui_layer_context_list_at(ui_layer, context, list, partial, i, &row);
+         i++) {
+        any = true;
+        printf("%s%s%s\n", i == *cursor ? ">" : "", row.label ? row.label : "?",
+              (row.flags & DATA_CHOICE_LINKED) ? " [connected]" : "");
+    }
+    if (!any)
+        printf("(no options)\n");
+
+    if (status && status[0])
+        printf("\n%s\n\n", status);
+
+    int input = getchar();
+    if (input == '\e' || input == 'h')
+        return LIST_STEP_CANCELLED;
+    if (input == 'j') {
+        DataChoice probe;
+        size_t next = *cursor + 1;
+        *cursor = ui_layer_context_list_at(ui_layer, context, list, partial,
+                                           next, &probe)
+                    ? next : 0;
+    } else if (input == 'k') {
+        if (*cursor == 0) {
+            DataChoice probe;
+            while (ui_layer_context_list_at(ui_layer, context, list, partial,
+                                            *cursor + 1, &probe))
+                (*cursor)++;
+        } else {
+            (*cursor)--;
         }
-        enterRawModeAgain();
-        return ok;
+    } else if (input == 'l') {
+        if (ui_layer_context_list_at(ui_layer, context, list, partial,
+                                     *cursor, out))
+            return LIST_STEP_SELECTED;
     }
-    default:
-        // DATA_ARG_CHOICE / DATA_ARG_MULTI_CHOICE need a real picker.
-        printf("(this cli does not support that argument kind yet)\n");
-        return false;
-    }
+    return LIST_STEP_CONTINUE;
 }
 
-// the drill narrowed to exactly one candidate - collect whatever arguments
-// its action needs (each arg prompt decides its own terminal mode, see
-// helper_action_arg_prompt) and execute it. Writes a one-line result into
-// msg (shown at the top of the next frame); msg[0] is left '\0' if there is
-// nothing to report. Returns the ContextId of whatever the action created
-// (e.g. the new sample from ADD_FILE_PATH), or CONTEXT_ID_INVALID if it
-// created nothing or failed - forwarded straight from
-// ui_layer_context_action_do's out_new. Not consumed by any caller yet, but
-// costs nothing to hand back and is exactly the hook a future "hover what
-// you just created" would need.
-static ContextId helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
-                                       char *msg, size_t msg_cap) {
-    if (!msg || msg_cap == 0)
-        return CONTEXT_ID_INVALID;
-    msg[0] = '\0';
-    if (!ui_layer || !chosen)
-        return CONTEXT_ID_INVALID;
-
-    const char *label = chosen->action.label ? chosen->action.label : "action";
-    DataActionReq req = {.type = chosen->action.type};
-    DataArgSpec specs[ACTION_ARG_COUNT];
-    size_t arg_count = ui_layer_context_action_args(
-        ui_layer, chosen->actions_context, chosen->action.type, specs,
-        ACTION_ARG_COUNT);
-
-    char path_buf[512];
-    bool ok = true;
-    if (arg_count > 0)
-        printf("\n-- %s --\n", label);
-    for (size_t i = 0; i < arg_count && ok; i++)
-        ok = helper_action_arg_prompt(&specs[i], &req, path_buf, sizeof(path_buf));
-
-    if (!ok) {
-        snprintf(msg, msg_cap, "%s: cancelled.", label);
-        return CONTEXT_ID_INVALID;
-    }
-
-    ContextId out_new = CONTEXT_ID_INVALID;
-    DataActionResult result =
-        ui_layer_context_action_do(ui_layer, chosen->actions_context, &req, &out_new);
+static void helper_action_result_msg(DataActionResult result, const char *label,
+                                     char *msg, size_t msg_cap) {
     switch (result) {
     case DATA_ACTION_OK:
         snprintf(msg, msg_cap, "%s: done.", label);
@@ -526,7 +518,189 @@ static ContextId helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *cho
         snprintf(msg, msg_cap, "%s: rejected (could not load or apply).", label);
         break;
     }
-    return out_new;
+}
+
+// a 0-arg action (REMOVE): nothing to collect, just execute.
+static ContextId helper_action_do_direct(UI_LAYER *ui_layer, ContextId context,
+                                         DataActionType type, const char *label,
+                                         char *msg, size_t msg_cap) {
+    DataActionReq req = {.type = type};
+    ContextId out_new = CONTEXT_ID_INVALID;
+    DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
+    helper_action_result_msg(result, label, msg, msg_cap);
+    return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
+}
+
+// single PATH arg (ADD_FILE_PATH): cooked-mode text entry. A future UI that
+// wants a real file browser here only needs to replace this function - the
+// dispatch in helper_action_resolve and every other action stay untouched.
+static ContextId helper_action_do_path(UI_LAYER *ui_layer, ContextId context,
+                                       DataActionType type, const DataArgSpec *spec,
+                                       const char *label, char *msg, size_t msg_cap) {
+    char path_buf[512];
+    enterCookedMode();
+    printf("%s: ", spec->label ? spec->label : spec->name);
+    fflush(stdout);
+    bool ok = fgets(path_buf, (int)sizeof(path_buf), stdin) != NULL;
+    enterRawModeAgain();
+    if (!ok) {
+        snprintf(msg, msg_cap, "%s: cancelled.", label);
+        return CONTEXT_ID_INVALID;
+    }
+    size_t len = strlen(path_buf);
+    if (len > 0 && path_buf[len - 1] == '\n')
+        path_buf[len - 1] = '\0';
+
+    DataActionReq req = {.type = type, .add_file_path.path = path_buf};
+    ContextId out_new = CONTEXT_ID_INVALID;
+    DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
+    helper_action_result_msg(result, label, msg, msg_cap);
+    return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
+}
+
+// single CHOICE arg (ADD_CHOICE): pick, execute, keep browsing - the result
+// shows inline via helper_choice_list_step's status line, so one session can
+// add several items (e.g. plugins) without leaving the picker. Ends on h/ESC.
+static ContextId helper_action_do_choice_repeat(UI_LAYER *ui_layer, ContextId context,
+                                                DataActionType type, const DataArgSpec *spec,
+                                                const char *label, char *msg, size_t msg_cap) {
+    size_t cursor = 0;
+    ContextId last_new = CONTEXT_ID_INVALID;
+    msg[0] = '\0';
+    DataActionReq partial = {.type = type};
+    while (1) {
+        DataChoice picked;
+        ListStepResult step = helper_choice_list_step(
+            ui_layer, context, spec->list, &partial,
+            spec->label ? spec->label : spec->name, msg, &cursor, &picked);
+        msg[0] = '\0';
+        if (step == LIST_STEP_CANCELLED)
+            break;
+        if (step != LIST_STEP_SELECTED)
+            continue;
+
+        DataActionReq req = {.type = type, .add_choice.choice_value = picked.value};
+        ContextId out_new = CONTEXT_ID_INVALID;
+        DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
+        helper_action_result_msg(result, label, msg, msg_cap);
+        if (result == DATA_ACTION_OK)
+            last_new = out_new;
+    }
+    if (msg[0] == '\0')
+        snprintf(msg, msg_cap, "%s: cancelled.", label);
+    return last_new;
+}
+
+// CONNECT: a dedicated two-mode navigator. SOURCE mode picks specs[0]'s list once and
+// switches to TARGETS mode; TARGETS mode browses specs[1]'s list scoped to
+// the chosen source (each row's [connected] marker comes from
+// DATA_CHOICE_LINKED) and toggles connect/disconnect immediately per row,
+// staying open. h/ESC in TARGETS steps back to SOURCE (cursor preserved);
+// h/ESC in SOURCE leaves the whole picker.
+static ContextId helper_action_do_connect(UI_LAYER *ui_layer, ContextId context,
+                                          const DataArgSpec *specs, size_t spec_count,
+                                          const char *label, char *msg, size_t msg_cap) {
+    msg[0] = '\0';
+    if (spec_count < 2) {
+        snprintf(msg, msg_cap, "%s: misconfigured.", label);
+        return CONTEXT_ID_INVALID;
+    }
+    const DataArgSpec *source_spec = &specs[0];
+    const DataArgSpec *targets_spec = &specs[1];
+
+    enum { CONNECT_MODE_SOURCE, CONNECT_MODE_TARGETS } mode = CONNECT_MODE_SOURCE;
+    size_t source_cursor = 0;
+    size_t target_cursor = 0;
+    DataChoice source_choice = {0};
+    ContextId last_new = CONTEXT_ID_INVALID;
+
+    while (1) {
+        if (mode == CONNECT_MODE_SOURCE) {
+            DataActionReq partial = {.type = DATA_ACTION_CONNECT};
+            DataChoice picked;
+            ListStepResult step = helper_choice_list_step(
+                ui_layer, context, source_spec->list, &partial,
+                source_spec->label ? source_spec->label : source_spec->name,
+                msg, &source_cursor, &picked);
+            if (step == LIST_STEP_CANCELLED)
+                break;
+            if (step == LIST_STEP_SELECTED) {
+                source_choice = picked;
+                target_cursor = 0;
+                msg[0] = '\0';
+                mode = CONNECT_MODE_TARGETS;
+            }
+            continue;
+        }
+
+        DataActionReq partial = {.type = DATA_ACTION_CONNECT,
+                                 .connect.source = source_choice.value};
+        DataChoice picked;
+        ListStepResult step = helper_choice_list_step(
+            ui_layer, context, targets_spec->list, &partial,
+            targets_spec->label ? targets_spec->label : targets_spec->name,
+            msg, &target_cursor, &picked);
+        msg[0] = '\0';
+        if (step == LIST_STEP_CANCELLED) {
+            mode = CONNECT_MODE_SOURCE;
+            continue;
+        }
+        if (step != LIST_STEP_SELECTED)
+            continue;
+
+        uint64_t target_value = picked.value;
+        DataActionReq req = {.type = DATA_ACTION_CONNECT,
+                             .connect.source = source_choice.value,
+                             .connect.targets = &target_value,
+                             .connect.target_count = 1};
+        ContextId out_new = CONTEXT_ID_INVALID;
+        DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
+        helper_action_result_msg(result, label, msg, msg_cap);
+        if (result == DATA_ACTION_OK)
+            last_new = out_new;
+    }
+    if (msg[0] == '\0')
+        snprintf(msg, msg_cap, "%s: cancelled.", label);
+    return last_new;
+}
+
+// dispatch to the function that knows how to collect that action's arguments
+// and execute it Extending or replacing how an action behaves (a real file
+// browser for ADD_FILE_PATH, a different CONNECT UI) means adding/swapping one
+// helper_action_do_* function and one dispatch line here - every other action's
+// function is untouched.
+static ContextId helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
+                                       char *msg, size_t msg_cap) {
+    if (!msg || msg_cap == 0)
+        return CONTEXT_ID_INVALID;
+    msg[0] = '\0';
+    if (!ui_layer || !chosen)
+        return CONTEXT_ID_INVALID;
+
+    ContextId context = chosen->actions_context;
+    DataActionType type = chosen->action.type;
+    const char *label = chosen->action.label ? chosen->action.label : "action";
+
+    DataArgSpec specs[ACTION_ARG_COUNT];
+    size_t arg_count = ui_layer_context_action_args(ui_layer, context, type,
+                                                     specs, ACTION_ARG_COUNT);
+    if (arg_count > 0)
+        printf("\n-- %s --\n", label);
+
+    if (type == DATA_ACTION_CONNECT)
+        return helper_action_do_connect(ui_layer, context, specs, arg_count,
+                                        label, msg, msg_cap);
+    if (arg_count == 0)
+        return helper_action_do_direct(ui_layer, context, type, label, msg, msg_cap);
+    if (arg_count == 1 && specs[0].kind == DATA_ARG_PATH)
+        return helper_action_do_path(ui_layer, context, type, &specs[0], label,
+                                     msg, msg_cap);
+    if (arg_count == 1 && specs[0].kind == DATA_ARG_CHOICE)
+        return helper_action_do_choice_repeat(ui_layer, context, type, &specs[0],
+                                              label, msg, msg_cap);
+
+    snprintf(msg, msg_cap, "%s: unsupported arguments.", label);
+    return CONTEXT_ID_INVALID;
 }
 
 static void helper_program_destroy(UI_LAYER* ui_layer, UI_STATE** states, size_t states_capacity){

@@ -370,10 +370,53 @@ BUILD ORDER
      are toggled, not treated as a desired-set diff). No new remove/DataAction
      needed for disconnecting a specific pair - re-selecting an already-linked
      target in the same CONNECT call disconnects it.]
-  6. CLI: context-menu loop; for Trk, stay open across many CONNECT calls,
-     re-pulling the target list each round. Not yet implemented - the CLI's
-     CHOICE/MULTI_CHOICE arg prompt still stubs "not supported yet"
-     (helper_action_arg_prompt in smp_groovebox_ui_cli.c); data/context/
-     ui_layer plumbing for CONNECT is fully wired and testable independent of
-     any particular CLI.
+  6. [DONE] CLI: context-menu loop; for Trk, stay open across many CONNECT
+     calls, re-pulling the target list each round.
+     [Reworked helper_action_resolve from one generic per-arg-kind loop into
+     a dispatcher over dedicated helper_action_do_* functions, one per action
+     shape, so extending or replacing one action's UI (a real file browser
+     for ADD_FILE_PATH; a different CONNECT UI) means adding/swapping one
+     function and one dispatch line, never touching the others:
+       - helper_choice_list_step(ui_layer, context, list, partial, title,
+         status, cursor*, out*) - the one shared primitive. One render + one
+         keypress against a live DataChoice list: j/k move *cursor (probing
+         the neighbour index, wrapping on list_at's false - list_count is
+         never needed, list_at's false is the only "no more rows" signal),
+         l selects into *out, h/ESC cancel. status (nullable) prints above
+         the list so a caller can show the last result without a blocking
+         "press any key" pause. *cursor is caller-owned so it persists
+         across calls - including across helper_action_do_connect's SOURCE/
+         TARGETS mode switch. Rows with DATA_CHOICE_LINKED print "[connected]"
+         (harmless no-op for lists that never set the flag, e.g. the plugin
+         catalogues).
+       - helper_action_do_direct: 0-arg actions (REMOVE) - execute, no UI.
+       - helper_action_do_path: single PATH arg (ADD_FILE_PATH) - cooked-mode
+         text entry. Swap this one function for a real file browser later.
+       - helper_action_do_choice_repeat: single CHOICE arg (ADD_CHOICE) -
+         loops helper_choice_list_step, executes on each SELECTED, shows the
+         result via status, keeps browsing until h/ESC. Replaces the old
+         "trailing CHOICE arg repeats" special case that lived inside
+         helper_action_resolve.
+       - helper_action_do_connect: CONNECT's two-mode navigator, exactly as
+         designed above (SOURCE picks specs[0]'s list once via one
+         helper_choice_list_step call per frame then switches to TARGETS;
+         TARGETS browses specs[1]'s list with partial={type=CONNECT,
+         connect.source=chosen}, toggling connect/disconnect immediately per
+         row via action_do with target_count=1, staying open; h/ESC in
+         TARGETS steps back to SOURCE with source_cursor preserved, h/ESC in
+         SOURCE leaves the whole picker).
+       - helper_action_resolve now just reads the action's arg_count/kind
+         (or checks type == DATA_ACTION_CONNECT first, hardcoded rather than
+         shape-matched since CONNECT is the only CHOICE+MULTI_CHOICE action
+         today) and calls the matching helper_action_do_*. An unrecognised
+         shape reports "unsupported arguments" instead of silently doing
+         nothing.
+     Removed as redundant once the above landed: helper_choice_list_pick
+     (its only real caller turned out to be CONNECT's SOURCE mode, which
+     just calls helper_choice_list_step directly now - a wrapper with one
+     caller wasn't earning its keep) and helper_action_arg_prompt (its
+     per-arg-kind switch is now fully absorbed into the do_* functions above;
+     its DATA_ARG_STRING branch was already dead code - it read into
+     path_buf but never wrote the value anywhere, since no action defines a
+     plain STRING arg - so nothing of substance was dropped).]
 
