@@ -1,4 +1,39 @@
 ================================================================================
+CROSS-CUTTING INVARIANT — identity/storage rule for anything CX-backed
+(applies to samples, plugins, params, and any future module that gets CX
+representation - not params-specific, written down here because the params
+resync work is what forced it to be stated explicitly)
+================================================================================
+The CX layer resolves a ContextId to a module's raw user_data pointer ONCE
+and reuses that SAME pointer across many later calls, without re-resolving
+it each time (see the Phase D note this task_list used to carry: "CX caches
+data_id, reconcile never re-resolves it"). This is already how samples and
+plugins work today, not a new rule invented for params:
+  sampler_child_at(): out->user_data = smp;   // raw pointer into SMP_INFO's
+                                                // fixed array
+  smp_sample_return(): "the samples array can have gaps, walk the occupied
+                        slots in order and return the idx-th one" - a
+                        verbatim comment already in contexts/sampler.c
+So: a fixed-array-backed module must NEVER move a surviving item's storage
+once a ContextId has been handed out for it (no compaction on remove - free
+slots become gaps/tombstones, reused only by a later NEW item, which gets a
+new identity). This holds regardless of threading - it is a hazard even
+fully single-threaded, because the cache persists across frames/calls, not
+because of concurrent access. Params.c's own add/remove-by-uid design
+(STAGE 2 below) follows this same rule for exactly this reason - it is not
+a params-specific invention, it is bringing params in line with what
+samples/plugins already rely on.
+The only real alternative - cache the stable key only, resolve key ->
+current live slot fresh on every single op call (dead -> NULL) instead of
+caching a raw pointer - would make compaction safe, but it is a change to
+app_intrf.c's fundamental CX-caching strategy, not a per-module one; it
+trades an O(1) dereference for an O(N) lookup on every op call system-wide;
+and every existing module would need to switch for consistency, not just
+whichever one is being worked on that day. Not worth it unless something
+concrete demands it later - noted here so the tradeoff doesn't need
+re-deriving next time a new CX-backed module comes up.
+
+================================================================================
 DONE — actions / args / execute system
 ================================================================================
 The generic DataAction / DataArgSpec / DataChoice / DataActionReq contract
@@ -69,9 +104,52 @@ audiences and one of them is RT-constrained:
   branches on it is an open question - check during this stage, don't
   assume yet.
 
-  Not decided yet, for whenever this stage actually starts: exact callback
-  signatures, and going through params.c function by function to see what
-  else follows from these two changes.
+  (c) per-parameter uid becomes mandatory [DECIDED]
+  Checked first: grep for `.user_id =` across contexts/*.c shows only
+  clap_plugins.c ever sets PRM_USER_DATA.user_id to something real
+  (param_info.id, CLAP's own clap_id). plugins.c (LV2), synth.c, sampler.c
+  never touch it - it silently defaults to 0 for every one of their params
+  today. So this is establishing a new cross-module contract, not
+  formalising an existing one - real work needed in those three modules
+  too, not just documentation.
+  Why mandatory: once a param becomes a CX node (STAGE 3), its
+  ContextId/DataChoice.value has to be MAKE_ID(ns, uid) - an owner that
+  leaves uid at the default 0 doesn't get a "less good" id, every one of
+  that owner's params collides on the exact same key. This isn't about
+  assuming every owner can dynamically add/remove params (most won't) -
+  ANY param exposed as a CX node needs stable identity regardless of
+  whether its owner's set ever changes shape. What dynamism (CLAP's
+  RESCAN_ALL, see STAGE 2) actually buys is the justification for one
+  GENERIC diff-based add/remove mechanism instead of two different ones
+  (static init vs dynamic resync) - for a static owner (synth/sampler/Trk)
+  the diff always comes back empty, so it costs them nothing to ride the
+  same mechanism.
+  Scope: only needs to be stable+unique WITHIN one owner's own container,
+  same guarantee clap_id itself actually gives (unique per plugin instance,
+  not globally) - global uniqueness is composed one level up by the CX
+  layer combining this with the owning instance's own uid, same "compose
+  an owner id into the local part" pattern already used for per-instance
+  lists (see IDENTITY/KEYS notes from the original actions-system design).
+  For synth/sampler/Trk, which have no external-format id to reuse, their
+  own existing fixed array position (0=Amp, 1=Freq, ...) already satisfies
+  this - no burden, since those sets never change shape.
+  API shape [DECIDED]: don't leave it inside the already-nullable
+  PRM_USER_DATA* user_data_per_param (bundling a mandatory field inside an
+  optional-as-a-whole pointer is contradictory). Pull it into its own
+  required parameter on params_init_param_container, parallel to
+  param_names/param_vals (which already return NULL if missing - same
+  validation style, just extended to cover uid). Leave PRM_USER_DATA.data
+  (the CLAP cookie, genuinely optional/module-specific) where it is.
+  params_init_param_container should also reject duplicate uids at init
+  time (cheap linear scan, param counts are tens not thousands) so a
+  broken owner fails loudly there instead of corrupting the CX layer
+  later - same idea extended into STAGE 2's resync function.
+  Minor, not urgent: clap_id is uint32_t; today's user_id is a signed int -
+  worth tightening the type once this is load-bearing.
+
+  Not decided yet, for whenever this stage actually starts: exact value/
+  display callback signatures, and going through params.c function by
+  function to see what else follows from these changes.
 
 STAGE 2 - deferred cleanup (explicitly "later", not blocking stage 1 or 3)
   - Allocation count: e.g. params_init_param_container mallocs rt/ui
@@ -79,12 +157,65 @@ STAGE 2 - deferred cleanup (explicitly "later", not blocking stage 1 or 3)
     own per-string mallocs go away with stage 1's string-function removal,
     not a stage 2 concern any more.) Worth a pass once the callback change
     (stage 1) settles what state actually needs to live in PRM_PARAM at all.
-  - Parameters added/removed at runtime by a plugin: today num_of_params_ui/
-    _rt and the rt_params/ui_params arrays are sized once in
-    params_init_param_container (calloc) and never resized. A plugin that
-    wants to add/remove its own params later needs this to become a real
-    dynamic structure, not a fixed array - ties into the allocation pass
-    above.
+  - Parameters added/removed at runtime by a plugin [DESIGN DECIDED,
+    triggered by a concrete existing case - see below]. Today
+    num_of_params_ui/_rt and the rt_params/ui_params arrays are sized once
+    in params_init_param_container (calloc) and never resized.
+
+    The concrete forcing case: clap_plug_ext_params_rescan
+    (contexts/clap_plugins.c) already exists and already handles
+    CLAP_PARAM_RESCAN_VALUES/TEXT/INFO for real (those only touch EXISTING
+    params by position, never add/remove, so they're unaffected by any of
+    this). Its CLAP_PARAM_RESCAN_ALL branch - the one that means "the
+    param count/order/ids changed" - is a TODO with the naive approach
+    commented out: `clap_plug_params_destroy(...); clap_plug_params_create(
+    ...);`, i.e. destroy the whole container and rebuild from scratch. That
+    would give every surviving param a brand-new ContextId even if it
+    didn't actually change - breaks the CROSS-CUTTING INVARIANT above and
+    breaks any UI_STATE/UI reference pointed at a param that's still
+    logically the same one. The old TODO comment ("need to overhaul the
+    whole app_intrf for this") is already resolved by the actions/CX system
+    that now exists - no app_intrf overhaul needed, see STAGE 3's plumbing
+    notes for exactly what app_intrf does and doesn't need.
+
+    Algorithm [DECIDED] - params_container_resync(container, new_params[],
+    new_count), called by the owner (CLAP's RESCAN_ALL handler today, any
+    future dynamic-params owner later) with its CURRENT full param list,
+    matched by uid not position, per the CROSS-CUTTING INVARIANT (tombstone,
+    never compact a surviving slot):
+      pass 1 - removals: for each currently-alive slot whose uid is no
+        longer present in new_params: release any owned state, mark the
+        slot dead (tombstoned), do NOT shift anything.
+      pass 2 - additions: for each new_params[i] whose uid has no matching
+        alive slot: reuse a tombstoned slot if one exists, else grow
+        rt_params/ui_params by one (realloc); populate it exactly like
+        params_init_param_container already does per-param today (name,
+        min, max, inc, val_type, def_val, val=def_val, uid, just_changed=0,
+        alive=true).
+      survivors (uid found in both): untouched entirely - not visited by
+        either pass. Value/name refresh for survivors is RESCAN_VALUES/
+        INFO's job (already implemented, separate from this), not this
+        function's.
+      Both rt_params and ui_params get identical treatment in lockstep,
+      same slot index in both, mirroring params_init_param_container's
+      existing symmetry. Safe to mutate both directly (no ring-buffer
+      messaging needed for the structural part) because CLAP only allows
+      RESCAN_ALL while the plugin instance is deactivated (the existing
+      `if (plug->plug_inst_activated == 1) return;` guard already in
+      clap_plug_ext_params_rescan enforces this) - the RT thread isn't
+      reading rt_params for that plugin while this runs.
+      This function does NOT report what changed to anyone - it only
+      leaves the container in the correct new state. STAGE 3's CX resync
+      independently discovers what actually changed later, by re-walking
+      child_at and diffing against what it already has - same as it
+      already does for every other container. Two separate diffs (this
+      one, and the CX one), not one handed from one side to the other.
+    Needs a uid-lookup helper (param_find_uid, mirroring the existing
+    param_find_name's linear scan, same reasoning - counts are small).
+    Array growth: realloc to exact size on demand, not doubling-growth -
+    rescans are a rare/cold event here, not a hot interactive-append path
+    like the CLI's UI_TARGET_LIST, so the simpler exact-size realloc is
+    fine and not premature optimisation avoidance.
   - Redundant code: nearly every accessor in params.c repeats the same
     `if (rt_params == 0) {array=ui_params; ...} if (rt_params == 1)
     {array=rt_params; ...}` array-select block - a clear factor-out
@@ -112,6 +243,43 @@ STAGE 3 - parameters as contexts (CX), integrated into the action system
     side) path and its ring-buffer message to the rt thread - this already
     matches the pattern the rest of the app uses (JACK, plugins), shouldn't
     need new plumbing, just confirm during implementation.
+  - How params become CX children, and how structural changes (RESCAN_ALL)
+    reach app_intrf [DECIDED - reuses the existing generic pipeline,
+    verified against actual code, not assumed]:
+      app_intrf's resync (enumerate a parent's current children via its
+      ops table, diff against the CX tree, emit CX_ADDED/CX_REMOVED) is
+      ALREADY fully generic - it doesn't know or care what kind of child
+      it's looking at. It needs ZERO new code for params. The "structural
+      change happened" signal is NOT a new DataEvent type either - it's
+      the exact same DATA_EVENT_CHILDREN_CHANGED already used for "a
+      plugin was added to the plugins list", just now ALSO fired targeting
+      a plugin/synth-osc/sample INSTANCE's own ContextId (not only
+      container-list ContextIds).
+      What's actually new, checked directly against app_data.c: every
+      item-level ops table - sample_ops, lv2_plugin_ops, clap_plugin_ops,
+      the synth osc's ops - currently stubs child_at to unconditionally
+      `return false;` (`(void)user_data; (void)idx; (void)out; return
+      false;`). They are hardcoded leaves today, not "almost wired up".
+      Giving them real param children means implementing REAL child_at/
+      child_count there, backed by PRM_CONTAIN (once STAGE 2 lands).
+      Each owning instance needs its own params_dirty bool (NOT the
+      existing container-level plugins_dirty/samples_dirty - those mean
+      "the SET of loaded instances changed"; params_dirty is instance-
+      scoped, since one plugin's RESCAN_ALL says nothing about another's),
+      set by the RESCAN_ALL handler right after params_container_resync
+      finishes (mutate first, flag second).
+      That flag doesn't need a new iteration to check it either -
+      clap_read_rt_to_ui_messages (already called every cycle from
+      app_data_update) already loops every currently-loaded CLAP_PLUG_PLUG
+      to drain each instance's param_msgs_process. Checking
+      cur_plug->params_dirty and pushing DATA_EVENT_CHILDREN_CHANGED for
+      that instance's ContextId slots into that same existing loop - one
+      more check per iteration, not a second pass. (Needs to loop, not be
+      a single flag check like JACK's ports_changed - several loaded
+      plugins could rescan in the same cycle, unlike JACK which is one
+      client.) LV2/synth/sampler would need the equivalent read function
+      to grow the same kind of check, whenever/if any of them gain a
+      dynamic-params story of their own.
   - DataActionType(s) for changing a value [DECIDED]: two, not three, not
     one. data_actions.h already anticipates this - DataActionType has a
     "// rename / value-change slot in later" comment, and DataArgKind has a
@@ -148,3 +316,85 @@ STAGE 3 - parameters as contexts (CX), integrated into the action system
     enum value + one ops-table case each only once something actually
     needs it (same "explicit over clever" extensibility rule the rest of
     the action system was built on).
+
+================================================================================
+FUTURE - categories for CHOICE / MULTI_CHOICE lists (design sketch, not
+scheduled - written down now because plugin presets will need it: preset
+browsers are essentially always categorised, e.g. LV2 preset banks/CLAP
+preset factories exposing a category/collection hierarchy)
+================================================================================
+  No new DataListId / DataArgKind / DataActionType needed - a category-
+  bearing list is still just a flat, idx-enumerable list_at, exactly like
+  today. Two additions to data_actions.h cover it:
+  - DataChoice gains a second flags bit: DATA_CHOICE_CATEGORY (1u << 1),
+    alongside the existing DATA_CHOICE_LINKED (1u << 0). A row with this bit
+    set is a node to descend into, not a pickable leaf - same idea as a
+    directory listing mixing files and subdirectories in one flat readdir,
+    "is this a directory" is a flag on the entry, not a different call.
+  - DataActionReq gains a top-level field, sibling to `type`, OUTSIDE the
+    action-specific union: `uint64_t category_scope;` (MAKE_ID(list_ns,
+    category key), 0 = list root). Set by the UI while drilling a
+    category-bearing list; ignored by list_at for lists that have no
+    categories; never meaningful in the req that finally reaches action_do
+    - only the union fields (add_choice/connect/...) are, so no ops table's
+    action_do needs to change for this to exist.
+    [Correction from an earlier version of this idea: originally proposed
+    reusing add_choice.choice_value itself as the drill scope while
+    browsing (elegant for ADD_CHOICE's single list, since nothing else
+    needs that field mid-browse) - doesn't generalise. CONNECT's targets
+    list is already scoped by partial->connect.source, which has to stay
+    the fixed, correct source for the whole browsing session; a second,
+    independent "which category am I inside" value has no spare field to
+    live in without colliding with source. A dedicated top-level field
+    avoids the collision and works identically for every action shape.]
+
+  How drilling works, CLI side: one more branch in the existing "on
+  SELECTED" handling already used by helper_choice_list_step's callers, not
+  a new architecture -
+    - pick-and-return shape (CONNECT's SOURCE mode, a plain non-repeating
+      CHOICE): category row -> update category_scope, reset cursor, browse
+      the same list again; leaf row -> return, exactly as today.
+    - act-and-continue shape (ADD_CHOICE's repeat, CONNECT's TARGETS
+      toggle): category row -> descend, same as above; leaf row -> act on
+      it (execute / toggle) and keep looping at the SAME scope, exactly as
+      today.
+  Backing out (h/ESC) needs a small caller-owned breadcrumb: a fixed-size
+  stack of (scope value, cursor) pairs, one per level drilled into, capped
+  like ACTION_ARG_COUNT/MAX_ACTION_CANDIDATES already are elsewhere in this
+  CLI - no heap. Pop one level per h/ESC (cursor restored, same as CONNECT's
+  source_cursor preservation) until back at the root, where it behaves like
+  today (leaves the picker / steps back to the outer mode).
+
+  Two things list_at implementations need to get right, whenever this is
+  actually built:
+  - A category node's own DataChoice.value must hash its FULL PATH (e.g.
+    fnv1a64("Bass/Analog/Warm")), not just its own name - otherwise two
+    different parents with a same-named child (Bass/Warm vs Lead/Warm)
+    collide. Leaf items keep using whatever globally-unique identity they
+    already have (a preset URI/path) - category_scope only filters which
+    leaves are visible at a given level, it is never folded into a leaf's
+    own identity.
+  - Only the immediate parent's scope value is ever needed by list_at (not
+    the whole ancestor chain) - a category node's children are determined
+    by the node itself, same reasoning already established for CONNECT's
+    one-level source/target dependency. The CLI's own breadcrumb stack is
+    for backing out visually, not something list_at needs to see.
+
+  Rejected alternatives:
+  - A dedicated new DataArgKind / a list_children-style call for tree
+    enumeration - not a genuinely new interaction shape (still "pick from
+    an enumerable list", just applied recursively), so a new contract
+    surface would violate the "a new arg kind is the only thing that
+    should touch the UI" rule the rest of the action system was built on.
+  - Returning a nested tree from one list_at call - breaks the flat-
+    pagination contract every existing caller relies on, and would need
+    heap-allocated variable-depth structures crossing data_actions.h's
+    dependency-free boundary. The flag-plus-drill-loop keeps everything
+    flat and caller-stack-owned, matching "all interface buffers are
+    caller stack" already established for the rest of this system.
+
+  Checked for robustness against MULTI_CHOICE and CONNECT specifically
+  (not just the single-list ADD_CHOICE case) before writing this down -
+  category_scope as a top-level field (not a reused union field) is what
+  makes it compose with CONNECT's existing source/target scoping without
+  collision; see the correction note above.
