@@ -12,9 +12,7 @@
 #include <stdlib.h>
 #include <sys/types.h>
 
-// TODO TODAY.
-// Implement Port connectivity, test sound. 
-// AFTER TODAY. Implement Params: Must be able to
+// TODAY. Implement Params: Must be able to
 // change amount of params during runtime Remove unecessary various log
 // conversion methods in params, instead use the string callback function (like
 // in clap plugin parameters)

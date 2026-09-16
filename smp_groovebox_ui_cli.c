@@ -752,8 +752,10 @@ int main() {
     // main ui state, for general program navigation
     UI_STATE* state_main = ui_layer_state_init(ui_layer);
     // current ContextId of the state_main;
-    ContextId state_main_current = id_root;
-    // which idx in the state_main_current children array is the UI_PURPOSE_HOVERED
+    ContextId state_main_context_current = id_root;
+    // the current context parent, useful when current is stale/deleted
+    ContextId state_main_context_current_parent = id_root;
+    // which idx in the state_main_context_current children array is the UI_PURPOSE_HOVERED
     size_t state_main_hovered_idx = 0;
 
     // this array will contain all of the states
@@ -761,7 +763,7 @@ int main() {
 
     // currently focused state
     UI_STATE* state_current = state_main;
-    ContextId* state_current_context_current = &state_main_current;
+    ContextId* state_current_context_current = &state_main_context_current;
     size_t *state_current_hovered_idx = &state_main_hovered_idx;
 
     // navigation mode
@@ -785,18 +787,35 @@ int main() {
                 ui_layer_state_reconcile(ui_layer, states_all[si]);
             if (rr == UI_RECONCILE_REBUILD && states_all[si] == state_main) {
                 // the view's cursor fell behind - fall back to the root
-                state_main_current = id_root;
+                state_main_context_current = id_root;
             }
         }
 
         // show the state_main info
-        // first update state_main_hovered_idx if user inputs or the
-        // _state_reconcile changed the state_main_current
+        // first update the contexts if they are deleted
+        if (!ui_layer_context_valid(ui_layer, state_main_context_current)) {
+            if (ui_layer_context_valid(ui_layer,
+                                       state_main_context_current_parent)) {
+                state_main_context_current = state_main_context_current_parent;
+            } else {
+                state_main_context_current = id_root;
+            }
+        }
+
         state_main_hovered_idx = helper_nav_context_single_purpose_set(
-            ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED,
+            ui_layer, state_main, state_main_context_current, UI_PURPOSE_HOVERED,
             (UiStalePolicy){.mode = UI_STALE_PREV_SIBLING});
         ContextId state_main_id_hovered = helper_purpose_get(
-            ui_layer, state_main, state_main_current, UI_PURPOSE_HOVERED);
+            ui_layer, state_main, state_main_context_current, UI_PURPOSE_HOVERED);
+
+        // update the parent
+        ContextId parent = ui_layer_context_parent_return(ui_layer, state_main_context_current);
+        if(ui_layer_context_valid(ui_layer, parent)){
+            state_main_context_current_parent = parent;
+        }
+        else{
+            state_main_context_current_parent = id_root;
+        }
 
 
         printf("\e[22m");
@@ -804,11 +823,11 @@ int main() {
             printf("\e[2m");
 
         CONTEXT_INTRF_INFO state_main_current_info;
-        if(helper_context_info_get(ui_layer, state_main_current, &state_main_current_info)){
+        if(helper_context_info_get(ui_layer, state_main_context_current, &state_main_current_info)){
             printf("----| %s |----\n\n", state_main_current_info.name);
             for(size_t i = 0; i < state_main_current_info.child_count; i++){
                 CONTEXT_INTRF_INFO state_main_current_child_info;
-                ContextId cur_child = ui_layer_context_child_at(ui_layer, state_main_current, i);
+                ContextId cur_child = ui_layer_context_child_at(ui_layer, state_main_context_current, i);
                 if(helper_context_info_get(ui_layer, cur_child, &state_main_current_child_info)){
                     if(cur_child == state_main_id_hovered && state_current == state_main){
                         printf(">%s\n", state_main_current_child_info.name);
