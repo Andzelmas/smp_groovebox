@@ -655,6 +655,21 @@ static unsigned int clap_plug_params_value_to_text(const void *user_data,
     return convert_err;
 }
 
+// param_add_param fails (returns -1, adds nothing) if uid already exists in the
+// container (see its own doc comment) - which clap_plug_params_create's
+// discovery loop below can genuinely hit Losing an add here would leave that
+// val_id unfilled, desyncing every param after it. So probe for a free uid
+// first via param_find_uid starting from the very top of the uint32_t range,
+// which no real CLAP plugin id realistically reaches then add the placeholder
+// once.
+static void clap_plug_add_placeholder_param(PRM_CONTAIN *plug_params,
+                                            uint32_t val_id) {
+    uint32_t uid = UINT32_MAX - 1 - val_id;
+    while (param_find_uid(plug_params, uid) != -1)
+        uid--;
+    param_add_param(plug_params, "", 0.0, 0.0, 0.0, 0.0, uid, NULL);
+}
+
 // create parameters on the id plugin, the plugin should not be processing
 static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     if (!plug_data)
@@ -689,13 +704,12 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     // - keep every index filled, even on a get_info failure, since
     // param_get_value elsewhere is called with this same index and a gap
     // would desync every param after it. On a get_info failure there's no
-    // real clap_id to use as uid either, so val_id doubles as a fallback
-    // uid too - still unique per container even though it isn't a clap_id.
+    // real clap_id to use as uid - clap_plug_add_placeholder_param handles
+    // finding one that's actually free
     for (uint32_t val_id = 0; val_id < param_count; val_id++) {
         clap_param_info_t param_info;
         if (!clap_params->get_info(plug->plug_inst, val_id, &param_info)) {
-            param_add_param(plug->plug_params, "", 0.0, 0.0, 0.0, 0.0,
-                            val_id, NULL);
+            clap_plug_add_placeholder_param(plug->plug_params, val_id);
             continue;
         }
 
@@ -725,9 +739,16 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
             CLAP_PARAM_IS_READONLY) {
             param_inc = 0;
         }
-        param_add_param(plug->plug_params, param_info.name,
-                        param_info.default_value, param_min, param_max,
-                        param_inc, param_info.id, param_info.cookie);
+        // a failure here (duplicate param_info.id - a non-conformant
+        // plugin reporting the same clap_id twice - or allocation failure)
+        // still must not leave val_id unfilled; fall back to the same
+        // placeholder the get_info-failure branch above uses, trading this
+        // one param's real identity for every other param staying aligned
+        if (param_add_param(plug->plug_params, param_info.name,
+                            param_info.default_value, param_min, param_max,
+                            param_inc, param_info.id, param_info.cookie) == -1) {
+            clap_plug_add_placeholder_param(plug->plug_params, val_id);
+        }
     }
     return 0;
 }
@@ -766,11 +787,17 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
         uint32_t param_count =
             (uint32_t)param_return_num_params(plug->plug_params, 0);
         for (uint32_t param_num = 0; param_num < param_count; param_num++) {
-            clap_param_info_t param_info;
-            if (!clap_params->get_info(plug->plug_inst, param_num, &param_info))
+            // this param's uid IS its clap_id (see clap_plug_params_value_
+            // to_text's own comment) - no need for a fresh get_info call
+            // just to re-derive it.
+            const char *param_name =
+                param_get_name(plug->plug_params, (int)param_num);
+            if (!param_name || param_name[0] == '\0')
                 continue;
+            uint32_t clap_param_id =
+                param_get_uid(plug->plug_params, (int)param_num, 0);
             double cur_value = 0;
-            if (!clap_params->get_value(plug->plug_inst, param_info.id,
+            if (!clap_params->get_value(plug->plug_inst, clap_param_id,
                                         &cur_value))
                 continue;
             param_set_value(plug->plug_params, param_num, (PARAM_T)cur_value,
