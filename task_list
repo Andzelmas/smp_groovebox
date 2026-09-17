@@ -54,109 +54,480 @@ system. General plan, not locked - the usual "agree the shape, then build a
 step at a time" approach applies here same as it did for actions.
 ================================================================================
 
-STAGE 1 - replace params.c's own value-building and display formatting with
-owner callbacks. TWO separate hooks, not one - they have different
-audiences and one of them is RT-constrained:
+STAGE 1 - [DONE] replaced params.c's own value-building and display
+formatting with owner callbacks, and made the per-parameter uid mandatory.
+Touched contexts/params.h, contexts/params.c, and every params_init_param_
+container/param_get_value call site: contexts/sampler.c, contexts/plugins.c
+(LV2), contexts/clap_plugins.c, contexts/synth.c, jack_funcs/jack_funcs.c.
+Builds clean (make, and a -Wall -Wextra pass across all touched files).
 
   (a) value-building callback (numeric, feeds param_get_value - RT/DSP path)
-  Current state: param_get_value(container, val_id, curved, interp,
-  rt_params) does the value-building itself - if curved, normalizes into
-  0..1 (fit_range) and runs it through PRM_PARAM.curve_table
-  (math_range_table_convert_value), then maps back to range; if interp,
-  feeds the result through params_interp_val_get_value (PRM_PARAM.
-  interp_val). Generic, flag-driven math params.c owns internally.
-  param_get_value is called directly by RT/DSP code, not just for display -
-  e.g. synth.c:611 `param_get_value(osc->params, 6, 1, 0, 1)` (curved=1,
-  rt_params=1: an ADSR attack time read on the AUDIO THREAD, curve-mapped,
-  fed straight into synthesis math), same pattern for plugins.c/
-  clap_plugins.c feeding an LV2/CLAP control port. So param_get_value
-  MUST keep returning PARAM_T - a string return here would break real DSP
-  (the audio thread can't parse a string back into a float, and RT code
-  shouldn't be formatting strings anyway). Goal: params.c stops doing the
-  curved/interp math itself; the owner (sample/plugin/synth osc - whoever
-  calls params_init_param_container) supplies a callback in
-  PRM_CONT_USER_DATA that builds the final PARAM_T from the raw stored one
-  - curve mapping, interpolation, anything else the owner wants - params.c
-  just calls it. Exact signature/whether curve_table + interp_val stay as
-  PRM_PARAM-owned storage or move entirely into the owner's own callback
-  state is not decided yet.
+  [DONE, with one signature simplification decided during implementation]
+  param_get_value dropped its curved/interp bool parameters entirely -
+  signature is now param_get_value(container, val_id, rt_params). Checked
+  every call site first (synth.c, plugins.c, clap_plugins.c, sampler.c):
+  none of them ever varied curved/interp for the same val_id across
+  different calls - a given param_id always requested the same treatment
+  everywhere it was read. So there was nothing for a caller-supplied flag
+  to actually express; the owner's callback already receives param_id and
+  can decide the same thing internally. Callback signature: PARAM_T(*)
+  (const void *user_data, int param_id, PARAM_T raw_val, unsigned int
+  rt_params) - rt_params is passed through because any state the owner
+  keeps (e.g. an interpolator) must stay separated by side, same as
+  params.c's own rt_params/ui_params split. NULL callback = raw value
+  returned unchanged (params.c's own new no-op default, mirrors val_to_
+  string's existing "no callback, no output" convention).
+  PRM_PARAM.curve_table / .interp_val removed - not just bypassed. Nothing
+  in params.c reads them any more, so leaving them there would only be the
+  exact kind of unconditional per-param allocation (interp_val was
+  malloc'd for every param on both rt/ui sides, even ones that never used
+  it) STAGE 2 was already planning to cut. params_init_interpolated_val /
+  params_interp_val_get_value stay as public, standalone utilities in
+  params.h - not tied to PRM_PARAM at all, same shape synth.c already used
+  independently for its per-voice amp interpolators (SYNTH_VOICE.vco_amp_L/
+  R) before this change. The one real owner of curve/interp state today,
+  synth.c, now manages it itself: a new synth_osc_build_value callback
+  (registered per-oscillator, user_data = the SYNTH_OSC*, which already had
+  a synth_data back-pointer) replicates the exact same math param_get_value
+  used to do inline - fit_range + math_range_table_convert_value against
+  synth_data->amp_to_exp for params 6/7/9 (A/D/R, unchanged shared curve
+  table, unchanged 0..5 range now named SYNTH_ADSR_TIME_MIN/MAX constants
+  so the callback and the init call can't drift apart), and params_interp_
+  val_get_value against a new per-oscillator SYNTH_OSC.amp_smooth handle
+  for param 0 (Amp) - freed in synth_clean_osc alongside ->params. Every
+  other current owner (sampler, LV2, CLAP, Trk) registers no build_value
+  callback at all and gets the raw stored value, exactly matching their
+  pre-existing curved=0,interp=0 behaviour at every one of their call
+  sites - verified by grep before assuming it, not just asserted.
 
   (b) display callback (string, replaces param_get_value_as_string - UI-only)
-  Current state: param_get_value_as_string(container, val_id, ...) - its own
-  doc comment already says "Use only on [main-thread] for ui display
-  purposes," so no RT constraint here - has its own val_type switch
-  (Uchar_type/Int_type/Float_type/DB_Return_Type/Curve_Float_Return_Type/
-  String_Return_Type) building the display string, with PRM_CONT_USER_DATA.
-  val_to_string only as an optional first-look override, not the only path.
-  Goal [DECIDED]: the owner's callback becomes the ONLY path - it decides
-  whether this parameter displays as a plain float, a dB readout, a
-  True/False toggle, a choice-list label, anything else, and params.c stops
-  knowing any of those categories exist - the val_type switch goes away
-  entirely, not just gets a bypass.
-  Consequence [DECIDED]: PRM_PARAM.param_strings / param_set_param_strings /
-  param_get_param_string disappear too - that whole mechanism only existed
-  to let String_Return_Type params look up a display label by indexing into
-  a params.c-owned string array; once the owner's display callback decides
-  formatting entirely, the owner just holds its own choice labels and
-  indexes into them itself inside the callback, same as it already
-  effectively does today, just moved out of params.c. Whether PRM_PARAM.
-  val_type itself has any remaining reason to exist once neither function
-  branches on it is an open question - check during this stage, don't
-  assume yet.
+  [DONE as decided] The val_type switch is gone, not bypassed - param_get_
+  value_as_string now only ever calls the owner's val_to_string, returning
+  0 if none is registered. PRM_PARAM.val_type / param_strings / param_
+  set_param_strings / param_get_param_string all removed. Checked who
+  actually calls param_get_value_as_string before assuming this was safe:
+  nobody, anywhere in the codebase (grep, one hit - a comment). Params
+  aren't wired into any UI yet (STAGE 3), so this path is entirely dormant
+  today - meaning CLAP (which already had a real val_to_string callback,
+  clap_plug_params_value_to_text, untouched by this change) is unaffected,
+  and LV2/sampler/synth/Trk simply have no callback registered yet, same
+  as they had no working display path before either (they relied entirely
+  on the now-removed built-in val_type switch, which nothing was calling).
+  LV2's enum-control labels (the data param_set_param_strings used to copy
+  into params.c) were never deleted - they still live in plug->controls[i]
+  ->points, ready for a small val_to_string callback reading them directly
+  whenever something actually calls param_get_value_as_string for LV2 -
+  not built now since nothing needs it yet (explicit > clever).
+  PRM_PARAM.val_type had no other reader once these two changes landed
+  (checked: only ever read by the two functions being removed) - removed.
 
-  (c) per-parameter uid becomes mandatory [DECIDED]
-  Checked first: grep for `.user_id =` across contexts/*.c shows only
-  clap_plugins.c ever sets PRM_USER_DATA.user_id to something real
-  (param_info.id, CLAP's own clap_id). plugins.c (LV2), synth.c, sampler.c
-  never touch it - it silently defaults to 0 for every one of their params
-  today. So this is establishing a new cross-module contract, not
-  formalising an existing one - real work needed in those three modules
-  too, not just documentation.
-  Why mandatory: once a param becomes a CX node (STAGE 3), its
-  ContextId/DataChoice.value has to be MAKE_ID(ns, uid) - an owner that
-  leaves uid at the default 0 doesn't get a "less good" id, every one of
-  that owner's params collides on the exact same key. This isn't about
-  assuming every owner can dynamically add/remove params (most won't) -
-  ANY param exposed as a CX node needs stable identity regardless of
-  whether its owner's set ever changes shape. What dynamism (CLAP's
-  RESCAN_ALL, see STAGE 2) actually buys is the justification for one
-  GENERIC diff-based add/remove mechanism instead of two different ones
-  (static init vs dynamic resync) - for a static owner (synth/sampler/Trk)
-  the diff always comes back empty, so it costs them nothing to ride the
-  same mechanism.
-  Scope: only needs to be stable+unique WITHIN one owner's own container,
-  same guarantee clap_id itself actually gives (unique per plugin instance,
-  not globally) - global uniqueness is composed one level up by the CX
-  layer combining this with the owning instance's own uid, same "compose
-  an owner id into the local part" pattern already used for per-instance
-  lists (see IDENTITY/KEYS notes from the original actions-system design).
-  For synth/sampler/Trk, which have no external-format id to reuse, their
-  own existing fixed array position (0=Amp, 1=Freq, ...) already satisfies
-  this - no burden, since those sets never change shape.
-  API shape [DECIDED]: don't leave it inside the already-nullable
-  PRM_USER_DATA* user_data_per_param (bundling a mandatory field inside an
-  optional-as-a-whole pointer is contradictory). Pull it into its own
-  required parameter on params_init_param_container, parallel to
-  param_names/param_vals (which already return NULL if missing - same
-  validation style, just extended to cover uid). Leave PRM_USER_DATA.data
-  (the CLAP cookie, genuinely optional/module-specific) where it is.
-  params_init_param_container should also reject duplicate uids at init
-  time (cheap linear scan, param counts are tens not thousands) so a
-  broken owner fails loudly there instead of corrupting the CX layer
-  later - same idea extended into STAGE 2's resync function.
-  Minor, not urgent: clap_id is uint32_t; today's user_id is a signed int -
-  worth tightening the type once this is load-bearing.
+  (c) per-parameter uid becomes mandatory [DONE]
+  PRM_USER_DATA (the old {int user_id; void *data;} struct) is gone. New
+  accessors param_get_uid / param_cookie_return replace param_user_data_
+  return; new param_find_uid mirrors the existing param_find_name (linear
+  scan, same reasoning - counts are small).
+  Per-owner uid source: CLAP uses param_info.id (clap_id) as designed,
+  falling back to the loop index (never a shared constant) if get_info
+  fails for a param, so two failed lookups still can't collide. LV2/synth/
+  Trk/sampler, which have no external per-param id, use their own fixed
+  array position - exactly the "costs static owners nothing" case this was
+  designed for.
 
-  Not decided yet, for whenever this stage actually starts: exact value/
-  display callback signatures, and going through params.c function by
-  function to see what else follows from these changes.
+  (d) params_init_param_container/build API reshaped [DONE, done as a
+  follow-up right after (a)-(c) landed, same session]
+  The batch, struct-of-parallel-arrays signature this section originally
+  described (num_of_params + 7 parallel arrays in one call) turned out to
+  be worth splitting further, immediately after building it: params_init_
+  param_container(user_data_per_container) now creates an EMPTY container,
+  and a new int param_add_param(container, name, val, min, max, inc, uid,
+  cookie) appends one parameter at a time, returning its val_id (-1 on a
+  duplicate uid or allocation failure). uid uniqueness is checked per-add
+  via param_find_uid (already built for (c)) - the old batch params_uids_
+  have_duplicate scan is gone, folded into that one check.
+  Why this is more than a style preference: clap_plugins.c and plugins.c
+  (LV2) discover their param count and values at RUNTIME, so the old batch
+  API forced them to calloc 7 temp arrays, fill them in a loop, make one
+  call, then free everything - including heap-allocating every param NAME
+  up front (calloc+snprintf for CLAP, strdup for LV2) purely so all N names
+  could stay alive simultaneously until the one batch call. With param_add_
+  param, a name only needs to survive one synchronous call - params.c
+  already copies it into PRM_PARAM.name[] immediately - so CLAP's param_
+  info.name and LV2's lilv_node_as_string() now pass straight through with
+  no heap allocation and no matching free loop at all. Net allocation count
+  for a dynamically-discovered param set went down, not up - directly
+  serves STAGE 2's already-stated "reduce allocation count" goal, not a
+  detour from it.
+  Also serves STAGE 2 directly: params_container_resync's own "add a new
+  param" step (the pass-2 half of the diff-and-mutate algorithm designed
+  above) needs exactly this primitive - append one param to a container
+  that may already have others in it. param_add_param as built now always
+  grows by one (no tombstone-reuse yet, since there is no tombstone/alive
+  concept without STAGE 2's dynamic-remove support); STAGE 2 extends this
+  SAME function to check a freed slot first, rather than writing a second,
+  separate add path.
+  Synth.c/jack_funcs.c (Trk) benefited too, despite having a fixed,
+  compile-time-known param set with no loop to begin with: the old call
+  site had 5-7 parallel compound-literal arrays (name[], val[], min[],
+  max[], inc[], uid[]) that had to be read down through in lockstep to
+  know what any one param even was, and a silent misalignment (inserting a
+  param in the middle of one array without updating the others) was a real,
+  hard-to-spot correctness hazard. N one-line param_add_param calls, one
+  self-contained line per param, make that class of bug structurally
+  impossible rather than merely avoided by care - a real readability/safety
+  win for the static-set owners too, not just the dynamic-discovery ones.
+  One correctness point caught while migrating clap_plugins.c/plugins.c:
+  both loops use their own external index (CLAP's param_index, LV2's
+  plug->controls index) as this container's val_id too, and other code
+  (param_get_value calls in plug_run_rt / clap_plugins.c's RT param-event
+  loop) assumes that same index lines up 1:1 between plug->controls/CLAP's
+  own numbering and this container's val_id. So a param_id that fails
+  get_info (CLAP) or a NULL plug->controls[i] slot (LV2) still gets a
+  param_add_param call (with a safe non-NULL placeholder name, e.g. "") to
+  keep the index aligned, rather than being skipped - skipping would have
+  desynced every param after it. The old array-based code did this
+  correctly too (always wrote a default value into that array slot); this
+  is calling that out explicitly since it would have been an easy thing to
+  silently break while switching to a call-per-param loop.
+
+  (e) PRM_PARAM storage: one malloc per parameter, not one block [DONE,
+  decided and built right after (d)]
+  rt_params/ui_params changed from PRM_PARAM* (one realloc'd block) to
+  PRM_PARAM** (an array of individually malloc'd PRM_PARAMs). param_add_
+  param now mallocs one new PRM_PARAM, then grows the OUTER pointer array
+  with realloc - safe, because realloc there only ever moves pointer
+  VALUES around, never the PRM_PARAMs they point at. param_clean_param_
+  container frees each PRM_PARAM individually before freeing the outer
+  arrays. Every accessor changed from &(param_array[val_id]) (address of a
+  value inside one block) to param_array[val_id] (dereference a stored
+  pointer) - mechanical, touched every function in the file, verified with
+  a full -Wall -Wextra build (clean) plus a valgrind run through this
+  app's actual startup (sampler/synth/LV2/CLAP/Trk all call param_add_param
+  during init) - 0 errors, 0 bytes definitely lost.
+  Why this reverses part of (d)'s original tradeoff: (d) kept the
+  contiguous block specifically to avoid "more allocations" - but once CX
+  integration (STAGE 3) is factored in, that concern doesn't hold up.
+  Stage 3 will materialise essentially every param as a CX node, and a CX
+  node's user_data has to be something that survives time (see the cross-
+  cutting invariant) - so *some* per-param allocation was always going to
+  be needed once STAGE 3 lands, whether it's the PRM_PARAM itself or a
+  smaller handle pointing at one. Between "malloc the param itself, and
+  let user_data be that pointer directly - exactly the same pattern
+  sample_ops/lv2_plugin_ops/clap_plugin_ops already use" and "keep the
+  contiguous block, and teach app_data.c a params-only exception where
+  user_data is a {container, uid} handle resolved fresh through param_
+  find_uid on every access" - the first keeps every CX-backed module on
+  the identical pattern (a raw, cache-once, safe pointer) with zero special
+  casing anywhere outside params.c; the second would have been real, ap-
+  data.c-side edge-case code for one module, for a savings that stage 3
+  spends right back anyway. "Reduce allocation count" (STAGE 2, below) was
+  always about *unnecessary* allocation (e.g. giving every param an
+  interp_val whether it used one or not) - one malloc to let a parameter
+  exist as a distinct, independently-addressable thing isn't in that
+  category once the CX layer needs that guarantee regardless.
+  Cache-locality cost of scattered PRM_PARAMs checked against this app's
+  actual RT access patterns before accepting the tradeoff, not assumed:
+  every RT read is a targeted single-index lookup (param_msgs_process's
+  prm_array[cur_bit.val_id], synth.c's ten separately-named param_get_value
+  calls with hardcoded indices) - there is no sequential "scan all params"
+  hot path anywhere in this codebase today. The one place that does
+  iterate every param (CLAP's per-cycle changed-value check) does it every
+  single audio cycle, which is exactly the case where the working set
+  stays cache-resident regardless of layout - contiguity only pays off on
+  a cold touch, and this data never goes cold. Net: no measurable RT cost
+  from this change given how the code actually reads params, not just "we
+  can afford it."
+
+  (f) val_id vs uid - not redundant, different jobs, worth stating plainly
+  since the question came up: val_id is a direct O(1) array-position
+  handle (what every accessor already takes); uid is a stable, owner-
+  chosen identity that costs an O(N) param_find_uid scan to resolve to a
+  val_id. val_id is for a caller that already knows where a param lives
+  (every hot RT read in this codebase); uid is for cross-time/cross-
+  module identity - surviving a resync, or being the thing a ContextId's
+  local part is built from (STAGE 3). The relationship mirrors the CX
+  layer's own "resolve a ContextId to a fast handle once, reuse the handle
+  many times" pattern - val_id IS params.c's own version of that fast
+  handle, uid->val_id (via param_find_uid) is the one-time resolve step.
+
+  (g) two small renames, done alongside (e)/(f) for the same clarity reason
+  - PARAM_RING_DATA_BIT.param_id (types.h) -> val_id. It only ever carried
+    a val_id (param_set_value writes send_bit.val_id = val_id; param_msgs_
+    process reads prm_array[cur_bit.val_id] as a direct index) - the old
+    name collided in meaning with CLAP's own clap_event_param_value_t.
+    param_id (clap_plugins.c), which per CLAP's spec holds the STABLE
+    clap_id (this codebase's uid), not a position. Same word, opposite
+    meaning, in code that sits right next to each other - confusing in
+    practice, not just in theory, which is what prompted the rename.
+  - PRM_INTERP_VAL / params_init_interpolated_val / params_interp_val_
+    get_value moved OUT of params.h/params.c entirely, into util_funcs/
+    math_funcs.h/.c as MATH_RAMP_VAL / math_ramp_val_init / math_ramp_val_
+    get_value. Once stage 1(a) moved curve/interp application out of
+    param_get_value and into owner callbacks, nothing in PRM_PARAM
+    referenced this type any more - and synth.c was already using the same
+    function independently for something that has nothing to do with
+    parameters at all (SYNTH_VOICE.vco_amp_L/R, per-voice amplitude
+    smoothing during audio rendering, no PRM_CONTAIN involved). A generic
+    "ramp a value toward a target over N samples" utility belongs with
+    fit_range/MATH_RANGE_TABLE in math_funcs.h, not in the parameter
+    module - params.h's own #include of math_funcs.h came out too, since
+    nothing in it needed MATH_RANGE_TABLE either (vestigial since stage 1
+    removed PRM_PARAM.curve_table, only actually noticed now).
+
+  (h) PRM_PARAM split into PRM_PARAM_RT / PRM_PARAM_UI [DONE] - the last,
+  most invasive piece of stage 1. Forcing question: with rt_params/ui_params
+  now two arrays of individually-malloc'd structs (see (e)), is duplicating
+  the WHOLE struct on both sides actually necessary, given only .val truly
+  needs to cross threads? Audited every real field against every actual
+  call site (not guessed) to answer it:
+    - RT-only: cookie (only clap_plugins.c's rt-thread event-building path
+      ever reads a param's cookie; nothing on the ui side ever has).
+    - UI-only: inc_am, def_val, name, is_hidden (Increase/Decrease/DefValue/
+      ChangeName/ToggleHidden are all ui-side-only operations - the rt side
+      never computes any of them, it only ever receives a final value or
+      originates one directly).
+    - Both: val, min_val, max_val, uid. val_changed also lives on both
+      structs by name but is RT-ONLY in practice - the ui side has nothing
+      that polls it (see below).
+  Two struct types replaced the one shared PRM_PARAM:
+    PRM_PARAM_RT { val, min_val, max_val, val_changed, uid, cookie }
+    PRM_PARAM_UI { val, min_val, max_val, def_val, inc_am, name, uid,
+                   is_hidden }
+  name/ui_name collapsed into UI's single mutable name[] - now that uid (not
+  name) is the stable cross-time identity (see (f)), nothing depends on a
+  param's display name staying fixed, so ChangeName can just rewrite name[]
+  directly. ui_name_just_changed removed entirely, not renamed/kept: once a
+  name-changed consumer exists it belongs on the CX layer's own push-based
+  DATA_EVENT_CHANGED mechanism (already built, see the actions/CX work),
+  which doesn't need a per-param polled flag at all - a stored "did the name
+  change" bit would just be duplicating what CX already does better.
+  just_changed renamed to val_changed and confined to PRM_PARAM_RT only -
+  it exists because CLAP/JACK-transport rt-thread loops poll it every audio
+  cycle to decide whether an external protocol still needs telling about a
+  value (param_get_if_changed_rt/param_get_if_any_changed_rt); the ui side
+  never had an equivalent consumer, so it doesn't get the field.
+  Cross-thread protocol changed at the same time, and had to: previously
+  param_set_value sent the ORIGINAL operation (param_op + raw set_to) across
+  the ring buffer and the receiving side replayed it via param_set_value_
+  directly, clamping against ITS OWN min/max. That only worked because both
+  sides carried a full PRM_PARAM with min/max (and inc_am/def_val for the ui
+  ops). Once PRM_PARAM_RT drops inc_am/def_val, rt can no longer replay
+  Increase/Decrease/DefValue - so the protocol changed to "whichever side
+  originates a change computes and clamps the FINAL value itself, sends
+  just that". PARAM_RING_DATA_BIT (types.h) shrank from {val_id, param_
+  value, param_string, param_op} to {val_id, param_value} accordingly - the
+  receiving side (param_msgs_process) now just stores the value verbatim,
+  no operation/string/clamping logic on that path at all.
+  Function surface changed with an explicit, non-arbitrary rule (not
+  "split everything" or "split nothing"): a function whose valid operation
+  SET differs by side split into an unsuffixed ui function + an _rt
+  function (param_set_value / param_set_value_rt, param_cookie_return_rt,
+  param_get_if_changed_rt, param_get_if_any_changed_rt); a function that
+  does the exact same thing on either side, just reading a different array,
+  stayed ONE function taking an rt_params flag (param_get_uid, param_get_
+  value, param_return_num_params) - splitting those would have produced
+  near-duplicate bodies differing only in which array they read, which is
+  exactly the "parallel signature twins" shape this codebase avoids
+  elsewhere (see the no-parallel-signature-twins memory). param_find_uid
+  lost its rt_params argument entirely and become ui-only, since uid is
+  identical on both sides once param_add_param sets it and nothing on the
+  rt side has ever needed to resolve one - checking the ui array alone is
+  correct and sufficient. param_find_name removed outright (no call site
+  anywhere used it - name was never how anything looked a param up, uid/
+  val_id always were).
+  PRM_CONT_USER_DATA.build_value: briefly split into build_value_rt/build_
+  value_ui (two slots), then MERGED BACK to one build_value(..., rt_params)
+  callback [DONE, reverted same session]. Reasoning for the revert: every
+  actual owner (synth.c, clap_plugins.c) only ever populated build_value_rt
+  and left build_value_ui permanently NULL - there was no real case where
+  the two slots differed, only a symmetry with param_set_value/param_set_
+  value_rt that didn't actually apply here. The split-vs-unified test used
+  everywhere else in this file is "does the valid OPERATION SET differ by
+  side" (param_set_value: yes, 7 ui-only ops vs 1 rt op, genuinely different
+  code) vs "same single operation, just reads different state, optionally
+  gated by an rt_params flag" (param_get_uid, param_get_value, param_return_
+  num_params - and build_value belongs in this second group, not the first).
+  synth_osc_build_value went back to taking rt_params and gating the amp-
+  smoothing branch on param_id==0 && rt_params==1 internally (its pre-split
+  shape) - the ADSR curve-mapping branch (params 6/7/9) was never gated at
+  all, on either side.
+  Verified: make, a manual gcc -Wall -Wextra full-project compile (params.c
+  alone also warning-free standalone), and valgrind against the built
+  binary's actual startup path - 0 errors, 0 bytes definitely lost. Re-
+  verified again after the build_value merge-back with the same three
+  checks, same result.
+
+  (i) PARAM_RING_DATA_BIT shrinking to {val_id, param_value} (see (h))
+  double-checked against both plugin backends specifically for a rename
+  message, not just assumed safe because "no call site does it today":
+    - CLAP: clap_host_params_t.rescan is documented [main-thread] in the
+      vendored clap/ext/params.h itself (checked directly, not from memory)
+      - a plugin CANNOT legally call it from an audio-thread context. Code
+        matches the spec: Operation_ChangeName is only ever issued from
+        clap_plug_ext_params_rescan's RESCAN_INFO branch, i.e. that same
+        rescan callback - grep confirms zero other call sites.
+    - LV2: has no equivalent mechanism AT ALL, on any thread. Checked the
+      vendored headers directly (patch.h, parameters.h, port-props.h) -
+      none mention a name/label property; a plugin's control-port name/
+      symbol is static .ttl metadata fixed at load time, and there is no
+      LV2 extension letting a plugin tell the host "my parameter's name
+      changed" the way CLAP's rescan does. Confirmed against this
+      codebase too: contexts/plugins.c never references Operation_
+      ChangeName (grep, zero hits), and doesn't even parse an incoming
+      patch:Set atom from a plugin's output port today - only writes
+      outgoing patch:Set (ui/init -> plugin), never reads one back.
+  Conclusion: no plugin backend in this codebase has an RT-thread-
+  originated rename path - CLAP's is main-thread by spec AND by code, LV2's
+  doesn't exist at all. Dropping PARAM_RING_DATA_BIT's string/op fields
+  down to a bare final value was safe on both counts, not just "probably
+  fine". If a future LV2 extension or a creative use of `patch` ever needed
+  to push a display string from run() (RT), that would need its own
+  mechanism - param_set_value_rt's "always a final numeric value" contract
+  shouldn't be stretched to carry strings for a case that doesn't exist yet.
+
+  (j) clap_plug_params_value_to_text: stop re-deriving param_info.id via a
+  fresh get_info call on every string conversion [DONE] - the uid stored in
+  the container IS param_info.id already (set once, at creation time, in
+  clap_plug_params_create's param_add_param call), so a plugin round-trip
+  to re-fetch the same value on every single param_get_value_as_string call
+  was pure waste. Replaced with param_get_uid(plug->plug_params, val_id,
+  0) - an O(1) container read instead of a call into the plugin.
+  This reopened the one edge case get_info's fresh call used to guard
+  against for free: a param whose OWN get_info failed at creation time gets
+  added with an empty name and its uid set to the fallback loop index
+  (see (c)/clap_plug_params_create's own comment), not a real clap_id.
+  Under the old code, calling get_info again here would almost certainly
+  fail again too and return 0 safely; under the new code, that fallback
+  "uid" gets handed straight to value_to_text as if it were a real clap_id
+  - which could coincidentally match a DIFFERENT param's actual id and
+  silently return the wrong plugin's label instead of failing cleanly.
+  Fixed with an explicit guard, not by reverting the optimisation: a
+  badly-created param is exactly identifiable by its empty name (the same
+  marker clap_plug_params_create itself uses), so clap_plug_params_value_
+  to_text now checks param_get_name first and returns 0 (nothing written,
+  matching every other "can't format this" path in this function) if the
+  name is empty, before ever touching param_get_uid/value_to_text.
+  Verified: make, gcc -Wall -Wextra on clap_plugins.c (only pre-existing,
+  unrelated warnings), valgrind against the built binary's actual startup
+  path - 0 errors, 0 bytes definitely lost.
+
+  (k) types.h params cleanup [DONE] - user asked to check types.h for
+  anything only meant for params (and code that includes params.h) and
+  move it, ahead of a broader types.h cleanup planned for later. Audited
+  every macro/enum/struct in types.h against actual usage (grep, not
+  guessed):
+    - enum paramOperType -> moved to params.h [public - param_set_value's
+      callers need the Operation_* constants]. Every file that references
+      it already had params.h in its include chain already (directly, or
+      transitively via sampler.h/synth.h/clap_plugins.h/jack_funcs.h, all
+      of which already #include params.h) - zero new #includes needed
+      anywhere.
+    - PARAM_RING_DATA_BIT -> moved to params.c, made fully PRIVATE (not
+      just relocated to the header) - checked first and confirmed nothing
+      outside params.c ever constructed or read one by name, only params.h
+      referenced it in a doc comment. Tag renamed _app_param_ring_data_bit
+      -> _params_ring_data_bit to match this file's other private tags
+      (_params_param_rt/_params_param_ui/_params_container).
+    - MAX_PARAM_RING_BUFFER_ARRAY_SIZE -> moved to params.c, also made
+      private, same reasoning - only params.c's own ring_buffer_init calls
+      ever used it.
+    - enum paramRealtimeType (UI_PARAM_E/RT_PARAM_E/UI_TO_RT_RING_E/
+      RT_TO_UI_RING_E) -> DELETED, not moved. Zero references anywhere
+      outside its own definition (grep) - dead code left over from before
+      this session's rt/ui split, when these presumably selected which
+      array/ring to use; every function now takes a plain rt_params/
+      direction argument instead. Moving dead code doesn't clean anything
+      up, so it was removed outright.
+    - enum appReturnType -> moved to contexts/plugins.c as a private,
+      file-scope enum (right above plug_load_and_activate, its only
+      remaining user), comments fixed [DONE]. This one was NOT a clean
+      "belongs to params.h" case - params.c/.h never reference it at all,
+      its only real use left in the whole codebase is a transient, local
+      classification inside plug_load_and_activate's LV2 controls loop
+      (deciding param increment size). Its doc comments were stale/wrong
+      before the move too - "will need to use a param function to return
+      it" and "from curve table on the parameter" both refer to PRM_PARAM.
+      val_type/curve_table, removed back in stage 1(a)/(b) - fixed to
+      describe its actual current, narrow purpose instead.
+    - MAX_PARAM_NAME_LENGTH -> NOT moved to params.h, RENAMED instead to
+      MAX_SHORT_NAME_LENGTH (types.h) and every call site updated
+      (contexts/params.c, contexts/plugins.c, contexts/clap_plugins.c,
+      smp_groovebox_ui.c - the last one not part of the active `make`
+      build target, still fixed for consistency). Despite the name, this
+      constant stopped being param-specific well before this session -
+      it's used for plugin_short_name, CX display_name, preset short_name,
+      and the plugin catalogue's short_name, none of which are param
+      names. Moving it into params.h would have been wrong (would force
+      unrelated files to pull in params.h just for a buffer-size
+      constant) - it genuinely belongs in shared types.h, just under an
+      honest name.
+    Verified: make, gcc -Wall -Wextra full-project compile (only pre-
+    existing, unrelated warnings), valgrind against the built binary's
+    actual startup path - 0 errors, 0 bytes definitely lost.
+
+  (l) param_get_name / param_get_value_as_string -> const char* [DONE],
+  requested for consistency with the rest of the app's own convention
+  (data_name/nav_cx_name_return/DataOps.name: return a borrowed const
+  char*, NULL on error/no-capability, no caller buffer or length arg -
+  see data_object.h's own doc comment on `name`).
+    - param_get_name(container, val_id) - dropped ret_name/name_len
+      entirely. Returns a pointer straight into PRM_PARAM_UI.name[] - no
+      scratch/copy needed at all, since that storage already lives exactly
+      as long as the param does (stronger guarantee than "valid until next
+      call": "valid while the object exists", matching data_name's own
+      documented contract precisely).
+    - param_get_value_as_string(container, val_id, value) - dropped ret_
+      string/string_len. No stable underlying storage exists for this one
+      (the string is computed fresh by the owner's val_to_string callback
+      every call) - added a small per-container scratch buffer
+      (PRM_CONTAIN.value_string_scratch[MAX_STRING_MSG_LENGTH], private)
+      that val_to_string writes into, and returns a pointer to it. "Valid
+      until the next param_get_value_as_string call on this container (any
+      val_id)" - the exact same discipline already established elsewhere
+      in this app for a one-string-at-a-time return (see app_data.c's
+      trk_port_name_buf and its own doc comment). Per-CONTAINER, not one
+      shared file-scope static, since params containers are plural (one
+      per sample/plugin/osc/Trk) - a single shared buffer would let two
+      different containers' in-flight strings alias each other.
+      This scratch buffer is also the thing that makes the earlier-
+      discussed DATA_ACTION_SET_CHOICE/list_at design for CLAP_PARAM_
+      IS_ENUM params practical: building a picker by walking min..max and
+      calling this per value already assumes exactly this "copy before
+      the next call" discipline (list_at only ever needs the ONE string
+      of the option it's filling in right now) - not new plumbing that
+      design will need later, already in place.
+    val_to_string itself (the owner-supplied callback in PRM_CONT_USER_
+    DATA) was deliberately LEFT as a caller-buffer contract, not also
+    converted - it mirrors CLAP's own value_to_text ABI (which every
+    current implementation, clap_plug_params_value_to_text, forwards
+    straight into), and centralising the one persistent buffer inside
+    params.c means every future owner implementation (LV2, synth, a new
+    plugin format) just snprintfs into a buffer it's handed, same as
+    today, rather than each having to manage its own return-lifetime
+    buffer to satisfy a const char* contract on their own side too.
+    clap_plug_params_value_to_text's own param_get_name call site (the
+    "is this param badly-created" guard added in (j)) updated to match -
+    const char *param_name = param_get_name(...); checked for NULL and
+    empty, no local buffer needed there any more either.
+    Zero real callers of either function existed before this change (grep
+    confirmed, still dormant - params aren't wired into any UI yet, STAGE
+    3), so both signature changes had zero call-site migration cost beyond
+    the one internal clap_plugins.c call site above.
+    Verified: make, gcc -Wall -Wextra full-project compile (only pre-
+    existing, unrelated warnings), valgrind against the built binary's
+    actual startup path - 0 errors, 0 bytes definitely lost.
 
 STAGE 2 - deferred cleanup (explicitly "later", not blocking stage 1 or 3)
-  - Allocation count: e.g. params_init_param_container mallocs rt/ui
-    interp_val separately per parameter per side. (param_set_param_strings'
-    own per-string mallocs go away with stage 1's string-function removal,
-    not a stage 2 concern any more.) Worth a pass once the callback change
-    (stage 1) settles what state actually needs to live in PRM_PARAM at all.
+  - Allocation count [PARTIALLY RESOLVED by (e) above - one malloc per
+    parameter is now accepted as necessary, not something to minimise
+    further]. What's left to look at: params_init_param_container/param_
+    add_param no longer over-allocate anything conditional (interp_val
+    used to be malloc'd for every param on both sides whether or not it
+    was ever used - that's gone, ramping state is now owned by whichever
+    owner actually wants it, e.g. synth.c's amp_smooth). Worth a pass for
+    anything else added since, but the "reduce unnecessary allocation"
+    item is largely already addressed. (param_set_param_strings' own per-
+    string mallocs also went away with stage 1's string-function removal -
+    not a stage 2 concern any more either.)
   - Parameters added/removed at runtime by a plugin [DESIGN DECIDED,
     triggered by a concrete existing case - see below]. Today
     num_of_params_ui/_rt and the rt_params/ui_params arrays are sized once
@@ -188,10 +559,14 @@ STAGE 2 - deferred cleanup (explicitly "later", not blocking stage 1 or 3)
         slot dead (tombstoned), do NOT shift anything.
       pass 2 - additions: for each new_params[i] whose uid has no matching
         alive slot: reuse a tombstoned slot if one exists, else grow
-        rt_params/ui_params by one (realloc); populate it exactly like
-        params_init_param_container already does per-param today (name,
-        min, max, inc, val_type, def_val, val=def_val, uid, just_changed=0,
-        alive=true).
+        rt_params/ui_params by one (realloc); populate BOTH structs exactly
+        like param_add_param already does per-param today [field list
+        updated for stage 1(h)'s RT/UI split - the old single-PRM_PARAM
+        field list (val_type, just_changed, ...) this line used to name no
+        longer exists]: PRM_PARAM_RT gets val, min_val, max_val, val_
+        changed=0, uid, cookie; PRM_PARAM_UI gets val, min_val, max_val,
+        def_val=val, inc_am, name, uid, is_hidden=0; plus alive=true on
+        whichever tombstone-tracking field STAGE 2 ends up adding to both.
       survivors (uid found in both): untouched entirely - not visited by
         either pass. Value/name refresh for survivors is RESCAN_VALUES/
         INFO's job (already implemented, separate from this), not this
@@ -216,11 +591,20 @@ STAGE 2 - deferred cleanup (explicitly "later", not blocking stage 1 or 3)
     rescans are a rare/cold event here, not a hot interactive-append path
     like the CLI's UI_TARGET_LIST, so the simpler exact-size realloc is
     fine and not premature optimisation avoidance.
-  - Redundant code: nearly every accessor in params.c repeats the same
-    `if (rt_params == 0) {array=ui_params; ...} if (rt_params == 1)
-    {array=rt_params; ...}` array-select block - a clear factor-out
-    candidate (see no-parallel-signature-twins memory for the general
-    preference this would follow).
+  - Redundant code [MOSTLY RESOLVED by stage 1(h)'s RT/UI split - only
+    listed here for history, not an open item any more]. Before (h),
+    nearly every accessor repeated the same `if(rt_params==0){array=
+    ui_params;...} if(rt_params==1){array=rt_params;...}` block. After (h),
+    most accessors touch only ONE of the two arrays directly and don't
+    branch at all (param_set_value/param_set_value_rt, param_cookie_
+    return_rt, param_get_if_changed_rt, param_get_if_any_changed_rt,
+    param_find_uid, param_get_increment, param_is_hidden, param_get_name).
+    Only three still branch on rt_params, because they're genuinely the
+    same operation reading either array: param_get_uid, param_get_value,
+    param_return_num_params - three short if/return pairs each, not worth
+    factoring further (see no-parallel-signature-twins memory - the
+    original concern was duplicated FUNCTIONS, not a three-line branch
+    inside one that stayed unified on purpose, see (h)).
   - Re-check against the action system once stage 3 exists: some of this
     cleanup may turn out to be required by stage 3 rather than independent
     - revisit the split once stage 3's shape is clearer.
@@ -239,10 +623,14 @@ STAGE 3 - parameters as contexts (CX), integrated into the action system
     only non-hidden ones (PRM_PARAM.is_hidden already exists)? A plugin can
     have a lot of params (tens to low hundreds) - worth checking real
     numbers against how the rest of the CX tree scales before committing.
-  - Value changes go through param_set_value's existing rt_params=0 (ui
-    side) path and its ring-buffer message to the rt thread - this already
-    matches the pattern the rest of the app uses (JACK, plugins), shouldn't
-    need new plumbing, just confirm during implementation.
+  - Value changes go through the ui-side param_set_value and its ring-
+    buffer message to the rt thread - this already matches the pattern the
+    rest of the app uses (JACK, plugins), shouldn't need new plumbing, just
+    confirm during implementation. [Signature note: param_set_value no
+    longer takes an rt_params argument as of stage 1(h) - it's
+    unconditionally the ui-side function now; param_set_value_rt is the
+    separate rt-originated function and isn't relevant to action_do, since
+    actions always originate ui-side.]
   - How params become CX children, and how structural changes (RESCAN_ALL)
     reach app_intrf [DECIDED - reuses the existing generic pipeline,
     verified against actual code, not assumed]:
@@ -289,8 +677,7 @@ STAGE 3 - parameters as contexts (CX), integrated into the action system
                                  (not a raw value) - action_do interprets it
                                  in the owner's own step size, e.g.
                                  param_set_value(..., Operation_Increase or
-                                 Operation_Decrease depending on sign,
-                                 rt_params=0).
+                                 Operation_Decrease depending on sign).
     Rejected: three separate actions (SET/INCREASE/DECREASE) - increase and
     decrease are the same operation with an opposite sign, no reason to
     double the enum for that. Also rejected: SET_VALUE only, with the CLI
@@ -306,16 +693,242 @@ STAGE 3 - parameters as contexts (CX), integrated into the action system
     shortcut - see the CLI +/- key note above) and always sends step=+1/-1;
     a future scroll-wheel or held-key-repeat UI can send a larger step
     count through the exact same action, no new DataActionType needed.
-    Implementation cost is trivial either way - params.c's
-    param_set_value_directly already implements every one of these
-    operations (Operation_SetValue/Increase/Decrease/...); action_do for
-    both new types is one line each into the existing param_set_value(...,
-    rt_params=0) call, no new params.c logic.
+    Implementation cost is trivial either way - params.c's param_set_value
+    already implements every one of these operations (Operation_SetValue/
+    Increase/Decrease/DefValue, in its value-operations switch - param_set_
+    value_directly, the shared-struct helper this used to route through
+    pre stage-1(h), no longer exists; param_set_value now switches directly
+    against PRM_PARAM_UI); action_do for both new types is one line each
+    into the existing param_set_value(container, val_id, set_to, NULL,
+    Operation_...) call, no new params.c logic.
     Other paramOperType values (DefValue/SetIncr/SetDefValue/ChangeName/
     ToggleHidden) stay unexposed to the action system for now - add one
     enum value + one ops-table case each only once something actually
     needs it (same "explicit over clever" extensibility rule the rest of
     the action system was built on).
+
+  - A third action worth adding alongside these two: DATA_ACTION_SET_CHOICE
+    for CLAP_PARAM_IS_ENUM params (verified against the vendored clap/ext/
+    params.h - "This parameter represents an enumerated value... must set
+    IS_STEPPED too. All values from min to max must not have a blank
+    value_to_text()"). An enum param is a CHOICE in disguise - a small
+    integer range where every value already has a real label via value_to_
+    text() - so today it would only be reachable via SET_VALUE (type a raw
+    number) or ADJUST_VALUE (step blindly) when it should be a labeled
+    picker ("Lowpass / Highpass / Bandpass"), reusing list_at/DataChoice
+    exactly as already built for the plugin catalogue - list_at walks
+    min_value..max_value calling value_to_text() per step for the label.
+    Reuses helper_choice_list_step as-is on the CLI side, no new UI code.
+    Not implemented yet - noted here for whenever SET_VALUE/ADJUST_VALUE
+    actually get built.
+
+    Challenged and RE-CONFIRMED [DECIDED, stays SET_CHOICE/list_at, not
+    UI-side enumeration]: question raised was whether SET_CHOICE leaks
+    param functionality onto the UI, versus an alternative where an enum
+    param just stays an ordinary SET_VALUE/ADJUST_VALUE param (inc=1,
+    min/max = the enum's range) and the UI itself loops min..max calling a
+    value-accepting param_get_value_as_string to build its own picker,
+    needing no new DataActionType/list_at at all.
+    Verdict: keep SET_CHOICE/list_at as the mechanism - the alternative
+    inverts where the leak actually is. If the UI has to know "this param's
+    domain is a walkable, gap-free integer range, so step it and treat each
+    string as a label", that IS the param owning UI reconstructing
+    domain-specific behaviour from raw metadata - the exact pattern already
+    rejected for ADJUST_VALUE's step semantics earlier in this same
+    section ("what one step means is owner-defined behaviour... not
+    something the UI should reconstruct from raw metadata"). SET_CHOICE/
+    list_at keeps that loop in ONE place (the data layer, written once per
+    owner) and hands the UI an already-built flat list - the identical
+    shape ADD_CHOICE already uses, so helper_choice_list_step needs zero
+    new code. Without it, every future UI implementation (not just the
+    CLI) would need its own copy of "detect enum-shaped param, loop
+    min..max, build picker" - the duplication SET_CHOICE avoids.
+    The list_at implementation itself is cheap, not a new subsystem: CLAP's
+    own IS_ENUM contract guarantees a contiguous, gap-free integer range
+    (spec: must be IS_STEPPED, no blank value_to_text() anywhere in
+    min..max), and clap_plugins.c already forces inc=1.0 for any
+    IS_STEPPED param (clap_plug_params_create, the CLAP_PARAM_IS_STEPPED
+    check) - so a param's own list_at is just `for(v=min; v<=max; v+=1.0)`
+    calling param_get_value_as_string(container, val_id, v, ...) per step,
+    which is exactly the primitive the next paragraph generalises.
+    One genuinely good piece of the alternative WAS kept: param_get_value_
+    as_string [DONE, signature changed] took only val_id and read the
+    param's CURRENT stored value internally via param_get_value(...) before
+    formatting it - unnecessarily narrow, since the owner's val_to_string
+    callback it forwards to already takes an explicit value argument, not
+    just a val_id. Changed to param_get_value_as_string(container, val_id,
+    PARAM_T value, ret_string, string_len) - value is now always caller-
+    supplied; a caller wanting "what does this param currently show" passes
+    param_get_value(container, val_id, 0) itself, a caller wanting a
+    hypothetical/preview string (a picker walking a range, without
+    touching stored state) passes any value it likes. No signature twin
+    added - one function, value no longer implicit. This IS the primitive
+    an eventual param list_at would use to build each DataChoice's label -
+    not wasted, it's the actual implementation detail SET_CHOICE needs.
+    Zero real callers existed before this change (grep confirmed, still
+    dormant/unused - params aren't wired into any UI yet, STAGE 3), so the
+    signature change had zero migration cost.
+
+    Separately, checked params.h/.c and every owner-callback implementation
+    for a related naming inconsistency while making this change: build_
+    value and val_to_string's function-pointer parameter was named param_id
+    even though what's actually passed through everywhere (param_get_value,
+    param_get_value_as_string) is val_id - the exact "same word, opposite/
+    ambiguous meaning" hazard stage 1(g) already renamed PARAM_RING_DATA_
+    BIT.param_id -> val_id to avoid, just missed here. Fixed: both callback
+    signatures in PRM_CONT_USER_DATA (params.h) renamed param_id -> val_id;
+    the two real implementations - clap_plug_params_value_to_text
+    (clap_plugins.c) and synth_osc_build_value (synth.c) - renamed their
+    own local parameter and every internal use to match. Also caught and
+    fixed the same issue one level up: clap_plug_params_create's discovery
+    loop (clap_plugins.c) used `for(uint32_t param_id = 0; ...)` as both
+    CLAP's own param_index (get_info's second argument is documented
+    param_index, not a clap_id) and this container's val_id, including as
+    the fallback uid on a get_info failure - none of that is a clap_id
+    either, so renamed to val_id there too, comment updated to say why.
+    Left alone, correctly, two call sites that ARE genuinely a clap_id, not
+    a val_id: clap_plug_ext_params_clear's own `clap_id param_id` parameter
+    (CLAP's own callback signature, not this codebase's naming) and
+    clap_event_param_value_t.param_id (CLAP's own struct field, assigned
+    param_get_uid(...)'s result - correct, that field really does want the
+    stable clap_id).
+    Verified: make, a manual gcc -Wall -Wextra pass on params.c/synth.c/
+    clap_plugins.c (only pre-existing, unrelated warnings), and valgrind
+    against the built binary's actual startup path - 0 errors, 0 bytes
+    definitely lost.
+
+  - Checked contexts/clap_plugins.c against the full vendored clap/ext/
+    params.h (not just the module field already covered above) before
+    committing further to this design:
+      - CLAP_PARAM_IS_READONLY: already zeroes inc_am (clap_plugins.c:744ish)
+        but doesn't disable the action - SET_VALUE/ADJUST_VALUE/SET_CHOICE's
+        DataAction.enabled should gate on this directly once those actions
+        exist.
+      - CLAP_PARAM_IS_BYPASS ("merges the plugin and host bypass button"):
+        still an empty TODO stub. Fine to expose as an ordinary param for
+        now: decide later whether it deserves dedicated "Bypass" treatment
+        on the plugin's own context instead.
+      - The plugin's own internal value changes never reach us: clap_output_
+        events_read (clap_plugins.c:2138ish) has its own honest TODO -
+        "need to find a plugin that outputs them" - it only counts output
+        events, never parses a CLAP_EVENT_PARAM_VALUE the plugin itself
+        sends (e.g. its own MIDI-mapping changing a param). Pre-existing
+        gap, not introduced by the params work, but relevant to trusting
+        what gets displayed once params are wired up.
+      - Rename threading (clap_host_params.rescan): confirmed [main-thread]
+        in the vendored header and matched against code - see stage 1(i)
+        for the full check, also covering why LV2 has no equivalent at all.
+      - Gesture begin/end (CLAP_EVENT_PARAM_GESTURE_BEGIN/_END): our
+        SET_VALUE/ADJUST_VALUE would send a bare PARAM_VALUE with no
+        gesture wrapping. Probably fine since nothing here records
+        automation, but a specific plugin keying special behaviour off
+        gesture end could misbehave - check if one ever does, not assumed
+        broken.
+      - clap_host_params.request_flush()/flush(): matters if a plugin is
+        loaded/active but process() isn't currently being called (e.g.
+        transport stopped). Not confirmed broken - this app's JACK loop
+        likely calls process() continuously whenever a plugin is active -
+        but not audited either; verify before relying on it.
+      - Automation and modulation (IS_AUTOMATABLE*/IS_MODULATABLE* and
+        their PER_NOTE_ID/PER_KEY/PER_CHANNEL/PER_PORT variants, plus
+        CLAP_EVENT_PARAM_MOD): explicitly and deliberately out of scope for
+        now, not a silent gap. Automation needs a recorded-timeline/
+        playback engine this app doesn't have (JACK transport position/
+        tempo already exists - jack_funcs.c's app_jack_transport/
+        timebbt_callback_rt - but nothing records or replays param changes
+        against it); modulation is smaller and would compose with what
+        exists (a routing action related to but not reducible to CONNECT,
+        since a target needs a depth/amount and can sum several sources).
+        Revisit both only when specifically decided to build them, going
+        through clap_plugins.c against the CLAP library function by
+        function at that point, not before.
+
+  - Param categories [DECIDED: Path A - flat CX children, category is
+    metadata, not a tree level]. CLAP already gives a real input for this -
+    clap_param_info_t.module (verified against the vendored header,
+    /usr/include/clap/ext/params.h): "The module path containing the
+    param, eg: 'Oscillators/Wavetable 1'. '/' will be used as a separator
+    to show a tree-like structure." Two ways to use it were weighed:
+      Path A (chosen): PRM_PARAM gets a category/module string field.
+        Params stay flat, direct CX children of their owning instance,
+        exactly as already designed above - category is presentational
+        metadata only, not a tree level. Some accessor needs to expose it
+        to a consumer (extend name()'s output, or a small dedicated op) -
+        one shared, one-time addition, not per-UI cost.
+      Path B (rejected for now): each distinct module path becomes its
+        own real intermediate CX node (params become ITS children instead
+        of the instance's). Rejected because:
+        - child_at only ever receives a single void *user_data, with no
+          side channel for "which subset" the way list_at gets partial -
+          so a category node needs its own genuinely separate, persisted,
+          stable-identity storage (its own small per-instance tombstoned
+          array, uid = hash of the full path) to exist at all. The flag-
+          plus-scope trick built for CHOICE-list categories (see the
+          FUTURE block below) does NOT transfer here - it specifically
+          exploited partial being threaded through list_at's contract,
+          which child_at/the plain CX tree contract does not have.
+        - CLAP lists "module change" as one of the reasons RESCAN_INFO
+          fires - a param's category can change at runtime without the
+          param itself being added/removed. Under Path B this means the
+          param's CX node needs a different PARENT, and CX parentage is
+          fixed at creation (app_intrf_cx_create takes parent_cx once,
+          no reparent primitive exists) - so a mere category relabel
+          would need to be handled as remove-and-recreate at the CX
+          layer, even though the param's own identity/value never
+          changed. Under Path A it is just updating a string field on
+          the already-existing struct - no CX event needed beyond an
+          optional presentational DATA_EVENT_CHANGED if a UI wants to
+          refresh its display of the grouping.
+      Path A is upgradable to Path B later without waste if it turns out
+      to be needed: the one thing Path B would need as input - each
+      param's category/module path - is exactly what Path A already
+      stores for its own display purposes, and param ContextIds (uid-
+      derived) do not reference their parent, so they are unaffected by
+      which path is chosen.
+      Cost of Path A: hjkl navigation through a flat list of all of a
+      plugin's params is more keypresses to reach one that is far away,
+      versus being able to drill straight into a smaller subset - cheaply
+      softened by having child_at return params sorted by category (same-
+      category params land adjacent even though still flat/direct
+      children), so a UI can at least print a header as it scrolls past a
+      contiguous run without needing a real tree node for it.
+      Path B's one real advantage over Path A is exactly that - shorter
+      navigation to reach a specific category's params - not anything
+      about actions, identity, or staleness, which are identical either
+      way. Worth checking real per-plugin param counts before assuming
+      this cost actually matters in practice (same open caveat already
+      noted above for "materialise every param as a CX child").
+      Stress-tested against a hypothetical richer UI (collapsed
+      categories, expand with l) before deciding this was safe to commit
+      to - confirmed it needs zero data-layer changes either way, only
+      where the UI-side cost lands differs by interaction style:
+        - literal inline expand/collapse within one continuous scrolling
+          list (synthetic header rows interleaved with real param rows,
+          toggled in place) is the more expensive one to build under
+          Path A, since it needs its own client-side derived view-model -
+          group the flat children by category once, keep a per-category
+          expanded bool as pure UI state (never persisted data-side,
+          rebuilt whenever the user navigates to a different instance),
+          rebuild an ordered "display rows" list on every toggle, and
+          move the cursor through that derived list instead of directly
+          through child_at's indices. Path B gets this exact behaviour
+          for free from ordinary tree navigation instead (a node's
+          children are already invisible until you enter it).
+        - drilling (a small category-list view; l switches to a filtered
+          param-list view scoped to that category; h/ESC switches back)
+          is cheap under Path A - it is the same shape as
+          helper_action_do_connect's existing SOURCE/TARGETS two-mode
+          navigator: group params by category client-side once, a mode
+          (CATEGORY_LIST | PARAM_LIST) plus two cursors, l on a category
+          switches mode and resets the param cursor, h/ESC in PARAM_LIST
+          mode switches back with the category cursor preserved. Bounded,
+          already-proven pattern, not new complexity - and arguably the
+          better fit for a keyboard-driven CLI than inline expansion
+          would be anyway.
+      Either interaction style is entirely UI-side work on top of the
+      same flat child_at results - confirms Path A does not box out a
+      richer future UI, it just leaves that UI's presentation complexity
+      where it belongs, in that UI, rather than in the data layer.
 
 ================================================================================
 FUTURE - categories for CHOICE / MULTI_CHOICE lists (design sketch, not

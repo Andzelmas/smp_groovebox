@@ -35,3 +35,13 @@ PARAM_T exp_range_ratio(PARAM_T num_items, PARAM_T cur_item);
 PARAM_T freq_add_semitones(PARAM_T freq_in, PARAM_T semitones);
 //get from a table values with linear interpolation between values if index is with a fraction
 PARAM_T math_get_from_table_lerp(PARAM_T* table_in, unsigned int len, PARAM_T index);
+
+//ramps a value smoothly toward whatever it's last asked for, instead of
+//jumping straight to it - e.g. to avoid a click when a knob/parameter value
+//changes abruptly. Not tied to any other type here - the caller owns one
+//handle per value it wants smoothed and keeps calling math_ramp_val_get_value
+//with the current target every time it wants the next smoothed sample/step.
+typedef struct _math_ramp_val MATH_RAMP_VAL;
+MATH_RAMP_VAL* math_ramp_val_init(PARAM_T max_range, unsigned int total_samples);
+//ramp toward new_val by one step and return the current (partway) value
+PARAM_T math_ramp_val_get_value(MATH_RAMP_VAL* ramp_val, PARAM_T new_val);

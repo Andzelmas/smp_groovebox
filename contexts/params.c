@@ -1,125 +1,105 @@
 #include "params.h"
 #include "../types.h"
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <math.h>
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/ring_buffer.h"
-//default speed per samples to interpolate the parameters when requested
-#define INTERP_SAMPLES 400
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
-typedef struct _params_interp_val{
-    PARAM_T cur_inc; //how much to increment the value 
-    PARAM_T from_val; //from what value we are interpolating
-    PARAM_T to_val; //to what value interpolating
-    PARAM_T cur_val; //cur value that will be returned to the user
-    PARAM_T new_val; //new value that is given from the user, while the interpolation is not finished ignore this value
-    int dir_mult; //to what direction to go, if from_val > to_val we have to cur_inc *= -1;
-}PRM_INTERP_VAL;
+// max size for the ui<->rt parameter ring buffer messaging arrays
+#define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 1024
 
-typedef struct _params_param{
-    //value of the parameter
+// message struct for the ui<->rt ring buffers - always "this param's value
+// is now X", never an operation to replay. Whichever side (rt/ui)
+// originates a change computes the final, already-clamped result itself
+// (it has its own min_val/max_val) and sends just that - the receiving
+// side stores it verbatim, no re-computation. val_id (position in the
+// container) - never a uid, this never crosses into any module's own
+// external id space (e.g. CLAP's clap_id). 
+typedef struct _params_ring_data_bit {
+    int val_id;
+    PARAM_T param_value;
+} PARAM_RING_DATA_BIT;
+
+// rt-side parameter - only what the audio thread actually touches. it only ever
+// receives a final value to store (see param_msgs_process) or originates one
+// itself (see param_set_value_rt)
+typedef struct _params_param_rt {
     PARAM_T val;
     PARAM_T min_val;
     PARAM_T max_val;
-    PARAM_T def_val; //default value
-    //how much to increase or decrease the parameter
-    PARAM_T inc_am;
-    //the type of the parameter value, used for ui display purposes
-    //check the appReturnType in the types.h
-    unsigned char val_type;
-    //if this is 1 the parameter was just changed, this will change to 0 when get_value will be invoked
-    unsigned int just_changed;
-    //if the ui_name of parameter just changed this will be 1, and will become a 0 if param_ui_name_changed is called
-    unsigned int ui_name_just_changed;
-    //name will not change during the lifetime of parameter
-    char name[MAX_PARAM_NAME_LENGTH];
-    //ui_name is the display name for the user. This can change during the lifetime of the program
-    char ui_name[MAX_PARAM_NAME_LENGTH];
-    //sometimes we might want to get an interpolated version of the parameter, so it does not change so quickly,
-    //for example to avoid a click when changing amplitude of a synth oscillator
-    PRM_INTERP_VAL* interp_val;
-    //for exponential parameters this is where the table for the exp or any other curve should be
-    //this table needs to be normalized (range 0..1) and malloced outside of this context and added here
-    //with the param_add_curve_table
-    MATH_RANGE_TABLE* curve_table;
-    //for parameters that contain strings to display for user
-    unsigned int param_strings_num; // how many strings there are for this parameter
-    char** param_strings; //the string array
-    //user data for convenience (for example clap plugins has a void* cookie for faster loading of params from events)
-    PRM_USER_DATA user_data;
-    //TODO instead of is hidden implement flag system for parameters
-    //is the parameter hidden
-    uint16_t is_hidden;
-}PRM_PARAM;
+    unsigned int val_changed;
+    // owner-supplied stable identity, unique within this container - see
+    // param_add_param's doc comment. Never a positional index.
+    uint32_t uid;
+    // owner-supplied optional convenience pointer (e.g. a CLAP param cookie)
+    //- borrowed, params.c never touches it. rt-only: nothing on the ui side
+    // has ever needed a param's cookie.
+    void *cookie;
+} PRM_PARAM_RT;
 
-typedef struct _params_container{
-    //the parameters arrays
-    //rt_params should be touched only by the rt thread, and the ui_params only by the simple,
-    //usually the ui thread
-    PRM_PARAM* rt_params;
-    PRM_PARAM* ui_params;
-    //how many parameters are there
+// ui-side parameter - everything the ui thread needs to present and edit a
+// parameter. No val_changed here - the ui side has no polled protocol consuming
+// it once something wants to know "did this param's value change" from the ui
+// side, that belongs on the push-based CX DATA_EVENT_CHANGED mechanism, not a
+// stored flag here.
+typedef struct _params_param_ui {
+    PARAM_T val;
+    PARAM_T min_val;
+    PARAM_T max_val;
+    PARAM_T def_val; // default value
+    // how much to increase or decrease the parameter
+    PARAM_T inc_am;
+    // display name - can change during the lifetime of the program
+    //(Operation_ChangeName), unlike uid which never does
+    char name[MAX_SHORT_NAME_LENGTH];
+    uint32_t uid;
+    // TODO instead of is hidden implement flag system for parameters
+    // is the parameter hidden
+    uint16_t is_hidden;
+} PRM_PARAM_UI;
+
+typedef struct _params_container {
+    // the parameter arrays - each element is its OWN malloc'd PRM_PARAM_RT/UI.
+    // That's deliberate: param_add_param grows these OUTER arrays with
+    // realloc, which is only safe because they hold pointer VALUES. If the
+    // params themselves lived in one realloc'd block, an address already
+    // handed out could be silently invalidated the next time a parameter
+    // gets added. rt_params should be touched only by the rt thread, and
+    // the ui_params only by the ui thread.
+    PRM_PARAM_RT **rt_params;
+    PRM_PARAM_UI **ui_params;
+    // how many parameters are there
     unsigned int num_of_params_ui;
     unsigned int num_of_params_rt;
-    //ring buffers for parameter manipulation/communication
-    RING_BUFFER* param_rt_to_ui;
-    RING_BUFFER* param_ui_to_rt;
+    // ring buffers for parameter manipulation/communication
+    RING_BUFFER *param_rt_to_ui;
+    RING_BUFFER *param_ui_to_rt;
     PRM_CONT_USER_DATA user_data;
-}PRM_CONTAIN;
+    // scratch buffer param_get_value_as_string formats into and returns a
+    // pointer to - valid only until the next param_get_value_as_string call
+    // on this container (any val_id)
+    char value_string_scratch[MAX_STRING_MSG_LENGTH];
+} PRM_CONTAIN;
 
-PRM_INTERP_VAL* params_init_interpolated_val(PARAM_T max_range, unsigned int total_samples){
-    if(total_samples <= 0)return NULL;
-    if(max_range <= 0)return NULL;
-    PRM_INTERP_VAL* intrp_val = malloc(sizeof(PRM_INTERP_VAL));
-    if(!intrp_val)return NULL;
-    
-    intrp_val->cur_inc = (PARAM_T)(max_range / (PARAM_T)total_samples);
-    intrp_val->cur_val = 0.0;
-    intrp_val->from_val = 0.0;
-    intrp_val->to_val = 0.0;
-    intrp_val->new_val = 0.0;
-    intrp_val->dir_mult = 1;
-    return intrp_val;
+// clamps val into [min_val, max_val] - shared by both sides, since both can
+// originate a value change and each clamps against its own min/max before
+// sending the final value across (see the "send final value" protocol on
+// param_set_value_rt/param_set_value).
+static PARAM_T param_clamp(PARAM_T val, PARAM_T min_val, PARAM_T max_val) {
+    if (val < min_val)
+        return min_val;
+    if (val > max_val)
+        return max_val;
+    return val;
 }
 
-PARAM_T params_interp_val_get_value(PRM_INTERP_VAL* intrp_val, PARAM_T new_val){
-    if(!intrp_val)return new_val;
-    intrp_val->new_val = new_val;
-    
-    if(intrp_val->cur_inc <= 0)return new_val;
-    
-    intrp_val->cur_val += (intrp_val->cur_inc * intrp_val->dir_mult);
-    
-    if(intrp_val->cur_val >= intrp_val->to_val && intrp_val->dir_mult > 0){
-	intrp_val->from_val = intrp_val->to_val;
-	intrp_val->cur_val = intrp_val->to_val;
-	intrp_val->to_val = intrp_val->new_val;
-	
-	intrp_val->dir_mult = 1;
-	if(intrp_val->from_val > intrp_val->to_val) intrp_val->dir_mult = -1;
-    }
-
-    if(intrp_val->cur_val <= intrp_val->to_val && intrp_val->dir_mult < 0){
-	intrp_val->from_val = intrp_val->to_val;
-	intrp_val->cur_val = intrp_val->to_val;
-	intrp_val->to_val = intrp_val->new_val;
-	
-	intrp_val->dir_mult = 1;
-	if(intrp_val->from_val > intrp_val->to_val) intrp_val->dir_mult = -1;
-    }
-    
-    return intrp_val->cur_val;
-}
-
-PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** param_names, PARAM_T* param_vals,
-					 PARAM_T* param_mins, PARAM_T* param_maxs, PARAM_T* param_incs, unsigned char* val_types,
-					 PRM_USER_DATA* user_data_per_param, const PRM_CONT_USER_DATA* user_data_per_container){
-    if(num_of_params<=0) return NULL;
-    if(!param_names || !param_vals || !param_mins || !param_maxs || !param_incs || !val_types) return NULL;
-    PRM_CONTAIN* param_container = (PRM_CONTAIN*)malloc(sizeof(PRM_CONTAIN));
-    if(!param_container)return NULL;
+PRM_CONTAIN *
+params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
+    PRM_CONTAIN *param_container = (PRM_CONTAIN *)malloc(sizeof(PRM_CONTAIN));
+    if (!param_container)
+        return NULL;
     param_container->param_rt_to_ui = NULL;
     param_container->param_ui_to_rt = NULL;
     param_container->num_of_params_rt = 0;
@@ -127,568 +107,383 @@ PRM_CONTAIN* params_init_param_container(unsigned int num_of_params, char** para
     param_container->rt_params = NULL;
     param_container->ui_params = NULL;
     param_container->user_data.user_data = NULL;
+    param_container->user_data.build_value = NULL;
     param_container->user_data.val_to_string = NULL;
-    if(user_data_per_container){
-	param_container->user_data.user_data = user_data_per_container->user_data;
-	param_container->user_data.val_to_string = user_data_per_container->val_to_string;
+    if (user_data_per_container) {
+        param_container->user_data.user_data =
+            user_data_per_container->user_data;
+        param_container->user_data.build_value =
+            user_data_per_container->build_value;
+        param_container->user_data.val_to_string =
+            user_data_per_container->val_to_string;
     }
-    
-    param_container->param_rt_to_ui = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    param_container->param_ui_to_rt = ring_buffer_init(sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
-    if(!param_container->param_rt_to_ui || !param_container->param_ui_to_rt){
-	param_clean_param_container(param_container);
-	return NULL;
-    }
-    
-    param_container->num_of_params_rt = num_of_params;
-    param_container->rt_params = calloc(num_of_params, sizeof(PRM_PARAM));
-    param_container->num_of_params_ui = num_of_params;
-    param_container->ui_params = calloc(num_of_params, sizeof(PRM_PARAM));
-    if(!param_container->rt_params || !param_container->ui_params){
-	param_clean_param_container(param_container);
-	return NULL;
-    }
-    
-    for(int i = 0; i< num_of_params; i++){
-	PRM_PARAM* rt_params = &(param_container->rt_params[i]);
-	PRM_PARAM* ui_params = &(param_container->ui_params[i]);
-	
-	rt_params->interp_val = params_init_interpolated_val(fabs(param_maxs[i] - param_mins[i]) , INTERP_SAMPLES);
-	if(!rt_params->interp_val)continue;	
-	ui_params->interp_val = params_init_interpolated_val(fabs(param_maxs[i] - param_mins[i]) , INTERP_SAMPLES);
-	if(!ui_params->interp_val){
-	    free(rt_params->interp_val);
-	    continue;
-	}	
-	rt_params->just_changed = 0;
-	ui_params->just_changed = 0;
-		
-	rt_params->val = param_vals[i];
-	ui_params->val = param_vals[i];
-	
-	rt_params->min_val = param_mins[i];
-	ui_params->min_val = param_mins[i];
-	
-	rt_params->max_val = param_maxs[i];
-	ui_params->max_val = param_maxs[i];
 
-	rt_params->def_val = param_vals[i];
-	ui_params->def_val = param_vals[i];
-	
-	rt_params->inc_am = param_incs[i];
-	ui_params->inc_am = param_incs[i];
-	
-	rt_params->val_type = val_types[i];
-	ui_params->val_type = val_types[i];
-
-	//to make the parameter hidden send a param_set_value with Operation_Hidden and set_to 0 or 1
-	rt_params->is_hidden = 0;
-	ui_params->is_hidden = 0;
-	
-	const char* param_name = param_names[i];
-	snprintf(rt_params->name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
-	snprintf(ui_params->name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
-	snprintf(rt_params->ui_name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
-	snprintf(ui_params->ui_name, MAX_PARAM_NAME_LENGTH, "%s", param_name);
-	rt_params->ui_name_just_changed = 0;
-	ui_params->ui_name_just_changed = 0;
-
-	if(user_data_per_param){
-	    rt_params->user_data = user_data_per_param[i];
-	    ui_params->user_data = user_data_per_param[i];
-	}
+    param_container->param_rt_to_ui = ring_buffer_init(
+        sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
+    param_container->param_ui_to_rt = ring_buffer_init(
+        sizeof(PARAM_RING_DATA_BIT), MAX_PARAM_RING_BUFFER_ARRAY_SIZE);
+    if (!param_container->param_rt_to_ui || !param_container->param_ui_to_rt) {
+        param_clean_param_container(param_container);
+        return NULL;
     }
 
     return param_container;
 }
-int param_add_curve_table(PRM_CONTAIN* param_container, int val_id, MATH_RANGE_TABLE* table){
-    if(!param_container)return -1;
-    
-    if(val_id >= param_container->num_of_params_ui)return -1;
-    PRM_PARAM* param_array_rt = param_container->rt_params;
-    PRM_PARAM* param_array_ui = param_container->ui_params;
-    if(!param_array_rt || !param_array_ui)return -1;
 
-    PRM_PARAM* cur_param_rt = &(param_array_rt[val_id]);
-    PRM_PARAM* cur_param_ui = &(param_array_ui[val_id]);
-    if(!cur_param_rt || !cur_param_ui)return -1;
-    
-    cur_param_rt->curve_table = table;
-    cur_param_ui->curve_table = table;
+int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
+                    PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
+                    void *cookie) {
+    if (!param_container)
+        return -1;
+    if (!name)
+        return -1;
+    // uid must stay unique within this container - fail loudly here rather
+    // than silently corrupting the CX layer later (see param_get_uid's doc)
+    if (param_find_uid(param_container, uid) != -1)
+        return -1;
 
-    return 0;
+    PRM_PARAM_RT *new_rt_param = malloc(sizeof(PRM_PARAM_RT));
+    if (!new_rt_param)
+        return -1;
+    PRM_PARAM_UI *new_ui_param = malloc(sizeof(PRM_PARAM_UI));
+    if (!new_ui_param) {
+        free(new_rt_param);
+        return -1;
+    }
+
+    unsigned int new_count = param_container->num_of_params_rt + 1;
+    // growing this outer pointer array is always safe to realloc - it only
+    // ever moves pointer VALUES, never the structs they point at
+    PRM_PARAM_RT **new_rt_array =
+        realloc(param_container->rt_params, new_count * sizeof(PRM_PARAM_RT *));
+    if (!new_rt_array) {
+        free(new_rt_param);
+        free(new_ui_param);
+        return -1;
+    }
+    param_container->rt_params = new_rt_array;
+    PRM_PARAM_UI **new_ui_array =
+        realloc(param_container->ui_params, new_count * sizeof(PRM_PARAM_UI *));
+    if (!new_ui_array) {
+        free(new_rt_param);
+        free(new_ui_param);
+        return -1;
+    }
+    param_container->ui_params = new_ui_array;
+
+    unsigned int idx = param_container->num_of_params_rt;
+    param_container->rt_params[idx] = new_rt_param;
+    param_container->ui_params[idx] = new_ui_param;
+
+    new_rt_param->val = val;
+    new_rt_param->min_val = min;
+    new_rt_param->max_val = max;
+    new_rt_param->val_changed = 0;
+    new_rt_param->uid = uid;
+    new_rt_param->cookie = cookie;
+
+    new_ui_param->val = val;
+    new_ui_param->min_val = min;
+    new_ui_param->max_val = max;
+    new_ui_param->def_val = val;
+    new_ui_param->inc_am = inc;
+    snprintf(new_ui_param->name, MAX_SHORT_NAME_LENGTH, "%s", name);
+    new_ui_param->uid = uid;
+    // to make the parameter hidden send a param_set_value with
+    // Operation_ToggleHidden and set_to 0 or 1
+    new_ui_param->is_hidden = 0;
+
+    param_container->num_of_params_rt = new_count;
+    param_container->num_of_params_ui = new_count;
+    return (int)idx;
 }
 
-static void param_set_value_directly(PRM_PARAM* cur_param, PARAM_T set_to, const char* in_string, unsigned char param_op){
-    if(!cur_param)return;
-    PARAM_T prev_value = cur_param->val;
+void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
+    if (!param_container)
+        return;
 
-    switch(param_op){
-    case Operation_Decrease:
-	cur_param->val -= set_to * cur_param->inc_am;
-	break;
-    case Operation_Increase:
-	cur_param->val += set_to * cur_param->inc_am;
-	break;
-    case Operation_SetValue:
-	cur_param->val = set_to;
-	break;
-    case Operation_DefValue:
-	cur_param->val = cur_param->def_val;
-	break;
-    case Operation_SetIncr:
-	cur_param->inc_am = set_to;
-	cur_param->just_changed = 1;
-	break;
-    case Operation_SetDefValue:
-	cur_param->def_val = set_to;
-	cur_param->just_changed = 1;
-	break;
-    case Operation_ChangeName:
-	if(in_string){
-	    snprintf(cur_param->ui_name, MAX_PARAM_NAME_LENGTH, "%s", in_string);
-	    cur_param->ui_name_just_changed = 1;
-	}
-	break;
-    case Operation_ToggleHidden:
-	if(set_to <= 0)cur_param->is_hidden = 0;
-	if(set_to >= 1)cur_param->is_hidden = 1;
-	cur_param->just_changed = 1;
-	break;
-    default:
-	cur_param->val = cur_param->val;
-    }
-
-    if(cur_param->val < cur_param->min_val)cur_param->val = cur_param->min_val;
-    if(cur_param->val > cur_param->max_val)cur_param->val = cur_param->max_val;
-    //if the value changed mark this param as changed
-    if(prev_value != cur_param->val){
-	cur_param->just_changed = 1;
-    }
-}
-
-void param_msgs_process(PRM_CONTAIN* param_container, unsigned int rt_params){
-    if(!param_container)return;
-
-    PRM_PARAM* prm_array = NULL;
-    RING_BUFFER* ring_buffer = NULL;
-    if(!rt_params){
-	prm_array = param_container->ui_params;
-	ring_buffer = param_container->param_rt_to_ui;
-    }
-    if(rt_params){
-	prm_array = param_container->rt_params;
-	ring_buffer = param_container->param_ui_to_rt;
-    }
-    if(!prm_array || !ring_buffer)return;
+    RING_BUFFER *ring_buffer = NULL;
+    if (!rt_params)
+        ring_buffer = param_container->param_rt_to_ui;
+    if (rt_params)
+        ring_buffer = param_container->param_ui_to_rt;
+    if (!ring_buffer)
+        return;
 
     unsigned int cur_items = ring_buffer_return_items(ring_buffer);
-    for(unsigned int i = 0; i < cur_items; i++){
-	PARAM_RING_DATA_BIT cur_bit;
-	int read_buffer = ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
-	if(read_buffer <= 0)continue;
-	param_set_value_directly(&(prm_array[cur_bit.param_id]), cur_bit.param_value, cur_bit.param_string, cur_bit.param_op);
-    }    
-    
+    for (unsigned int i = 0; i < cur_items; i++) {
+        PARAM_RING_DATA_BIT cur_bit;
+        int read_buffer =
+            ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
+        if (read_buffer <= 0)
+            continue;
+        // the value crossing the ring buffer is already final and clamped by
+        // whichever side sent it (see param_set_value_rt/param_set_value) -
+        // store it verbatim, nothing to recompute here
+        if (rt_params) {
+            if ((unsigned int)cur_bit.val_id >=
+                param_container->num_of_params_rt)
+                continue;
+            PRM_PARAM_RT *cur_param =
+                param_container->rt_params[cur_bit.val_id];
+            cur_param->val = cur_bit.param_value;
+            cur_param->val_changed = 1;
+        } else {
+            if ((unsigned int)cur_bit.val_id >=
+                param_container->num_of_params_ui)
+                continue;
+            param_container->ui_params[cur_bit.val_id]->val =
+                cur_bit.param_value;
+        }
+    }
 }
 
-int param_set_value(PRM_CONTAIN* param_container, int val_id, PARAM_T set_to, const char* set_string_to, unsigned char param_op, unsigned int rt_params){
-    if(!param_container)return -1;
-    if(isnan(set_to))return -1;
-    PRM_PARAM* param_array = NULL;
-    RING_BUFFER* ring_buffer = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
-	ring_buffer = param_container->param_ui_to_rt;
-    }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-	ring_buffer = param_container->param_rt_to_ui;
-    }
-    if(val_id >= num_of_params || !param_array || !ring_buffer)return -1;
+int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
+                       PARAM_T set_to) {
+    if (!param_container)
+        return -1;
+    if (isnan(set_to))
+        return -1;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_rt)
+        return -1;
 
-    PRM_PARAM* cur_param = &(param_array[val_id]);
-    param_set_value_directly(cur_param, set_to, set_string_to, param_op);
-    //only send the change to the other thread if the parameter actually changed its value
-    if(param_get_if_changed(param_container, val_id, rt_params) == 1 || param_ui_name_changed(param_container, val_id, rt_params) == 1){
-	PARAM_RING_DATA_BIT send_bit;
-	send_bit.param_id = val_id;
-	send_bit.param_op = param_op;
-	if(set_string_to)
-	    snprintf(send_bit.param_string, MAX_PARAM_NAME_LENGTH, "%s", set_string_to);
-	send_bit.param_value = set_to;
-	ring_buffer_write(ring_buffer, &send_bit, sizeof(send_bit));
+    PRM_PARAM_RT *cur_param = param_container->rt_params[val_id];
+    PARAM_T prev_val = cur_param->val;
+    PARAM_T new_val =
+        param_clamp(set_to, cur_param->min_val, cur_param->max_val);
+    cur_param->val = new_val;
+    // only send the change to the other side if the value actually changed
+    if (new_val != prev_val) {
+        cur_param->val_changed = 1;
+        PARAM_RING_DATA_BIT send_bit;
+        send_bit.val_id = val_id;
+        send_bit.param_value = new_val;
+        ring_buffer_write(param_container->param_rt_to_ui, &send_bit,
+                          sizeof(send_bit));
     }
-    return 0;    
-}
-int param_user_data_return(PRM_CONTAIN* param_container, int val_id, PRM_USER_DATA* user_data, unsigned int rt_params){
-    if(!param_container)return -1;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
-    }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-    if(val_id >= num_of_params)return -1;
-
-    PRM_PARAM cur_param = param_array[val_id];
-    *user_data = cur_param.user_data;
-    return 0;
-}
-PARAM_T param_get_increment(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
-    if(!param_container)return -1;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
-    }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-    if(val_id >= num_of_params)return -1;
-
-    PRM_PARAM cur_param = param_array[val_id];
-
-    PARAM_T ret_increment = cur_param.inc_am;
-    
-    return ret_increment;
-}
-
-static unsigned char param_get_val_type(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
-    if(!param_container)return 0;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
-    }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-    if(val_id >= num_of_params)return 0;
-    if(!param_array)return 0;
-    
-    PRM_PARAM* cur_param = &(param_array[val_id]);
-    return cur_param->val_type;
-}
-
-PARAM_T param_get_value(PRM_CONTAIN* param_container, int val_id, unsigned int curved, unsigned int interp, unsigned int rt_params){
-    if(!param_container)return -1;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
-    }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-    if(val_id >= num_of_params)return -1;
-    if(!param_array)return -1;
-    PRM_PARAM* cur_param = &(param_array[val_id]);
-    //when returning the value we mark this param as no longer just_changed
-    cur_param->just_changed = 0;
-
-    PARAM_T ret_val = cur_param->val;
-    //check if this parameter is of exponential or other curve nature
-    if(curved == 1){
-	if(cur_param->curve_table){
-	    //if there is a curve table
-	    PARAM_T val_min = cur_param->min_val;
-	    PARAM_T val_max = cur_param->max_val;
-	    //first make the param range 0..1
-	    PARAM_T val_norm = fit_range(val_max, val_min, 1.0, 0.0, ret_val);
-	    //now get what this value is in the table
-	    PARAM_T val_curve = math_range_table_convert_value(cur_param->curve_table, val_norm);
-	    //and return to the original range
-	    ret_val = fit_range(1.0, 0.0, val_max, val_min, val_curve);
-	}
-    }
-    
-    //if user wants to interpolate the value and not return it right away
-    if(interp == 1){
-	if(cur_param->interp_val){
-	    ret_val = params_interp_val_get_value(cur_param->interp_val, ret_val);
-	}
-    }
-    return ret_val;
-}
-
-int param_set_param_strings(PRM_CONTAIN* param_container, int val_id, char** strings, unsigned int num_strings){
-    if(!param_container)return -1;
-    if(!strings)return -1;
-    if(num_strings <= 0)return -1;
-    if(val_id >= param_container->num_of_params_ui)return -1;
-    PRM_PARAM* param_array_rt = param_container->rt_params;
-    PRM_PARAM* param_array_ui = param_container->ui_params;
-
-    PRM_PARAM* cur_param_rt = &(param_array_rt[val_id]);
-    PRM_PARAM* cur_param_ui = &(param_array_ui[val_id]);
-    unsigned char val_type = cur_param_ui->val_type;
-    if((val_type & 0xff) != String_Return_Type)return -1;
-    //free the strings if there are labels already on this parameter
-    //though the labels should be set once, on the param init
-    if(cur_param_rt->param_strings != NULL){
-	free(cur_param_rt->param_strings);
-	cur_param_rt->param_strings_num = 0;
-    }
-    if(cur_param_ui->param_strings != NULL){
-	free(cur_param_ui->param_strings);
-	cur_param_ui->param_strings_num = 0;
-    }
-    
-    cur_param_rt->param_strings = malloc(sizeof(char*)*num_strings);
-    if(cur_param_rt->param_strings == NULL)return -1;
-    cur_param_ui->param_strings = malloc(sizeof(char*)*num_strings);
-    if(cur_param_ui->param_strings == NULL){
-	free(cur_param_rt->param_strings);
-	cur_param_rt->param_strings = NULL;
-	return -1;
-    }
-    cur_param_rt->param_strings_num = num_strings;
-    cur_param_ui->param_strings_num = num_strings;
-    for(int i = 0; i < num_strings; i++){
-	cur_param_rt->param_strings[i] = NULL;
-	cur_param_ui->param_strings[i] = NULL;
-	const char* cur_string = strings[i];
-	if(!cur_string)continue;
-	char* copy_string_rt = malloc(sizeof(char) * (strlen(cur_string)+1));
-	if(!copy_string_rt)continue;
-	char* copy_string_ui = malloc(sizeof(char) * (strlen(cur_string)+1));
-	if(!copy_string_ui){
-	    free(copy_string_rt);
-	    continue;
-	}
-	strcpy(copy_string_rt, cur_string);
-	strcpy(copy_string_ui, cur_string);
-	cur_param_rt->param_strings[i] = copy_string_rt;
-	cur_param_ui->param_strings[i] = copy_string_ui;
-    }
-    
     return 0;
 }
 
-const char* param_get_param_string(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
-    if(!param_container)return NULL;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
-    }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-    if(val_id >= num_of_params)return NULL;
+int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
+                    const char *set_string_to, unsigned char param_op) {
+    if (!param_container)
+        return -1;
+    if (isnan(set_to))
+        return -1;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
 
-    PRM_PARAM cur_param = param_array[val_id];
-    int cur_val = (int)cur_param.val;
-    if(cur_val > cur_param.max_val || cur_val < cur_param.min_val)return NULL;
-    if(cur_param.param_strings_num <= 0 || cur_val >= cur_param.param_strings_num || cur_val < 0)return NULL;
-    
-    return cur_param.param_strings[cur_val];
-}
-unsigned int param_get_value_as_string(PRM_CONTAIN* param_container, int val_id, char* ret_string, uint32_t string_len){
-    if(string_len == 0)return 0;
-    if(!ret_string)return 0;
-    unsigned char val_type = 0;
-    val_type = param_get_val_type(param_container, val_id, 0);
-    if(val_type == 0)return 0;
-
-    unsigned int curved = 0;
-    if(val_type == Curve_Float_Return_Type)curved = 1;
-
-    PARAM_T val = param_get_value(param_container, val_id, curved, 0, 0);
-
-    //if there is a user provided function to convert the parameter value to string, use it
-    if(param_container->user_data.user_data && param_container->user_data.val_to_string){
-	if(param_container->user_data.val_to_string(param_container->user_data.user_data, val_id, val, ret_string, string_len) == 1)
-	    return 1;
+    PRM_PARAM_UI *cur_param = param_container->ui_params[val_id];
+    // property-only operations - mutate ui-only fields, nothing to clamp or
+    // propagate to the rt side, which has no matching fields
+    switch (param_op) {
+    case Operation_SetIncr:
+        cur_param->inc_am = set_to;
+        return 0;
+    case Operation_SetDefValue:
+        cur_param->def_val = set_to;
+        return 0;
+    case Operation_ChangeName:
+        if (set_string_to)
+            snprintf(cur_param->name, MAX_SHORT_NAME_LENGTH, "%s",
+                     set_string_to);
+        return 0;
+    case Operation_ToggleHidden:
+        if (set_to <= 0)
+            cur_param->is_hidden = 0;
+        if (set_to >= 1)
+            cur_param->is_hidden = 1;
+        return 0;
+    default:
+        break;
     }
 
-    if(val_type == Uchar_type)snprintf(ret_string, string_len, "%02X", (unsigned int)val);
-    
-    if(val_type == Int_type)snprintf(ret_string, string_len, "%d", (int)val);
-    
-    if(val_type == Float_type)snprintf(ret_string, string_len, "%g", val);
-    
-    if(val_type == DB_Return_Type)snprintf(ret_string, string_len, "%0.3gDB", log10((double)val) * 20);
-    
-    if(val_type == Curve_Float_Return_Type)snprintf(ret_string, string_len, "%g", val);
-    
-    if(val_type == String_Return_Type){
-	const char* param_string = param_get_param_string(param_container, val_id, 0);
-	if(!param_string)return 0;
-	snprintf(ret_string, string_len, "%s", param_string);
+    // value operations - compute the new value, clamp it, and if it
+    // actually changed send that final value to the rt side
+    PARAM_T prev_val = cur_param->val;
+    PARAM_T new_val = prev_val;
+    switch (param_op) {
+    case Operation_Decrease:
+        new_val = prev_val - set_to * cur_param->inc_am;
+        break;
+    case Operation_Increase:
+        new_val = prev_val + set_to * cur_param->inc_am;
+        break;
+    case Operation_SetValue:
+        new_val = set_to;
+        break;
+    case Operation_DefValue:
+        new_val = cur_param->def_val;
+        break;
+    default:
+        return -1;
     }
-    return 1;
-}
-
-int param_get_if_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
-    if(!param_container)return -1;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
+    new_val = param_clamp(new_val, cur_param->min_val, cur_param->max_val);
+    cur_param->val = new_val;
+    if (new_val != prev_val) {
+        PARAM_RING_DATA_BIT send_bit;
+        send_bit.val_id = val_id;
+        send_bit.param_value = new_val;
+        ring_buffer_write(param_container->param_ui_to_rt, &send_bit,
+                          sizeof(send_bit));
     }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-    if(val_id >= num_of_params)return -1;
-
-    PRM_PARAM cur_param = param_array[val_id];
-    return cur_param.just_changed;
+    return 0;
 }
 
-int param_get_if_any_changed(PRM_CONTAIN* param_container, unsigned int rt_params){
-    if(!param_container)return -1;
-    int params_changed = 0;
-    unsigned int num_params = param_return_num_params(param_container, rt_params);
-    if(num_params<=0)return -1;
-    for(int i=0; i < num_params; i++){
-	int changed = param_get_if_changed(param_container, i, rt_params);
-	if(changed == 1){
-	    params_changed = 1;
-	    break;
-	}
-    }
-    return params_changed;
+void *param_cookie_return_rt(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return NULL;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_rt)
+        return NULL;
+    return param_container->rt_params[val_id]->cookie;
 }
 
-unsigned int param_is_hidden(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
-    if(!param_container)return 0;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
+uint32_t param_get_uid(PRM_CONTAIN *param_container, int val_id,
+                       unsigned int rt_params) {
+    if (!param_container)
+        return 0;
+    if (rt_params) {
+        if (val_id < 0 ||
+            (unsigned int)val_id >= param_container->num_of_params_rt)
+            return 0;
+        return param_container->rt_params[val_id]->uid;
     }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-    if(!param_array)return 0;
-    if(val_id >= num_of_params)return 0;
-    
-    PRM_PARAM cur_param = param_array[val_id];
-    return cur_param.is_hidden;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return 0;
+    return param_container->ui_params[val_id]->uid;
 }
 
-unsigned int param_ui_name_changed(PRM_CONTAIN* param_container, int val_id, unsigned int rt_params){
-    if(!param_container)return 0;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
-    }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-    if(!param_array)return 0;
-    if(val_id >= num_of_params)return 0;
-    PRM_PARAM* cur_param = &(param_array[val_id]);
-    unsigned int just_changed = cur_param->ui_name_just_changed;
-    return just_changed;
-}
-
-unsigned int param_get_ui_name(PRM_CONTAIN* param_container, int val_id, char* ret_name, uint32_t name_len){
-    if(!param_container)return 0;
-    PRM_PARAM* param_array = param_container->ui_params;
-    int num_of_params = param_container->num_of_params_ui;
-    
-    if(val_id >= num_of_params)return 0;
-
-    PRM_PARAM* cur_param = &(param_array[val_id]);
-    snprintf(ret_name, name_len, "%s", cur_param->ui_name);
-    cur_param->ui_name_just_changed = 0;
-    return 1;
-}
-
-unsigned int param_get_name(PRM_CONTAIN* param_container, int val_id, char* ret_name, uint32_t name_len){
-    if(!param_container)return 0;
-    PRM_PARAM* param_array = param_container->ui_params;
-    int num_of_params = param_container->num_of_params_ui;
-    
-    if(val_id >= num_of_params)return 0;
-
-    PRM_PARAM* cur_param = &(param_array[val_id]);
-    snprintf(ret_name, name_len, "%s", cur_param->name);
-    return 1;
-}
-
-int param_find_name(PRM_CONTAIN* param_container, const char* param_name, unsigned int rt_params){
-    if(!param_container)return -1;
-    if(!param_name)return -1;
-    PRM_PARAM* param_array = NULL;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	param_array = param_container->ui_params;
-	num_of_params = param_container->num_of_params_ui;
-    }
-    if(rt_params == 1){
-	param_array = param_container->rt_params;
-	num_of_params = param_container->num_of_params_rt;
-    }
-
-    for(int i = 0; i < num_of_params; i++){
-	const char* cur_name = param_array[i].name;
-	if(strcmp(param_name, cur_name)==0){
-	    return i;
-	}
+int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid) {
+    if (!param_container)
+        return -1;
+    // uid is identical on both sides once param_add_param sets it - checking
+    // the ui side alone is sufficient, nothing on the rt side has ever
+    // needed to resolve a uid it doesn't already have a val_id for
+    for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
+        if (param_container->ui_params[i]->uid == uid)
+            return (int)i;
     }
     return -1;
 }
 
-unsigned int param_return_num_params(PRM_CONTAIN* param_container, unsigned int rt_params){
-    if(!param_container)return 0;
-    int num_of_params = -1;
-    if(rt_params == 0){
-	num_of_params = param_container->num_of_params_ui;
-    }
-    if(rt_params == 1){
-	num_of_params = param_container->num_of_params_rt;
-    }
-
-    return num_of_params;
+PARAM_T param_get_increment(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return -1;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
+    return param_container->ui_params[val_id]->inc_am;
 }
 
-static void param_clean_param(PRM_PARAM* param){
-    if(!param)return;
-    if(param->interp_val)free(param->interp_val);
-    if(param->param_strings){
-	for(int j = 0; j < param->param_strings_num; j++){
-	    if(param->param_strings[j])free(param->param_strings[j]);
-	}
-	free(param->param_strings);
+PARAM_T param_get_value(PRM_CONTAIN *param_container, int val_id,
+                        unsigned int rt_params) {
+    if (!param_container)
+        return -1;
+    if (rt_params) {
+        if (val_id < 0 ||
+            (unsigned int)val_id >= param_container->num_of_params_rt)
+            return -1;
+        PRM_PARAM_RT *cur_param = param_container->rt_params[val_id];
+        // when returning the value we mark this param as no longer changed -
+        // only the rt side tracks this (see PRM_PARAM_RT's doc comment)
+        cur_param->val_changed = 0;
+        PARAM_T raw_val = cur_param->val;
+        if (param_container->user_data.build_value)
+            return param_container->user_data.build_value(
+                param_container->user_data.user_data, val_id, raw_val,
+                rt_params);
+        return raw_val;
     }
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
+    PARAM_T raw_val = param_container->ui_params[val_id]->val;
+    if (param_container->user_data.build_value)
+        return param_container->user_data.build_value(
+            param_container->user_data.user_data, val_id, raw_val, rt_params);
+    return raw_val;
 }
 
-void param_clean_param_container(PRM_CONTAIN* param_container){
-    if(!param_container)return;
-    for(int i = 0; i < param_container->num_of_params_ui; i++){
-	param_clean_param(&(param_container->rt_params[i]));
-	param_clean_param(&(param_container->ui_params[i]));
-    }	
+const char *param_get_value_as_string(PRM_CONTAIN *param_container,
+                                      int val_id, PARAM_T value) {
+    if (!param_container)
+        return NULL;
+    // if there is no user provided function to convert the parameter value to
+    // string, there is nothing to display
+    if (!param_container->user_data.user_data ||
+        !param_container->user_data.val_to_string)
+        return NULL;
+
+    unsigned int wrote = param_container->user_data.val_to_string(
+        param_container->user_data.user_data, val_id, value,
+        param_container->value_string_scratch,
+        sizeof(param_container->value_string_scratch));
+    if (!wrote)
+        return NULL;
+    return param_container->value_string_scratch;
+}
+
+int param_get_if_changed_rt(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return -1;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_rt)
+        return -1;
+    return param_container->rt_params[val_id]->val_changed;
+}
+
+int param_get_if_any_changed_rt(PRM_CONTAIN *param_container) {
+    if (!param_container)
+        return -1;
+    unsigned int num_params = param_container->num_of_params_rt;
+    if (num_params == 0)
+        return -1;
+    for (unsigned int i = 0; i < num_params; i++) {
+        if (param_container->rt_params[i]->val_changed == 1)
+            return 1;
+    }
+    return 0;
+}
+
+unsigned int param_is_hidden(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return 0;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return 0;
+    return param_container->ui_params[val_id]->is_hidden;
+}
+
+const char *param_get_name(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return NULL;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return NULL;
+    return param_container->ui_params[val_id]->name;
+}
+
+unsigned int param_return_num_params(PRM_CONTAIN *param_container,
+                                     unsigned int rt_params) {
+    if (!param_container)
+        return 0;
+    if (rt_params)
+        return param_container->num_of_params_rt;
+    return param_container->num_of_params_ui;
+}
+
+void param_clean_param_container(PRM_CONTAIN *param_container) {
+    if (!param_container)
+        return;
     ring_buffer_clean(param_container->param_rt_to_ui);
     ring_buffer_clean(param_container->param_ui_to_rt);
-    if(param_container->rt_params)free(param_container->rt_params);
-    if(param_container->ui_params)free(param_container->ui_params);
-    
+    if (param_container->rt_params) {
+        for (unsigned int i = 0; i < param_container->num_of_params_rt; i++)
+            if (param_container->rt_params[i])
+                free(param_container->rt_params[i]);
+        free(param_container->rt_params);
+    }
+    if (param_container->ui_params) {
+        for (unsigned int i = 0; i < param_container->num_of_params_ui; i++)
+            if (param_container->ui_params[i])
+                free(param_container->ui_params[i]);
+        free(param_container->ui_params);
+    }
+
     free(param_container);
 }

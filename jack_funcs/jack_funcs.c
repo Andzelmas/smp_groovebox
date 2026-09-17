@@ -98,12 +98,14 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
     jack_status_t status = 0;
 
     //initialize the general song trk parameters like current bar, beat, play etc.
-    jack_data->trk_params = params_init_param_container(7, (char*[7]){"Tempo", "Bar", "Beat", "Tick", "Play", "BPB", "Beat_Type"},
-							(PARAM_T[7]){100, 1, 1, 0, 0, 4, 4},
-							(PARAM_T[7]){10, 1, 1, 0, 0, 2, 2}, (PARAM_T[7]){500, MAX_BARS, 16, 2000, 1, 16, 16},
-							(PARAM_T[7]){1, 1, 1, floor(time_ticks_per_beat/4), 1, 1, 1},
-							(unsigned char[7]){Int_type, Int_type, Int_type, Int_type, Int_type, Int_type, Int_type},
-							NULL, NULL);
+    jack_data->trk_params = params_init_param_container(NULL);
+    param_add_param(jack_data->trk_params, "Tempo", 100, 10, 500, 1, 0, NULL);
+    param_add_param(jack_data->trk_params, "Bar", 1, 1, MAX_BARS, 1, 1, NULL);
+    param_add_param(jack_data->trk_params, "Beat", 1, 1, 16, 1, 2, NULL);
+    param_add_param(jack_data->trk_params, "Tick", 0, 0, 2000, floor(time_ticks_per_beat/4), 3, NULL);
+    param_add_param(jack_data->trk_params, "Play", 0, 0, 1, 1, 4, NULL);
+    param_add_param(jack_data->trk_params, "BPB", 4, 2, 16, 1, 5, NULL);
+    param_add_param(jack_data->trk_params, "Beat_Type", 4, 2, 16, 1, 6, NULL);
     if(!jack_data->trk_params){
 	jack_clean_memory(jack_data);
 	return NULL;
@@ -174,18 +176,18 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data){
 		//After setting the value, get the value so the parameter is_changed will be 0 and app_jack_update_transport_from_params_rt will not create a new tranport object
 		//even though a parameter was not changed by the ui
 		//get the bars
-		param_set_value(jack_data->trk_params, 1, (float)pos.bar, NULL, Operation_SetValue, 1);
-	        param_get_value(jack_data->trk_params, 1, 0, 0, 1);
+		param_set_value_rt(jack_data->trk_params, 1, (float)pos.bar);
+	        param_get_value(jack_data->trk_params, 1, 1);
 		//get the beat
-		param_set_value(jack_data->trk_params, 2, (float)pos.beat, NULL, Operation_SetValue, 1);
-		param_get_value(jack_data->trk_params, 2, 0, 0, 1);
+		param_set_value_rt(jack_data->trk_params, 2, (float)pos.beat);
+		param_get_value(jack_data->trk_params, 2, 1);
 		//get the tick
-		param_set_value(jack_data->trk_params, 3, (float)pos.tick, NULL, Operation_SetValue, 1);
-		param_get_value(jack_data->trk_params, 3, 0, 0, 1);
+		param_set_value_rt(jack_data->trk_params, 3, (float)pos.tick);
+		param_get_value(jack_data->trk_params, 3, 1);
 	    }
 	    //get the isPlaying state even if the Jack transport head is not rolling
-	    param_set_value(jack_data->trk_params, 4, (float)state, NULL, Operation_SetValue, 1);
-	    param_get_value(jack_data->trk_params, 4, 0, 0, 1);
+	    param_set_value_rt(jack_data->trk_params, 4, (float)state);
+	    param_get_value(jack_data->trk_params, 4, 1);
 	}
     }
     return 0;
@@ -568,14 +570,14 @@ void timebbt_callback_rt(jack_transport_state_t state, jack_nframes_t nframes, j
 	PRM_CONTAIN* transport_cntr = jack_data->trk_params;
 	pos->valid = JackPositionBBT;
 	pos->beats_per_bar = 4;
-	pos->beats_per_bar = param_get_value(transport_cntr, 5, 0, 0, 1);
+	pos->beats_per_bar = param_get_value(transport_cntr, 5, 1);
 	pos->beat_type = 4;
-	pos->beat_type = param_get_value(transport_cntr, 6, 0, 0, 1);
+	pos->beat_type = param_get_value(transport_cntr, 6, 1);
 	
 	pos->ticks_per_beat = time_ticks_per_beat;
 	//get the bpm
 	pos->beats_per_minute = 120;
-	pos->beats_per_minute = param_get_value(transport_cntr, 0, 0, 0, 1);
+	pos->beats_per_minute = param_get_value(transport_cntr, 0, 1);
 
 	//Compute the *pos members from frame
 	min = pos->frame / ((double) pos->frame_rate * 60.0);
@@ -639,7 +641,7 @@ void app_jack_update_transport_from_params_rt(JACK_INFO* jack_data){
     if(!transport_cntr)return;
 
     //check if any parameters have changed
-    int params_changed = param_get_if_any_changed(transport_cntr, 1);
+    int params_changed = param_get_if_any_changed_rt(transport_cntr);
     if(params_changed != 1) return;
 
     //get the current pos of transport
@@ -651,19 +653,19 @@ void app_jack_update_transport_from_params_rt(JACK_INFO* jack_data){
     new_pos.valid = JackPositionBBT;
     new_pos.frame_rate = old_pos.frame_rate;
     
-    new_pos.beats_per_minute = param_get_value(transport_cntr, 0, 0, 0, 1);
-    new_pos.beats_per_bar = param_get_value(transport_cntr, 5, 0, 0, 1);
+    new_pos.beats_per_minute = param_get_value(transport_cntr, 0, 1);
+    new_pos.beats_per_bar = param_get_value(transport_cntr, 5, 1);
     
-    new_pos.bar = param_get_value(transport_cntr, 1, 0, 0, 1);
-    new_pos.beat = param_get_value(transport_cntr, 2, 0, 0, 1);
+    new_pos.bar = param_get_value(transport_cntr, 1, 1);
+    new_pos.beat = param_get_value(transport_cntr, 2, 1);
     if(new_pos.beat>new_pos.beats_per_bar){
 	new_pos.beat = 1;
 	new_pos.bar +=1;
     }
     
-    new_pos.tick = param_get_value(transport_cntr, 3, 0, 0, 1);
+    new_pos.tick = param_get_value(transport_cntr, 3, 1);
         
-    new_pos.beat_type = param_get_value(transport_cntr, 6, 0, 0, 1);
+    new_pos.beat_type = param_get_value(transport_cntr, 6, 1);
     new_pos.ticks_per_beat = time_ticks_per_beat;
 
     //first calculate how many beats from frame 0, with remainder
@@ -675,7 +677,7 @@ void app_jack_update_transport_from_params_rt(JACK_INFO* jack_data){
     jack_nframes_t frame = ceil(seconds_passed * old_pos.frame_rate);
     new_pos.frame = frame;
 
-    float play = param_get_value(transport_cntr, 4, 0, 0, 1);
+    float play = param_get_value(transport_cntr, 4, 1);
     app_jack_transport(jack_data, (int)play);
     
     jack_transport_reposition(jack_data->client, &new_pos);

@@ -17,8 +17,8 @@ int main(){
     //NAVIGATING interface
     CX* cx_curr = nav_cx_curr_return(app_intrf);
     if(cx_curr){
-	char display_name[MAX_PARAM_NAME_LENGTH];
-	if(nav_cx_display_name_return(app_intrf, cx_curr, display_name, MAX_PARAM_NAME_LENGTH) == 1){
+	char display_name[MAX_SHORT_NAME_LENGTH];
+	if(nav_cx_display_name_return(app_intrf, cx_curr, display_name, MAX_SHORT_NAME_LENGTH) == 1){
 	    printf("cx_curr: %s\n", display_name);
 	}
 
@@ -26,7 +26,7 @@ int main(){
 	unsigned int child_idx = 0;
 	while(cx_child){
 	    printf("   |");
-	    if(nav_cx_display_name_return(app_intrf, cx_child, display_name, MAX_PARAM_NAME_LENGTH) == 1){
+	    if(nav_cx_display_name_return(app_intrf, cx_child, display_name, MAX_SHORT_NAME_LENGTH) == 1){
 		printf("--> %s\n", display_name);
 	    }
 	    child_idx += 1;

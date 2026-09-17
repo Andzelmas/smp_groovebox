@@ -45,7 +45,7 @@ typedef struct _plugin_list_item {
     // including the path from clap_paths too
     char path[MAX_PATH_STRING];
     // short name that is used in the clap descriptor
-    char short_name[MAX_PARAM_NAME_LENGTH];
+    char short_name[MAX_SHORT_NAME_LENGTH];
     // the plugin instance id in the clap plugin descriptor
     int plug_inst_id;
     CLAP_PLUG_INFO *plug_data;
@@ -63,7 +63,7 @@ typedef struct _plugin_list {
 
 // struct that has the plugin preset info
 typedef struct _clap_plug_preset_info {
-    char short_name[MAX_PARAM_NAME_LENGTH]; // the short name, without any
+    char short_name[MAX_SHORT_NAME_LENGTH]; // the short name, without any
                                             // extensions or path symbols
     char full_path[MAX_PATH_STRING];  // the full path of the plugin preset
     char categories[MAX_PATH_STRING]; // the categories path, separated by /
@@ -622,7 +622,7 @@ static int clap_plug_params_destroy(CLAP_PLUG_INFO *plug_data, int id) {
 // [main-thread] this function is on param_container and will be used when the
 // function param_get_value_as_string is called in params.c
 static unsigned int clap_plug_params_value_to_text(const void *user_data,
-                                                   int param_id, PARAM_T value,
+                                                   int val_id, PARAM_T value,
                                                    char *ret_string,
                                                    uint32_t string_len) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)user_data;
@@ -634,15 +634,20 @@ static unsigned int clap_plug_params_value_to_text(const void *user_data,
         plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
     if (!clap_params)
         return 0;
-    clap_param_info_t param_info;
-    if (!clap_params->get_info(plug->plug_inst, param_id, &param_info))
+
+    const char *param_name = param_get_name(plug->plug_params, val_id);
+    if (!param_name || param_name[0] == '\0')
         return 0;
+    // this param's uid IS its clap_id, set from param_info.id at creation
+    // time (clap_plug_params_create) - no need to round-trip through
+    // get_info again just to re-derive it
+    uint32_t clap_param_id = param_get_uid(plug->plug_params, val_id, 0);
     // TODO have to create a long string first, because Juice wrapper and some
     // CLAP plugins do not respect the string_len given to the value_to_text
     // function
     char long_string[MAX_STRING_MSG_LENGTH];
     unsigned int convert_err = clap_params->value_to_text(
-        plug->plug_inst, param_info.id, (double)value, long_string,
+        plug->plug_inst, clap_param_id, (double)value, long_string,
         MAX_STRING_MSG_LENGTH);
     if (convert_err == 1) {
         snprintf(ret_string, string_len, "%s", long_string);
@@ -671,62 +676,39 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     if (param_count == 0)
         return 0;
 
-    char **param_names = calloc(param_count, sizeof(char *));
-    PARAM_T *param_vals = calloc(param_count, sizeof(PARAM_T));
-    PARAM_T *param_mins = calloc(param_count, sizeof(PARAM_T));
-    PARAM_T *param_maxs = calloc(param_count, sizeof(PARAM_T));
-    PARAM_T *param_incs = calloc(param_count, sizeof(PARAM_T));
-    unsigned char *val_types = calloc(param_count, sizeof(char));
-    PRM_USER_DATA *user_data_array = calloc(param_count, sizeof(PRM_USER_DATA));
-    if (!param_names || !param_vals || !param_mins || !param_maxs ||
-        !param_incs || !val_types) {
-        if (param_names)
-            free(param_names);
-        if (param_vals)
-            free(param_vals);
-        if (param_mins)
-            free(param_mins);
-        if (param_maxs)
-            free(param_maxs);
-        if (param_incs)
-            free(param_incs);
-        if (val_types)
-            free(val_types);
-        if (user_data_array)
-            free(user_data_array);
+    PRM_CONT_USER_DATA container_user_data;
+    container_user_data.user_data = (void *)plug;
+    container_user_data.build_value = NULL;
+    container_user_data.val_to_string = clap_plug_params_value_to_text;
+    plug->plug_params = params_init_param_container(&container_user_data);
+    if (!plug->plug_params)
         return -1;
-    }
-    for (uint32_t param_id = 0; param_id < param_count; param_id++) {
-        // init to temp values
-        param_names[param_id] = NULL;
-        param_vals[param_id] = 0.0;
-        param_mins[param_id] = 0.0;
-        param_maxs[param_id] = 0.0;
-        val_types[param_id] = Float_type;
-        PRM_USER_DATA param_data;
-        param_data.data = NULL;
-        param_data.user_id = 0;
-        user_data_array[param_id] = param_data;
 
+    // val_id here doubles as CLAP's own param_index (get_info's second arg
+    // is documented param_index, not a clap_id) and this container's val_id
+    // - keep every index filled, even on a get_info failure, since
+    // param_get_value elsewhere is called with this same index and a gap
+    // would desync every param after it. On a get_info failure there's no
+    // real clap_id to use as uid either, so val_id doubles as a fallback
+    // uid too - still unique per container even though it isn't a clap_id.
+    for (uint32_t val_id = 0; val_id < param_count; val_id++) {
         clap_param_info_t param_info;
-        if (!clap_params->get_info(plug->plug_inst, param_id, &param_info))
+        if (!clap_params->get_info(plug->plug_inst, val_id, &param_info)) {
+            param_add_param(plug->plug_params, "", 0.0, 0.0, 0.0, 0.0,
+                            val_id, NULL);
             continue;
-        param_vals[param_id] = param_info.default_value;
+        }
 
-        param_mins[param_id] = param_info.min_value;
-        param_maxs[param_id] = param_info.max_value;
+        PARAM_T param_min = param_info.min_value;
+        PARAM_T param_max = param_info.max_value;
         // calculate the increment
-        PARAM_T param_range = param_maxs[param_id] - param_mins[param_id];
+        PARAM_T param_range = param_max - param_min;
         if(param_range < 0)param_range *= -1;
-        param_incs[param_id] = param_range / 100.0;
-
-        user_data_array[param_id].data = param_info.cookie;
-        user_data_array[param_id].user_id = param_info.id;
+        PARAM_T param_inc = param_range / 100.0;
 
         if ((param_info.flags & CLAP_PARAM_IS_STEPPED) ==
             CLAP_PARAM_IS_STEPPED) {
-            val_types[param_id] = Int_type;
-            param_incs[param_id] = 1.0;
+            param_inc = 1.0;
         }
         // TODO not sure what to do with periodic parameters
         if ((param_info.flags & CLAP_PARAM_IS_PERIODIC) ==
@@ -741,30 +723,12 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
         }
         if ((param_info.flags & CLAP_PARAM_IS_READONLY) ==
             CLAP_PARAM_IS_READONLY) {
-            param_incs[param_id] = 0;
+            param_inc = 0;
         }
-        param_names[param_id] = calloc(MAX_PARAM_NAME_LENGTH, sizeof(char));
-        snprintf(param_names[param_id], MAX_PARAM_NAME_LENGTH, "%s",
-                 param_info.name);
+        param_add_param(plug->plug_params, param_info.name,
+                        param_info.default_value, param_min, param_max,
+                        param_inc, param_info.id, param_info.cookie);
     }
-    PRM_CONT_USER_DATA container_user_data;
-    container_user_data.user_data = (void *)plug;
-    container_user_data.val_to_string = clap_plug_params_value_to_text;
-    plug->plug_params = params_init_param_container(
-        param_count, param_names, param_vals, param_mins, param_maxs,
-        param_incs, val_types, user_data_array, &container_user_data);
-
-    for (uint32_t i = 0; i < param_count; i++) {
-        if (param_names[i])
-            free(param_names[i]);
-    }
-    free(param_names);
-    free(param_vals);
-    free(param_mins);
-    free(param_maxs);
-    free(param_incs);
-    free(val_types);
-    free(user_data_array);
     return 0;
 }
 
@@ -810,7 +774,7 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
                                         &cur_value))
                 continue;
             param_set_value(plug->plug_params, param_num, (PARAM_T)cur_value,
-                            NULL, Operation_SetValue, 0);
+                            NULL, Operation_SetValue);
         }
     }
     if ((flags & CLAP_PARAM_RESCAN_TEXT) == CLAP_PARAM_RESCAN_TEXT) {
@@ -833,7 +797,7 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
             if (!clap_params->get_info(plug->plug_inst, param_num, &param_info))
                 continue;
             param_set_value(plug->plug_params, param_num, 0.0, param_info.name,
-                            Operation_ChangeName, 0);
+                            Operation_ChangeName);
         }
         // TODO get if any parameter is hidden or not, and set with set_value
         // Operation_ToggleHidden
@@ -844,14 +808,6 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
         context_sub_send_msg(
             plug_data->control_data, (void *)plug_data, is_audio_thread,
             "Plugin %s requested CLAP_PARAM_RESCAN_ALL\n", plug->plug_path);
-        // TODO app_intrf.c does not handle critical changes of parameters right
-        // now - need to overhaul the whole app_intrf for this
-        // TODO right now on app_intrf.c the parameters are created only when
-        // the plugin is added.
-        /*
-        clap_plug_params_destroy(plug_data, plug->id);
-        clap_plug_params_create(plug_data, plug->id);
-        */
     }
 }
 
@@ -1470,7 +1426,7 @@ void *clap_plug_presets_iterate(CLAP_PLUG_INFO *plug_data,
             return NULL;
         int err = clap_ext_preset_info_return(
             cur_plug->preset_fac, cur_plug->plugin_id, iter, NULL, NULL, NULL,
-            0, preset_info->short_name, MAX_PARAM_NAME_LENGTH,
+            0, preset_info->short_name, MAX_SHORT_NAME_LENGTH,
             preset_info->full_path, MAX_PATH_STRING, preset_info->categories,
             MAX_PATH_STRING);
         if (err == 1)
@@ -1753,7 +1709,7 @@ int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
                     unsigned int cur_member = plugin_list->size_curr - 1;
                     PLUGIN_LIST_ITEM* cur_item = &(plugin_list->plugin_list[cur_member]);
                     snprintf(cur_item->path, MAX_PATH_STRING, "%s", total_file_path);
-                    snprintf(cur_item->short_name, MAX_PARAM_NAME_LENGTH, "%s", plug_desc->name);
+                    snprintf(cur_item->short_name, MAX_SHORT_NAME_LENGTH, "%s", plug_desc->name);
                     cur_item->plug_data = plug_data;
                     cur_item->plug_inst_id = pl_iter;
                 }
@@ -2178,7 +2134,7 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
     // offset frame put parameter changes into the event queue
     uint32_t param_count = param_return_num_params(plug->plug_params, 1);
     for (uint32_t param_idx = 0; param_idx < param_count; param_idx++) {
-        if (param_get_if_changed(plug->plug_params, (int)param_idx, 1) != 1)
+        if (param_get_if_changed_rt(plug->plug_params, (int)param_idx) != 1)
             continue;
         if (not_quiet == 0)
             not_quiet = 1;
@@ -2191,19 +2147,14 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
 
         clap_event_param_value_t param_val;
         param_val.channel = -1;
-        PRM_USER_DATA param_user_data;
-        param_user_data.data = NULL;
-        param_user_data.user_id = -1;
-        param_user_data_return(plug->plug_params, (int)param_idx,
-                               &param_user_data, 1);
-        param_val.cookie = param_user_data.data;
+        param_val.cookie = param_cookie_return_rt(plug->plug_params, (int)param_idx);
         param_val.header = head;
         param_val.key = -1;
         param_val.note_id = -1;
-        param_val.param_id = param_user_data.user_id;
+        param_val.param_id = param_get_uid(plug->plug_params, (int)param_idx, 1);
         param_val.port_index = -1;
         param_val.value =
-            (double)param_get_value(plug->plug_params, (int)param_idx, 0, 0, 1);
+            (double)param_get_value(plug->plug_params, (int)param_idx, 1);
         ub_push(ub_in, (void *)&(param_val),
                 (uint32_t)sizeof(clap_event_param_value_t));
     }

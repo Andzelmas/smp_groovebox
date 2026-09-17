@@ -26,6 +26,12 @@ static thread_local bool is_audio_thread = false;
 //using this number a table is built for converting semitones to frequency,
 //given the starting frequency
 #define MAX_SEMITONES 36
+//range of the A/D/R params (params 6/7/9 below) - shared by the init call and
+//synth_osc_build_value's curve mapping so they can't drift out of sync
+#define SYNTH_ADSR_TIME_MIN 0.0
+#define SYNTH_ADSR_TIME_MAX 5.0
+//how many samples math_ramp_val_get_value smooths the Amp param over,
+#define SYNTH_AMP_INTERP_SAMPLES 400
 //the increments that the semitones will be incremented or decreased by the user
 #define SEMITONES_INC 0.1
 //the longest that the a, d or r in ADSR can be in seconds
@@ -56,8 +62,8 @@ typedef struct _synth_voice{
     unsigned int stopped;
     //what the user wishes the vco level to be, its 0 when playing is 0
     //this is to interpolate so the amp does not go to big values too fast
-    PRM_INTERP_VAL* vco_amp_L;
-    PRM_INTERP_VAL* vco_amp_R;
+    MATH_RAMP_VAL* vco_amp_L;
+    MATH_RAMP_VAL* vco_amp_R;
     //the voice amp adsr
     SYNTH_ADSR* vco_adsr;
     //the current phase of the vco
@@ -90,6 +96,8 @@ typedef struct _synth_osc{
     unsigned int num_voices;
     //parameter container for the oscillator
     PRM_CONTAIN* params;
+    //smooths the raw Amp param (index 0) on [audio-thread] reads
+    MATH_RAMP_VAL* amp_smooth;
     //which voice played last
     int last_voice;
     //the buffer of the summed voices output is kept here
@@ -205,6 +213,40 @@ static SYNTH_ADSR* synth_init_adsr(SAMPLE_T samplerate){
     adsr->r_frames = 0;
     
     return adsr;
+}
+
+//builds the value param_get_value returns for one of this oscillator's own
+//params
+static PARAM_T synth_osc_build_value(const void* user_data, int val_id, PARAM_T raw_val, unsigned int rt_params){
+    SYNTH_OSC *osc = (SYNTH_OSC *)user_data;
+    if (!osc)
+        return raw_val;
+    if (!osc->synth_data)
+        return raw_val;
+
+    // A / D / R (params 6, 7, 9): exponential time mapping, same curve table
+    // and same fit_range round-trip param_get_value used to do internally
+    if (val_id == 6 || val_id == 7 || val_id == 9) {
+        if (!osc->synth_data->amp_to_exp)
+            return raw_val;
+        PARAM_T val_norm = fit_range(SYNTH_ADSR_TIME_MAX, SYNTH_ADSR_TIME_MIN,
+                                     1.0, 0.0, raw_val);
+        PARAM_T val_curve = math_range_table_convert_value(
+            osc->synth_data->amp_to_exp, val_norm);
+        return fit_range(1.0, 0.0, SYNTH_ADSR_TIME_MAX, SYNTH_ADSR_TIME_MIN,
+                         val_curve);
+    }
+
+    // Amp (param 0): smoothed so a fast knob turn doesn't click - only ever
+    // read this way on [audio-thread] (rt_params == 1), matching every
+    // existing param_get_value call site for this param
+    if (val_id == 0 && rt_params == 1) {
+        if (!osc->amp_smooth)
+            return raw_val;
+        return math_ramp_val_get_value(osc->amp_smooth, raw_val);
+    }
+
+    return raw_val;
 }
 
 SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const char* cx_name, unsigned int with_metronome,
@@ -455,8 +497,8 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	}
 	for(unsigned int j = 0; j < cur_osc->num_voices; j++){
 	    SYNTH_VOICE* cur_voice = &(cur_osc->osc_voices[j]);
-	    cur_voice->vco_amp_L = params_init_interpolated_val(1.0, (unsigned int)(0.002 * synth_data->samplerate));
-	    cur_voice->vco_amp_R = params_init_interpolated_val(1.0, (unsigned int)(0.002 * synth_data->samplerate));
+	    cur_voice->vco_amp_L = math_ramp_val_init(1.0, (unsigned int)(0.002 * synth_data->samplerate));
+	    cur_voice->vco_amp_R = math_ramp_val_init(1.0, (unsigned int)(0.002 * synth_data->samplerate));
 	    cur_voice->vco_adsr = synth_init_adsr(synth_data->samplerate);
 	    cur_voice->vco_ph = 0;
 	    cur_voice->wobble_ph = 0;
@@ -469,20 +511,22 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	    cur_voice->osc_table = NULL;
 	}
 
-	cur_osc->params = params_init_param_container(10, (char* [10]){"Amp", "Freq", "Spread", "Wobble", "Octave", "Table", "A", "D", "S", "R"},
-						      (PARAM_T [10]){0.8, 0, 0, 0, 0, 0, 0.0, 0.0, 1.0, 0.001},
-						      (PARAM_T [10]){0.00001, -12, 0, 0, ((MAX_SEMITONES - 12) / 12.0) * -1, 0, 0.0, 0.0, 0.0, 0.0},
-						      (PARAM_T [10]){1, 12, 1, 1, (MAX_SEMITONES - 12) / 12.0, 3, 5.0, 5.0, 1.0, 5.0},
-						      (PARAM_T [10]){0.01, 0.1, 0.01, 0.05, 1, 1, 0.1, 0.1, 0.01, 0.1},
-						      (unsigned char [10]){DB_Return_Type, Float_type, Float_type, Float_type, Int_type, String_Return_Type,
-							  Curve_Float_Return_Type, Curve_Float_Return_Type, Float_type, Curve_Float_Return_Type},
-						      NULL, NULL);
-	//write strings to parameters that are String_Return_Type
-	param_set_param_strings(cur_osc->params, 5, (char* [4]){"sin", "triang", "saw", "sqr"}, 4);
-	//put a curve table for the params that should be returned as curves
-	param_add_curve_table(cur_osc->params, 6, synth_data->amp_to_exp);
-	param_add_curve_table(cur_osc->params, 7, synth_data->amp_to_exp);
-	param_add_curve_table(cur_osc->params, 9, synth_data->amp_to_exp);
+	//Amp (param 0) is smoothed on [audio-thread] reads by synth_osc_build_value
+	cur_osc->amp_smooth = math_ramp_val_init(fabs(1.0 - 0.00001), SYNTH_AMP_INTERP_SAMPLES);
+	PRM_CONT_USER_DATA osc_params_user_data = {.user_data = (void*)cur_osc,
+						   .build_value = synth_osc_build_value,
+						   .val_to_string = NULL};
+	cur_osc->params = params_init_param_container(&osc_params_user_data);
+	param_add_param(cur_osc->params, "Amp",     0.8,   0.00001, 1, 0.01, 0, NULL);
+	param_add_param(cur_osc->params, "Freq",    0,     -12, 12,     0.1,  1, NULL);
+	param_add_param(cur_osc->params, "Spread",  0,     0, 1,        0.01, 2, NULL);
+	param_add_param(cur_osc->params, "Wobble",  0,     0, 1,        0.05, 3, NULL);
+	param_add_param(cur_osc->params, "Octave",  0,     ((MAX_SEMITONES - 12) / 12.0) * -1, (MAX_SEMITONES - 12) / 12.0, 1, 4, NULL);
+	param_add_param(cur_osc->params, "Table",   0,     0, 3,        1,    5, NULL);
+	param_add_param(cur_osc->params, "A",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  6, NULL);
+	param_add_param(cur_osc->params, "D",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  7, NULL);
+	param_add_param(cur_osc->params, "S",       1.0,   0.0, 1.0,     0.01, 8, NULL);
+	param_add_param(cur_osc->params, "R",       0.001, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  9, NULL);
 
 	synth_activate_backend_ports(synth_data, cur_osc);
     }
@@ -602,16 +646,16 @@ static void synth_process_osc_voices(SYNTH_DATA* synth_data, SYNTH_OSC* osc, NFR
     memset(osc->buffer_R, '\0', sizeof(SAMPLE_T) * nframes);
     
     //interpolate the amp value
-    PARAM_T amp_in = param_get_value(osc->params, 0, 0, 1, 1);
-    PARAM_T freq_in = param_get_value(osc->params, 1, 0, 0, 1);
-    PARAM_T octave_in =  param_get_value(osc->params, 4, 0, 0, 1);
-    PARAM_T wobble = param_get_value(osc->params, 3, 0, 0, 1);
-    PARAM_T spread = param_get_value(osc->params, 2, 0, 0, 1);
+    PARAM_T amp_in = param_get_value(osc->params, 0, 1);
+    PARAM_T freq_in = param_get_value(osc->params, 1, 1);
+    PARAM_T octave_in =  param_get_value(osc->params, 4, 1);
+    PARAM_T wobble = param_get_value(osc->params, 3, 1);
+    PARAM_T spread = param_get_value(osc->params, 2, 1);
     //get the adsr values from the user parameters
-    PARAM_T vco_a = param_get_value(osc->params, 6, 1, 0, 1);
-    PARAM_T vco_d = param_get_value(osc->params, 7, 1, 0, 1);
-    PARAM_T vco_s = param_get_value(osc->params, 8, 0, 0, 1);
-    PARAM_T vco_r = param_get_value(osc->params, 9, 1, 0, 1);
+    PARAM_T vco_a = param_get_value(osc->params, 6, 1);
+    PARAM_T vco_d = param_get_value(osc->params, 7, 1);
+    PARAM_T vco_s = param_get_value(osc->params, 8, 1);
+    PARAM_T vco_r = param_get_value(osc->params, 9, 1);
 
     for(unsigned int i = 0; i < osc->num_voices; i++){
 	SYNTH_VOICE* cur_voice = &(osc->osc_voices[i]);
@@ -676,8 +720,8 @@ static void synth_process_osc_voices(SYNTH_DATA* synth_data, SYNTH_OSC* osc, NFR
 	    PARAM_T wave_sample_R = wave_sample_L;
 	    osc_updatePhase(osc_table, &(cur_voice->vco_ph), freq_final);
 
-	    PARAM_T interp_amp_in_L = params_interp_val_get_value(cur_voice->vco_amp_L, amp_in * adsr_amp * spread_mult_L * midi_amp);
-	    PARAM_T interp_amp_in_R = params_interp_val_get_value(cur_voice->vco_amp_R, amp_in * adsr_amp * spread_mult_R * midi_amp);	    
+	    PARAM_T interp_amp_in_L = math_ramp_val_get_value(cur_voice->vco_amp_L, amp_in * adsr_amp * spread_mult_L * midi_amp);
+	    PARAM_T interp_amp_in_R = math_ramp_val_get_value(cur_voice->vco_amp_R, amp_in * adsr_amp * spread_mult_R * midi_amp);	    
 	    
 	    osc->buffer_L[j] += wave_sample_L * math_range_table_convert_value(synth_data->amp_to_exp, interp_amp_in_L);
 	    osc->buffer_R[j] += wave_sample_R * math_range_table_convert_value(synth_data->amp_to_exp, interp_amp_in_R);
@@ -770,7 +814,7 @@ static void synth_play_osc_rt(SYNTH_OSC* osc, MIDI_DATA_T vel, MIDI_DATA_T note,
 	//set which table to play for the voice
 	//its set before playing the voice so the table does not change while the sound is playing
 	to_play_voice->osc_table = osc->sin_osc;
-	PARAM_T table  = param_get_value(osc->params, 5, 0, 0, 1);
+	PARAM_T table  = param_get_value(osc->params, 5, 1);
 	if(table == SIN_WAVETABLE)to_play_voice->osc_table = osc->sin_osc;	
 	if(table == TRIANGLE_WAVETABLE)to_play_voice->osc_table = osc->triang_osc;
 	if(table == SAW_WAVETABLE)to_play_voice->osc_table = osc->saw_osc;
@@ -935,6 +979,8 @@ static int synth_clean_osc(SYNTH_DATA* synth_data, SYNTH_OSC* synth_osc){
     if(!synth_osc)return -1;
     if(synth_osc->params)param_clean_param_container(synth_osc->params);
     synth_osc->params = NULL;
+    if(synth_osc->amp_smooth)free(synth_osc->amp_smooth);
+    synth_osc->amp_smooth = NULL;
     if(synth_osc->osc_voices){
 	for(unsigned int i = 0; i < synth_osc->num_voices; i++){
 	    SYNTH_VOICE* cur_voice = &(synth_osc->osc_voices[i]);

@@ -67,7 +67,7 @@ static thread_local bool is_audio_thread =
 // plugin list item - from this struct a lv2 plugin can be loaded
 typedef struct _plugin_list_item {
     char plugin_path[MAX_PATH_STRING];
-    char plugin_short_name[MAX_PARAM_NAME_LENGTH];
+    char plugin_short_name[MAX_SHORT_NAME_LENGTH];
     PLUG_INFO *plug_data;
 } PLUGIN_LIST_ITEM;
 
@@ -855,7 +855,7 @@ int plug_plugin_list_init(PLUG_INFO *plug_data) {
         const char *name_string = lilv_node_as_string(cur_name);
         PLUGIN_LIST_ITEM list_item;
         snprintf(list_item.plugin_path, MAX_PATH_STRING, "%s", path_string);
-        snprintf(list_item.plugin_short_name, MAX_PARAM_NAME_LENGTH, "%s",
+        snprintf(list_item.plugin_short_name, MAX_SHORT_NAME_LENGTH, "%s",
                  name_string);
         lilv_node_free(cur_name);
         list_item.plug_data = plug_data;
@@ -1098,6 +1098,21 @@ static void plug_set_display_name(PLUG_PLUG *plug) {
     lilv_node_free(name_node);
 }
 
+// classifies an LV2 control's value - used only to decide the size of this
+// control's param increment (see the controls loop below, val_t). 
+enum appReturnType {
+    Uchar_type = 0x01,
+    Int_type = 0x02,
+    Float_type = 0x03,
+    // returned value should be displayed as db, so
+    // converted to log scale
+    DB_Return_Type = 0x04,
+    // control is an enumeration - forces increment to 1 below
+    String_Return_Type = 0x05,
+    // float that should be presented to the user as a special curve
+    Curve_Float_Return_Type = 0x06
+};
+
 uint32_t plug_load_and_activate(void *plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM*)plugin_item;
     if (!plugin_list_item)
@@ -1208,39 +1223,34 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     plug_create_properties(plug_data, plug, false);
     //--------------------------------------------------
 
-    // go through all created controls and create the params for each of them
+    // go through all created controls and create a param for each of them.
+    // params are created in the same order as plug->controls, which never
+    // reorders/resyncs after load - array position is used as each param's
+    // uid (see params_init_param_container's doc comment on why a uid is
+    // mandatory) and kept in lockstep with plug->controls' own indices,
+    // since plug_run_rt later indexes params by the same ctrl_iter it uses
+    // for plug->controls - a gap here would desync every param after it.
     if (plug->controls) {
-        unsigned int num_of_params = plug->num_controls;
-        char **param_names = malloc(sizeof(char *) * num_of_params);
-        PARAM_T *param_vals = malloc(sizeof(PARAM_T) * num_of_params);
-        PARAM_T *param_mins = malloc(sizeof(PARAM_T) * num_of_params);
-        PARAM_T *param_maxs = malloc(sizeof(PARAM_T) * num_of_params);
-        PARAM_T *param_incs = malloc(sizeof(PARAM_T) * num_of_params);
-        unsigned char *val_types = malloc(sizeof(char) * num_of_params);
+        PRM_CONTAIN *plug_params = params_init_param_container(NULL);
 
         for (unsigned int ct_iter = 0; ct_iter < plug->num_controls;
              ct_iter++) {
-            // first set this index in all arrays to be sent to params init
-            // function to zero
-            param_names[ct_iter] = NULL;
-            param_vals[ct_iter] = 0;
-            param_mins[ct_iter] = 0;
-            param_maxs[ct_iter] = 0;
-            param_incs[ct_iter] = 0;
-            val_types[ct_iter] = 0;
             PLUG_CONTROL *cur_ctrl = plug->controls[ct_iter];
-            if (!cur_ctrl)
+            if (!cur_ctrl) {
+                param_add_param(plug_params, "", 0, 0, 0, 0, ct_iter, NULL);
                 continue;
+            }
 
-            param_names[ct_iter] =
-                strdup(lilv_node_as_string(cur_ctrl->symbol));
-            param_vals[ct_iter] = 0;
+            const char *param_name = lilv_node_as_string(cur_ctrl->symbol);
+            if (!param_name)
+                param_name = "";
+            PARAM_T param_val = 0;
             if (lilv_node_is_float(cur_ctrl->def) == 1 ||
                 lilv_node_is_int(cur_ctrl->def) == 1) {
-                param_vals[ct_iter] = lilv_node_as_float(cur_ctrl->def);
+                param_val = lilv_node_as_float(cur_ctrl->def);
             }
-            param_mins[ct_iter] = lilv_node_as_float(cur_ctrl->min);
-            param_maxs[ct_iter] = lilv_node_as_float(cur_ctrl->max);
+            PARAM_T param_min = lilv_node_as_float(cur_ctrl->min);
+            PARAM_T param_max = lilv_node_as_float(cur_ctrl->max);
 
             unsigned char val_t = Float_type;
             if (cur_ctrl->is_integer || cur_ctrl->is_toggle) {
@@ -1249,93 +1259,42 @@ uint32_t plug_load_and_activate(void *plugin_item) {
             if (cur_ctrl->is_enumeration) {
                 val_t = String_Return_Type;
             }
-            val_types[ct_iter] = val_t;
             // TODO now if the param is not writable it will simply have
             // increment of 0 and the user wont be able to increase or decrease
             // it should have a property for this parameter to not send it to
             // ui_to_rt ring buffer and only get its value from the plugin
-            if (cur_ctrl->is_writable != 1) {
-                continue;
-            }
-            // decide how big the increment of the parameter will be
-            PARAM_T total_range = param_maxs[ct_iter] - param_mins[ct_iter];
-            if(total_range < 0)total_range *= -1;
-            PARAM_T cur_inc = 1;
-            if (val_t == Float_type) {
-                cur_inc = total_range * 0.01;
-            }
-            if (val_t == Int_type) {
-                if (total_range <= 10)
-                    cur_inc = 1;
-                if (total_range <= 100)
-                    cur_inc = 5;
-                if (total_range <= 1000)
-                    cur_inc = 10;
-                if (total_range > 1000)
-                    cur_inc = (unsigned int)(total_range * 0.05);
-            }
-            if (cur_ctrl->is_toggle)
+            PARAM_T cur_inc = 0;
+            if (cur_ctrl->is_writable == 1) {
+                // decide how big the increment of the parameter will be
+                PARAM_T total_range = param_max - param_min;
+                if (total_range < 0)
+                    total_range *= -1;
                 cur_inc = 1;
-            if (cur_ctrl->is_enumeration)
-                cur_inc = 1;
-            param_incs[ct_iter] = cur_inc;
-        }
-        PRM_CONTAIN *plug_params = params_init_param_container(
-            num_of_params, param_names, param_vals, param_mins, param_maxs,
-            param_incs, val_types, NULL, NULL);
-        // go through the controls again and set the strings for parameters that
-        // are string type
-        for (unsigned int ct_iter = 0; ct_iter < plug->num_controls;
-             ct_iter++) {
-            PLUG_CONTROL *cur_ctrl = plug->controls[ct_iter];
-            if (!cur_ctrl)
-                continue;
-            if (!cur_ctrl->is_enumeration || !cur_ctrl->is_integer)
-                continue;
-            if (cur_ctrl->n_points > 0 && cur_ctrl->points) {
-                char **val_labels = malloc(sizeof(char *) * cur_ctrl->n_points);
-                if (val_labels) {
-                    for (unsigned int c_pt = 0; c_pt < cur_ctrl->n_points;
-                         c_pt++) {
-                        val_labels[c_pt] = NULL;
-                        ScalePoint *cur_pt = &(cur_ctrl->points[c_pt]);
-                        if (!cur_pt)
-                            continue;
-                        if (!cur_pt->label)
-                            continue;
-                        val_labels[c_pt] = strdup(cur_pt->label);
-                    }
-                    param_set_param_strings(plug_params, ct_iter, val_labels,
-                                            cur_ctrl->n_points);
-                    for (unsigned int lbl_iter = 0;
-                         lbl_iter < cur_ctrl->n_points; lbl_iter++) {
-                        char *cur_lbl = val_labels[lbl_iter];
-                        if (cur_lbl)
-                            free(cur_lbl);
-                    }
-                    free(val_labels);
+                if (val_t == Float_type) {
+                    cur_inc = total_range * 0.01;
                 }
+                if (val_t == Int_type) {
+                    if (total_range <= 10)
+                        cur_inc = 1;
+                    if (total_range <= 100)
+                        cur_inc = 5;
+                    if (total_range <= 1000)
+                        cur_inc = 10;
+                    if (total_range > 1000)
+                        cur_inc = (unsigned int)(total_range * 0.05);
+                }
+                if (cur_ctrl->is_toggle)
+                    cur_inc = 1;
+                if (cur_ctrl->is_enumeration)
+                    cur_inc = 1;
             }
+            param_add_param(plug_params, param_name, param_val, param_min,
+                            param_max, cur_inc, ct_iter, NULL);
         }
-        // clean the temp arrays
-        if (param_names) {
-            for (unsigned int name_iter = 0; name_iter < num_of_params;
-                 name_iter++) {
-                if (param_names[name_iter])
-                    free(param_names[name_iter]);
-            }
-            free(param_names);
-        }
-        if (param_vals)
-            free(param_vals);
-        if (param_mins)
-            free(param_mins);
-        if (param_maxs)
-            free(param_maxs);
-        if (param_incs)
-            free(param_incs);
-        if (val_types)
-            free(val_types);
+        // TODO val_to_string callback reading them straight from plug->controls
+        // can be added here whenever something actually calls
+        // param_get_value_as_string for this container (nothing does yet -
+        // params are not wired into any UI at this stage)
 
         plug->plug_params = plug_params;
     }
@@ -1946,7 +1905,7 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
         for (unsigned int ctrl_iter = 0; ctrl_iter < plug->num_controls;
              ctrl_iter++) {
             int param_changed =
-                param_get_if_changed(plug->plug_params, ctrl_iter, 1);
+                param_get_if_changed_rt(plug->plug_params, ctrl_iter);
             if (param_changed != 1)
                 continue;
             PLUG_CONTROL *cur_control = plug->controls[ctrl_iter];
@@ -1955,7 +1914,7 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
             if (!(cur_control->is_writable))
                 continue;
             PARAM_T param_value =
-                param_get_value(plug->plug_params, ctrl_iter, 0, 0, 1);
+                param_get_value(plug->plug_params, ctrl_iter, 1);
 
             if (cur_control->type == PORT) {
                 uint32_t port_index = cur_control->index;
@@ -2030,16 +1989,15 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                 // will be set at the same speed, since it output parameter
                 if (plug_data->rt_tick == 0) {
                     // set the val on param container
-                    param_set_value(plug->plug_params, cur_port->param_index,
-                                    cur_port->control, NULL, Operation_SetValue,
-                                    1);
+                    param_set_value_rt(plug->plug_params, cur_port->param_index,
+                                    cur_port->control);
                     // get the parameter value, so the parameter is_changed will
                     // be 0, otherwise on next cycle this parameter value will
                     // be sent to the plugin no need for that since we got this
                     // value from the plugin already
                     unsigned char param_val_type = 0;
                     PARAM_T param_value = param_get_value(
-                        plug->plug_params, cur_port->param_index, 0, 0, 1);
+                        plug->plug_params, cur_port->param_index, 1);
                 }
             }
             if (cur_port->type == PORT_TYPE_EVENT) {

@@ -14,13 +14,10 @@
 
 #define MAX_STRING_MSG_LENGTH 128 // max string size for sys messages
 
-#define MAX_PARAM_NAME_LENGTH 100 // the max length for param names
+#define MAX_SHORT_NAME_LENGTH 100 // max length for a short display name (param, plugin, preset, CX...)
 
 // max size for ring buffer arrays in sys messages between threads
 #define MAX_SYS_BUFFER_ARRAY_SIZE 256
-
-// max size for the parameter ring buffer messaging arrays
-#define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 1024
 
 // in what interval the rt thread should give info to the ui thread to
 // not overwhelm it.
@@ -67,54 +64,12 @@ enum appContextTypes {
     Context_type_Clap_Plugins = 0x06
 };
 
-// enum for value return types
-enum appReturnType {
-    Uchar_type = 0x01,
-    Int_type = 0x02,
-    Float_type = 0x03,
-    // returned value should be displayed as db, so
-    // converted to log scale
-    DB_Return_Type = 0x04,
-    // returned value is a string, will need to use a
-    // param function to return it
-    String_Return_Type = 0x05,
-    // float that should be presented to the user as a special curve,
-    // from curve table on the parameter
-    Curve_Float_Return_Type = 0x06
-};
-
-// enum for operations on parameters types
-enum paramOperType {
-    Operation_Nothing = 0x00,
-    Operation_Decrease = 0x01,
-    Operation_Increase = 0x02,
-    Operation_SetValue = 0x03,
-    // set the value of the parameter to the default value
-    Operation_DefValue = 0x04,
-    // set the increment of the parameter to this value
-    Operation_SetIncr = 0x05,
-    // set the default value to this value
-    Operation_SetDefValue = 0x06,
-    // change the name of the parameter
-    Operation_ChangeName = 0x07,
-    // value should change if the parameter is hidden or not
-    Operation_ToggleHidden = 0x08
-};
-
 // wavetables
 enum waveTablesType {
     SIN_WAVETABLE,
     TRIANGLE_WAVETABLE,
     SAW_WAVETABLE,
     SQUARE_WAVETABLE
-};
-
-// parameter and ring buffer realtime values
-enum paramRealtimeType {
-    UI_PARAM_E = 0,
-    RT_PARAM_E = 1,
-    UI_TO_RT_RING_E = 0,
-    RT_TO_UI_RING_E = 1
 };
 
 enum FlowType { PORT_FLOW_UNKNOWN, PORT_FLOW_INPUT, PORT_FLOW_OUTPUT };
@@ -165,16 +120,3 @@ typedef struct _ring_sys_msg {
     // address and etc.
     void *user_data;
 } RING_SYS_MSG;
-
-// Parameter ring data struct. A message to manipulate the parameter
-typedef struct _app_param_ring_data_bit {
-    // the parameter id of the object.
-    int param_id;
-    // the parameter value to what to set the parameter or what the parameter
-    // value is now
-    PARAM_T param_value;
-    // this can be used to send a new name to the parameter for example
-    char param_string[MAX_PARAM_NAME_LENGTH];
-    // what to do with parameter? check paramOperType
-    unsigned char param_op;
-} PARAM_RING_DATA_BIT;

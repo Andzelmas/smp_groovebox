@@ -508,3 +508,56 @@ PARAM_T math_get_from_table_lerp(PARAM_T* table_in, unsigned int len, PARAM_T in
 
     return samp;
 }
+
+typedef struct _math_ramp_val{
+    PARAM_T cur_inc; //how much to increment the value
+    PARAM_T from_val; //from what value we are ramping
+    PARAM_T to_val; //to what value ramping
+    PARAM_T cur_val; //cur value that will be returned to the user
+    PARAM_T new_val; //new value that is given from the user, while the ramp is not finished ignore this value
+    int dir_mult; //to what direction to go, if from_val > to_val we have to cur_inc *= -1;
+}MATH_RAMP_VAL;
+
+MATH_RAMP_VAL* math_ramp_val_init(PARAM_T max_range, unsigned int total_samples){
+    if(total_samples <= 0)return NULL;
+    if(max_range <= 0)return NULL;
+    MATH_RAMP_VAL* ramp_val = malloc(sizeof(MATH_RAMP_VAL));
+    if(!ramp_val)return NULL;
+
+    ramp_val->cur_inc = (PARAM_T)(max_range / (PARAM_T)total_samples);
+    ramp_val->cur_val = 0.0;
+    ramp_val->from_val = 0.0;
+    ramp_val->to_val = 0.0;
+    ramp_val->new_val = 0.0;
+    ramp_val->dir_mult = 1;
+    return ramp_val;
+}
+
+PARAM_T math_ramp_val_get_value(MATH_RAMP_VAL* ramp_val, PARAM_T new_val){
+    if(!ramp_val)return new_val;
+    ramp_val->new_val = new_val;
+
+    if(ramp_val->cur_inc <= 0)return new_val;
+
+    ramp_val->cur_val += (ramp_val->cur_inc * ramp_val->dir_mult);
+
+    if(ramp_val->cur_val >= ramp_val->to_val && ramp_val->dir_mult > 0){
+	ramp_val->from_val = ramp_val->to_val;
+	ramp_val->cur_val = ramp_val->to_val;
+	ramp_val->to_val = ramp_val->new_val;
+
+	ramp_val->dir_mult = 1;
+	if(ramp_val->from_val > ramp_val->to_val) ramp_val->dir_mult = -1;
+    }
+
+    if(ramp_val->cur_val <= ramp_val->to_val && ramp_val->dir_mult < 0){
+	ramp_val->from_val = ramp_val->to_val;
+	ramp_val->cur_val = ramp_val->to_val;
+	ramp_val->to_val = ramp_val->new_val;
+
+	ramp_val->dir_mult = 1;
+	if(ramp_val->from_val > ramp_val->to_val) ramp_val->dir_mult = -1;
+    }
+
+    return ramp_val->cur_val;
+}
