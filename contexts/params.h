@@ -53,16 +53,18 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 // appends one parameter to the container. uid is mandatory - a stable id for
 // this parameter, unique within this container (never a positional index -
 // every CX-backed identity built on top of a param needs a stable key to
-// survive an add/remove resync). Fails (returns -1) if uid already exists in
-// this container (checked via param_find_uid) or on allocation failure. name
-// is copied immediately, not borrowed past this call. cookie is optional
-// convenience storage for the owner (e.g. a CLAP param's cookie) - may be
-// NULL, and is only ever readable from the rt side (see
-// param_cookie_return_rt) Returns the new val_id (same index on both the rt and
-// ui side) on success.
+// survive an add/remove resync) Fails (returns -1) if uid already exists in
+// this container (checked via param_find_uid) or on allocation failure. name is
+// copied immediately, not borrowed past this call. owner_id is a second,
+// separate identifier, opaque to params.c - for an owner with its own external
+// id space for this param (e.g. CLAP's clap_id)
+// cookie is optional convenience storage for the owner (e.g. a CLAP param's
+// cookie) - may be NULL, and is only ever readable from the rt side (see
+// param_cookie_return_rt). Returns the new val_id (same index on both the rt
+// and ui side) on success.
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    void *cookie);
+                    uint32_t owner_id, void *cookie);
 
 // process ring_buffers - apply value messages that crossed from the other
 // side. Each message is already the final, clamped value (see
@@ -96,6 +98,12 @@ uint32_t param_get_uid(PRM_CONTAIN *param_container, int val_id,
 //- nothing on the rt side has ever needed to resolve a uid it doesn't
 // already have a val_id for.
 int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid);
+
+// return this param's owner_id (see param_add_param) for whichever side
+// rt_params selects, 0 on error. Opaque to params.c - meaningless without
+// knowing what the owner put there (e.g. CLAP's clap_id). 
+uint32_t param_get_owner_id(PRM_CONTAIN *param_container, int val_id,
+                            unsigned int rt_params);
 
 // return the parameter increment amount (by how much the parameter value
 // increases or decreases per Operation_Increase/Decrease) - ui-only, the rt

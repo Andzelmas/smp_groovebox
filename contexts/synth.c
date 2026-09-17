@@ -517,16 +517,16 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 						   .build_value = synth_osc_build_value,
 						   .val_to_string = NULL};
 	cur_osc->params = params_init_param_container(&osc_params_user_data);
-	param_add_param(cur_osc->params, "Amp",     0.8,   0.00001, 1, 0.01, 0, NULL);
-	param_add_param(cur_osc->params, "Freq",    0,     -12, 12,     0.1,  1, NULL);
-	param_add_param(cur_osc->params, "Spread",  0,     0, 1,        0.01, 2, NULL);
-	param_add_param(cur_osc->params, "Wobble",  0,     0, 1,        0.05, 3, NULL);
-	param_add_param(cur_osc->params, "Octave",  0,     ((MAX_SEMITONES - 12) / 12.0) * -1, (MAX_SEMITONES - 12) / 12.0, 1, 4, NULL);
-	param_add_param(cur_osc->params, "Table",   0,     0, 3,        1,    5, NULL);
-	param_add_param(cur_osc->params, "A",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  6, NULL);
-	param_add_param(cur_osc->params, "D",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  7, NULL);
-	param_add_param(cur_osc->params, "S",       1.0,   0.0, 1.0,     0.01, 8, NULL);
-	param_add_param(cur_osc->params, "R",       0.001, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  9, NULL);
+	param_add_param(cur_osc->params, "Amp",     0.8,   0.00001, 1, 0.01, 0, 0, NULL);
+	param_add_param(cur_osc->params, "Freq",    0,     -12, 12,     0.1,  1, 1, NULL);
+	param_add_param(cur_osc->params, "Spread",  0,     0, 1,        0.01, 2, 2, NULL);
+	param_add_param(cur_osc->params, "Wobble",  0,     0, 1,        0.05, 3, 3, NULL);
+	param_add_param(cur_osc->params, "Octave",  0,     ((MAX_SEMITONES - 12) / 12.0) * -1, (MAX_SEMITONES - 12) / 12.0, 1, 4, 4, NULL);
+	param_add_param(cur_osc->params, "Table",   0,     0, 3,        1,    5, 5, NULL);
+	param_add_param(cur_osc->params, "A",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  6, 6, NULL);
+	param_add_param(cur_osc->params, "D",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  7, 7, NULL);
+	param_add_param(cur_osc->params, "S",       1.0,   0.0, 1.0,     0.01, 8, 8, NULL);
+	param_add_param(cur_osc->params, "R",       0.001, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  9, 9, NULL);
 
 	synth_activate_backend_ports(synth_data, cur_osc);
     }

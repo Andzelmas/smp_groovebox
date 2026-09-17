@@ -15,10 +15,14 @@
 // originates a change computes the final, already-clamped result itself
 // (it has its own min_val/max_val) and sends just that - the receiving
 // side stores it verbatim, no re-computation. val_id (position in the
-// container) - never a uid, this never crosses into any module's own
-// external id space (e.g. CLAP's clap_id). 
+// container) - never an owner_id, this never crosses into any module's own
+// external id space (e.g. CLAP's clap_id).
+// uid rides along too, as a safety check: val_id alone is only a position,
+// and add/remove resync can reuse a freed slot for a DIFFERENT
+// param. 
 typedef struct _params_ring_data_bit {
     int val_id;
+    uint32_t uid;
     PARAM_T param_value;
 } PARAM_RING_DATA_BIT;
 
@@ -33,6 +37,8 @@ typedef struct _params_param_rt {
     // owner-supplied stable identity, unique within this container - see
     // param_add_param's doc comment. Never a positional index.
     uint32_t uid;
+    // owner-supplied secondary id, opaque to params.c
+    uint32_t owner_id;
     // owner-supplied optional convenience pointer (e.g. a CLAP param cookie)
     //- borrowed, params.c never touches it. rt-only: nothing on the ui side
     // has ever needed a param's cookie.
@@ -55,6 +61,8 @@ typedef struct _params_param_ui {
     //(Operation_ChangeName), unlike uid which never does
     char name[MAX_SHORT_NAME_LENGTH];
     uint32_t uid;
+    // owner-supplied secondary id, opaque to params.c
+    uint32_t owner_id;
     // TODO instead of is hidden implement flag system for parameters
     // is the parameter hidden
     uint16_t is_hidden;
@@ -132,7 +140,7 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
 
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    void *cookie) {
+                    uint32_t owner_id, void *cookie) {
     if (!param_container)
         return -1;
     if (!name)
@@ -180,6 +188,7 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     new_rt_param->max_val = max;
     new_rt_param->val_changed = 0;
     new_rt_param->uid = uid;
+    new_rt_param->owner_id = owner_id;
     new_rt_param->cookie = cookie;
 
     new_ui_param->val = val;
@@ -189,6 +198,7 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     new_ui_param->inc_am = inc;
     snprintf(new_ui_param->name, MAX_SHORT_NAME_LENGTH, "%s", name);
     new_ui_param->uid = uid;
+    new_ui_param->owner_id = owner_id;
     // to make the parameter hidden send a param_set_value with
     // Operation_ToggleHidden and set_to 0 or 1
     new_ui_param->is_hidden = 0;
@@ -219,21 +229,28 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
             continue;
         // the value crossing the ring buffer is already final and clamped by
         // whichever side sent it (see param_set_value_rt/param_set_value) -
-        // store it verbatim, nothing to recompute here
+        // store it verbatim, nothing to recompute here. The uid check
+        // guards against a since-freed-and-reused val_id (see
+        // PARAM_RING_DATA_BIT's own doc comment) - a survivor's uid never
+        // changes, so this only ever rejects a genuinely stale message.
         if (rt_params) {
             if ((unsigned int)cur_bit.val_id >=
                 param_container->num_of_params_rt)
                 continue;
             PRM_PARAM_RT *cur_param =
                 param_container->rt_params[cur_bit.val_id];
+            if (cur_param->uid != cur_bit.uid)
+                continue;
             cur_param->val = cur_bit.param_value;
             cur_param->val_changed = 1;
         } else {
             if ((unsigned int)cur_bit.val_id >=
                 param_container->num_of_params_ui)
                 continue;
-            param_container->ui_params[cur_bit.val_id]->val =
-                cur_bit.param_value;
+            PRM_PARAM_UI *cur_param = param_container->ui_params[cur_bit.val_id];
+            if (cur_param->uid != cur_bit.uid)
+                continue;
+            cur_param->val = cur_bit.param_value;
         }
     }
 }
@@ -257,6 +274,7 @@ int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
         cur_param->val_changed = 1;
         PARAM_RING_DATA_BIT send_bit;
         send_bit.val_id = val_id;
+        send_bit.uid = cur_param->uid;
         send_bit.param_value = new_val;
         ring_buffer_write(param_container->param_rt_to_ui, &send_bit,
                           sizeof(send_bit));
@@ -323,6 +341,7 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
     if (new_val != prev_val) {
         PARAM_RING_DATA_BIT send_bit;
         send_bit.val_id = val_id;
+        send_bit.uid = cur_param->uid;
         send_bit.param_value = new_val;
         ring_buffer_write(param_container->param_ui_to_rt, &send_bit,
                           sizeof(send_bit));
@@ -351,6 +370,21 @@ uint32_t param_get_uid(PRM_CONTAIN *param_container, int val_id,
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
         return 0;
     return param_container->ui_params[val_id]->uid;
+}
+
+uint32_t param_get_owner_id(PRM_CONTAIN *param_container, int val_id,
+                            unsigned int rt_params) {
+    if (!param_container)
+        return 0;
+    if (rt_params) {
+        if (val_id < 0 ||
+            (unsigned int)val_id >= param_container->num_of_params_rt)
+            return 0;
+        return param_container->rt_params[val_id]->owner_id;
+    }
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return 0;
+    return param_container->ui_params[val_id]->owner_id;
 }
 
 int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid) {

@@ -311,7 +311,7 @@ uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {
     SMP_SMP *cur_smp = &(smp_data->samples[smp_id]);
     // init the sample parameters to default values
     cur_smp->params = params_init_param_container(NULL);
-    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0, NULL);
+    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0, 0, NULL);
 
     // TODO samplerate is not needed, when we load sample to memory we also need
     // to convert it to the system sample rate, when system sample rate changes,

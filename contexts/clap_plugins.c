@@ -126,6 +126,10 @@ typedef struct _clap_plug_plug {
                       // factory
     char plug_path[MAX_PATH_STRING];            // the path for the clap file
     PRM_CONTAIN *plug_params;   // plugin parameter container for params.c
+    // monotonic counter for this plugin's own param uids - mints a fresh
+    // never-reused value for each param param_add_param sees (creation, and
+    // any future resync's additions)
+    uint32_t next_param_uid;
     clap_host_t clap_host_info; // need when creating the plugin instance, this
                                 // struct has this CLAP_PLUG_PLUG in the
                                 // host_data var as (void*)
@@ -638,10 +642,8 @@ static unsigned int clap_plug_params_value_to_text(const void *user_data,
     const char *param_name = param_get_name(plug->plug_params, val_id);
     if (!param_name || param_name[0] == '\0')
         return 0;
-    // this param's uid IS its clap_id, set from param_info.id at creation
-    // time (clap_plug_params_create) - no need to round-trip through
-    // get_info again just to re-derive it
-    uint32_t clap_param_id = param_get_uid(plug->plug_params, val_id, 0);
+    // this param's real clap_id is stored as owner_id
+    uint32_t clap_param_id = param_get_owner_id(plug->plug_params, val_id, 0);
     // TODO have to create a long string first, because Juice wrapper and some
     // CLAP plugins do not respect the string_len given to the value_to_text
     // function
@@ -653,21 +655,6 @@ static unsigned int clap_plug_params_value_to_text(const void *user_data,
         snprintf(ret_string, string_len, "%s", long_string);
     }
     return convert_err;
-}
-
-// param_add_param fails (returns -1, adds nothing) if uid already exists in the
-// container (see its own doc comment) - which clap_plug_params_create's
-// discovery loop below can genuinely hit Losing an add here would leave that
-// val_id unfilled, desyncing every param after it. So probe for a free uid
-// first via param_find_uid starting from the very top of the uint32_t range,
-// which no real CLAP plugin id realistically reaches then add the placeholder
-// once.
-static void clap_plug_add_placeholder_param(PRM_CONTAIN *plug_params,
-                                            uint32_t val_id) {
-    uint32_t uid = UINT32_MAX - 1 - val_id;
-    while (param_find_uid(plug_params, uid) != -1)
-        uid--;
-    param_add_param(plug_params, "", 0.0, 0.0, 0.0, 0.0, uid, NULL);
 }
 
 // create parameters on the id plugin, the plugin should not be processing
@@ -699,19 +686,20 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     if (!plug->plug_params)
         return -1;
 
-    // val_id here doubles as CLAP's own param_index (get_info's second arg
-    // is documented param_index, not a clap_id) and this container's val_id
-    // - keep every index filled, even on a get_info failure, since
-    // param_get_value elsewhere is called with this same index and a gap
-    // would desync every param after it. On a get_info failure there's no
-    // real clap_id to use as uid - clap_plug_add_placeholder_param handles
-    // finding one that's actually free
+    // val_id here is just this container's own position for the param -
+    // nothing downstream needs it to equal CLAP's own param_index (get_
+    // value/value_to_text/the RT event loop all resolve a param through
+    // its real clap_id via param_get_owner_id; RESCAN_VALUES/RESCAN_INFO
+    // both do the same, in whichever direction they need).
+    // uid is THIS container's own identity, minted fresh here - never
+    // param_info.id directly, since CLAP allows a later-added param to
+    // reuse an id a since-removed one had (see next_param_uid's own doc
+    // comment on CLAP_PLUG_PLUG) - reset once per (re)discovery pass.
+    plug->next_param_uid = 0;
     for (uint32_t val_id = 0; val_id < param_count; val_id++) {
         clap_param_info_t param_info;
-        if (!clap_params->get_info(plug->plug_inst, val_id, &param_info)) {
-            clap_plug_add_placeholder_param(plug->plug_params, val_id);
+        if (!clap_params->get_info(plug->plug_inst, val_id, &param_info))
             continue;
-        }
 
         PARAM_T param_min = param_info.min_value;
         PARAM_T param_max = param_info.max_value;
@@ -739,16 +727,14 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
             CLAP_PARAM_IS_READONLY) {
             param_inc = 0;
         }
-        // a failure here (duplicate param_info.id - a non-conformant
-        // plugin reporting the same clap_id twice - or allocation failure)
-        // still must not leave val_id unfilled; fall back to the same
-        // placeholder the get_info-failure branch above uses, trading this
-        // one param's real identity for every other param staying aligned
-        if (param_add_param(plug->plug_params, param_info.name,
-                            param_info.default_value, param_min, param_max,
-                            param_inc, param_info.id, param_info.cookie) == -1) {
-            clap_plug_add_placeholder_param(plug->plug_params, val_id);
-        }
+        // param_add_param can still fail here (allocation failure - a
+        // duplicate uid can't happen any more, next_param_uid never repeats
+        // within one discovery pass); nothing to recover into, just drop
+        // this one param rather than inserting a placeholder for it
+        param_add_param(plug->plug_params, param_info.name,
+                        param_info.default_value, param_min, param_max,
+                        param_inc, ++plug->next_param_uid, param_info.id,
+                        param_info.cookie);
     }
     return 0;
 }
@@ -764,6 +750,18 @@ PRM_CONTAIN *clap_plug_param_return_param_container(CLAP_PLUG_INFO *plug_data,
         return NULL;
 
     return plug->plug_params;
+}
+
+// find this container's val_id whose owner_id equals this clap_id, -1 if
+// not found. Mirrors param_find_uid's own linear scan, but over owner_id
+static int clap_plug_find_val_id_by_clap_id(PRM_CONTAIN *plug_params,
+                                            uint32_t clap_id) {
+    unsigned int count = param_return_num_params(plug_params, 0);
+    for (unsigned int val_id = 0; val_id < count; val_id++) {
+        if (param_get_owner_id(plug_params, (int)val_id, 0) == clap_id)
+            return (int)val_id;
+    }
+    return -1;
 }
 
 static void clap_plug_ext_params_rescan(const clap_host_t *host,
@@ -787,15 +785,15 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
         uint32_t param_count =
             (uint32_t)param_return_num_params(plug->plug_params, 0);
         for (uint32_t param_num = 0; param_num < param_count; param_num++) {
-            // this param's uid IS its clap_id (see clap_plug_params_value_
-            // to_text's own comment) - no need for a fresh get_info call
-            // just to re-derive it.
+            // this param's real clap_id is stored as owner_id (see clap_
+            // plug_params_value_to_text's own comment) - no need for a
+            // fresh get_info call just to re-derive it.
             const char *param_name =
                 param_get_name(plug->plug_params, (int)param_num);
             if (!param_name || param_name[0] == '\0')
                 continue;
             uint32_t clap_param_id =
-                param_get_uid(plug->plug_params, (int)param_num, 0);
+                param_get_owner_id(plug->plug_params, (int)param_num, 0);
             double cur_value = 0;
             if (!clap_params->get_value(plug->plug_inst, clap_param_id,
                                         &cur_value))
@@ -812,18 +810,24 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
         // rendered again it will do so automaticaly on the next ui cycle
     }
     if ((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO) {
-        // go through the params and change the ui_names
+        // go through the params and change the names
         const clap_plugin_params_t *clap_params =
             plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
         if (!clap_params)
             return;
-        uint32_t param_count =
-            (uint32_t)param_return_num_params(plug->plug_params, 0);
-        for (uint32_t param_num = 0; param_num < param_count; param_num++) {
+        // get_info only takes CLAP's OWN live param_index - this
+        // container's val_id only equals that index up until the FIRST
+        // CLAP_PARAM_RESCAN_ALL this plugin instance ever goes through
+        uint32_t clap_count = clap_params->count(plug->plug_inst);
+        for (uint32_t clap_idx = 0; clap_idx < clap_count; clap_idx++) {
             clap_param_info_t param_info;
-            if (!clap_params->get_info(plug->plug_inst, param_num, &param_info))
+            if (!clap_params->get_info(plug->plug_inst, clap_idx, &param_info))
                 continue;
-            param_set_value(plug->plug_params, param_num, 0.0, param_info.name,
+            int val_id = clap_plug_find_val_id_by_clap_id(plug->plug_params,
+                                                          param_info.id);
+            if (val_id == -1)
+                continue;
+            param_set_value(plug->plug_params, val_id, 0.0, param_info.name,
                             Operation_ChangeName);
         }
         // TODO get if any parameter is hidden or not, and set with set_value
@@ -2178,7 +2182,7 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
         param_val.header = head;
         param_val.key = -1;
         param_val.note_id = -1;
-        param_val.param_id = param_get_uid(plug->plug_params, (int)param_idx, 1);
+        param_val.param_id = param_get_owner_id(plug->plug_params, (int)param_idx, 1);
         param_val.port_index = -1;
         param_val.value =
             (double)param_get_value(plug->plug_params, (int)param_idx, 1);
