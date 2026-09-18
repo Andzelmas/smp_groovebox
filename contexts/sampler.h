@@ -34,9 +34,6 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes);
 //some the cur_smp buffer to out_L and out_R according to the number of channels of cur_smp
 static void smp_sum_channel_buffers_rt(SMP_SMP* cur_smp, SAMPLE_T* out_L, SAMPLE_T* out_R,
 				       SAMPLE_T mult, int chans);
-//param manipulation functions
-PRM_CONTAIN* smp_param_return_param_container(SMP_INFO* smp_data, int smp_id);
-
 //copy to new malloced string and return the file path of the sample
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id);
 //return the idx-th loaded sample (walking occupied slots in order), NULL past

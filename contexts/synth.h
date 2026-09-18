@@ -16,9 +16,6 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 			void* audio_backend);
 //process the synth_data oscillators
 int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes);
-//functions for param manipulation, should be called only on [main-thread]
-PRM_CONTAIN* synth_param_return_param_container(SYNTH_DATA* synth_data, int osc_id);
-
 //activate the audio ports
 int synth_activate_backend_ports(SYNTH_DATA* synth_data, SYNTH_OSC* osc);
 //return how many oscillators there are

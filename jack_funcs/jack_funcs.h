@@ -38,9 +38,6 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data);
 //update parameters, log messages from rt thread
 int app_jack_read_rt_to_ui_messages(JACK_INFO* jack_data);
 
-//parameter manipulation functions for ui
-PRM_CONTAIN* app_jack_param_return_param_container(JACK_INFO* jack_data);
-
 //clean the midi container
 void app_jack_clean_midi_cont(JACK_MIDI_CONT* midi_cont);
 //initate the midi container where velocities, note pitches etc will be stored

@@ -220,6 +220,7 @@ enum {
     DATA_NS_LV2_PLUG = 3,
     DATA_NS_CLAP_PLUG = 4,
     DATA_NS_SYNTH_OSC = 5,
+    DATA_NS_CLAP_PARAM = 6,
 };
 // mask for everything below the namespace byte (56 bits). MAKE_ID keeps all
 // of them rather than truncating local to uint32_t: every existing local is
@@ -249,6 +250,7 @@ enum {
 enum {
     DATA_LIST_NS_CATALOG = 1,
     DATA_LIST_NS_PORTS = 2,
+    DATA_LIST_NS_PARAM_CHOICE = 3,
 };
 #define MAKE_LIST_ID(ns, local)                                                \
     (((DataListId)(ns) << CTXID_NS_SHIFT) | ((DataListId)(local) & CTXID_LOCAL_MASK))
@@ -257,6 +259,11 @@ enum {
     LID_LV2_CATALOG = 1,
     LID_CLAP_CATALOG,
 };
+
+// single static list id, reused by every enum param's SET_CHOICE arg - the
+// param itself (via list_at's own user_data) disambiguates which one's
+// range to walk, not this id.
+#define LIST_PARAM_CHOICES MAKE_LIST_ID(DATA_LIST_NS_PARAM_CHOICE, 1)
 
 // local part for the DATA_LIST_NS_PORTS namespace. Both are plain static
 // constants (not per-instance). The CONNECT action
@@ -845,16 +852,246 @@ static const DataOps lv2_plugins_ops = {
     .action_do = lv2_plugins_action_do,
 };
 
+// one CLAP plugin instance's parameter. user_data is the opaque handle from
+// param_get_handle - param_handle_resolve turns it back into (container,
+// val_id) for every call below.
+static ContextId clap_param_id(void *user_data) {
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return MAKE_ID(DATA_NS_CLAP_PARAM, 0);
+    return MAKE_ID(DATA_NS_CLAP_PARAM, param_get_uid(container, val_id, 0));
+}
+static const char *clap_param_name(void *user_data) {
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return NULL;
+    return param_get_name(container, val_id);
+}
+static const char *clap_param_value_as_string(void *user_data) {
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return NULL;
+    return param_get_value_as_string(container, val_id,
+                                     param_get_value(container, val_id, 0));
+}
+static bool clap_param_value_range(void *user_data, double *out_min,
+                                   double *out_max, double *out_inc) {
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return false;
+    if (out_min)
+        *out_min = (double)param_get_min(container, val_id);
+    if (out_max)
+        *out_max = (double)param_get_max(container, val_id);
+    if (out_inc)
+        *out_inc = (double)param_get_increment(container, val_id);
+    return true;
+}
+static bool clap_param_is_hidden(void *user_data) {
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return false;
+    return param_is_hidden(container, val_id) != 0;
+}
+// DATA_CAP_ACTIONS: every param can SET_VALUE/ADJUST_VALUE; an enum param
+// (PARAM_FLAG_ENUM) additionally gets SET_CHOICE. All three disabled if the
+// param is readonly (PARAM_FLAG_READONLY).
+static size_t clap_param_action_list(void *user_data, DataAction *out,
+                                     size_t cap) {
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return 0;
+    if (!out || cap < 1)
+        return 0;
+    bool writable = !param_is_readonly(container, val_id);
+    size_t n = 0;
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_SET_VALUE,
+            .label = "Set value",
+            .tooltip = "Set this parameter to a specific value",
+            .enabled = writable,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_ADJUST_VALUE,
+            .label = "Adjust value",
+            .tooltip = "Increase or decrease this parameter by one increment",
+            .enabled = writable,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    if (param_is_enum(container, val_id) && n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_SET_CHOICE,
+            .label = "Choose",
+            .tooltip = "Pick this parameter's value from a list",
+            .enabled = writable,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    return n;
+}
+static size_t clap_param_action_args(void *user_data, DataActionType type,
+                                     DataArgSpec *out, size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    if (type == DATA_ACTION_SET_VALUE) {
+        out[0] = (DataArgSpec){.name = "value", .label = "Value",
+                               .kind = DATA_ARG_NUMBER, .required = true,
+                               .list = DATA_LIST_NONE};
+        return 1;
+    }
+    if (type == DATA_ACTION_ADJUST_VALUE) {
+        out[0] = (DataArgSpec){.name = "step", .label = "Step",
+                               .kind = DATA_ARG_NUMBER, .required = true,
+                               .list = DATA_LIST_NONE};
+        return 1;
+    }
+    if (type == DATA_ACTION_SET_CHOICE) {
+        out[0] = (DataArgSpec){.name = "choice", .label = "Choice",
+                               .kind = DATA_ARG_CHOICE, .required = true,
+                               .list = LIST_PARAM_CHOICES};
+        return 1;
+    }
+    return 0;
+}
+// a SET_CHOICE value encodes the actual integer param value (not a
+// position) - CLAP requires IS_ENUM to imply IS_STEPPED, so every value in
+// [min,max] is a whole number.
+static uint64_t clap_param_choice_encode(int enum_val) {
+    return MAKE_LIST_ID(DATA_LIST_NS_PARAM_CHOICE, (uint64_t)(uint32_t)enum_val);
+}
+static int clap_param_choice_decode(uint64_t value) {
+    return (int)(uint32_t)(value & CTXID_LOCAL_MASK);
+}
+static size_t clap_param_list_count(void *user_data, DataListId list,
+                                    const DataActionReq *partial) {
+    (void)list;
+    (void)partial;
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return 0;
+    PARAM_T min = param_get_min(container, val_id);
+    PARAM_T max = param_get_max(container, val_id);
+    if (max < min)
+        return 0;
+    return (size_t)(max - min) + 1;
+}
+static bool clap_param_list_at(void *user_data, DataListId list,
+                               const DataActionReq *partial, size_t idx,
+                               DataChoice *out) {
+    (void)list;
+    (void)partial;
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return false;
+    PARAM_T min = param_get_min(container, val_id);
+    PARAM_T max = param_get_max(container, val_id);
+    PARAM_T val = min + (PARAM_T)idx;
+    if (val > max)
+        return false;
+    const char *label = param_get_value_as_string(container, val_id, val);
+    if (!label)
+        return false;
+    out->value = clap_param_choice_encode((int)val);
+    out->label = label;
+    out->flags = 0;
+    return true;
+}
+static DataActionResult clap_param_action_do(void *user_data,
+                                             const DataActionReq *req,
+                                             ContextId *out_new) {
+    (void)out_new; // none of these actions create anything
+    if (!req)
+        return DATA_ACTION_ERR_INVALID;
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return DATA_ACTION_ERR_INVALID;
+    if (param_is_readonly(container, val_id))
+        return DATA_ACTION_ERR_NOT_ALLOWED;
+    if (req->type == DATA_ACTION_SET_VALUE) {
+        if (param_set_value(container, val_id, (PARAM_T)req->set_value.value,
+                            NULL, Operation_SetValue) != 0)
+            return DATA_ACTION_ERR_DATA;
+        return DATA_ACTION_OK;
+    }
+    if (req->type == DATA_ACTION_ADJUST_VALUE) {
+        int step = req->adjust_value.step;
+        if (step == 0)
+            return DATA_ACTION_ERR_INVALID;
+        unsigned char op = step > 0 ? Operation_Increase : Operation_Decrease;
+        PARAM_T amount = (PARAM_T)(step > 0 ? step : -step);
+        if (param_set_value(container, val_id, amount, NULL, op) != 0)
+            return DATA_ACTION_ERR_DATA;
+        return DATA_ACTION_OK;
+    }
+    if (req->type == DATA_ACTION_SET_CHOICE) {
+        int enum_val = clap_param_choice_decode(req->add_choice.choice_value);
+        if (param_set_value(container, val_id, (PARAM_T)enum_val, NULL,
+                            Operation_SetValue) != 0)
+            return DATA_ACTION_ERR_DATA;
+        return DATA_ACTION_OK;
+    }
+    return DATA_ACTION_ERR_INVALID;
+}
+static const DataOps clap_param_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_VALUE | DATA_CAP_HIDDEN |
+                   DATA_CAP_ACTIONS,
+    .id = clap_param_id,
+    .name = clap_param_name,
+    .value_as_string = clap_param_value_as_string,
+    .value_range = clap_param_value_range,
+    .is_hidden = clap_param_is_hidden,
+    .action_list = clap_param_action_list,
+    .action_args = clap_param_action_args,
+    .list_count = clap_param_list_count,
+    .list_at = clap_param_list_at,
+    .action_do = clap_param_action_do,
+};
+
 // single loaded clap plugin. user_data is the plugin handle from
 // clap_plug_plugin_return.
 static size_t clap_plugin_child_count(void *user_data) {
-    (void)user_data;
-    return 0;
+    PRM_CONTAIN *container = clap_plug_plugin_param_container(user_data);
+    if (!container)
+        return 0;
+    unsigned int total = param_return_num_params(container, 0);
+    size_t count = 0;
+    for (unsigned int i = 0; i < total; i++) {
+        if (param_get_name(container, (int)i))
+            count++;
+    }
+    return count;
 }
 static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
-    (void)user_data;
-    (void)idx;
-    (void)out;
+    PRM_CONTAIN *container = clap_plug_plugin_param_container(user_data);
+    if (!container)
+        return false;
+    unsigned int total = param_return_num_params(container, 0);
+    size_t seen = 0;
+    for (unsigned int i = 0; i < total; i++) {
+        if (!param_get_name(container, (int)i))
+            continue;
+        if (seen == idx) {
+            void *handle = param_get_handle(container, (int)i);
+            if (!handle)
+                return false;
+            out->ops = &clap_param_ops;
+            out->user_data = handle;
+            return true;
+        }
+        seen++;
+    }
     return false;
 }
 static ContextId clap_plugin_id(void *user_data) {
@@ -1235,32 +1472,6 @@ DataObject app_init(void) {
     return root;
 }
 
-// Get the parameter container for the context
-// PRM_CONTAIN can be used to set, get param values, get their names, etc.
-static PRM_CONTAIN *app_get_context_param_container(APP_INFO *app_data,
-                                                    unsigned char cx_type,
-                                                    int cx_id) {
-    if (!app_data)
-        return NULL;
-    if (cx_type == Context_type_Trk) {
-        return app_jack_param_return_param_container(app_data->trk_jack);
-    }
-    if (cx_type == Context_type_Sampler) {
-        return smp_param_return_param_container(app_data->smp_data, cx_id);
-    }
-    if (cx_type == Context_type_Synth) {
-        return synth_param_return_param_container(app_data->synth_data, cx_id);
-    }
-    if (cx_type == Context_type_Plugins) {
-        return plug_param_return_param_container(app_data->plug_data, cx_id);
-    }
-    if (cx_type == Context_type_Clap_Plugins) {
-        return clap_plug_param_return_param_container(app_data->clap_plug_data,
-                                                      cx_id);
-    }
-    return NULL;
-}
-
 bool app_data_poll_event(void *root_user_data, DataEvent *out) {
     APP_INFO *app_data = (APP_INFO *)root_user_data;
     if (!app_data || !out)
@@ -1302,6 +1513,17 @@ void app_data_update(void *root_user_data) {
     if (clap_plug_plugins_is_dirty(app_data->clap_plug_data))
         app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_CLAP_PLUGINS));
+
+    // same, one level down: did any one CLAP instance's own param set change
+    for (unsigned int i = 0;; i++) {
+        void *plug = clap_plug_plugin_return(app_data->clap_plug_data, i);
+        if (!plug)
+            break;
+        if (clap_plug_plugin_params_dirty(plug))
+            app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
+                                MAKE_ID(DATA_NS_CLAP_PLUG,
+                                       clap_plug_plugin_uid(plug)));
+    }
 
     // ports/connections are never materialised into the CX tree (see Trk)
     bool ports_changed = app_jack_ports_changed(app_data->trk_jack);

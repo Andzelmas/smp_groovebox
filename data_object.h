@@ -26,6 +26,10 @@ typedef enum {
     // data_actions.h. Per-action availability is DataAction.enabled, so
     // there is no separate DATA_CAP_RENAME or similar per-action cap.
     DATA_CAP_ACTIONS = 1 << 2,
+    // value_as_string/value_range
+    DATA_CAP_VALUE = 1 << 3,
+    // is_hidden
+    DATA_CAP_HIDDEN = 1 << 4,
 } DataCapabilities;
 
 struct DataOps {
@@ -50,6 +54,22 @@ struct DataOps {
     // it past that must copy. Navigation (main thread) use only. May return
     // NULL on error.
     const char *(*name)(void *user_data);
+
+    // DATA_CAP_VALUE
+    // return a display string for this object's current value. The string
+    // is owned by the data layer and stays valid while the object exists -
+    // same lifetime contract as name(). May return NULL on error.
+    const char *(*value_as_string)(void *user_data);
+    // fill the object's numeric range/step, if it has one. Returns false
+    // (out-params untouched) if it doesn't or on error.
+    bool (*value_range)(void *user_data, double *out_min, double *out_max,
+                        double *out_inc);
+
+    // DATA_CAP_HIDDEN
+    // is this object currently hidden? A property of an already-existing
+    // object, not a structural fact - changes surface as DATA_EVENT_CHANGED,
+    // never a child-set change.
+    bool (*is_hidden)(void *user_data);
 
     // DATA_CAP_ACTIONS - see data_actions.h for the flow and struct docs.
     // fill *out with up to cap available actions for this object.
@@ -116,6 +136,25 @@ static inline const char *data_name(const DataObject *obj) {
     if (!data_obj_has(obj, DATA_CAP_NAME) || !obj->ops->name)
         return NULL;
     return obj->ops->name(obj->user_data);
+}
+
+static inline const char *data_value_as_string(const DataObject *obj) {
+    if (!data_obj_has(obj, DATA_CAP_VALUE) || !obj->ops->value_as_string)
+        return NULL;
+    return obj->ops->value_as_string(obj->user_data);
+}
+
+static inline bool data_value_range(const DataObject *obj, double *out_min,
+                                    double *out_max, double *out_inc) {
+    if (!data_obj_has(obj, DATA_CAP_VALUE) || !obj->ops->value_range)
+        return false;
+    return obj->ops->value_range(obj->user_data, out_min, out_max, out_inc);
+}
+
+static inline bool data_is_hidden(const DataObject *obj) {
+    if (!data_obj_has(obj, DATA_CAP_HIDDEN) || !obj->ops->is_hidden)
+        return false;
+    return obj->ops->is_hidden(obj->user_data);
 }
 
 static inline ContextId data_id(const DataObject *obj) {

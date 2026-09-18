@@ -51,19 +51,6 @@
 //This can be realloced later
 #define PTR_ARRAY_COUNT 25
 
-// enum for context types
-// TODO userDataTypes replaces these, will need to delete
-enum appContextTypes {
-    Context_type_Sampler = 0x01,
-    Context_type_Plugins = 0x02,
-    Context_type_Trk = 0x03,
-    Context_type_Synth = 0x04,
-    // Audio or midi output ports container context
-    Context_type_PortContainer = 0x05,
-    // Plugins but for CLAP plugins
-    Context_type_Clap_Plugins = 0x06
-};
-
 // wavetables
 enum waveTablesType {
     SIN_WAVETABLE,

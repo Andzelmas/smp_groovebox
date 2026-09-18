@@ -15,78 +15,180 @@ slot, never shift a survivor).
 STAGE 3 — parameters as CX contexts, integrated into the action system
 ================================================================================
 Agreed direction: params become CX tree nodes (like plugin instances),
-not a live external list (like JACK ports).
+not a live external list (like JACK ports). Build the full vertical
+slice (steps below) on CLAP first, then replicate the same shape to
+LV2/sampler/synth - each has its own small deltas, noted per step.
 
-TODO, shape already decided:
-- Materialize EVERY parameter as a CX child, hidden ones included - not
-  just non-hidden ones. is_hidden is a PROPERTY of an already-existing
-  param, not a structural fact about whether it exists - excluding hidden
-  params from child_at would make toggling Operation_ToggleHidden a
-  structural CX_ADDED/CX_REMOVED event (the child set child_at returns
-  would change) for a param whose actual identity/lifetime in params.c
-  never changed at all. Materializing all of them means a hidden toggle
-  is just an ordinary DATA_EVENT_CHANGED - simpler, and keeps child_at
-  only ever skipping tombstoned (NULL) slots, never also branching on
-  is_hidden.
-  Exposed via two separate things, not one, since querying and mutating
-  are different concerns:
-    - a new, general (not params-specific) `bool (*is_hidden)(void
-      *user_data)` on DataOps, gated by a new DATA_CAP_HIDDEN capability
-      bit - same pattern as DATA_CAP_NAME/CHILDREN/ACTIONS (the bit lives
-      on the shared per-KIND DataOps meaning "this kind has a hidden
-      concept at all"; the actual per-instance true/false comes from
-      calling the function with that param's user_data, same as name()
-      already works). Lets a UI filter/display without invoking an
-      action.
-    - DATA_ACTION_TOGGLE_HIDDEN, mapping to a one-line param_set_value(
-      container, val_id, ..., Operation_ToggleHidden) in action_do -
-      Operation_ToggleHidden already exists in paramOperType, this is
-      the "something needs it" moment already anticipated below.
-  Both sides already fully exist in params.c (param_is_hidden, Operation_
-  ToggleHidden) - this is purely DataObject/DataOps/action-system wiring,
-  no new params.c work.
+STEPS 0-4: DONE for CLAP. Verified via clean build (-Wall -Wextra, no
+new warnings) and a real pty-driven CLI run loading SG-323 under
+valgrind (0 definitely/indirectly/possibly lost; the only reported
+errors are a pre-existing uninitialised-value warning inside SG-323's
+own JUCE code, unrelated to this work) - params show up as real named
+CX children with correctly gated actions. Two things surfaced along the
+way, tracked below: the CLI can't yet collect a DATA_ARG_NUMBER value,
+and jack_funcs.c/Trk's own params never got the uid-uniqueness fix the
+other four modules got earlier this session.
 
-- Value changes: go through the (ui-side) param_set_value and its
-  existing ring-buffer message to rt - matches the JACK/plugins pattern,
-  no new plumbing expected.
-- Params as CX children: sample_ops/lv2_plugin_ops/clap_plugin_ops/synth-
-  osc ops currently stub child_at to `return false` - need real child_at/
-  child_count backed by PRM_CONTAIN (params_container_resync/param_add_
-  param already handle tombstones - child_at just needs to skip NULL
-  slots the same way sampler.c's own child_at already does for its
-  samples array's gaps). Each owning instance needs its own instance-
-  scoped params_dirty bool (distinct from the container-level plugins_
-  dirty/samples_dirty, which mean "the SET of instances changed"), set
-  right after params_container_resync finishes and checked inside the
-  existing per-cycle rt-to-ui message loop (clap_read_rt_to_ui_messages
-  today; LV2/synth/sampler need the equivalent if/when they get dynamic
-  params too). The rest of the pipeline (child diff, DATA_EVENT_CHILDREN_
-  CHANGED) is already fully generic - zero new code needed there.
-- DATA_ACTION_SET_VALUE (one numeric arg, the value) and DATA_ACTION_
-  ADJUST_VALUE (one signed step COUNT, not a raw value - action_do maps
-  sign to Operation_Increase/Decrease). Both map to one-line param_set_
-  value(container, val_id, set_to, NULL, Operation_...) calls in
-  action_do. ToggleHidden is separately exposed via DATA_ACTION_TOGGLE_
-  HIDDEN (see the materialize-all-params point above). Other paramOperType
-  values (DefValue/SetIncr/SetDefValue/ChangeName) stay unexposed to the
-  action system until something needs them.
-- DATA_ACTION_SET_CHOICE for CLAP_PARAM_IS_ENUM params: reuse list_at/
-  DataChoice like the plugin catalogue does - list_at walks min..max
-  calling param_get_value_as_string per step for the label. Reuses
-  helper_choice_list_step as-is on the CLI side. Do NOT make the UI loop
-  min..max itself (pushes owner-specific domain knowledge into the UI).
-- Param categories: PRM_PARAM_UI gets a category/module string field
-  (CLAP: clap_param_info_t.module). Params stay FLAT CX children of their
-  owning instance - category is presentational metadata only, not a real
-  tree level. child_at should return params sorted by category so a UI
-  can print a header over contiguous runs without a real tree node. Add
-  the field + an accessor when actually wiring params into a UI.
+STEP 0 - param ContextId:
+New namespace per owner kind in app_data.c (DATA_NS_CLAP_PARAM/DATA_NS_
+LV2_PARAM/DATA_NS_SYNTH_PARAM/DATA_NS_SAMPLE_PARAM), mirroring the
+existing per-kind instance namespaces. A param's .id() is a flat one-
+liner, MAKE_ID(that_ns, param_get_uid(container, val_id, 0)) - no
+folding/hash-chaining needed, since a param's uid is already globally
+unique for its whole kind (this session's next_param_uid fix). Safe at
+any future nesting depth for the same reason.
+
+STEP 1 - params exist structurally, nothing displays them:
+Real child_count/child_at for clap_plugin_ops (first), skipping
+tombstoned (NULL) slots, params' .id() from STEP 0, hidden params
+included too. capabilities = 0 otherwise - no NAME/VALUE/ACTIONS yet.
+Verify via build+valgrind/pty harness before the live CLI; confirm
+helper_context_info_get handles a NULL name safely first.
+
+STEP 2 - structural add/remove events:
+Per-instance params_dirty bool (distinct from the container-level
+plugins_dirty), set right after params_container_resync, checked in
+clap_read_rt_to_ui_messages. app_data_update turns it into DATA_EVENT_
+CHILDREN_CHANGED, mirroring the existing plugins_dirty handling exactly.
+Fulfills clap_plugins.c's own "TODO (STAGE 3): flag this instance's
+params_dirty here" at the CLAP_PARAM_RESCAN_ALL branch. The CX diff
+itself (CX_ADDED/CX_REMOVED) is already fully generic - no new code
+there. LV2/sampler/synth's params don't change shape after creation, so
+their flag can stay unconditionally false for now, same precedent as
+synth's own instance-level dirty flag.
+
+STEP 3 - UI shows names, values, and range:
+- DATA_CAP_NAME/name() - param_get_name.
+- DATA_CAP_VALUE/value_as_string() - param_get_value_as_string, with a
+  fallback added: format the raw value as a plain number when the owner
+  registered no val_to_string (sampler and LV2 do params_init_param_
+  container(NULL) today - no callback at all). Decimal count derived
+  from the param's own increment: smallest d where inc*10^d is (within
+  an epsilon) a whole number, capped at 6 - inc=1 -> 0 decimals, inc=
+  0.001 -> 3. Fulfills plugins.c's own "TODO val_to_string callback...
+  can be added here whenever something actually calls param_get_value_
+  as_string" - decided: LV2 uses the raw-numeric fallback only, no
+  custom formatter.
+- value_range() (min, max, inc) - same DATA_CAP_VALUE capability,
+  bundled with value_as_string() as one query.
+
+STEP 4 - UI can change values:
+- DATA_ARG_NUMBER added to DataArgKind (data_actions.h currently has
+  only STRING/PATH/CHOICE/MULTI_CHOICE) - needed before SET_VALUE/
+  ADJUST_VALUE can declare their arg via action_args.
+- DATA_ACTION_SET_VALUE (absolute) + DATA_ACTION_ADJUST_VALUE (signed
+  step count, not a raw value - action_do maps sign to Operation_
+  Increase/Decrease) - one-line param_set_value calls in action_do.
+- DATA_ACTION_SET_CHOICE for CLAP_PARAM_IS_ENUM params - reuse list_at/
+  DataChoice/helper_choice_list_step as-is, list_at walks min..max
+  calling param_get_value_as_string per step for the label.
+- DATA_CAP_HIDDEN/is_hidden() as a query ONLY - no DATA_ACTION_TOGGLE_
+  HIDDEN. is_hidden reflects the plugin's own classification, not a user
+  preference - a future "user hides/shows something in their own view"
+  concept, if built, should be its own separate mechanism, not reuse
+  this.
+- IS_READONLY gating on SET_VALUE/ADJUST_VALUE/SET_CHOICE's DataAction.
+  enabled, generalized per owner: CLAP's CLAP_PARAM_IS_READONLY flag,
+  LV2's cur_ctrl->is_writable == 0 (fulfills plugins.c's own "TODO now
+  if the param is not writable... it should have a property for this
+  parameter to not send it to ui_to_rt ring buffer" - achieved via
+  action-gating rather than literally suppressing the ring-buffer send).
+
+- Flags system (replaces the single is_hidden bool, fulfills params.c's
+  own pre-existing "TODO instead of is hidden implement flag system"):
+  new enum paramFlags in params.h, own independent bit numbering (not
+  CLAP's - params.h stays owner-agnostic, same reasoning as owner_id),
+  doc-commented per bit, only what's implemented now:
+    PARAM_FLAG_HIDDEN   = 1 << 0
+    PARAM_FLAG_READONLY = 1 << 1
+  PRM_PARAM_UI.is_hidden (uint16_t) -> PRM_PARAM_UI.flags (uint32_t,
+  matching clap_param_info_flags' width). param_add_param gains a
+  uint32_t flags parameter (every call site updated: clap_plugins.c,
+  plugins.c, sampler.c, synth.c, params_container_resync's own pass-2
+  call - 0 where a module has no flag source yet). PARAM_RESYNC_ITEM
+  gains a matching flags field. Operation_ToggleHidden renamed/
+  repurposed to Operation_SetFlags (sets the WHOLE flags value to
+  set_to, not a single-bit toggle - reconciliation below hands the
+  plugin's current full flag state wholesale, not a delta). param_is_
+  hidden stays (now backed by flags & PARAM_FLAG_HIDDEN); new param_is_
+  readonly added the same way.
+
+  Fulfills clap_plugins.c's two flags-related TODOs. Both need their own
+  reconciliation, since RESCAN_INFO and RESCAN_ALL can fire independently
+  of each other:
+  - clap_plug_discover_params's empty CLAP_PARAM_IS_HIDDEN block:
+    translate CLAP_PARAM_IS_HIDDEN/CLAP_PARAM_IS_READONLY into PARAM_
+    RESYNC_ITEM.flags for every discovered param. New adds get correct
+    initial flags straight from param_add_param - no follow-up needed.
+    Survivors are untouched by resync itself (same tombstone-preserving
+    guarantee as name/value) so still need reconciling: after params_
+    container_resync returns (clap_plug_params_create and RESCAN_ALL),
+    walk the discovered list again, and only for entries param_find_uid
+    finds already alive, apply Operation_SetFlags with a MASKED merge -
+    (current_flags & ~KNOWN_MASK) | (discovered_flags & KNOWN_MASK), not
+    a blind overwrite, so a future non-CLAP-sourced flag bit is never
+    silently clobbered - only if it differs from current.
+  - RESCAN_INFO's own "get if any parameter is hidden or not" TODO: not
+    made redundant by the above, since RESCAN_INFO can fire alone without
+    RESCAN_ALL - needs the same masked Operation_SetFlags reconciliation
+    in its own branch, alongside its existing name check.
+  - LV2 needs neither reconciliation pass at all: confirmed LV2 has no
+    plugin-to-host "something changed" mechanism in this app at all
+    (param_get_if_changed_rt only propagates UI-driven changes OUT to the
+    plugin; the one path that could carry a change back - parsing an
+    incoming patch:Set atom - is unparsed, plugins.c's own TODO, already
+    self-deprioritized). LV2's flags are set once, correctly, at param_
+    add_param time and never need touching again.
+
+STEP 5 - UI reacts to individual param changes:
+PRM_PARAM_UI gets a ui_changed flag mirroring PRM_PARAM_RT.val_changed,
+set by param_msgs_process on a ui-side apply; param_get_if_changed_ui
+checks-and-clears it, mirroring param_get_if_changed_rt. params.c and
+the owner modules stay ContextId-ignorant - no signature changes to any
+*_read_rt_to_ui_messages function. app_data_update polls the flag per
+param right after its existing drain calls, same spot/shape as the
+plugins_dirty checks, and is the only place that mints the ContextId and
+calls app_data_push_event - content-free DATA_EVENT_CHANGED, no value/
+name distinction. The current CLI won't consume this (confirmed - full
+redraw every cycle, doesn't read CX_CHANGED at all) - pure future-
+proofing for a selective-redraw UI.
+
+STEP 6 - categories:
+PRM_PARAM_UI gets a category/module string field (CLAP: clap_param_
+info_t.module) + accessor. Params stay FLAT CX children - category is
+presentational metadata only, not a real tree level. child_at returns
+params sorted by category so a UI can print a header over contiguous
+runs. CLI-side grouping/header display not yet designed - its own small
+pass once this lands.
+
+Once proven on CLAP, replicate steps 1-6 to LV2/sampler/synth (each's
+deltas noted above, per step).
+
+TODO - found while implementing STEPS 0-4, not yet fixed:
+- CLI can't collect a DATA_ARG_NUMBER arg: smp_groovebox_ui_cli.c's
+  generic action-arg-collection code (around line 719-726) only handles
+  DATA_ARG_PATH/DATA_ARG_CHOICE, falling through to "unsupported
+  arguments" for anything else. SET_VALUE/ADJUST_VALUE are fully wired
+  and correctly gated at the DataOps/action_do layer (verified - the
+  action is offered, enabled, and would execute correctly given a
+  value) but aren't actually usable from the CLI yet. Needs its own
+  small design: digit accumulation, decimal point/negative sign
+  handling, confirm/cancel keys - new CLI input-handling code, not a
+  DataObject/params.c change.
+- jack_funcs.c mints Trk's own params (Tempo/Bar/Beat/Tick/Play/BPB/
+  Beat_Type, jack_funcs.c ~line 102-108) with the same literal, non-
+  globally-unique per-container uid pattern (0-6) that CLAP/LV2/
+  sampler/synth all had before this session's earlier fix - Trk was
+  never included in that pass. Needs the identical fix: a subsystem-
+  wide next_param_uid counter on JACK_INFO (mirroring next_plug_uid/
+  next_smp_uid's own shape), minted once per param at creation instead
+  of the current literal indices. Compile-fixed only for now (flags=0
+  added at the call sites) - the uid-uniqueness fix itself is still
+  outstanding.
 
 TODO - gaps found checking clap_plugins.c against the vendored clap/ext/
-params.h, still open:
-- CLAP_PARAM_IS_READONLY already zeroes inc_am but doesn't disable
-  anything - SET_VALUE/ADJUST_VALUE/SET_CHOICE's DataAction.enabled
-  should gate on it once those actions exist.
+params.h, future consideration, not part of the STEP plan above:
+- CLAP_PARAM_IS_PERIODIC: no handling at all, not decided.
 - CLAP_PARAM_IS_BYPASS: still an empty TODO stub, exposed as an ordinary
   param for now - decide later whether it deserves dedicated treatment.
 - clap_output_events_read never parses a CLAP_EVENT_PARAM_VALUE the

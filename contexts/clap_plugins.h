@@ -57,10 +57,6 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                clap_plug_status_t *plug_error,
                                void *audio_backend);
 
-// return the plugin parameter container
-PRM_CONTAIN *clap_plug_param_return_param_container(CLAP_PLUG_INFO *plug_data,
-                                                    int plug_id);
-
 // initialize the plugin list
 // it contains all the plugins on the system available to the user
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data);
@@ -101,6 +97,13 @@ uint32_t clap_plug_plugin_uid(void *plug);
 
 // return if the plugins array is dirty - if it changed
 bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data);
+
+// did this one instance's own param set change (added/removed) since the
+// last call? check-and-clear, like clap_plug_plugins_is_dirty.
+bool clap_plug_plugin_params_dirty(void *plug);
+
+// return this plugin instance's own param container, NULL on error/none yet
+PRM_CONTAIN *clap_plug_plugin_param_container(void *plug);
 
 // process the clap plugins, must be called on the [audio-thread]
 void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes);

@@ -28,6 +28,9 @@ typedef enum {
     DATA_ACTION_ADD_FILE_PATH,
     DATA_ACTION_CONNECT,      // generic bipartite toggle-connect: one source,
                                // many targets, both drawn from named lists.
+    DATA_ACTION_SET_VALUE,    // set to an absolute numeric value
+    DATA_ACTION_ADJUST_VALUE, // move by a signed step COUNT, not a raw value
+    DATA_ACTION_SET_CHOICE,   // set to a value picked from a named list
 } DataActionType;
 
 typedef enum {
@@ -35,6 +38,7 @@ typedef enum {
     DATA_ARG_PATH,
     DATA_ARG_CHOICE,
     DATA_ARG_MULTI_CHOICE,
+    DATA_ARG_NUMBER,
 } DataArgKind;
 
 typedef enum {
@@ -91,7 +95,8 @@ typedef struct {
     DataActionType type;
     union {
         struct {
-            uint64_t choice_value;
+            uint64_t choice_value; // also used by DATA_ACTION_SET_CHOICE -
+                                   // same shape, "a value picked from a list"
         } add_choice;
         struct {
             const char *path;
@@ -101,6 +106,12 @@ typedef struct {
             const uint64_t *targets;   // MAKE_ID(domain_namespace, key) each
             size_t target_count;
         } connect;
+        struct {
+            double value;
+        } set_value;
+        struct {
+            int step; // signed step count, sign maps to Increase/Decrease
+        } adjust_value;
         // DATA_ACTION_REMOVE: no payload
     };
 } DataActionReq;

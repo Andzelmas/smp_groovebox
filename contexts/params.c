@@ -63,9 +63,13 @@ typedef struct _params_param_ui {
     uint32_t uid;
     // owner-supplied secondary id, opaque to params.c
     uint32_t owner_id;
-    // TODO instead of is hidden implement flag system for parameters
-    // is the parameter hidden
-    uint16_t is_hidden;
+    // bitmask of enum paramFlags
+    uint32_t flags;
+    // set once by param_add_param - lets param_get_handle/param_handle_
+    // resolve turn this struct's own address into an opaque (container,
+    // val_id) handle without exposing PRM_PARAM_UI itself outside params.c
+    PRM_CONTAIN *self_container;
+    int self_val_id;
 } PRM_PARAM_UI;
 
 typedef struct _params_container {
@@ -140,7 +144,7 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
 
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    uint32_t owner_id, void *cookie) {
+                    uint32_t owner_id, uint32_t flags, void *cookie) {
     if (!param_container)
         return -1;
     if (!name)
@@ -217,9 +221,9 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     snprintf(new_ui_param->name, MAX_SHORT_NAME_LENGTH, "%s", name);
     new_ui_param->uid = uid;
     new_ui_param->owner_id = owner_id;
-    // to make the parameter hidden send a param_set_value with
-    // Operation_ToggleHidden and set_to 0 or 1
-    new_ui_param->is_hidden = 0;
+    new_ui_param->flags = flags;
+    new_ui_param->self_container = param_container;
+    new_ui_param->self_val_id = (int)idx;
 
     return (int)idx;
 }
@@ -263,7 +267,7 @@ void params_container_resync(PRM_CONTAIN *param_container,
         param_add_param(param_container, new_params[i].name, new_params[i].val,
                         new_params[i].min, new_params[i].max, new_params[i].inc,
                         new_params[i].uid, new_params[i].owner_id,
-                        new_params[i].cookie);
+                        new_params[i].flags, new_params[i].cookie);
     }
 }
 
@@ -367,11 +371,8 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
             snprintf(cur_param->name, MAX_SHORT_NAME_LENGTH, "%s",
                      set_string_to);
         return 0;
-    case Operation_ToggleHidden:
-        if (set_to <= 0)
-            cur_param->is_hidden = 0;
-        if (set_to >= 1)
-            cur_param->is_hidden = 1;
+    case Operation_SetFlags:
+        cur_param->flags = (uint32_t)set_to;
         return 0;
     default:
         break;
@@ -484,6 +485,26 @@ PARAM_T param_get_increment(PRM_CONTAIN *param_container, int val_id) {
     return param_container->ui_params[val_id]->inc_am;
 }
 
+PARAM_T param_get_min(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return -1;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
+    if (!param_container->ui_params[val_id])
+        return -1;
+    return param_container->ui_params[val_id]->min_val;
+}
+
+PARAM_T param_get_max(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return -1;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
+    if (!param_container->ui_params[val_id])
+        return -1;
+    return param_container->ui_params[val_id]->max_val;
+}
+
 PARAM_T param_get_value(PRM_CONTAIN *param_container, int val_id,
                         unsigned int rt_params) {
     if (!param_container)
@@ -516,15 +537,40 @@ PARAM_T param_get_value(PRM_CONTAIN *param_container, int val_id,
     return raw_val;
 }
 
+// smallest decimal count d where inc*10^d is (within an epsilon) a whole
+// number, capped at 6 - inc=1 -> 0 decimals, inc=0.001 -> 3.
+static int param_decimals_for_inc(PARAM_T inc) {
+    if (inc <= 0)
+        return 2;
+    PARAM_T abs_inc = fabs(inc);
+    for (int d = 0; d <= 6; d++) {
+        PARAM_T scaled = abs_inc * pow(10, d);
+        if (fabs(scaled - round(scaled)) < 1e-6)
+            return d;
+    }
+    return 6;
+}
+
 const char *param_get_value_as_string(PRM_CONTAIN *param_container,
                                       int val_id, PARAM_T value) {
     if (!param_container)
         return NULL;
-    // if there is no user provided function to convert the parameter value to
-    // string, there is nothing to display
+    // no owner-supplied formatter - format the raw value as a plain number,
+    // decimal count derived from this param's own increment
     if (!param_container->user_data.user_data ||
-        !param_container->user_data.val_to_string)
-        return NULL;
+        !param_container->user_data.val_to_string) {
+        if (val_id < 0 ||
+            (unsigned int)val_id >= param_container->num_of_params_ui)
+            return NULL;
+        if (!param_container->ui_params[val_id])
+            return NULL;
+        int decimals =
+            param_decimals_for_inc(param_container->ui_params[val_id]->inc_am);
+        snprintf(param_container->value_string_scratch,
+                sizeof(param_container->value_string_scratch), "%.*f",
+                decimals, value);
+        return param_container->value_string_scratch;
+    }
 
     unsigned int wrote = param_container->user_data.val_to_string(
         param_container->user_data.user_data, val_id, value,
@@ -560,6 +606,16 @@ int param_get_if_any_changed_rt(PRM_CONTAIN *param_container) {
     return 0;
 }
 
+uint32_t param_get_flags(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return 0;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return 0;
+    if (!param_container->ui_params[val_id])
+        return 0;
+    return param_container->ui_params[val_id]->flags;
+}
+
 unsigned int param_is_hidden(PRM_CONTAIN *param_container, int val_id) {
     if (!param_container)
         return 0;
@@ -567,7 +623,27 @@ unsigned int param_is_hidden(PRM_CONTAIN *param_container, int val_id) {
         return 0;
     if (!param_container->ui_params[val_id])
         return 0;
-    return param_container->ui_params[val_id]->is_hidden;
+    return (param_container->ui_params[val_id]->flags & PARAM_FLAG_HIDDEN) != 0;
+}
+
+unsigned int param_is_readonly(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return 0;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return 0;
+    if (!param_container->ui_params[val_id])
+        return 0;
+    return (param_container->ui_params[val_id]->flags & PARAM_FLAG_READONLY) != 0;
+}
+
+unsigned int param_is_enum(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return 0;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return 0;
+    if (!param_container->ui_params[val_id])
+        return 0;
+    return (param_container->ui_params[val_id]->flags & PARAM_FLAG_ENUM) != 0;
 }
 
 const char *param_get_name(PRM_CONTAIN *param_container, int val_id) {
@@ -578,6 +654,28 @@ const char *param_get_name(PRM_CONTAIN *param_container, int val_id) {
     if (!param_container->ui_params[val_id])
         return NULL;
     return param_container->ui_params[val_id]->name;
+}
+
+void *param_get_handle(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return NULL;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return NULL;
+    if (!param_container->ui_params[val_id])
+        return NULL;
+    return (void *)param_container->ui_params[val_id];
+}
+
+bool param_handle_resolve(void *handle, PRM_CONTAIN **out_container,
+                          int *out_val_id) {
+    if (!handle)
+        return false;
+    PRM_PARAM_UI *ui = (PRM_PARAM_UI *)handle;
+    if (out_container)
+        *out_container = ui->self_container;
+    if (out_val_id)
+        *out_val_id = ui->self_val_id;
+    return true;
 }
 
 unsigned int param_return_num_params(PRM_CONTAIN *param_container,

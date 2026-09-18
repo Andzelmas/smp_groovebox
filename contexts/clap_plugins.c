@@ -126,6 +126,10 @@ typedef struct _clap_plug_plug {
                       // factory
     char plug_path[MAX_PATH_STRING];            // the path for the clap file
     PRM_CONTAIN *plug_params;   // plugin parameter container for params.c
+    // did plug_params' param SET change (added/removed)? distinct from
+    // CLAP_PLUG_INFO's own plugins_dirty, which means "the set of instances
+    // changed" - this means "this instance's own param set changed"
+    bool params_dirty;
     clap_host_t clap_host_info; // need when creating the plugin instance, this
                                 // struct has this CLAP_PLUG_PLUG in the
                                 // host_data var as (void*)
@@ -671,6 +675,19 @@ static int clap_plug_find_val_id_by_clap_id(PRM_CONTAIN *plug_params,
     return -1;
 }
 
+// translate the CLAP_PARAM_IS_HIDDEN/READONLY/ENUM bits of a clap_param_
+// info_t.flags into this container's own paramFlags
+static uint32_t clap_plug_translate_param_flags(uint32_t clap_flags) {
+    uint32_t flags = 0;
+    if ((clap_flags & CLAP_PARAM_IS_HIDDEN) == CLAP_PARAM_IS_HIDDEN)
+        flags |= PARAM_FLAG_HIDDEN;
+    if ((clap_flags & CLAP_PARAM_IS_READONLY) == CLAP_PARAM_IS_READONLY)
+        flags |= PARAM_FLAG_READONLY;
+    if ((clap_flags & CLAP_PARAM_IS_ENUM) == CLAP_PARAM_IS_ENUM)
+        flags |= PARAM_FLAG_ENUM;
+    return flags;
+}
+
 // walks CLAP's current param list and fills out[] with one PARAM_RESYNC_
 // ITEM per param (up to max_out). uid is reused via an existing owner_id
 // match if present, else freshly minted. Returns entries written.
@@ -705,14 +722,11 @@ static uint32_t clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
         // TODO not sure what to do with bypass parameter
         if ((param_info.flags & CLAP_PARAM_IS_BYPASS) == CLAP_PARAM_IS_BYPASS) {
         }
-        // TODO need to make parameter hidden status switchable and to not show
-        // these parameters to the user
-        if ((param_info.flags & CLAP_PARAM_IS_HIDDEN) == CLAP_PARAM_IS_HIDDEN) {
-        }
         if ((param_info.flags & CLAP_PARAM_IS_READONLY) ==
             CLAP_PARAM_IS_READONLY) {
             param_inc = 0;
         }
+        uint32_t param_flags = clap_plug_translate_param_flags(param_info.flags);
 
         int existing_val_id =
             plug->plug_params ? clap_plug_find_val_id_by_clap_id(
@@ -730,10 +744,46 @@ static uint32_t clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
         out[written].inc = param_inc;
         out[written].uid = uid;
         out[written].owner_id = param_info.id;
+        out[written].flags = param_flags;
         out[written].cookie = param_info.cookie;
         written++;
     }
     return written;
+}
+
+// paramFlags bits clap_plug_discover_params can translate - a reconciliation
+// merge only ever touches these, so a future non-CLAP-sourced flag bit is
+// never silently clobbered.
+#define CLAP_PLUG_KNOWN_PARAM_FLAGS \
+    (PARAM_FLAG_HIDDEN | PARAM_FLAG_READONLY | PARAM_FLAG_ENUM)
+
+// reconcile one survivor param's flags against CLAP's current report for it
+// - masked merge (only CLAP_PLUG_KNOWN_PARAM_FLAGS), only if it actually
+// differs. No-op if val_id is -1 (not found/alive).
+static void clap_plug_reconcile_param_flags(PRM_CONTAIN *plug_params,
+                                            int val_id,
+                                            uint32_t discovered_flags) {
+    if (val_id == -1)
+        return;
+    uint32_t cur_flags = param_get_flags(plug_params, val_id);
+    uint32_t new_flags = (cur_flags & ~CLAP_PLUG_KNOWN_PARAM_FLAGS) |
+                         (discovered_flags & CLAP_PLUG_KNOWN_PARAM_FLAGS);
+    if (new_flags != cur_flags)
+        param_set_value(plug_params, val_id, (PARAM_T)new_flags, NULL,
+                        Operation_SetFlags);
+}
+
+// reconcile every survivor's flags after a discovery/resync pass - new adds
+// already got correct flags from param_add_param, this only matters for
+// params that were already alive (resync leaves survivors untouched, see
+// params_container_resync's own doc comment).
+static void clap_plug_reconcile_survivors(PRM_CONTAIN *plug_params,
+                                          const PARAM_RESYNC_ITEM *items,
+                                          uint32_t item_count) {
+    for (uint32_t i = 0; i < item_count; i++) {
+        int val_id = param_find_uid(plug_params, items[i].uid);
+        clap_plug_reconcile_param_flags(plug_params, val_id, items[i].flags);
+    }
 }
 
 // create parameters on the id plugin, the plugin should not be processing
@@ -771,21 +821,9 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     uint32_t item_count =
         clap_plug_discover_params(plug, clap_params, items, param_count);
     params_container_resync(plug->plug_params, items, item_count);
+    clap_plug_reconcile_survivors(plug->plug_params, items, item_count);
     free(items);
     return 0;
-}
-
-PRM_CONTAIN *clap_plug_param_return_param_container(CLAP_PLUG_INFO *plug_data,
-                                                    int plug_id) {
-    if (!plug_data)
-        return NULL;
-    if (plug_id >= MAX_INSTANCES || plug_id < 0)
-        return NULL;
-    CLAP_PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
-    if (!plug->plug_params)
-        return NULL;
-
-    return plug->plug_params;
 }
 
 static void clap_plug_ext_params_rescan(const clap_host_t *host,
@@ -851,9 +889,10 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
                 continue;
             param_set_value(plug->plug_params, val_id, 0.0, param_info.name,
                             Operation_ChangeName);
+            clap_plug_reconcile_param_flags(
+                plug->plug_params, val_id,
+                clap_plug_translate_param_flags(param_info.flags));
         }
-        // TODO get if any parameter is hidden or not, and set with set_value
-        // Operation_ToggleHidden
     }
     if ((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL) {
         if (plug->plug_inst_activated == 1)
@@ -876,9 +915,9 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
                                            param_count)
                 : 0;
         params_container_resync(plug->plug_params, items, item_count);
+        clap_plug_reconcile_survivors(plug->plug_params, items, item_count);
         free(items);
-        // TODO (STAGE 3): flag this instance's params_dirty here once
-        // params are CX children - nothing consumes that yet
+        plug->params_dirty = true;
     }
 }
 
@@ -1648,6 +1687,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->plug_inst_id = -1;
         plug->plug_inst_processing = 0;
         plug->plug_params = NULL;
+        plug->params_dirty = false;
         plug->preset_fac = NULL;
     }
 
@@ -2052,11 +2092,30 @@ uint32_t clap_plug_plugin_uid(void *plug){
     return cur_plug->uid;
 }
 
+// return this plugin instance's own param container, NULL on error/none yet
+PRM_CONTAIN *clap_plug_plugin_param_container(void *plug){
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG*)plug;
+    if(!cur_plug)
+        return NULL;
+    return cur_plug->plug_params;
+}
+
 bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data){
     if(!plug_data)
         return false;
     bool is_dirty = plug_data->plugins_dirty;
     plug_data->plugins_dirty = false;
+    return is_dirty;
+}
+
+// did this one instance's own param set change (added/removed)? see
+// CLAP_PLUG_PLUG.params_dirty
+bool clap_plug_plugin_params_dirty(void *plug){
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG*)plug;
+    if(!cur_plug)
+        return false;
+    bool is_dirty = cur_plug->params_dirty;
+    cur_plug->params_dirty = false;
     return is_dirty;
 }
 

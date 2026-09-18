@@ -113,10 +113,6 @@ void plug_set_block_length(PLUG_INFO *plug_data, uint32_t block_length);
 // function sent here returns 0 on success
 int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug);
 
-// returns param ocntainer on the plugin, use on [main-thread]
-PRM_CONTAIN *plug_param_return_param_container(PLUG_INFO *plug_data,
-                                               int plug_id);
-
 // connect the ports, run the plugins instances for nframes, and update the
 // output ports, use on [audio-thread]
 void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes);

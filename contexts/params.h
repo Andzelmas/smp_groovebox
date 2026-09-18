@@ -1,10 +1,11 @@
 #pragma once
 #include "../structs.h"
 #include "../types.h"
+#include <stdbool.h>
 #include <stdint.h>
 // operations param_set_value can apply to a parameter - the four value ops
 // (Decrease/Increase/SetValue/DefValue) clamp and may propagate to the rt
-// side; the three property ops (SetIncr/ChangeName/ToggleHidden) only ever
+// side; the three property ops (SetIncr/ChangeName/SetFlags) only ever
 // mutate ui-only fields (see param_set_value's own doc comment).
 enum paramOperType {
     Operation_Nothing = 0x00,
@@ -19,8 +20,19 @@ enum paramOperType {
     Operation_SetDefValue = 0x06,
     // change the name of the parameter
     Operation_ChangeName = 0x07,
-    // value should change if the parameter is hidden or not
-    Operation_ToggleHidden = 0x08
+    // replace the whole flags bitmask (see enum paramFlags) with set_to
+    Operation_SetFlags = 0x08
+};
+
+// per-parameter property bits, translated by the owner from its own flag
+// source (e.g. CLAP's clap_param_info_flags) at discovery/creation time -
+// params.c only knows what param_is_hidden/param_is_readonly say a bit
+// means. Own numbering, independent of any owner's own flag values - more
+// bits get added here as something actually needs them.
+enum paramFlags {
+    PARAM_FLAG_HIDDEN   = 1 << 0,
+    PARAM_FLAG_READONLY = 1 << 1,
+    PARAM_FLAG_ENUM     = 1 << 2,
 };
 
 // struct that holds the parameters
@@ -61,19 +73,22 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 // id space for this param (e.g. CLAP's clap_id)
 // cookie is optional convenience storage for the owner (e.g. a CLAP param's
 // cookie) - may be NULL, and is only ever readable from the rt side (see
-// param_cookie_return_rt). Reuses a freed slot if one exists, else grows the
-// container. Returns the new val_id (same index on both the rt and ui side)
-// on success.
+// param_cookie_return_rt). flags is this param's initial paramFlags bitmask
+// (0 if the owner has no flag source). Reuses a freed slot if one exists,
+// else grows the container. Returns the new val_id (same index on both the
+// rt and ui side) on success.
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    uint32_t owner_id, void *cookie);
+                    uint32_t owner_id, uint32_t flags, void *cookie);
 
 // one parameter as the owner currently sees it, for params_container_resync.
 // name is copied, doesn't need to outlive the call. uid: for a survivor,
 // pass its EXISTING uid (via param_find_uid/param_get_uid) - resync matches
 // by uid only, so a wrong value here drops the survivor instead of matching
 // it. For a genuinely new param, mint a fresh uid, never reused for this
-// container's lifetime.
+// container's lifetime. flags only takes effect for a genuinely new param -
+// a survivor's flags are left untouched by resync (see params_container_
+// resync's own doc comment), reconciling those is the owner's own job.
 typedef struct _params_resync_item {
     char name[MAX_SHORT_NAME_LENGTH];
     PARAM_T val;
@@ -82,6 +97,7 @@ typedef struct _params_resync_item {
     PARAM_T inc;
     uint32_t uid;
     uint32_t owner_id;
+    uint32_t flags;
     void *cookie;
 } PARAM_RESYNC_ITEM;
 
@@ -143,6 +159,13 @@ uint32_t param_get_owner_id(PRM_CONTAIN *param_container, int val_id,
 // struct has no inc_am.
 PARAM_T param_get_increment(PRM_CONTAIN *param_container, int val_id);
 
+// return the parameter's min/max range - ui-only, mirrors param_get_
+// increment. -1 on error (a real min/max of -1 is indistinguishable from
+// that; callers needing to tell them apart should check val_id validity
+// themselves first).
+PARAM_T param_get_min(PRM_CONTAIN *param_container, int val_id);
+PARAM_T param_get_max(PRM_CONTAIN *param_container, int val_id);
+
 // get the parameter value for whichever side rt_params selects, run through
 // the owner's build_value callback if one is registered (see
 // PRM_CONT_USER_DATA), otherwise the raw stored value. On the rt side this
@@ -171,9 +194,23 @@ int param_get_if_changed_rt(PRM_CONTAIN *param_container, int val_id);
 // param_get_if_changed_rt.
 int param_get_if_any_changed_rt(PRM_CONTAIN *param_container);
 
-// get if parameter is hidden or not - ui-only, the rt struct has no
-// is_hidden.
+// return the parameter's whole flags bitmask (see enum paramFlags), 0 on
+// error - ui-only. For reconciling an owner's current report against a
+// param's stored flags (e.g. a masked merge) without dropping a bit that
+// has no dedicated param_is_* query yet.
+uint32_t param_get_flags(PRM_CONTAIN *param_container, int val_id);
+
+// get if parameter is hidden or not (PARAM_FLAG_HIDDEN) - ui-only, the rt
+// struct has no flags.
 unsigned int param_is_hidden(PRM_CONTAIN *param_container, int val_id);
+
+// get if the parameter can't be changed (PARAM_FLAG_READONLY) - ui-only,
+// mirrors param_is_hidden.
+unsigned int param_is_readonly(PRM_CONTAIN *param_container, int val_id);
+
+// get if the parameter represents an enumerated value (PARAM_FLAG_ENUM) -
+// ui-only, mirrors param_is_hidden.
+unsigned int param_is_enum(PRM_CONTAIN *param_container, int val_id);
 
 // get the parameter's current display name - ui-only, the rt struct has no
 // name. The string is owned by the param and stays valid while it exists
@@ -181,6 +218,18 @@ unsigned int param_is_hidden(PRM_CONTAIN *param_container, int val_id);
 // callers that need to keep it past that must copy,  Returns NULL on error. Use
 // only on [main-thread].
 const char *param_get_name(PRM_CONTAIN *param_container, int val_id);
+
+// opaque per-param handle, stable for exactly the param's own lifetime (same
+// underlying storage as the param itself - no separate allocation/lifetime
+// management needed). For an owner that needs one pointer identifying a
+// specific param without separately tracking (container, val_id) itself
+// (e.g. a DataObject's user_data). NULL on error. ui-only.
+void *param_get_handle(PRM_CONTAIN *param_container, int val_id);
+
+// resolve a handle from param_get_handle back to its container/val_id.
+// Returns false (leaving the out-params untouched) if handle is NULL.
+bool param_handle_resolve(void *handle, PRM_CONTAIN **out_container,
+                          int *out_val_id);
 
 // return how many parameters are on the container, for whichever side
 // rt_params selects (both sides always hold the same count - param_add_param

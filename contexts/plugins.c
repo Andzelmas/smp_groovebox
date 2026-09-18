@@ -1243,7 +1243,8 @@ uint32_t plug_load_and_activate(void *plugin_item) {
             PLUG_CONTROL *cur_ctrl = plug->controls[ct_iter];
             if (!cur_ctrl) {
                 uint32_t p_uid = ++plug_data->next_param_uid;
-                param_add_param(plug_params, "", 0, 0, 0, 0, p_uid, p_uid, NULL);
+                param_add_param(plug_params, "", 0, 0, 0, 0, p_uid, p_uid, 0,
+                                NULL);
                 continue;
             }
 
@@ -1295,8 +1296,13 @@ uint32_t plug_load_and_activate(void *plugin_item) {
                     cur_inc = 1;
             }
             uint32_t p_uid = ++plug_data->next_param_uid;
+            uint32_t p_flags = 0;
+            if (cur_ctrl->is_writable == 0)
+                p_flags |= PARAM_FLAG_READONLY;
+            if (cur_ctrl->is_enumeration)
+                p_flags |= PARAM_FLAG_ENUM;
             param_add_param(plug_params, param_name, param_val, param_min,
-                            param_max, cur_inc, p_uid, p_uid, NULL);
+                            param_max, cur_inc, p_uid, p_uid, p_flags, NULL);
         }
         // TODO val_to_string callback reading them straight from plug->controls
         // can be added here whenever something actually calls
@@ -1765,18 +1771,6 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
     free(default_values);
 
     return 0;
-}
-
-PRM_CONTAIN *plug_param_return_param_container(PLUG_INFO *plug_data,
-                                               int plug_id) {
-    if (!plug_data)
-        return NULL;
-    if (plug_id >= MAX_INSTANCES)
-        return NULL;
-    PLUG_PLUG *cur_plug = &(plug_data->plugins[plug_id]);
-    if (!cur_plug->plug_instance || !cur_plug->plug_params)
-        return NULL;
-    return cur_plug->plug_params;
 }
 
 void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {

@@ -316,7 +316,7 @@ uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {
     // init the sample parameters to default values
     cur_smp->params = params_init_param_container(NULL);
     uint32_t p_uid = ++smp_data->next_param_uid;
-    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, p_uid, p_uid, NULL);
+    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, p_uid, p_uid, 0, NULL);
 
     // TODO samplerate is not needed, when we load sample to memory we also need
     // to convert it to the system sample rate, when system sample rate changes,
@@ -450,14 +450,6 @@ static void smp_sum_channel_buffers_rt(SMP_SMP* cur_smp, SAMPLE_T* out_L, SAMPLE
 	*out_L += cur_smp->buffer[cur_smp->offset] * mult;
 	*out_R += cur_smp->buffer[cur_smp->offset+(cur_smp->chans-1)] * mult;
     }    
-}
-
-PRM_CONTAIN* smp_param_return_param_container(SMP_INFO* smp_data, int smp_id){
-    if(!smp_data)return NULL;
-    if(smp_id >= MAX_SAMPLES || smp_id < 0)return NULL;
-    SMP_SMP* smp = &(smp_data->samples[smp_id]);
-    if(!smp->buffer || !smp->params)return NULL;
-    return smp->params;
 }
 
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){
