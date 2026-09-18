@@ -119,17 +119,13 @@ typedef struct _clap_plug_plug {
         plug_inst_activated; // was the activate function called on this plugin
     // 0 - not processing, 1 - processing, 2 - sleeping (not processing, but
     // [audio-thread] keeps sending params and checking if input events or input
-    // audio ir not_quiet)
+    // audio is not_quiet)
     unsigned int plug_inst_processing; // is the plugin instance processing,
                                        // touch only on [audio_thread]
     int plug_inst_id; // the plugin instance index in the array of the plugin
                       // factory
     char plug_path[MAX_PATH_STRING];            // the path for the clap file
     PRM_CONTAIN *plug_params;   // plugin parameter container for params.c
-    // monotonic counter for this plugin's own param uids - mints a fresh
-    // never-reused value for each param param_add_param sees (creation, and
-    // any future resync's additions)
-    uint32_t next_param_uid;
     clap_host_t clap_host_info; // need when creating the plugin instance, this
                                 // struct has this CLAP_PLUG_PLUG in the
                                 // host_data var as (void*)
@@ -160,6 +156,9 @@ typedef struct _clap_plug_info {
     struct _clap_plug_plug plugins[MAX_INSTANCES];
     bool plugins_dirty; //did plugins array change?
     uint32_t next_plug_uid; //monotonic counter for CLAP_PLUG_PLUG.uid, never reset
+    // monotonic counter for every param's uid across every instance, never
+    // reset - keeps a param's uid globally unique
+    uint32_t next_param_uid;
     SAMPLE_T sample_rate;
     // for clap there can be min and max buffer sizes, for not changing buffer
     // sizes set as the same
@@ -657,6 +656,86 @@ static unsigned int clap_plug_params_value_to_text(const void *user_data,
     return convert_err;
 }
 
+// find this container's val_id whose owner_id equals this clap_id, -1 if
+// not found. Checks param_get_name (not owner_id==0) to skip freed slots,
+// since 0 is a legal clap_id.
+static int clap_plug_find_val_id_by_clap_id(PRM_CONTAIN *plug_params,
+                                            uint32_t clap_id) {
+    unsigned int count = param_return_num_params(plug_params, 0);
+    for (unsigned int val_id = 0; val_id < count; val_id++) {
+        if (!param_get_name(plug_params, (int)val_id))
+            continue;
+        if (param_get_owner_id(plug_params, (int)val_id, 0) == clap_id)
+            return (int)val_id;
+    }
+    return -1;
+}
+
+// walks CLAP's current param list and fills out[] with one PARAM_RESYNC_
+// ITEM per param (up to max_out). uid is reused via an existing owner_id
+// match if present, else freshly minted. Returns entries written.
+static uint32_t clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
+                                          const clap_plugin_params_t *clap_params,
+                                          PARAM_RESYNC_ITEM *out,
+                                          uint32_t max_out) {
+    uint32_t param_count = clap_params->count(plug->plug_inst);
+    uint32_t written = 0;
+    for (uint32_t clap_idx = 0; clap_idx < param_count && written < max_out;
+        clap_idx++) {
+        clap_param_info_t param_info;
+        if (!clap_params->get_info(plug->plug_inst, clap_idx, &param_info))
+            continue;
+
+        PARAM_T param_min = param_info.min_value;
+        PARAM_T param_max = param_info.max_value;
+        // calculate the increment
+        PARAM_T param_range = param_max - param_min;
+        if (param_range < 0)
+            param_range *= -1;
+        PARAM_T param_inc = param_range / 100.0;
+
+        if ((param_info.flags & CLAP_PARAM_IS_STEPPED) ==
+            CLAP_PARAM_IS_STEPPED) {
+            param_inc = 1.0;
+        }
+        // TODO not sure what to do with periodic parameters
+        if ((param_info.flags & CLAP_PARAM_IS_PERIODIC) ==
+            CLAP_PARAM_IS_PERIODIC) {
+        }
+        // TODO not sure what to do with bypass parameter
+        if ((param_info.flags & CLAP_PARAM_IS_BYPASS) == CLAP_PARAM_IS_BYPASS) {
+        }
+        // TODO need to make parameter hidden status switchable and to not show
+        // these parameters to the user
+        if ((param_info.flags & CLAP_PARAM_IS_HIDDEN) == CLAP_PARAM_IS_HIDDEN) {
+        }
+        if ((param_info.flags & CLAP_PARAM_IS_READONLY) ==
+            CLAP_PARAM_IS_READONLY) {
+            param_inc = 0;
+        }
+
+        int existing_val_id =
+            plug->plug_params ? clap_plug_find_val_id_by_clap_id(
+                                    plug->plug_params, param_info.id)
+                              : -1;
+        uint32_t uid = (existing_val_id != -1)
+                          ? param_get_uid(plug->plug_params, existing_val_id, 0)
+                          : ++plug->plug_data->next_param_uid;
+
+        snprintf(out[written].name, MAX_SHORT_NAME_LENGTH, "%s",
+                 param_info.name);
+        out[written].val = param_info.default_value;
+        out[written].min = param_min;
+        out[written].max = param_max;
+        out[written].inc = param_inc;
+        out[written].uid = uid;
+        out[written].owner_id = param_info.id;
+        out[written].cookie = param_info.cookie;
+        written++;
+    }
+    return written;
+}
+
 // create parameters on the id plugin, the plugin should not be processing
 static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     if (!plug_data)
@@ -686,56 +765,13 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     if (!plug->plug_params)
         return -1;
 
-    // val_id here is just this container's own position for the param -
-    // nothing downstream needs it to equal CLAP's own param_index (get_
-    // value/value_to_text/the RT event loop all resolve a param through
-    // its real clap_id via param_get_owner_id; RESCAN_VALUES/RESCAN_INFO
-    // both do the same, in whichever direction they need).
-    // uid is THIS container's own identity, minted fresh here - never
-    // param_info.id directly, since CLAP allows a later-added param to
-    // reuse an id a since-removed one had (see next_param_uid's own doc
-    // comment on CLAP_PLUG_PLUG) - reset once per (re)discovery pass.
-    plug->next_param_uid = 0;
-    for (uint32_t val_id = 0; val_id < param_count; val_id++) {
-        clap_param_info_t param_info;
-        if (!clap_params->get_info(plug->plug_inst, val_id, &param_info))
-            continue;
-
-        PARAM_T param_min = param_info.min_value;
-        PARAM_T param_max = param_info.max_value;
-        // calculate the increment
-        PARAM_T param_range = param_max - param_min;
-        if(param_range < 0)param_range *= -1;
-        PARAM_T param_inc = param_range / 100.0;
-
-        if ((param_info.flags & CLAP_PARAM_IS_STEPPED) ==
-            CLAP_PARAM_IS_STEPPED) {
-            param_inc = 1.0;
-        }
-        // TODO not sure what to do with periodic parameters
-        if ((param_info.flags & CLAP_PARAM_IS_PERIODIC) ==
-            CLAP_PARAM_IS_PERIODIC) {
-        }
-        // TODO not sure what to do with bypass parameter
-        if ((param_info.flags & CLAP_PARAM_IS_BYPASS) == CLAP_PARAM_IS_BYPASS) {
-        }
-        // TODO need to make parameter hidden status switchable and to not show
-        // these parameters to the user
-        if ((param_info.flags & CLAP_PARAM_IS_HIDDEN) == CLAP_PARAM_IS_HIDDEN) {
-        }
-        if ((param_info.flags & CLAP_PARAM_IS_READONLY) ==
-            CLAP_PARAM_IS_READONLY) {
-            param_inc = 0;
-        }
-        // param_add_param can still fail here (allocation failure - a
-        // duplicate uid can't happen any more, next_param_uid never repeats
-        // within one discovery pass); nothing to recover into, just drop
-        // this one param rather than inserting a placeholder for it
-        param_add_param(plug->plug_params, param_info.name,
-                        param_info.default_value, param_min, param_max,
-                        param_inc, ++plug->next_param_uid, param_info.id,
-                        param_info.cookie);
-    }
+    PARAM_RESYNC_ITEM *items = malloc(param_count * sizeof(PARAM_RESYNC_ITEM));
+    if (!items)
+        return -1;
+    uint32_t item_count =
+        clap_plug_discover_params(plug, clap_params, items, param_count);
+    params_container_resync(plug->plug_params, items, item_count);
+    free(items);
     return 0;
 }
 
@@ -750,18 +786,6 @@ PRM_CONTAIN *clap_plug_param_return_param_container(CLAP_PLUG_INFO *plug_data,
         return NULL;
 
     return plug->plug_params;
-}
-
-// find this container's val_id whose owner_id equals this clap_id, -1 if
-// not found. Mirrors param_find_uid's own linear scan, but over owner_id
-static int clap_plug_find_val_id_by_clap_id(PRM_CONTAIN *plug_params,
-                                            uint32_t clap_id) {
-    unsigned int count = param_return_num_params(plug_params, 0);
-    for (unsigned int val_id = 0; val_id < count; val_id++) {
-        if (param_get_owner_id(plug_params, (int)val_id, 0) == clap_id)
-            return (int)val_id;
-    }
-    return -1;
 }
 
 static void clap_plug_ext_params_rescan(const clap_host_t *host,
@@ -785,9 +809,7 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
         uint32_t param_count =
             (uint32_t)param_return_num_params(plug->plug_params, 0);
         for (uint32_t param_num = 0; param_num < param_count; param_num++) {
-            // this param's real clap_id is stored as owner_id (see clap_
-            // plug_params_value_to_text's own comment) - no need for a
-            // fresh get_info call just to re-derive it.
+            // this param's real clap_id is stored as owner_id
             const char *param_name =
                 param_get_name(plug->plug_params, (int)param_num);
             if (!param_name || param_name[0] == '\0')
@@ -836,9 +858,27 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
     if ((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL) {
         if (plug->plug_inst_activated == 1)
             return;
-        context_sub_send_msg(
-            plug_data->control_data, (void *)plug_data, is_audio_thread,
-            "Plugin %s requested CLAP_PARAM_RESCAN_ALL\n", plug->plug_path);
+        const clap_plugin_params_t *clap_params =
+            plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
+        if (!clap_params)
+            return;
+        uint32_t param_count = clap_params->count(plug->plug_inst);
+        // param_count==0 still must run resync (as an empty new_params[])
+        // so pass 1 removes every param this plugin no longer has
+        PARAM_RESYNC_ITEM *items =
+            param_count > 0 ? malloc(param_count * sizeof(PARAM_RESYNC_ITEM))
+                            : NULL;
+        if (param_count > 0 && !items)
+            return;
+        uint32_t item_count =
+            param_count > 0
+                ? clap_plug_discover_params(plug, clap_params, items,
+                                           param_count)
+                : 0;
+        params_container_resync(plug->plug_params, items, item_count);
+        free(items);
+        // TODO (STAGE 3): flag this instance's params_dirty here once
+        // params are CX children - nothing consumes that yet
     }
 }
 
@@ -1594,6 +1634,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     // init the plugins array
     plug_data->plugins_dirty = false;
     plug_data->next_plug_uid = 0;
+    plug_data->next_param_uid = 0;
     for (int i = 0; i < (MAX_INSTANCES); i++) {
         CLAP_PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->clap_host_info = clap_info_host;

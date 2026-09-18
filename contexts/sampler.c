@@ -98,6 +98,9 @@ typedef struct _smp_info{
     bool samples_dirty;
     //monotonic counter for SMP_SMP.uid, never reset
     uint32_t next_smp_uid;
+    //monotonic counter for every sample param's uid across every sample,
+    //never reset - keeps a param's uid globally unique
+    uint32_t next_param_uid;
 }SMP_INFO;
 
 //functions for thread safe string messages
@@ -235,6 +238,7 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
     }
     smp_data->samples_dirty = false;
     smp_data->next_smp_uid = 0;
+    smp_data->next_param_uid = 0;
     for(int i = 0; i < (MAX_SAMPLES+1); i++){
 	 SMP_SMP* samp = &(smp_data->samples[i]);
 	 samp->buffer = NULL;
@@ -311,7 +315,8 @@ uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {
     SMP_SMP *cur_smp = &(smp_data->samples[smp_id]);
     // init the sample parameters to default values
     cur_smp->params = params_init_param_container(NULL);
-    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0, 0, NULL);
+    uint32_t p_uid = ++smp_data->next_param_uid;
+    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, p_uid, p_uid, NULL);
 
     // TODO samplerate is not needed, when we load sample to memory we also need
     // to convert it to the system sample rate, when system sample rate changes,

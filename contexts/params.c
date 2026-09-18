@@ -159,27 +159,45 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
         return -1;
     }
 
-    unsigned int new_count = param_container->num_of_params_rt + 1;
-    // growing this outer pointer array is always safe to realloc - it only
-    // ever moves pointer VALUES, never the structs they point at
-    PRM_PARAM_RT **new_rt_array =
-        realloc(param_container->rt_params, new_count * sizeof(PRM_PARAM_RT *));
-    if (!new_rt_array) {
-        free(new_rt_param);
-        free(new_ui_param);
-        return -1;
+    // reuse a freed slot before growing; ui_params is NULL at the same
+    // index, so checking rt_params alone is enough
+    int reuse_idx = -1;
+    for (unsigned int i = 0; i < param_container->num_of_params_rt; i++) {
+        if (!param_container->rt_params[i]) {
+            reuse_idx = (int)i;
+            break;
+        }
     }
-    param_container->rt_params = new_rt_array;
-    PRM_PARAM_UI **new_ui_array =
-        realloc(param_container->ui_params, new_count * sizeof(PRM_PARAM_UI *));
-    if (!new_ui_array) {
-        free(new_rt_param);
-        free(new_ui_param);
-        return -1;
-    }
-    param_container->ui_params = new_ui_array;
 
-    unsigned int idx = param_container->num_of_params_rt;
+    unsigned int idx;
+    if (reuse_idx != -1) {
+        idx = (unsigned int)reuse_idx;
+    } else {
+        unsigned int new_count = param_container->num_of_params_rt + 1;
+        // growing this outer pointer array is always safe to realloc - it
+        // only ever moves pointer VALUES, never the structs they point at
+        PRM_PARAM_RT **new_rt_array = realloc(
+            param_container->rt_params, new_count * sizeof(PRM_PARAM_RT *));
+        if (!new_rt_array) {
+            free(new_rt_param);
+            free(new_ui_param);
+            return -1;
+        }
+        param_container->rt_params = new_rt_array;
+        PRM_PARAM_UI **new_ui_array = realloc(
+            param_container->ui_params, new_count * sizeof(PRM_PARAM_UI *));
+        if (!new_ui_array) {
+            free(new_rt_param);
+            free(new_ui_param);
+            return -1;
+        }
+        param_container->ui_params = new_ui_array;
+
+        idx = param_container->num_of_params_rt;
+        param_container->num_of_params_rt = new_count;
+        param_container->num_of_params_ui = new_count;
+    }
+
     param_container->rt_params[idx] = new_rt_param;
     param_container->ui_params[idx] = new_ui_param;
 
@@ -203,9 +221,50 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     // Operation_ToggleHidden and set_to 0 or 1
     new_ui_param->is_hidden = 0;
 
-    param_container->num_of_params_rt = new_count;
-    param_container->num_of_params_ui = new_count;
     return (int)idx;
+}
+
+void params_container_resync(PRM_CONTAIN *param_container,
+                             const PARAM_RESYNC_ITEM *new_params,
+                             unsigned int new_count) {
+    if (!param_container)
+        return;
+    if (!new_params && new_count > 0)
+        return;
+
+    // pass 1: free and NULL any alive slot whose uid is no longer in
+    // new_params - never shift survivors 
+    for (unsigned int val_id = 0; val_id < param_container->num_of_params_rt;
+        val_id++) {
+        if (!param_container->rt_params[val_id])
+            continue;
+        uint32_t cur_uid = param_container->rt_params[val_id]->uid;
+        unsigned int still_present = 0;
+        for (unsigned int i = 0; i < new_count; i++) {
+            if (new_params[i].uid == cur_uid) {
+                still_present = 1;
+                break;
+            }
+        }
+        if (still_present)
+            continue;
+        free(param_container->rt_params[val_id]);
+        param_container->rt_params[val_id] = NULL;
+        free(param_container->ui_params[val_id]);
+        param_container->ui_params[val_id] = NULL;
+    }
+
+    // pass 2: add anything not already alive via param_add_param (reuses a
+    // freed slot if pass 1 left one). A survivor is left untouched -
+    // value/name refresh is the owner's own job.
+    for (unsigned int i = 0; i < new_count; i++) {
+        if (param_find_uid(param_container, new_params[i].uid) != -1)
+            continue;
+        param_add_param(param_container, new_params[i].name, new_params[i].val,
+                        new_params[i].min, new_params[i].max, new_params[i].inc,
+                        new_params[i].uid, new_params[i].owner_id,
+                        new_params[i].cookie);
+    }
 }
 
 void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
@@ -229,17 +288,15 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
             continue;
         // the value crossing the ring buffer is already final and clamped by
         // whichever side sent it (see param_set_value_rt/param_set_value) -
-        // store it verbatim, nothing to recompute here. The uid check
-        // guards against a since-freed-and-reused val_id (see
-        // PARAM_RING_DATA_BIT's own doc comment) - a survivor's uid never
-        // changes, so this only ever rejects a genuinely stale message.
+        // store it verbatim, nothing to recompute here. NULL/uid checks
+        // reject a message targeting a freed or freed-and-reused slot.
         if (rt_params) {
             if ((unsigned int)cur_bit.val_id >=
                 param_container->num_of_params_rt)
                 continue;
             PRM_PARAM_RT *cur_param =
                 param_container->rt_params[cur_bit.val_id];
-            if (cur_param->uid != cur_bit.uid)
+            if (!cur_param || cur_param->uid != cur_bit.uid)
                 continue;
             cur_param->val = cur_bit.param_value;
             cur_param->val_changed = 1;
@@ -248,7 +305,7 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
                 param_container->num_of_params_ui)
                 continue;
             PRM_PARAM_UI *cur_param = param_container->ui_params[cur_bit.val_id];
-            if (cur_param->uid != cur_bit.uid)
+            if (!cur_param || cur_param->uid != cur_bit.uid)
                 continue;
             cur_param->val = cur_bit.param_value;
         }
@@ -263,8 +320,10 @@ int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
         return -1;
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_rt)
         return -1;
-
     PRM_PARAM_RT *cur_param = param_container->rt_params[val_id];
+    if (!cur_param)
+        return -1;
+
     PARAM_T prev_val = cur_param->val;
     PARAM_T new_val =
         param_clamp(set_to, cur_param->min_val, cur_param->max_val);
@@ -290,8 +349,10 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
         return -1;
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
         return -1;
-
     PRM_PARAM_UI *cur_param = param_container->ui_params[val_id];
+    if (!cur_param)
+        return -1;
+
     // property-only operations - mutate ui-only fields, nothing to clamp or
     // propagate to the rt side, which has no matching fields
     switch (param_op) {
@@ -354,6 +415,8 @@ void *param_cookie_return_rt(PRM_CONTAIN *param_container, int val_id) {
         return NULL;
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_rt)
         return NULL;
+    if (!param_container->rt_params[val_id])
+        return NULL;
     return param_container->rt_params[val_id]->cookie;
 }
 
@@ -365,9 +428,13 @@ uint32_t param_get_uid(PRM_CONTAIN *param_container, int val_id,
         if (val_id < 0 ||
             (unsigned int)val_id >= param_container->num_of_params_rt)
             return 0;
+        if (!param_container->rt_params[val_id])
+            return 0;
         return param_container->rt_params[val_id]->uid;
     }
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return 0;
+    if (!param_container->ui_params[val_id])
         return 0;
     return param_container->ui_params[val_id]->uid;
 }
@@ -380,9 +447,13 @@ uint32_t param_get_owner_id(PRM_CONTAIN *param_container, int val_id,
         if (val_id < 0 ||
             (unsigned int)val_id >= param_container->num_of_params_rt)
             return 0;
+        if (!param_container->rt_params[val_id])
+            return 0;
         return param_container->rt_params[val_id]->owner_id;
     }
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return 0;
+    if (!param_container->ui_params[val_id])
         return 0;
     return param_container->ui_params[val_id]->owner_id;
 }
@@ -392,8 +463,11 @@ int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid) {
         return -1;
     // uid is identical on both sides once param_add_param sets it - checking
     // the ui side alone is sufficient, nothing on the rt side has ever
-    // needed to resolve a uid it doesn't already have a val_id for
+    // needed to resolve a uid it doesn't already have a val_id for. Skips
+    // NULL (freed) slots.
     for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
+        if (!param_container->ui_params[i])
+            continue;
         if (param_container->ui_params[i]->uid == uid)
             return (int)i;
     }
@@ -404,6 +478,8 @@ PARAM_T param_get_increment(PRM_CONTAIN *param_container, int val_id) {
     if (!param_container)
         return -1;
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
+    if (!param_container->ui_params[val_id])
         return -1;
     return param_container->ui_params[val_id]->inc_am;
 }
@@ -417,6 +493,8 @@ PARAM_T param_get_value(PRM_CONTAIN *param_container, int val_id,
             (unsigned int)val_id >= param_container->num_of_params_rt)
             return -1;
         PRM_PARAM_RT *cur_param = param_container->rt_params[val_id];
+        if (!cur_param)
+            return -1;
         // when returning the value we mark this param as no longer changed -
         // only the rt side tracks this (see PRM_PARAM_RT's doc comment)
         cur_param->val_changed = 0;
@@ -428,6 +506,8 @@ PARAM_T param_get_value(PRM_CONTAIN *param_container, int val_id,
         return raw_val;
     }
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
+    if (!param_container->ui_params[val_id])
         return -1;
     PARAM_T raw_val = param_container->ui_params[val_id]->val;
     if (param_container->user_data.build_value)
@@ -460,6 +540,8 @@ int param_get_if_changed_rt(PRM_CONTAIN *param_container, int val_id) {
         return -1;
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_rt)
         return -1;
+    if (!param_container->rt_params[val_id])
+        return -1;
     return param_container->rt_params[val_id]->val_changed;
 }
 
@@ -470,6 +552,8 @@ int param_get_if_any_changed_rt(PRM_CONTAIN *param_container) {
     if (num_params == 0)
         return -1;
     for (unsigned int i = 0; i < num_params; i++) {
+        if (!param_container->rt_params[i])
+            continue;
         if (param_container->rt_params[i]->val_changed == 1)
             return 1;
     }
@@ -481,6 +565,8 @@ unsigned int param_is_hidden(PRM_CONTAIN *param_container, int val_id) {
         return 0;
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
         return 0;
+    if (!param_container->ui_params[val_id])
+        return 0;
     return param_container->ui_params[val_id]->is_hidden;
 }
 
@@ -488,6 +574,8 @@ const char *param_get_name(PRM_CONTAIN *param_container, int val_id) {
     if (!param_container)
         return NULL;
     if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return NULL;
+    if (!param_container->ui_params[val_id])
         return NULL;
     return param_container->ui_params[val_id]->name;
 }

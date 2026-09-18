@@ -7,77 +7,9 @@ it each time. So: a fixed-array/pointer-backed module must NEVER move a
 surviving item's storage once a ContextId has been handed out for it - no
 compaction on remove. Free slots become gaps/tombstones, reused only by a
 later NEW item (which gets a new identity). Already how samples/plugins
-work (contexts/sampler.c, app_data.c's ops tables); params' own resync
-(STAGE 2 below) must follow the same rule.
-
-================================================================================
-STAGE 2 — dynamic params (add/remove at runtime), PARAMS RESYNC
-================================================================================
-Not built yet. contexts/clap_plugins.c's clap_plug_ext_params_rescan
-handles CLAP_PARAM_RESCAN_VALUES/TEXT/INFO for real; its CLAP_PARAM_
-RESCAN_ALL branch (param count/order/ids changed) is still a TODO stub
-that only logs. Do NOT implement it as "destroy the container and
-rebuild" - that hands every surviving param a brand-new identity even
-when nothing about it changed, breaking the CROSS-CUTTING INVARIANT.
-
-TODO: implement params_container_resync(container, new_params[],
-new_count), called by the owner (CLAP's RESCAN_ALL handler) with its
-current full param list, matched by uid not position:
-  pass 1 (removals) - for each val_id whose current uid is no longer in
-    new_params: free(rt_params[val_id]); rt_params[val_id] = NULL; same
-    for ui_params[val_id]. Nothing else moves; num_of_params_rt/ui do NOT
-    shrink - the slot stays a valid, NULL, reusable index. NEVER compact/
-    shift surviving params down to close the gap (would silently
-    reassign val_id for every survivor after it - breaks PARAM_RING_
-    DATA_BIT messages in flight and any other code that resolved a
-    val_id and expects it to keep meaning the same param). Shrinking the
-    outer array's CAPACITY by realloc'ing away trailing NULLs (tail
-    only, never a middle gap) is safe if ever worth it - not needed yet.
-  pass 2 (additions) - for each new_params[i] with no matching alive
-    (non-NULL) slot: find the first NULL slot (scan rt_params; ui_params
-    is NULL at the same index in lockstep) and malloc fresh PRM_PARAM_RT/
-    PRM_PARAM_UI into it, same field population param_add_param already
-    does (PRM_PARAM_RT: val, min_val, max_val, val_changed=0, uid,
-    owner_id, cookie; PRM_PARAM_UI: val, min_val, max_val, def_val=val,
-    inc_am, name, uid, owner_id, is_hidden=0) - uid minted from CLAP_PLUG_
-    PLUG.next_param_uid, which must NOT be reset here (only clap_plug_
-    params_create resets it, at initial discovery). No NULL slot found ->
-    grow both outer arrays by one (realloc).
-  survivors (uid in both) - untouched by either pass; RESCAN_VALUES/INFO
-    already refresh value/name for these.
-  Safe to mutate both arrays directly, no ring-buffer messaging needed
-  for the structural part - RESCAN_ALL only fires while the plugin is
-  deactivated (`if (plug->plug_inst_activated == 1) return;`), so the rt
-  thread isn't touching this container while resync runs.
-  Reports nothing to anyone - STAGE 3's own CX resync (below) discovers
-  what changed later by re-walking child_at and diffing.
-
-TODO: something to walk CLAP's CURRENT index space fresh (0..count())
-after a RESCAN_ALL and build the new_params[] array resync takes as
-input (name, min, max, inc, uid=next_param_uid++, owner_id=param_info.id,
-cookie, per current index) - structurally identical to clap_plug_params_
-create's own discovery loop. Factor both into one shared helper rather
-than duplicating it.
-
-TODO: every accessor in params.c needs a NULL check on the val_id it
-dereferences, once tombstoning exists - today they all assume every
-index below num_of_params_rt/ui is non-NULL. Applies to: param_get_if_
-any_changed_rt's loop, param_find_uid's loop, param_msgs_process (the
-one slot it writes into - needs the guard before its uid comparison can
-even run), and any future params-as-CX child_at. Anything walking
-0..num_of_params needs to SKIP NULL slots (not stop), same as sampler.c's
-own child_at already does for its samples array's gaps.
-
-If LV2 ever needs the same resync (it doesn't today - plug->controls is
-fixed at load, no add/remove-ports mechanism in LV2 core or the patch/
-parameters/port-props extensions this app uses): uid would need to stop
-being ct_iter (position) and become the port/control's SYMBOL hashed into
-a uint32_t instead - position is exactly what goes unstable across a
-reconfiguration. Not automatic, a deliberate plugins.c change.
-
-Once resync exists: revisit whether STAGE 3's CX-child wiring needs any
-of its growth logic duplicated, or can call params_container_resync
-directly.
+work (contexts/sampler.c, app_data.c's ops tables), and how params.c's own
+param_add_param/params_container_resync work (NULL-tombstone a freed
+slot, never shift a survivor).
 
 ================================================================================
 STAGE 3 — parameters as CX contexts, integrated into the action system
@@ -85,34 +17,59 @@ STAGE 3 — parameters as CX contexts, integrated into the action system
 Agreed direction: params become CX tree nodes (like plugin instances),
 not a live external list (like JACK ports).
 
-TODO / open question:
-- Materialize every parameter as a CX child, or only non-hidden ones
-  (PRM_PARAM_UI.is_hidden already exists)? Check real per-plugin param
-  counts (tens to low hundreds possible) against how the rest of the CX
-  tree scales before committing.
-
 TODO, shape already decided:
+- Materialize EVERY parameter as a CX child, hidden ones included - not
+  just non-hidden ones. is_hidden is a PROPERTY of an already-existing
+  param, not a structural fact about whether it exists - excluding hidden
+  params from child_at would make toggling Operation_ToggleHidden a
+  structural CX_ADDED/CX_REMOVED event (the child set child_at returns
+  would change) for a param whose actual identity/lifetime in params.c
+  never changed at all. Materializing all of them means a hidden toggle
+  is just an ordinary DATA_EVENT_CHANGED - simpler, and keeps child_at
+  only ever skipping tombstoned (NULL) slots, never also branching on
+  is_hidden.
+  Exposed via two separate things, not one, since querying and mutating
+  are different concerns:
+    - a new, general (not params-specific) `bool (*is_hidden)(void
+      *user_data)` on DataOps, gated by a new DATA_CAP_HIDDEN capability
+      bit - same pattern as DATA_CAP_NAME/CHILDREN/ACTIONS (the bit lives
+      on the shared per-KIND DataOps meaning "this kind has a hidden
+      concept at all"; the actual per-instance true/false comes from
+      calling the function with that param's user_data, same as name()
+      already works). Lets a UI filter/display without invoking an
+      action.
+    - DATA_ACTION_TOGGLE_HIDDEN, mapping to a one-line param_set_value(
+      container, val_id, ..., Operation_ToggleHidden) in action_do -
+      Operation_ToggleHidden already exists in paramOperType, this is
+      the "something needs it" moment already anticipated below.
+  Both sides already fully exist in params.c (param_is_hidden, Operation_
+  ToggleHidden) - this is purely DataObject/DataOps/action-system wiring,
+  no new params.c work.
+
 - Value changes: go through the (ui-side) param_set_value and its
   existing ring-buffer message to rt - matches the JACK/plugins pattern,
   no new plumbing expected.
 - Params as CX children: sample_ops/lv2_plugin_ops/clap_plugin_ops/synth-
   osc ops currently stub child_at to `return false` - need real child_at/
-  child_count backed by PRM_CONTAIN (needs STAGE 2 first). Each owning
-  instance needs its own instance-scoped params_dirty bool (distinct from
-  the container-level plugins_dirty/samples_dirty, which mean "the SET of
-  instances changed"), set right after params_container_resync finishes
-  and checked inside the existing per-cycle rt-to-ui message loop
-  (clap_read_rt_to_ui_messages today; LV2/synth/sampler need the
-  equivalent if/when they get dynamic params too). The rest of the
-  pipeline (child diff, DATA_EVENT_CHILDREN_CHANGED) is already fully
-  generic - zero new code needed there.
+  child_count backed by PRM_CONTAIN (params_container_resync/param_add_
+  param already handle tombstones - child_at just needs to skip NULL
+  slots the same way sampler.c's own child_at already does for its
+  samples array's gaps). Each owning instance needs its own instance-
+  scoped params_dirty bool (distinct from the container-level plugins_
+  dirty/samples_dirty, which mean "the SET of instances changed"), set
+  right after params_container_resync finishes and checked inside the
+  existing per-cycle rt-to-ui message loop (clap_read_rt_to_ui_messages
+  today; LV2/synth/sampler need the equivalent if/when they get dynamic
+  params too). The rest of the pipeline (child diff, DATA_EVENT_CHILDREN_
+  CHANGED) is already fully generic - zero new code needed there.
 - DATA_ACTION_SET_VALUE (one numeric arg, the value) and DATA_ACTION_
   ADJUST_VALUE (one signed step COUNT, not a raw value - action_do maps
   sign to Operation_Increase/Decrease). Both map to one-line param_set_
   value(container, val_id, set_to, NULL, Operation_...) calls in
-  action_do. Other paramOperType values (DefValue/SetIncr/SetDefValue/
-  ChangeName/ToggleHidden) stay unexposed to the action system until
-  something needs them.
+  action_do. ToggleHidden is separately exposed via DATA_ACTION_TOGGLE_
+  HIDDEN (see the materialize-all-params point above). Other paramOperType
+  values (DefValue/SetIncr/SetDefValue/ChangeName) stay unexposed to the
+  action system until something needs them.
 - DATA_ACTION_SET_CHOICE for CLAP_PARAM_IS_ENUM params: reuse list_at/
   DataChoice like the plugin catalogue does - list_at walks min..max
   calling param_get_value_as_string per step for the label. Reuses
@@ -146,6 +103,24 @@ params.h, still open:
   app doesn't have; modulation would compose with a routing action
   related to but not reducible to CONNECT. Revisit only when specifically
   decided to build either.
+- clap_plug_discover_params reuses a param's uid across RESCAN_ALL by
+  matching owner_id (clap_id) against the not-yet-pruned old container -
+  if a plugin frees a clap_id and reassigns it to an unrelated new param
+  within the SAME rescan, the new param gets misidentified as a survivor
+  of the old one and its freshly-read name/min/max/default are discarded
+  (params_container_resync leaves survivors untouched). Not fixed: no
+  params.c setter exists for a live param's min/max/inc, and adding one
+  raises its own reclamp-in-flight questions. Narrow, plugin-behavior-
+  dependent edge case - revisit only if an actual plugin is found to hit
+  it.
+
+If LV2 ever needs its own params_container_resync (it doesn't today -
+plug->controls is fixed at load, no add/remove-ports mechanism in LV2
+core or the patch/parameters/port-props extensions this app uses): its
+uid would need to stop being ct_iter (position) and become the port/
+control's SYMBOL hashed into a uint32_t instead - position is exactly
+what goes unstable across a reconfiguration. Not automatic, a deliberate
+plugins.c change.
 
 ================================================================================
 FUTURE - categories for CHOICE / MULTI_CHOICE lists (not scheduled -

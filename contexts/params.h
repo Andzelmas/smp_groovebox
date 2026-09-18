@@ -1,5 +1,6 @@
 #pragma once
 #include "../structs.h"
+#include "../types.h"
 #include <stdint.h>
 // operations param_set_value can apply to a parameter - the four value ops
 // (Decrease/Increase/SetValue/DefValue) clamp and may propagate to the rt
@@ -60,11 +61,43 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 // id space for this param (e.g. CLAP's clap_id)
 // cookie is optional convenience storage for the owner (e.g. a CLAP param's
 // cookie) - may be NULL, and is only ever readable from the rt side (see
-// param_cookie_return_rt). Returns the new val_id (same index on both the rt
-// and ui side) on success.
+// param_cookie_return_rt). Reuses a freed slot if one exists, else grows the
+// container. Returns the new val_id (same index on both the rt and ui side)
+// on success.
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
                     uint32_t owner_id, void *cookie);
+
+// one parameter as the owner currently sees it, for params_container_resync.
+// name is copied, doesn't need to outlive the call. uid: for a survivor,
+// pass its EXISTING uid (via param_find_uid/param_get_uid) - resync matches
+// by uid only, so a wrong value here drops the survivor instead of matching
+// it. For a genuinely new param, mint a fresh uid, never reused for this
+// container's lifetime.
+typedef struct _params_resync_item {
+    char name[MAX_SHORT_NAME_LENGTH];
+    PARAM_T val;
+    PARAM_T min;
+    PARAM_T max;
+    PARAM_T inc;
+    uint32_t uid;
+    uint32_t owner_id;
+    void *cookie;
+} PARAM_RESYNC_ITEM;
+
+// reconciles the container against new_params[], the owner's current full
+// param list, matched by uid, not position:
+//   - existing val_id whose uid is missing from new_params -> removed
+//     (freed, slot set to NULL, never shifted
+//   - new_params[] entry with no existing match -> added via param_add_
+//     param.
+//   - new_params[] entry that already exists -> left untouched (a
+//     survivor); value/name refresh is the owner's own job.
+// Only safe to call while nothing is concurrently reading/writing this
+// container from the rt side.
+void params_container_resync(PRM_CONTAIN *param_container,
+                             const PARAM_RESYNC_ITEM *new_params,
+                             unsigned int new_count);
 
 // process ring_buffers - apply value messages that crossed from the other
 // side. Each message is already the final, clamped value (see
