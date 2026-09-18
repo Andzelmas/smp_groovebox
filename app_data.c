@@ -962,19 +962,11 @@ static size_t clap_param_action_args(void *user_data, DataActionType type,
     }
     return 0;
 }
-// a SET_CHOICE value encodes the actual integer param value (not a
-// position) - CLAP requires IS_ENUM to imply IS_STEPPED, so every value in
-// [min,max] is a whole number.
-static uint64_t clap_param_choice_encode(int enum_val) {
-    return MAKE_LIST_ID(DATA_LIST_NS_PARAM_CHOICE, (uint64_t)(uint32_t)enum_val);
-}
-static int clap_param_choice_decode(uint64_t value) {
-    return (int)(uint32_t)(value & CTXID_LOCAL_MASK);
-}
 static size_t clap_param_list_count(void *user_data, DataListId list,
                                     const DataActionReq *partial) {
-    (void)list;
     (void)partial;
+    if (list != LIST_PARAM_CHOICES)
+        return 0;
     PRM_CONTAIN *container;
     int val_id;
     if (!param_handle_resolve(user_data, &container, &val_id))
@@ -988,8 +980,9 @@ static size_t clap_param_list_count(void *user_data, DataListId list,
 static bool clap_param_list_at(void *user_data, DataListId list,
                                const DataActionReq *partial, size_t idx,
                                DataChoice *out) {
-    (void)list;
     (void)partial;
+    if (list != LIST_PARAM_CHOICES)
+        return false;
     PRM_CONTAIN *container;
     int val_id;
     if (!param_handle_resolve(user_data, &container, &val_id))
@@ -1002,7 +995,9 @@ static bool clap_param_list_at(void *user_data, DataListId list,
     const char *label = param_get_value_as_string(container, val_id, val);
     if (!label)
         return false;
-    out->value = clap_param_choice_encode((int)val);
+    // the raw integer param value (not a position) - CLAP requires IS_ENUM
+    // to imply IS_STEPPED, so every value in [min,max] is a whole number
+    out->value = (uint64_t)(uint32_t)(int)val;
     out->label = label;
     out->flags = 0;
     return true;
@@ -1036,7 +1031,7 @@ static DataActionResult clap_param_action_do(void *user_data,
         return DATA_ACTION_OK;
     }
     if (req->type == DATA_ACTION_SET_CHOICE) {
-        int enum_val = clap_param_choice_decode(req->add_choice.choice_value);
+        int enum_val = (int)(uint32_t)req->add_choice.choice_value;
         if (param_set_value(container, val_id, (PARAM_T)enum_val, NULL,
                             Operation_SetValue) != 0)
             return DATA_ACTION_ERR_DATA;
