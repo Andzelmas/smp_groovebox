@@ -46,10 +46,7 @@ typedef struct _params_param_rt {
 } PRM_PARAM_RT;
 
 // ui-side parameter - everything the ui thread needs to present and edit a
-// parameter. No val_changed here - the ui side has no polled protocol consuming
-// it once something wants to know "did this param's value change" from the ui
-// side, that belongs on the push-based CX DATA_EVENT_CHANGED mechanism, not a
-// stored flag here.
+// parameter.
 typedef struct _params_param_ui {
     PARAM_T val;
     PARAM_T min_val;
@@ -60,6 +57,9 @@ typedef struct _params_param_ui {
     // display name - can change during the lifetime of the program
     //(Operation_ChangeName), unlike uid which never does
     char name[MAX_SHORT_NAME_LENGTH];
+    // presentational grouping metadata only, never a real tree level - see
+    // param_add_param
+    char category[MAX_SHORT_NAME_LENGTH];
     uint32_t uid;
     // owner-supplied secondary id, opaque to params.c
     uint32_t owner_id;
@@ -144,7 +144,8 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
 
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    uint32_t owner_id, uint32_t flags, void *cookie) {
+                    uint32_t owner_id, uint32_t flags, const char *category,
+                    void *cookie) {
     if (!param_container)
         return -1;
     if (!name)
@@ -219,6 +220,8 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     new_ui_param->def_val = val;
     new_ui_param->inc_am = inc;
     snprintf(new_ui_param->name, MAX_SHORT_NAME_LENGTH, "%s", name);
+    snprintf(new_ui_param->category, MAX_SHORT_NAME_LENGTH, "%s",
+            category ? category : "");
     new_ui_param->uid = uid;
     new_ui_param->owner_id = owner_id;
     new_ui_param->flags = flags;
@@ -267,7 +270,8 @@ void params_container_resync(PRM_CONTAIN *param_container,
         param_add_param(param_container, new_params[i].name, new_params[i].val,
                         new_params[i].min, new_params[i].max, new_params[i].inc,
                         new_params[i].uid, new_params[i].owner_id,
-                        new_params[i].flags, new_params[i].cookie);
+                        new_params[i].flags, new_params[i].category,
+                        new_params[i].cookie);
     }
 }
 
@@ -654,6 +658,16 @@ const char *param_get_name(PRM_CONTAIN *param_container, int val_id) {
     if (!param_container->ui_params[val_id])
         return NULL;
     return param_container->ui_params[val_id]->name;
+}
+
+const char *param_get_category(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return "";
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return "";
+    if (!param_container->ui_params[val_id])
+        return "";
+    return param_container->ui_params[val_id]->category;
 }
 
 void *param_get_handle(PRM_CONTAIN *param_container, int val_id) {

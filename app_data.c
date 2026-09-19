@@ -1053,6 +1053,47 @@ static const DataOps clap_param_ops = {
     .action_do = cx_param_action_do,
 };
 
+// one entry while sorting a container's alive params by category - val_id
+// is a tiebreak, so equal categories stay in a fixed order regardless of
+// qsort's own (unspecified) stability.
+typedef struct {
+    int val_id;
+    const char *category;
+} CxParamSortEntry;
+
+static int cx_param_sort_cmp(const void *a, const void *b) {
+    const CxParamSortEntry *ea = (const CxParamSortEntry *)a;
+    const CxParamSortEntry *eb = (const CxParamSortEntry *)b;
+    int c = strcmp(ea->category, eb->category);
+    if (c != 0)
+        return c;
+    return (ea->val_id > eb->val_id) - (ea->val_id < eb->val_id);
+}
+
+// fills out[] with every alive val_id in container, sorted by category then
+// val_id - uncategorized ("") params sort first, since "" precedes every
+// non-empty string. out[] is caller-owned, sized to hold at least param_
+// return_num_params(container, 0) entries. Returns how many were written.
+static unsigned int cx_param_sorted_val_ids(PRM_CONTAIN *container, int *out) {
+    unsigned int total = param_return_num_params(container, 0);
+    CxParamSortEntry *entries = malloc(total * sizeof(CxParamSortEntry));
+    if (!entries)
+        return 0;
+    unsigned int n = 0;
+    for (unsigned int i = 0; i < total; i++) {
+        if (!param_get_name(container, (int)i))
+            continue;
+        entries[n].val_id = (int)i;
+        entries[n].category = param_get_category(container, (int)i);
+        n++;
+    }
+    qsort(entries, n, sizeof(CxParamSortEntry), cx_param_sort_cmp);
+    for (unsigned int i = 0; i < n; i++)
+        out[i] = entries[i].val_id;
+    free(entries);
+    return n;
+}
+
 // single loaded clap plugin. user_data is the plugin handle from
 // clap_plug_plugin_return.
 static size_t clap_plugin_child_count(void *user_data) {
@@ -1072,21 +1113,23 @@ static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
     if (!container)
         return false;
     unsigned int total = param_return_num_params(container, 0);
-    size_t seen = 0;
-    for (unsigned int i = 0; i < total; i++) {
-        if (!param_get_name(container, (int)i))
-            continue;
-        if (seen == idx) {
-            void *handle = param_get_handle(container, (int)i);
-            if (!handle)
-                return false;
+    if (total == 0)
+        return false;
+    int *sorted = malloc(total * sizeof(int));
+    if (!sorted)
+        return false;
+    unsigned int n = cx_param_sorted_val_ids(container, sorted);
+    bool ok = false;
+    if (idx < n) {
+        void *handle = param_get_handle(container, sorted[idx]);
+        if (handle) {
             out->ops = &clap_param_ops;
             out->user_data = handle;
-            return true;
+            ok = true;
         }
-        seen++;
     }
-    return false;
+    free(sorted);
+    return ok;
 }
 static ContextId clap_plugin_id(void *user_data) {
     return MAKE_ID(DATA_NS_CLAP_PLUG, clap_plug_plugin_uid(user_data));

@@ -523,25 +523,25 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 	cur_osc->params = params_init_param_container(&osc_params_user_data);
 	uint32_t p_uid;
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Amp",     0.8,   0.00001, 1, 0.01, p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "Amp",     0.8,   0.00001, 1, 0.01, p_uid, p_uid, 0, NULL, NULL);
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Freq",    0,     -12, 12,     0.1,  p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "Freq",    0,     -12, 12,     0.1,  p_uid, p_uid, 0, NULL, NULL);
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Spread",  0,     0, 1,        0.01, p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "Spread",  0,     0, 1,        0.01, p_uid, p_uid, 0, NULL, NULL);
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Wobble",  0,     0, 1,        0.05, p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "Wobble",  0,     0, 1,        0.05, p_uid, p_uid, 0, NULL, NULL);
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Octave",  0,     ((MAX_SEMITONES - 12) / 12.0) * -1, (MAX_SEMITONES - 12) / 12.0, 1, p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "Octave",  0,     ((MAX_SEMITONES - 12) / 12.0) * -1, (MAX_SEMITONES - 12) / 12.0, 1, p_uid, p_uid, 0, NULL, NULL);
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Table",   0,     0, 3,        1,    p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "Table",   0,     0, 3,        1,    p_uid, p_uid, 0, NULL, NULL);
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "A",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "A",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  p_uid, p_uid, 0, NULL, NULL);
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "D",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "D",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  p_uid, p_uid, 0, NULL, NULL);
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "S",       1.0,   0.0, 1.0,     0.01, p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "S",       1.0,   0.0, 1.0,     0.01, p_uid, p_uid, 0, NULL, NULL);
 	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "R",       0.001, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  p_uid, p_uid, 0, NULL);
+	param_add_param(cur_osc->params, "R",       0.001, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  p_uid, p_uid, 0, NULL, NULL);
 
 	synth_activate_backend_ports(synth_data, cur_osc);
     }

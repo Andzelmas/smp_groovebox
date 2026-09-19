@@ -19,15 +19,23 @@ not a live external list (like JACK ports). Build the full vertical
 slice (steps below) on CLAP first, then replicate the same shape to
 LV2/sampler/synth - each has its own small deltas, noted per step.
 
-STEPS 0-4: DONE for CLAP. Verified via clean build (-Wall -Wextra, no
-new warnings) and a real pty-driven CLI run loading SG-323 under
-valgrind (0 definitely/indirectly/possibly lost; the only reported
-errors are a pre-existing uninitialised-value warning inside SG-323's
-own JUCE code, unrelated to this work) - params show up as real named
-CX children with correctly gated actions. Two things surfaced along the
-way, tracked below: the CLI can't yet collect a DATA_ARG_NUMBER value,
-and jack_funcs.c/Trk's own params never got the uid-uniqueness fix the
-other four modules got earlier this session.
+STEPS 0-4 and 6: DONE for CLAP. STEP 5 implemented, then removed - see
+its own entry below for why. Steps 0-4 verified via clean build (-Wall
+-Wextra, no new warnings) and a real pty-driven CLI run loading SG-323
+under valgrind (0 definitely/indirectly/possibly lost; the only
+reported errors are a pre-existing uninitialised-value warning inside
+SG-323's own JUCE code, unrelated to this work) - params show up as
+real named CX children with correctly gated actions. STEP 6 verified
+the same way against Surge XT (hundreds of real params): valgrind clean
+(0/0/0, 0 errors), and child_at's category sort visibly confirmed -
+273 contiguous Scene A params, then 273 contiguous Scene B, then 209
+contiguous FX params, uncategorized Bypass sorting first. Two things
+surfaced along the way, tracked below:
+the CLI can't yet collect a DATA_ARG_NUMBER value, and jack_funcs.c/
+Trk's own params never got the uid-uniqueness fix the other four
+modules got earlier this session. cx_param_sorted_val_ids (app_data.c)
+is also already owner-agnostic, same as the other cx_param_* functions -
+LV2/sampler/synth's own child_at can reuse it as-is.
 
 STEP 0 - param ContextId:
 New namespace per owner kind in app_data.c (DATA_NS_CLAP_PARAM/DATA_NS_
@@ -140,18 +148,28 @@ STEP 4 - UI can change values:
     self-deprioritized). LV2's flags are set once, correctly, at param_
     add_param time and never need touching again.
 
-STEP 5 - UI reacts to individual param changes:
-PRM_PARAM_UI gets a ui_changed flag mirroring PRM_PARAM_RT.val_changed,
-set by param_msgs_process on a ui-side apply; param_get_if_changed_ui
-checks-and-clears it, mirroring param_get_if_changed_rt. params.c and
-the owner modules stay ContextId-ignorant - no signature changes to any
-*_read_rt_to_ui_messages function. app_data_update polls the flag per
-param right after its existing drain calls, same spot/shape as the
-plugins_dirty checks, and is the only place that mints the ContextId and
-calls app_data_push_event - content-free DATA_EVENT_CHANGED, no value/
-name distinction. The current CLI won't consume this (confirmed - full
-redraw every cycle, doesn't read CX_CHANGED at all) - pure future-
-proofing for a selective-redraw UI.
+STEP 5 - UI reacts to individual param changes: implemented, then
+reverted - decided against. PRM_PARAM_UI got a ui_changed flag, set by
+param_msgs_process on a ui-side apply, polled by app_data_update to
+push a per-param DATA_EVENT_CHANGED. Removed because: (1) it only ever
+fired for value changes (name/flags apply directly to ui_params, never
+through the ring buffer, so it was never the "no value/name
+distinction" signal it claimed to be), (2) a fast-modulated param could
+flip it every app_data_update cycle with no natural pacing, and (3)
+most importantly, it wasn't protecting anything real - unlike the rt
+side's val_changed (gates genuinely expensive, avoidable work: re-
+sending a CLAP event, recomputation), PRM_PARAM_UI is already kept
+continuously live by param_msgs_process regardless of who's watching,
+so any consumer that just re-reads it on its own schedule (a redraw, a
+coarser event, anything) already gets correct data for free - a per-
+value push notification wasn't gating any real cost, just adding an
+unpaced event source. If a future UI genuinely needs to know "something
+in this instance's params changed" for its own redraw scheduling, the
+already-existing per-instance params_dirty/DATA_EVENT_CHILDREN_CHANGED
+(structural) is the right level to hook - polling only happens once per
+app_data_update cycle either way, so per-param granularity never bought
+any latency, only a saved linear rescan over an already-cheap, bounded
+param count.
 
 STEP 6 - categories:
 PRM_PARAM_UI gets a category/module string field (CLAP: clap_param_
@@ -161,8 +179,9 @@ params sorted by category so a UI can print a header over contiguous
 runs. CLI-side grouping/header display not yet designed - its own small
 pass once this lands.
 
-Once proven on CLAP, replicate steps 1-6 to LV2/sampler/synth (each's
-deltas noted above, per step).
+Once proven on CLAP, replicate steps 1-4 and 6 to LV2/sampler/synth
+(each's deltas noted above, per step) - STEP 5 stays unimplemented
+everywhere, see its own entry above.
 
 TODO - found while implementing STEPS 0-4, not yet fixed:
 - CLI can't collect a DATA_ARG_NUMBER arg: smp_groovebox_ui_cli.c's
