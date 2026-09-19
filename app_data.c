@@ -313,222 +313,11 @@ static ContextId trk_id(void *user_data) {
     return MAKE_ID(DATA_NS_SINGLETON, SID_TRK);
 }
 
-// DATA_CAP_ACTIONS: Trk hosts the generic bipartite CONNECT action over live
-// JACK ports. Ports/connections are never materialised into the CX tree
-// - list_count/list_at always query JACK live.
-
-// max full JACK port name length ("client:port")
-#define TRK_PORT_NAME_MAX 320
-// scratch for the one DataChoice.label a list_at call hands back. Valid only
-// until the NEXT list_count/list_at call on this ops table - callers must
-// read/copy it before asking for another choice, same discipline as
-// nav_cx_name_return's borrowed pointer. 
-static char trk_port_name_buf[TRK_PORT_NAME_MAX];
-
-// search jack_data's ports of the given flow (JackPortIsOutput/
-// JackPortIsInput) for one whose hashed name matches key. Tries each port type in turn
-// (rather than PORT_TYPE_UNKNOWN's single "any type" query) so that, on
-// success, out_type (if non-NULL) can report which type it was found under -
-// the CONNECT target list needs this to filter to matching-type ports.
-// Copies the port's name into name_buf and returns true on success; false
-// (name_buf/out_type untouched) if no currently-live port matches - callers
-// should treat that as ERR_STALE, not ERR_INVALID: the value's namespace was
-// fine, the specific port just isn't there anymore.
-static bool trk_resolve_port(JACK_INFO *jack_data, uint64_t key,
-                             unsigned long flow, char *name_buf,
-                             size_t name_buf_size, unsigned int *out_type) {
-    static const unsigned int types[] = {PORT_TYPE_AUDIO, PORT_TYPE_MIDI};
-    for (size_t t = 0; t < sizeof(types) / sizeof(types[0]); t++) {
-        const char **names = app_jack_port_names(jack_data, NULL, types[t], flow);
-        if (!names)
-            continue;
-        bool found = false;
-        for (size_t i = 0; names[i]; i++) {
-            if ((fnv1a64(names[i]) & CTXID_LOCAL_MASK) != key)
-                continue;
-            snprintf(name_buf, name_buf_size, "%s", names[i]);
-            found = true;
-            break;
-        }
-        free(names);
-        if (found) {
-            if (out_type)
-                *out_type = types[t];
-            return true;
-        }
-    }
-    return false;
-}
-
-// fill *out with the idx-th port of the given flow (optionally type-filtered
-// - PORT_TYPE_UNKNOWN means any type, matching app_jack_port_names). If
-// linked_against is non-NULL, each row's DATA_CHOICE_LINKED bit reflects
-// whether it is currently connected to that port name. Used for both
-// LID_PORTS_OUT (type_pattern=UNKNOWN, linked_against=NULL - the source list
-// itself has no "linked" concept) and LID_PORTS_IN (type_pattern= the chosen
-// source's type, linked_against=the chosen source's name).
-static bool trk_enumerate_at(JACK_INFO *jack_data, unsigned int type_pattern,
-                             unsigned long flow, const char *linked_against,
-                             size_t idx, DataChoice *out) {
-    const char **names = app_jack_port_names(jack_data, NULL, type_pattern, flow);
-    if (!names)
-        return false;
-    bool found = false;
-    for (size_t i = 0; names[i]; i++) {
-        if (i != idx)
-            continue;
-        out->value = MAKE_ID(DATA_LIST_NS_PORTS, fnv1a64(names[i]));
-        snprintf(trk_port_name_buf, sizeof(trk_port_name_buf), "%s", names[i]);
-        out->label = trk_port_name_buf;
-        out->flags = (linked_against &&
-                     app_jack_ports_connected(jack_data, linked_against, names[i]))
-                        ? DATA_CHOICE_LINKED
-                        : 0;
-        found = true;
-        break;
-    }
-    free(names);
-    return found;
-}
-
-static size_t trk_action_list(void *user_data, DataAction *out, size_t cap) {
-    (void)user_data;
-    if (!out || cap < 1)
-        return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_CONNECT,
-        .label = "Connect",
-        .tooltip = "Connect or disconnect JACK ports",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_NORMAL,
-    };
-    return 1;
-}
-
-static size_t trk_action_args(void *user_data, DataActionType type,
-                              DataArgSpec *out, size_t cap) {
-    (void)user_data;
-    if (type != DATA_ACTION_CONNECT)
-        return 0;
-    if (!out || cap < 2)
-        return 0;
-    out[0] = (DataArgSpec){
-        .name = "source",
-        .label = "Output port",
-        .kind = DATA_ARG_CHOICE,
-        .required = true,
-        .list = MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_OUT),
-    };
-    out[1] = (DataArgSpec){
-        .name = "targets",
-        .label = "Input ports",
-        .kind = DATA_ARG_MULTI_CHOICE,
-        .required = true,
-        .list = MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_IN),
-    };
-    return 2;
-}
-
-static size_t trk_list_count(void *user_data, DataListId list,
-                             const DataActionReq *partial) {
-    (void)user_data;
-    (void)partial;
-    if (list != MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_OUT) &&
-        list != MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_IN))
-        return 0;
-    // unknown up front (would mean scanning just to count, then scanning
-    // again to fetch) - page via list_at until it returns false, per the
-    // contract's own "0 = unknown" allowance.
-    return 0;
-}
-
-static bool trk_list_at(void *user_data, DataListId list,
-                        const DataActionReq *partial, size_t idx,
-                        DataChoice *out) {
-    JACK_INFO *jack_data = (JACK_INFO *)user_data;
-    if (!jack_data)
-        return false;
-
-    if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_OUT))
-        return trk_enumerate_at(jack_data, PORT_TYPE_UNKNOWN, JackPortIsOutput,
-                                NULL, idx, out);
-
-    if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_IN)) {
-        // empty until a source is chosen - nothing to filter/link against yet
-        if (!partial || partial->type != DATA_ACTION_CONNECT)
-            return false;
-        ContextId source_val = (ContextId)partial->connect.source;
-        if (CTXID_NS(source_val) != DATA_LIST_NS_PORTS)
-            return false;
-
-        char source_name[TRK_PORT_NAME_MAX];
-        unsigned int source_type;
-        if (!trk_resolve_port(jack_data, source_val & CTXID_LOCAL_MASK,
-                              JackPortIsOutput, source_name,
-                              sizeof(source_name), &source_type))
-            return false; // the chosen source is already gone
-
-        // targets must match the source's type (audio<->audio, midi<->midi)
-        return trk_enumerate_at(jack_data, source_type, JackPortIsInput,
-                                source_name, idx, out);
-    }
-
-    return false;
-}
-
-static DataActionResult trk_action_do(void *user_data,
-                                      const DataActionReq *req,
-                                      ContextId *out_new) {
-    JACK_INFO *jack_data = (JACK_INFO *)user_data;
-    (void)out_new; // CONNECT creates no new context
-    if (!jack_data || !req || req->type != DATA_ACTION_CONNECT)
-        return DATA_ACTION_ERR_INVALID;
-    if (!req->connect.targets || req->connect.target_count == 0)
-        return DATA_ACTION_ERR_INVALID;
-
-    ContextId source_val = (ContextId)req->connect.source;
-    if (CTXID_NS(source_val) != DATA_LIST_NS_PORTS)
-        return DATA_ACTION_ERR_INVALID;
-
-    char source_name[TRK_PORT_NAME_MAX];
-    if (!trk_resolve_port(jack_data, source_val & CTXID_LOCAL_MASK,
-                          JackPortIsOutput, source_name, sizeof(source_name),
-                          NULL))
-        return DATA_ACTION_ERR_STALE;
-
-    bool any_failed = false;
-    for (size_t i = 0; i < req->connect.target_count; i++) {
-        ContextId target_val = (ContextId)req->connect.targets[i];
-        if (CTXID_NS(target_val) != DATA_LIST_NS_PORTS) {
-            any_failed = true;
-            continue;
-        }
-        char target_name[TRK_PORT_NAME_MAX];
-        if (!trk_resolve_port(jack_data, target_val & CTXID_LOCAL_MASK,
-                              JackPortIsInput, target_name,
-                              sizeof(target_name), NULL)) {
-            any_failed = true;
-            continue;
-        }
-        bool linked = app_jack_ports_connected(jack_data, source_name, target_name);
-        int rc = linked ? app_jack_disconnect_ports(jack_data, source_name, target_name)
-                        : app_jack_connect_ports(jack_data, source_name, target_name);
-        if (rc != 0)
-            any_failed = true;
-    }
-    return any_failed ? DATA_ACTION_ERR_DATA : DATA_ACTION_OK;
-}
-
 static const DataOps trk_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
     .id = trk_id,
     .child_count = trk_child_count,
     .child_at = trk_child_at,
-    .action_list = trk_action_list,
-    .action_args = trk_action_args,
-    .list_count = trk_list_count,
-    .list_at = trk_list_at,
-    .action_do = trk_action_do,
     .name = trk_name,
 };
 
@@ -1396,11 +1185,225 @@ static ContextId root_id(void *user_data) {
     (void)user_data;
     return MAKE_ID(DATA_NS_SINGLETON, SID_ROOT);
 }
+
+// DATA_CAP_ACTIONS: the root context hosts the generic bipartite CONNECT action
+// over live JACK ports Ports/connections are never materialised into the CX
+// tree - list_count/list_at always query JACK live.
+
+// max full JACK port name length ("client:port")
+#define JACK_PORT_NAME_MAX 320
+// scratch for the one DataChoice.label a list_at call hands back. Valid only
+// until the NEXT list_count/list_at call on this ops table - callers must
+// read/copy it before asking for another choice, same discipline as
+// nav_cx_name_return's borrowed pointer.
+static char root_connect_port_name_buf[JACK_PORT_NAME_MAX];
+
+// search jack_data's ports of the given flow (JackPortIsOutput/
+// JackPortIsInput) for one whose hashed name matches key. Tries each port type in turn
+// (rather than PORT_TYPE_UNKNOWN's single "any type" query) so that, on
+// success, out_type (if non-NULL) can report which type it was found under -
+// the CONNECT target list needs this to filter to matching-type ports.
+// Copies the port's name into name_buf and returns true on success; false
+// (name_buf/out_type untouched) if no currently-live port matches - callers
+// should treat that as ERR_STALE, not ERR_INVALID: the value's namespace was
+// fine, the specific port just isn't there anymore.
+static bool root_connect_resolve_port(JACK_INFO *jack_data, uint64_t key,
+                             unsigned long flow, char *name_buf,
+                             size_t name_buf_size, unsigned int *out_type) {
+    static const unsigned int types[] = {PORT_TYPE_AUDIO, PORT_TYPE_MIDI};
+    for (size_t t = 0; t < sizeof(types) / sizeof(types[0]); t++) {
+        const char **names = app_jack_port_names(jack_data, NULL, types[t], flow);
+        if (!names)
+            continue;
+        bool found = false;
+        for (size_t i = 0; names[i]; i++) {
+            if ((fnv1a64(names[i]) & CTXID_LOCAL_MASK) != key)
+                continue;
+            snprintf(name_buf, name_buf_size, "%s", names[i]);
+            found = true;
+            break;
+        }
+        free(names);
+        if (found) {
+            if (out_type)
+                *out_type = types[t];
+            return true;
+        }
+    }
+    return false;
+}
+
+// fill *out with the idx-th port of the given flow (optionally type-filtered
+// - PORT_TYPE_UNKNOWN means any type, matching app_jack_port_names). If
+// linked_against is non-NULL, each row's DATA_CHOICE_LINKED bit reflects
+// whether it is currently connected to that port name. Used for both
+// LID_PORTS_OUT (type_pattern=UNKNOWN, linked_against=NULL - the source list
+// itself has no "linked" concept) and LID_PORTS_IN (type_pattern= the chosen
+// source's type, linked_against=the chosen source's name).
+static bool root_connect_enumerate_at(JACK_INFO *jack_data, unsigned int type_pattern,
+                             unsigned long flow, const char *linked_against,
+                             size_t idx, DataChoice *out) {
+    const char **names = app_jack_port_names(jack_data, NULL, type_pattern, flow);
+    if (!names)
+        return false;
+    bool found = false;
+    for (size_t i = 0; names[i]; i++) {
+        if (i != idx)
+            continue;
+        out->value = MAKE_ID(DATA_LIST_NS_PORTS, fnv1a64(names[i]));
+        snprintf(root_connect_port_name_buf, sizeof(root_connect_port_name_buf), "%s", names[i]);
+        out->label = root_connect_port_name_buf;
+        out->flags = (linked_against &&
+                     app_jack_ports_connected(jack_data, linked_against, names[i]))
+                        ? DATA_CHOICE_LINKED
+                        : 0;
+        found = true;
+        break;
+    }
+    free(names);
+    return found;
+}
+
+static size_t root_connect_action_list(void *user_data, DataAction *out, size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataAction){
+        .type = DATA_ACTION_CONNECT,
+        .label = "Connect",
+        .tooltip = "Connect or disconnect JACK ports",
+        .enabled = true,
+        .style = DATA_ACTION_STYLE_NORMAL,
+    };
+    return 1;
+}
+
+static size_t root_connect_action_args(void *user_data, DataActionType type,
+                              DataArgSpec *out, size_t cap) {
+    (void)user_data;
+    if (type != DATA_ACTION_CONNECT)
+        return 0;
+    if (!out || cap < 2)
+        return 0;
+    out[0] = (DataArgSpec){
+        .name = "source",
+        .label = "Output port",
+        .kind = DATA_ARG_CHOICE,
+        .required = true,
+        .list = MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_OUT),
+    };
+    out[1] = (DataArgSpec){
+        .name = "targets",
+        .label = "Input ports",
+        .kind = DATA_ARG_MULTI_CHOICE,
+        .required = true,
+        .list = MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_IN),
+    };
+    return 2;
+}
+
+static size_t root_connect_list_count(void *user_data, DataListId list,
+                             const DataActionReq *partial) {
+    (void)user_data;
+    (void)partial;
+    if (list != MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_OUT) &&
+        list != MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_IN))
+        return 0;
+    // unknown up front (would mean scanning just to count, then scanning
+    // again to fetch) - page via list_at until it returns false, per the
+    // contract's own "0 = unknown" allowance.
+    return 0;
+}
+
+static bool root_connect_list_at(void *user_data, DataListId list,
+                        const DataActionReq *partial, size_t idx,
+                        DataChoice *out) {
+    APP_INFO *app_data = (APP_INFO *)user_data;
+    JACK_INFO *jack_data = app_data ? app_data->trk_jack : NULL;
+    if (!jack_data)
+        return false;
+
+    if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_OUT))
+        return root_connect_enumerate_at(jack_data, PORT_TYPE_UNKNOWN, JackPortIsOutput,
+                                NULL, idx, out);
+
+    if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_IN)) {
+        // empty until a source is chosen - nothing to filter/link against yet
+        if (!partial || partial->type != DATA_ACTION_CONNECT)
+            return false;
+        ContextId source_val = (ContextId)partial->connect.source;
+        if (CTXID_NS(source_val) != DATA_LIST_NS_PORTS)
+            return false;
+
+        char source_name[JACK_PORT_NAME_MAX];
+        unsigned int source_type;
+        if (!root_connect_resolve_port(jack_data, source_val & CTXID_LOCAL_MASK,
+                              JackPortIsOutput, source_name,
+                              sizeof(source_name), &source_type))
+            return false; // the chosen source is already gone
+
+        // targets must match the source's type (audio<->audio, midi<->midi)
+        return root_connect_enumerate_at(jack_data, source_type, JackPortIsInput,
+                                source_name, idx, out);
+    }
+
+    return false;
+}
+
+static DataActionResult root_connect_action_do(void *user_data,
+                                      const DataActionReq *req,
+                                      ContextId *out_new) {
+    APP_INFO *app_data = (APP_INFO *)user_data;
+    JACK_INFO *jack_data = app_data ? app_data->trk_jack : NULL;
+    (void)out_new; // CONNECT creates no new context
+    if (!jack_data || !req || req->type != DATA_ACTION_CONNECT)
+        return DATA_ACTION_ERR_INVALID;
+    if (!req->connect.targets || req->connect.target_count == 0)
+        return DATA_ACTION_ERR_INVALID;
+
+    ContextId source_val = (ContextId)req->connect.source;
+    if (CTXID_NS(source_val) != DATA_LIST_NS_PORTS)
+        return DATA_ACTION_ERR_INVALID;
+
+    char source_name[JACK_PORT_NAME_MAX];
+    if (!root_connect_resolve_port(jack_data, source_val & CTXID_LOCAL_MASK,
+                          JackPortIsOutput, source_name, sizeof(source_name),
+                          NULL))
+        return DATA_ACTION_ERR_STALE;
+
+    bool any_failed = false;
+    for (size_t i = 0; i < req->connect.target_count; i++) {
+        ContextId target_val = (ContextId)req->connect.targets[i];
+        if (CTXID_NS(target_val) != DATA_LIST_NS_PORTS) {
+            any_failed = true;
+            continue;
+        }
+        char target_name[JACK_PORT_NAME_MAX];
+        if (!root_connect_resolve_port(jack_data, target_val & CTXID_LOCAL_MASK,
+                              JackPortIsInput, target_name,
+                              sizeof(target_name), NULL)) {
+            any_failed = true;
+            continue;
+        }
+        bool linked = app_jack_ports_connected(jack_data, source_name, target_name);
+        int rc = linked ? app_jack_disconnect_ports(jack_data, source_name, target_name)
+                        : app_jack_connect_ports(jack_data, source_name, target_name);
+        if (rc != 0)
+            any_failed = true;
+    }
+    return any_failed ? DATA_ACTION_ERR_DATA : DATA_ACTION_OK;
+}
+
 static const DataOps root_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
     .id = root_id,
     .child_count = root_child_count,
     .child_at = root_child_at,
+    .action_list = root_connect_action_list,
+    .action_args = root_connect_action_args,
+    .list_count = root_connect_list_count,
+    .list_at = root_connect_list_at,
+    .action_do = root_connect_action_do,
     .name = root_name,
 };
 

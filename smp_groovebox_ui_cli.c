@@ -678,7 +678,7 @@ static ContextId helper_action_do_connect(UI_LAYER *ui_layer, ContextId context,
         helper_action_result_msg(result, label, msg, msg_cap);
         if (result == DATA_ACTION_OK) {
             last_new = out_new;
-            // trk_action_do toggles: already-linked -> disconnect, else
+            // root_connect_action_do toggles: already-linked -> disconnect, else
             // connect. picked.flags is this row's LINKED state as read just
             // before the toggle, so the new state is its exact negation
             override_value = picked.value;
