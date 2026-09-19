@@ -194,39 +194,65 @@ Full pass-through chain already built: data_property_list (data_object.h)
 one entry: "category"); other owners get it the same way once their own
 STAGE 3 slice lands.
 
-CLI-side grouping/header display: designed, not yet implemented.
-- Basic header printing: child_at already returns params pre-sorted by
-  category, so the CLI just detects boundaries in an already-grouped
-  walk - no sorting needed there. Per visible (non-hidden) row, look up
-  the "category" property (search ui_layer_context_properties' result
-  for that name - copy its value into a local buffer rather than holding
-  the returned pointer, since a future property isn't guaranteed to be
-  backed by persistent storage the way category happens to be today).
-  Print a header line whenever it's non-empty and differs from the last
-  one printed; empty/uncategorized rows never trigger a header.
-- Making categories navigable with the EXISTING l/h (enter/exit) keys:
-  a bigger change, not yet built. A category has no ContextId (deliberately
-  - see above), so l/h can't navigate "to" one the way they navigate to a
-  real child. Needs the hover cursor to stop indexing directly into
-  child_at and instead index a per-render "visible row list" mixing two
-  row kinds: category-header rows and real-child rows (built the same
-  way as the header-printing walk above, plus a second, filtered walk -
-  only children whose category matches a CLI-local `active_category`
-  string - for when a filter is active). l on a header row sets
-  active_category and resets the hover index to 0 (a purely CLI-local
-  state change, NOT a real CX enter - state_main_context_current stays
-  put); l on a normal row is unchanged. h pops active_category back to
-  the grouped view if one is set, else falls through to the existing
-  real exit. The real cost: helper_nav_context_scroll (and the hover-
-  index bookkeeping around it) has to change to scroll through the
-  visible-row list instead of raw child_at - existing working navigation
-  code changes, not purely additive. Open question before building:
-  active_category as one flat variable (simple, resets on any real
-  navigation, re-entering a parent later always starts ungrouped) vs a
-  small caller-owned breadcrumb stack per level (remembers which
-  category + cursor position across a full exit/re-enter) - mirrors the
-  breadcrumb stack the FUTURE catalog-category section below already
-  anticipates for the analogous DataChoice-drilling case, same tradeoff.
+Category navigation - revised design: categories become real CX tree
+nodes (a VIEW app_data.c constructs, not a params.c storage change),
+superseding the earlier flat-list/inline-header/CLI-local-active_
+category design entirely. Once a category is an ordinary child_at
+entry, the EXISTING generic navigation (helper_nav_context_scroll/
+enter/exit, hover position persisted via ui_layer_nav_target_list_begin
+keyed by ContextId) handles it with zero special-casing - no CLI-local
+state, no l/h branching, no visible-row indirection, no inline header-
+printing loop. The trigger for this revision: a CLI-local mechanism
+would not get hover-position-restored-on-re-entry for free the way a
+real context already does (that persistence lives in app_intrf, keyed
+by ContextId) - reinventing it per-feature was the actual problem, not
+just navigation ergonomics.
+- params.c stays completely untouched - same flat, tombstone-based
+  storage, same resync/uid/val_id semantics as today. app_data.c
+  supplies the category DataObject via child_at, same as any other
+  context; app_intrf.c is what actually resolves/caches it into a real,
+  persistently-tracked ContextId - app_data.c never touches the
+  hashtable itself, same division of labour as everywhere else.
+- clap_plugin_child_at/child_count change shape: instead of returning a
+  flat, category-sorted list of every param (today's cx_param_sorted_
+  val_ids), they return a MIX at each level - one category-group object
+  per distinct next path segment among categorized params, plus
+  directly-listed params for anything with no (further) category. A
+  category-group's own child_at/child_count recurse into the NEXT path
+  segment, bottoming out at real params once none is left - handles
+  arbitrary nesting ("User/Macros/New/...") for free, recursively.
+  cx_param_sorted_val_ids's flat-sort role is superseded by this and
+  should be removed/replaced when this lands.
+- A category-group's ContextId is COMPUTED, not minted-and-remembered:
+  MAKE_ID(a new namespace, fnv1a64(full category path) & CTXID_LOCAL_
+  MASK) - the FULL path, not just the last segment, or two different
+  parents with a same-named child collide (same reasoning already noted
+  for the FUTURE catalog-category case below). Depends only on the path
+  string's content, so it's automatically stable across every resync/
+  redraw with zero new params.c state - nothing to mint from, nothing
+  to persist just for identity.
+- The one genuinely new piece of infrastructure needed: a category-
+  group's user_data still has to satisfy the CROSS-CUTTING INVARIANT
+  (stable, reused pointer once resolved), but there's no persistent
+  params.c struct for it to point at the way a param has its own
+  PRM_PARAM_UI. child_at can't just malloc a fresh descriptor per call
+  (leaks, and could hand back a different pointer for "the same"
+  category on different calls) - needs a small per-instance cache of
+  category-group descriptors (keyed by path, lazily populated, freed
+  only when the instance itself is torn down).
+- Open, unresolved: garbage-collecting empty ancestor groups. If a
+  resync removes the last param under "Scene A/Filter/EQ", does "EQ"
+  disappear (CX_REMOVED)? Does "Scene A/Filter", if now also empty?
+  Groups are computed fresh from current param state each call, not
+  tracked/tombstoned like params themselves, so an empty group probably
+  just naturally stops being returned by child_at next cycle - needs
+  verifying against the existing generic CX_REMOVED diffing once this
+  is actually built, not assumed.
+- CLAP's module string's path convention (e.g. "/"-delimited, per the
+  "User/Macros/New/" example) needs confirming against the spec and
+  parsing at discovery time - today param_get_category/PARAM_RESYNC_
+  ITEM.category just stores the whole module string as one opaque
+  chunk, no segment-splitting yet.
 
 Once proven on CLAP, replicate steps 1-4 and 6 to LV2/sampler/synth
 (each's deltas noted above, per step) - STEP 5 stays unimplemented
