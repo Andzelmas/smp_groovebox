@@ -176,8 +176,57 @@ PRM_PARAM_UI gets a category/module string field (CLAP: clap_param_
 info_t.module) + accessor. Params stay FLAT CX children - category is
 presentational metadata only, not a real tree level. child_at returns
 params sorted by category so a UI can print a header over contiguous
-runs. CLI-side grouping/header display not yet designed - its own small
-pass once this lands.
+runs. Exposed to a UI generically via DATA_CAP_PROPERTIES/property_list
+(see below), not a dedicated DataOps field.
+
+DATA_CAP_PROPERTIES: implemented, generic (not params-specific). One
+new DataOps entry, `size_t (*property_list)(void *user_data, DataProperty
+*out, size_t cap)`, the read-only dual of DATA_CAP_ACTIONS - DataProperty
+is a plain {name, label, value} display string, no typed value (every
+property so far is naturally a string; add a kind/union later only if a
+genuinely typed one shows up). is_hidden/value_as_string/value_range
+deliberately stay their own dedicated DataOps entries, not folded in -
+they're read on a hot path or gate behaviour (filtering, enabling), so
+they need fast direct access, unlike category which is pure display.
+Full pass-through chain already built: data_property_list (data_object.h)
+-> nav_cx_properties (app_intrf.c) -> ui_layer_context_properties
+(ui_layer.c/h). clap_param_ops implements it (cx_param_property_list,
+one entry: "category"); other owners get it the same way once their own
+STAGE 3 slice lands.
+
+CLI-side grouping/header display: designed, not yet implemented.
+- Basic header printing: child_at already returns params pre-sorted by
+  category, so the CLI just detects boundaries in an already-grouped
+  walk - no sorting needed there. Per visible (non-hidden) row, look up
+  the "category" property (search ui_layer_context_properties' result
+  for that name - copy its value into a local buffer rather than holding
+  the returned pointer, since a future property isn't guaranteed to be
+  backed by persistent storage the way category happens to be today).
+  Print a header line whenever it's non-empty and differs from the last
+  one printed; empty/uncategorized rows never trigger a header.
+- Making categories navigable with the EXISTING l/h (enter/exit) keys:
+  a bigger change, not yet built. A category has no ContextId (deliberately
+  - see above), so l/h can't navigate "to" one the way they navigate to a
+  real child. Needs the hover cursor to stop indexing directly into
+  child_at and instead index a per-render "visible row list" mixing two
+  row kinds: category-header rows and real-child rows (built the same
+  way as the header-printing walk above, plus a second, filtered walk -
+  only children whose category matches a CLI-local `active_category`
+  string - for when a filter is active). l on a header row sets
+  active_category and resets the hover index to 0 (a purely CLI-local
+  state change, NOT a real CX enter - state_main_context_current stays
+  put); l on a normal row is unchanged. h pops active_category back to
+  the grouped view if one is set, else falls through to the existing
+  real exit. The real cost: helper_nav_context_scroll (and the hover-
+  index bookkeeping around it) has to change to scroll through the
+  visible-row list instead of raw child_at - existing working navigation
+  code changes, not purely additive. Open question before building:
+  active_category as one flat variable (simple, resets on any real
+  navigation, re-entering a parent later always starts ungrouped) vs a
+  small caller-owned breadcrumb stack per level (remembers which
+  category + cursor position across a full exit/re-enter) - mirrors the
+  breadcrumb stack the FUTURE catalog-category section below already
+  anticipates for the analogous DataChoice-drilling case, same tradeoff.
 
 Once proven on CLAP, replicate steps 1-4 and 6 to LV2/sampler/synth
 (each's deltas noted above, per step) - STEP 5 stays unimplemented
