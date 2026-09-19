@@ -300,9 +300,6 @@ typedef struct _plug_info {
     bool plugins_dirty;
     // monotonic counter for PLUG_PLUG.uid, never reset
     uint32_t next_plug_uid;
-    // monotonic counter for every control param's uid across every
-    // instance, never reset - keeps a param's uid globally unique
-    uint32_t next_param_uid;
     // sample_rate
     float sample_rate;
     // block_length
@@ -746,7 +743,6 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     // init the plugin instances to shell
     plug_data->plugins_dirty = false;
     plug_data->next_plug_uid = 0;
-    plug_data->next_param_uid = 0;
     for (int i = 0; i < MAX_INSTANCES; i++) {
         PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->is_processing = 0;
@@ -1232,9 +1228,9 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     // reorders/resyncs after load - val_id is kept in lockstep with plug->
     // controls' own indices, since plug_run_rt later indexes params by the
     // same ctrl_iter it uses for plug->controls - a gap here would desync
-    // every param after it. uid is unrelated to val_id - minted fresh per
-    // param from plug_data->next_param_uid; owner_id mirrors it since this
-    // module has no external id space.
+    // every param after it. uid is unrelated to val_id - passed as 0 so
+    // params.c mints it; owner_id stays 0 too, this module has no external
+    // id space to put there.
     if (plug->controls) {
         PRM_CONTAIN *plug_params = params_init_param_container(NULL);
 
@@ -1242,8 +1238,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
              ct_iter++) {
             PLUG_CONTROL *cur_ctrl = plug->controls[ct_iter];
             if (!cur_ctrl) {
-                uint32_t p_uid = ++plug_data->next_param_uid;
-                param_add_param(plug_params, "", 0, 0, 0, 0, p_uid, p_uid, 0,
+                param_add_param(plug_params, "", 0, 0, 0, 0, 0, 0, 0,
                                 NULL, NULL);
                 continue;
             }
@@ -1295,14 +1290,13 @@ uint32_t plug_load_and_activate(void *plugin_item) {
                 if (cur_ctrl->is_enumeration)
                     cur_inc = 1;
             }
-            uint32_t p_uid = ++plug_data->next_param_uid;
             uint32_t p_flags = 0;
             if (cur_ctrl->is_writable == 0)
                 p_flags |= PARAM_FLAG_READONLY;
             if (cur_ctrl->is_enumeration)
                 p_flags |= PARAM_FLAG_ENUM;
             param_add_param(plug_params, param_name, param_val, param_min,
-                            param_max, cur_inc, p_uid, p_uid, p_flags, NULL,
+                            param_max, cur_inc, 0, 0, p_flags, NULL,
                             NULL);
         }
         // TODO val_to_string callback reading them straight from plug->controls

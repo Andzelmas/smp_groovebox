@@ -37,14 +37,15 @@ modules got earlier this session. cx_param_sorted_val_ids (app_data.c)
 is also already owner-agnostic, same as the other cx_param_* functions -
 LV2/sampler/synth's own child_at can reuse it as-is.
 
-STEP 0 - param ContextId:
-New namespace per owner kind in app_data.c (DATA_NS_CLAP_PARAM/DATA_NS_
-LV2_PARAM/DATA_NS_SYNTH_PARAM/DATA_NS_SAMPLE_PARAM), mirroring the
-existing per-kind instance namespaces. A param's .id() is a flat one-
-liner, MAKE_ID(that_ns, param_get_uid(container, val_id, 0)) - no
-folding/hash-chaining needed, since a param's uid is already globally
-unique for its whole kind (this session's next_param_uid fix). Safe at
-any future nesting depth for the same reason.
+STEP 0 - param ContextId: DONE, and since SUPERSEDED - it originally
+called for one namespace per owner kind (DATA_NS_CLAP_PARAM/DATA_NS_
+LV2_PARAM/...), because a uid was only unique within its owner's own
+counter. params.c now mints every uid from ONE counter across every
+container (see the "params.c mints uids" item under the category
+section), so there is a single DATA_NS_PARAM instead, and a param's
+.id() is the flat one-liner MAKE_ID(DATA_NS_PARAM, param_get_uid(
+container, val_id, 0)) for every owner. No folding/hash-chaining at any
+nesting depth, same reasoning as before, just program-wide now.
 
 STEP 1 - params exist structurally, nothing displays them:
 Real child_count/child_at for clap_plugin_ops (first), skipping
@@ -190,12 +191,13 @@ they're read on a hot path or gate behaviour (filtering, enabling), so
 they need fast direct access, unlike category which is pure display.
 Full pass-through chain already built: data_property_list (data_object.h)
 -> nav_cx_properties (app_intrf.c) -> ui_layer_context_properties
-(ui_layer.c/h). clap_param_ops implements it (cx_param_property_list,
-one entry: "category"); other owners get it the same way once their own
-STAGE 3 slice lands.
+(ui_layer.c/h). cx_param_ops implements it (cx_param_property_list, one
+entry: "category"); every other owner gets it for free, that table is
+owner-agnostic now.
 
 Category navigation - revised design: categories become real CX tree
-nodes (a VIEW app_data.c constructs, not a params.c storage change),
+nodes (a VIEW app_data.c constructs - params.c's param storage stays
+flat and untouched, it only gains a lifetime side-table, see below),
 superseding the earlier flat-list/inline-header/CLI-local-active_
 category design entirely. Once a category is an ordinary child_at
 entry, the EXISTING generic navigation (helper_nav_context_scroll/
@@ -207,52 +209,229 @@ would not get hover-position-restored-on-re-entry for free the way a
 real context already does (that persistence lives in app_intrf, keyed
 by ContextId) - reinventing it per-feature was the actual problem, not
 just navigation ergonomics.
-- params.c stays completely untouched - same flat, tombstone-based
-  storage, same resync/uid/val_id semantics as today. app_data.c
-  supplies the category DataObject via child_at, same as any other
-  context; app_intrf.c is what actually resolves/caches it into a real,
-  persistently-tracked ContextId - app_data.c never touches the
-  hashtable itself, same division of labour as everywhere else.
-- clap_plugin_child_at/child_count change shape: instead of returning a
-  flat, category-sorted list of every param (today's cx_param_sorted_
-  val_ids), they return a MIX at each level - one category-group object
-  per distinct next path segment among categorized params, plus
-  directly-listed params for anything with no (further) category. A
-  category-group's own child_at/child_count recurse into the NEXT path
-  segment, bottoming out at real params once none is left - handles
-  arbitrary nesting ("User/Macros/New/...") for free, recursively.
-  cx_param_sorted_val_ids's flat-sort role is superseded by this and
-  should be removed/replaced when this lands.
-- A category-group's ContextId is COMPUTED, not minted-and-remembered:
-  MAKE_ID(a new namespace, fnv1a64(full category path) & CTXID_LOCAL_
-  MASK) - the FULL path, not just the last segment, or two different
-  parents with a same-named child collide (same reasoning already noted
-  for the FUTURE catalog-category case below). Depends only on the path
-  string's content, so it's automatically stable across every resync/
-  redraw with zero new params.c state - nothing to mint from, nothing
-  to persist just for identity.
-- The one genuinely new piece of infrastructure needed: a category-
-  group's user_data still has to satisfy the CROSS-CUTTING INVARIANT
-  (stable, reused pointer once resolved), but there's no persistent
-  params.c struct for it to point at the way a param has its own
-  PRM_PARAM_UI. child_at can't just malloc a fresh descriptor per call
-  (leaks, and could hand back a different pointer for "the same"
-  category on different calls) - needs a small per-instance cache of
-  category-group descriptors (keyed by path, lazily populated, freed
-  only when the instance itself is torn down).
-- Open, unresolved: garbage-collecting empty ancestor groups. If a
-  resync removes the last param under "Scene A/Filter/EQ", does "EQ"
-  disappear (CX_REMOVED)? Does "Scene A/Filter", if now also empty?
-  Groups are computed fresh from current param state each call, not
-  tracked/tombstoned like params themselves, so an empty group probably
-  just naturally stops being returned by child_at next cycle - needs
-  verifying against the existing generic CX_REMOVED diffing once this
-  is actually built, not assumed.
-- CLAP's module string's path convention (e.g. "/"-delimited, per the
-  "User/Macros/New/" example) needs confirming against the spec and
-  parsing at discovery time - today param_get_category/PARAM_RESYNC_
-  ITEM.category just stores the whole module string as one opaque
-  chunk, no segment-splitting yet.
+- What a category node actually has to answer with, in full: which
+  PRM_CONTAIN it belongs to, and its FULL path prefix ("Voice/Filter").
+  name() is the last segment, child_count/child_at enumerate that
+  container under that prefix, id() see below. That whole descriptor is
+  one pointer plus one string - the design question is purely where it
+  lives, not what's in it.
+- The constraint that decides everything: app_intrf_cx_create copies the
+  whole DataObject into the CX and holds user_data for the CX's ENTIRE
+  lifetime, and there is no callback back into the data layer when a CX
+  is freed. So the descriptor's owner must outlive every CX that could
+  point at it, and may only be freed at a moment when those CXs are
+  guaranteed gone (CROSS-CUTTING INVARIANT). Exactly one existing thing
+  has that lifetime already: the PRM_CONTAIN itself - when it dies, the
+  plugin dies, the parent's child_count drops it, and cx_subtree_free
+  tears the subtree down without ever dereferencing the stale user_data
+  (resync pass 1 only calls data_child_at on the still-alive PARENT).
+  That is the same reason param_get_handle is safe today.
+- DECIDED: intern the descriptors in params.c, keyed by path. NOT a
+  storage restructure - a side table hanging off PRM_CONTAIN next to the
+  flat param array. params.c learns nothing about trees or path syntax,
+  it only does string interning, in the same shape and with the same
+  contract as the existing param_get_handle/param_handle_resolve pair:
+    void *param_category_handle(PRM_CONTAIN *c, const char *path);
+    bool  param_category_resolve(void *h, PRM_CONTAIN **c, int *cat_id);
+    const char *param_category_path(PRM_CONTAIN *c, int cat_id);
+    uint32_t param_category_uid(PRM_CONTAIN *c, int cat_id);
+  resolve hands back (container, cat_id) and path/uid are ordinary
+  (container, cat_id) accessors, deliberately mirroring param_handle_
+  resolve + param_get_name/param_get_uid rather than inventing a second
+  convention - that's what makes the cx_param_cat_* ops come out shaped
+  exactly like the existing cx_param_* ones, and it lets params.c
+  bounds-check cat_id instead of trusting a bare pointer. Categories are
+  never individually removed, so self_cat_id is permanently valid - no
+  tombstone case, unlike params.
+  The intern KEY is never handed in from outside: it's always derived by
+  the enumerator from param_get_category(container, val_id), sliced down
+  to the current level (prefix + next segment). param_category_handle is
+  called from exactly one place, cx_param_level_at, at the moment it
+  decides "this row is a group whose full path is X".
+  Concretely, one malloc'd descriptor per distinct path plus a growable
+  array of POINTERS to them on PRM_CONTAIN, mirroring the param arrays:
+    typedef struct _param_category {
+        PRM_CONTAIN *self_container; // same self-ref trick as PRM_PARAM_UI
+        int self_cat_id;
+        uint32_t uid;             // minted from a file-static counter,
+                                  // never reset, 0 reserved for "error"
+        char path[...];           // the FULL path, "Voice/Filter"
+    } PRM_PARAM_CATEGORY;
+    PRM_PARAM_CATEGORY **categories; unsigned int num_categories;
+  The pointer indirection is the whole point, for the reason already
+  written at params.c:76 for rt_params/ui_params - the OUTER array is
+  realloc'd on growth, which is only safe because it holds pointer
+  values; a CX holds the descriptor address for its whole lifetime, so
+  the descriptor itself must never move. param_category_handle is then:
+  linear scan for a strcmp match, else malloc a descriptor, grow the
+  outer array, mint a uid. Linear scan is fine - distinct categories per
+  plugin is tens. Interning happens lazily, on the first child_at that
+  needs to emit that group; params.c never parses the path, it only ever
+  sees an opaque string key. All freed by param_clean_param_container.
+  [main-thread] only, like param_get_handle - no rt variant.
+  Rejected alternatives: an app_data.c-owned cache (needs its own GC
+  pass to notice a container died, and a reused container address could
+  collide with a not-yet-resynced stale entry - real bug potential, no
+  gain); an owner-owned cache in clap_plugins.c (works, but would be
+  rewritten in sampler.c/synth.c/plugins.c - the whole point of the
+  cx_param_* rename was that this layer is owner-agnostic now).
+- Interning REPLACES the path-hashing idea, and fixes a bug in it. The
+  earlier "COMPUTED id via fnv1a64(full path)" bullet only reached for
+  hashing because it assumed no persistent storage existed; with an
+  intern table, uids can be minted monotonically from a file-static
+  counter in params.c exactly like clap_plugins.c's next_param_uid, and
+  stability across resyncs comes from interning (same path -> same entry
+  -> same uid), not from hashing. That matters because path-only hashing
+  is WRONG here: two loaded Surge XT instances both have an "Oscillator
+  1" module, so fnv1a64("Oscillator 1") is identical for both, both
+  category nodes get the same ContextId, and ht_set in app_intrf_cx_
+  create silently overwrites one with the other. Param ids only dodge
+  this because next_param_uid is one counter across every instance; a
+  minted category uid dodges it the same way, a path hash would need an
+  instance salt mixed in - strictly more machinery than just minting.
+  Hashing stays correct for the FUTURE catalog DataChoice case below,
+  where nothing persists to mint from - different problem, don't
+  conflate them.
+- app_data.c does NOT get messy, because there is only one enumerator:
+  the plugin node and a category node ask the same question at different
+  prefixes, so clap_plugin_child_at is just "list under empty prefix".
+    cx_param_tree_enumerate(container, prefix):
+      groups = []  # distinct next segments, dedup
+      leaves = []  # val_ids
+      for val_id in alive params of container:   # param_get_name != NULL
+        cat = param_get_category(val_id)
+        if not under(cat, prefix): continue      # cat == prefix, or
+                                                 # cat starts prefix+"/"
+        rest = cat minus prefix (and the "/")
+        if rest empty: leaves.append(val_id)
+        else:          groups.add(prefix + "/" + first segment of rest)
+      return groups (sorted) ++ leaves (val_id order)
+  Groups first alphabetically, THEN leaves in val_id order - val_id
+  order preserves the plugin author's intended param order within a
+  module, which alphabetising would destroy. child_at(idx) indexes that
+  list: a group -> param_category_handle + a new cx_param_cat_ops; a
+  leaf -> param_get_handle + cx_param_ops, unchanged. A category's own
+  child_at resolves its handle and calls the identical function with its
+  stored path, so arbitrary nesting ("User/Macros/New/...") falls out
+  for free. Net effect: +4 tiny ops functions and one ops table, minus
+  CxParamSortEntry, cx_param_sort_cmp and cx_param_sorted_val_ids, and
+  clap_plugin_child_count/child_at shrink to two-line delegations -
+  roughly break-even on size, and generic rather than CLAP-shaped.
+- What the stable interned uid actually buys, stated precisely: NOT
+  surviving a disappearance, but never being SEEN as disappearing in the
+  first place. app_intrf_cx_resync pass 1 tests data_id(&dobj) ==
+  child->data_id, so with an interned uid a category that merely
+  gains/loses some params (but stays populated) compares equal, its CX
+  is left untouched, and its hover entry survives. With a volatile id
+  (minted fresh per child_at call, or derived from some contained param)
+  the category would look removed-and-re-added on EVERY resync and
+  ui_reconcile_removed would destroy the hover entry every time. Exactly
+  the property param_get_uid gives params, and why param_add_param's doc
+  insists a uid is never a positional index.
+- Empty categories: don't GC the interned entry, but be clear that the
+  CX does go and its hover entry goes with it (corrects an earlier wrong
+  claim here that "the same uid on return means hover state survives" -
+  it does not). ui_layer.c's ui_reconcile_removed finds the entry whose
+  e->context == the removed id - that IS the category's own hover entry
+  - and either clears its target list (UI_STALE_CLEAR) or deletes the
+  entry outright; other entries referencing the id get ui_reconcile_
+  item_policy. So a category that loses its last param loses its hover
+  position, and a later return with the same uid resurrects nothing.
+  That is CORRECT, not a wart - removing a plugin destroys its hover
+  entry the same way, and a category with no params in it is genuinely
+  gone. The only way to preserve hover across it would be to keep
+  listing the empty category forever, i.e. permanently empty rows in the
+  UI - not worth it. Keeping the descriptor interned anyway still buys
+  no uid churn and no uid ever reused for a different path, and costs a
+  pointer plus a path buffer per distinct path ever seen on that
+  container, freed with the container.
+- Path parsing is app_data.c's job, not params.c's: params.c keeps
+  storing clap_param_info_t.module as one opaque blob, only the
+  enumerator knows "/" is a separator. Keeps params.c free of syntax
+  decisions. CLAP's own convention still needs confirming against the
+  spec.
+- MAX_CATEGORY_PATH, its OWN constant, not MAX_SHORT_NAME_LENGTH (100).
+  CLAP's module is 1024, and the existing -Wformat-truncation warning on
+  the category snprintf becomes load-bearing once paths are parsed: a
+  truncated path can MERGE two distinct categories (and, since the path
+  is the intern key, merge their CX nodes too), not just uglify a name.
+  Size it deliberately.
+- Why the category uid counter sits in params.c while PARAM uids are
+  minted by the owner: the minting site follows WHO DECIDES IDENTITY.
+  An owner mints a param uid because only it can do survivor-matching
+  against its own external key (clap_plugins.c:730 - clap_plug_find_
+  val_id_by_clap_id on param_info.id, then param_get_uid for a survivor
+  / a fresh uid for a new one); params.c has no idea what "the same
+  param" means for CLAP. A category's identity key IS its path string,
+  which params.c can compare directly, so params.c is the only thing
+  that can tell new from existing - and there's no owner in scope
+  anyway, param_category_handle is called from the owner-agnostic
+  enumerator. Principled, but see the next item - it's a symptom.
+- FOLLOW-ON: DONE (verified - two SG-323 instances loaded, entered and
+  torn down under valgrind, both showing their own full param list, so
+  no ContextId collision; 0 definitely/indirectly/possibly lost. The
+  12269 errors from 1 context in that log are SG-323's own uninitialised
+  read in SG323AudioProcessor::processBlock, third-party and pre-
+  existing - the identical signature is in val_log_stage3b from an
+  earlier session. Surge XT also loads and renders its full param list.)
+  Let params.c mint PARAM uids too, so the two stop being
+  inconsistent. Note what clap_
+  plugins.c actually does today - it never REMEMBERS a uid, it reads a
+  survivor's back out via param_get_uid; the only thing it contributes
+  is ++next_param_uid for a genuinely new param. So make uid == 0 in
+  PARAM_RESYNC_ITEM/param_add_param mean "new, params.c please mint":
+    out[written].uid = (existing_val_id != -1)
+                          ? param_get_uid(plug->plug_params,
+                                          existing_val_id, 0)
+                          : 0;
+  The owner still does the MATCHING (only it knows clap_id), it just
+  stops inventing numbers. What falls out:
+    * next_param_uid deleted from CLAP_PLUG_INFO, and never duplicated
+      into sampler.c/synth.c/plugins.c when their STAGE 3 slice lands.
+    * uids become unique PROGRAM-WIDE, not just per-subsystem. Today
+      CLAP's counter is per-plug_data, so a sampler param and a CLAP
+      param can both be uid 7 - they'd only avoid collision by sitting
+      in different namespaces.
+    * with global uniqueness: one DATA_NS_PARAM, clap_param_id becomes
+      cx_param_id, clap_param_ops becomes cx_param_ops - fully owner-
+      agnostic, since that id function is the LAST CLAP-specific thing
+      left in the table. Shrinks the "replicate steps 1-4 and 6 to
+      LV2/sampler/synth" work below.
+    * the category counter stops being a deviation - same pattern, one
+      counter each for the two things params.c mints.
+  Snag: jack_funcs.c:102 passes a literal 0 as "Tempo"'s uid today,
+  which collides with the sentinel - already part of the literal-uid
+  TODO below, so it must be fixed in the same change. (0 is the right
+  sentinel regardless: CONTEXT_ID_NULL/MAKE_ID(ns, 0) already mean
+  "none" everywhere else.) params.h's uid doc contract needs rewriting
+  too - it currently states uid is mandatory and owner-supplied.
+- Optimisation, NOT a prerequisite - two independent quadratics stacked,
+  fixed in different places. Neither matters at today's CLAP param
+  counts; measure before doing either.
+  (a) app_intrf_cx_resync's nested scan, the bigger and more GENERAL
+      one: pass 1 loops over existing CX children and re-calls data_
+      child_at over every data child for each, pass 2 mirrors it - ~n^2
+      child_at calls per level before the data layer does any work.
+      Fix once in app_intrf.c by materialising the data children's
+      ContextIds into a temp array first (n calls), then running both
+      passes against that array; pass 2 re-fetches the DataObject only
+      for ids it actually creates (rare). ~15 lines in one function, no
+      new invariants, and it benefits EVERY context type, not just
+      params. Do this one first if anything makes resync hot.
+  (b) each child_at re-enumerating the whole container, O(total) per
+      call: a one-entry memo in app_data.c is enough, because the
+      access pattern is always child_count(prefix) then child_at(0..n-1)
+      on the SAME prefix. Hit requires container + prefix + generation
+      all to match; generation is a new counter on PRM_CONTAIN bumped by
+      param_add_param and params_container_resync and ONLY those, since
+      a row list depends solely on which params are alive and on their
+      categories (Operation_ChangeName can't affect it - names aren't in
+      the row list - and a category is immutable after add).
+  With (a) alone a level costs n * O(total); with (a)+(b), O(total) once
+  per level per frame.
+- Namespace: DATA_NS_PARAM_CATEGORY, generic from day one - the same
+  way DATA_NS_PARAM already is, now that params.c mints every uid from
+  one counter.
 
 Once proven on CLAP, replicate steps 1-4 and 6 to LV2/sampler/synth
 (each's deltas noted above, per step) - STEP 5 stays unimplemented
@@ -273,12 +452,12 @@ TODO - found while implementing STEPS 0-4, not yet fixed:
   Beat_Type, jack_funcs.c ~line 102-108) with the same literal, non-
   globally-unique per-container uid pattern (0-6) that CLAP/LV2/
   sampler/synth all had before this session's earlier fix - Trk was
-  never included in that pass. Needs the identical fix: a subsystem-
-  wide next_param_uid counter on JACK_INFO (mirroring next_plug_uid/
-  next_smp_uid's own shape), minted once per param at creation instead
-  of the current literal indices. Compile-fixed only for now (flags=0
-  added at the call sites) - the uid-uniqueness fix itself is still
-  outstanding.
+  never included in that pass. FIXED: all seven now pass uid 0 and
+  params.c mints, along with every other owner (see the "params.c mints
+  uids" item). owner_id went to 0 too - Trk has no external id space,
+  and nothing read it. val_id order is untouched, which is what the
+  hardcoded val_ids in jack_funcs.c's transport code (param_set_value_
+  rt(..., 1, bar) and friends) depend on.
 
 TODO - gaps found checking clap_plugins.c against the vendored clap/ext/
 params.h, future consideration, not part of the STEP plan above:

@@ -158,9 +158,6 @@ typedef struct _clap_plug_info {
     struct _clap_plug_plug plugins[MAX_INSTANCES];
     bool plugins_dirty; //did plugins array change?
     uint32_t next_plug_uid; //monotonic counter for CLAP_PLUG_PLUG.uid, never reset
-    // monotonic counter for every param's uid across every instance, never
-    // reset - keeps a param's uid globally unique
-    uint32_t next_param_uid;
     SAMPLE_T sample_rate;
     // for clap there can be min and max buffer sizes, for not changing buffer
     // sizes set as the same
@@ -730,9 +727,11 @@ static uint32_t clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
             plug->plug_params ? clap_plug_find_val_id_by_clap_id(
                                     plug->plug_params, param_info.id)
                               : -1;
+        // a survivor keeps the uid it already has; a genuinely new param goes
+        // in as 0 and params.c mints one.
         uint32_t uid = (existing_val_id != -1)
                           ? param_get_uid(plug->plug_params, existing_val_id, 0)
-                          : ++plug->plug_data->next_param_uid;
+                          : 0;
 
         snprintf(out[written].name, MAX_SHORT_NAME_LENGTH, "%s",
                  param_info.name);
@@ -1673,7 +1672,6 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     // init the plugins array
     plug_data->plugins_dirty = false;
     plug_data->next_plug_uid = 0;
-    plug_data->next_param_uid = 0;
     for (int i = 0; i < (MAX_INSTANCES); i++) {
         CLAP_PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->clap_host_info = clap_info_host;

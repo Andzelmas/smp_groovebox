@@ -161,9 +161,6 @@ typedef struct _synth_data{
     //this is control for [audio-thread] and [main-thread] sys communication
     //(since there is no need to remove and add the oscillators this is used right now only for thread safe message sending)
     CXCONTROL* control_data;
-    //monotonic counter for every osc param's uid across every oscillator,
-    //never reset - keeps a param's uid globally unique
-    uint32_t next_param_uid;
 }SYNTH_DATA;
 
 static int synth_sys_msg(void* user_data, const char* msg){
@@ -359,7 +356,6 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
         synth_clean_memory(synth_data);
         return NULL;
     }
-    synth_data->next_param_uid = 0;
     for (unsigned int i = 0; i < synth_data->num_osc; i++) {
         SYNTH_OSC *cur_osc = &(synth_data->osc_array[i]);
         cur_osc->synth_data = synth_data;
@@ -521,27 +517,18 @@ SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const ch
 						   .build_value = synth_osc_build_value,
 						   .val_to_string = NULL};
 	cur_osc->params = params_init_param_container(&osc_params_user_data);
-	uint32_t p_uid;
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Amp",     0.8,   0.00001, 1, 0.01, p_uid, p_uid, 0, NULL, NULL);
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Freq",    0,     -12, 12,     0.1,  p_uid, p_uid, 0, NULL, NULL);
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Spread",  0,     0, 1,        0.01, p_uid, p_uid, 0, NULL, NULL);
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Wobble",  0,     0, 1,        0.05, p_uid, p_uid, 0, NULL, NULL);
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Octave",  0,     ((MAX_SEMITONES - 12) / 12.0) * -1, (MAX_SEMITONES - 12) / 12.0, 1, p_uid, p_uid, 0, NULL, NULL);
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "Table",   0,     0, 3,        1,    p_uid, p_uid, 0, NULL, NULL);
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "A",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  p_uid, p_uid, 0, NULL, NULL);
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "D",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  p_uid, p_uid, 0, NULL, NULL);
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "S",       1.0,   0.0, 1.0,     0.01, p_uid, p_uid, 0, NULL, NULL);
-	p_uid = ++synth_data->next_param_uid;
-	param_add_param(cur_osc->params, "R",       0.001, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  p_uid, p_uid, 0, NULL, NULL);
+	// uid 0 - params.c mints. owner_id 0 too: this module has no external
+	// id space to mirror into it
+	param_add_param(cur_osc->params,"Amp",     0.8,   0.00001, 1, 0.01, 0, 0, 0, NULL, NULL);
+	param_add_param(cur_osc->params,"Freq",    0,     -12, 12,     0.1,  0, 0, 0, NULL, NULL);
+	param_add_param(cur_osc->params,"Spread",  0,     0, 1,        0.01, 0, 0, 0, NULL, NULL);
+	param_add_param(cur_osc->params,"Wobble",  0,     0, 1,        0.05, 0, 0, 0, NULL, NULL);
+	param_add_param(cur_osc->params,"Octave",  0,     ((MAX_SEMITONES - 12) / 12.0) * -1, (MAX_SEMITONES - 12) / 12.0, 1, 0, 0, 0, NULL, NULL);
+	param_add_param(cur_osc->params,"Table",   0,     0, 3,        1,    0, 0, 0, NULL, NULL);
+	param_add_param(cur_osc->params,"A",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  0, 0, 0, NULL, NULL);
+	param_add_param(cur_osc->params,"D",       0.0,   SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  0, 0, 0, NULL, NULL);
+	param_add_param(cur_osc->params,"S",       1.0,   0.0, 1.0,     0.01, 0, 0, 0, NULL, NULL);
+	param_add_param(cur_osc->params,"R",       0.001, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX, 0.1,  0, 0, 0, NULL, NULL);
 
 	synth_activate_backend_ports(synth_data, cur_osc);
     }

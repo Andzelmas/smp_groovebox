@@ -220,7 +220,7 @@ enum {
     DATA_NS_LV2_PLUG = 3,
     DATA_NS_CLAP_PLUG = 4,
     DATA_NS_SYNTH_OSC = 5,
-    DATA_NS_CLAP_PARAM = 6,
+    DATA_NS_PARAM = 6,
 };
 // mask for everything below the namespace byte (56 bits). MAKE_ID keeps all
 // of them rather than truncating local to uint32_t: every existing local is
@@ -641,15 +641,15 @@ static const DataOps lv2_plugins_ops = {
     .action_do = lv2_plugins_action_do,
 };
 
-static ContextId clap_param_id(void *user_data) {
+// one parameter, from any owner. user_data is the opaque handle from
+// param_get_handle.
+static ContextId cx_param_id(void *user_data) {
     PRM_CONTAIN *container;
     int val_id;
     if (!param_handle_resolve(user_data, &container, &val_id))
-        return MAKE_ID(DATA_NS_CLAP_PARAM, 0);
-    return MAKE_ID(DATA_NS_CLAP_PARAM, param_get_uid(container, val_id, 0));
+        return MAKE_ID(DATA_NS_PARAM, 0);
+    return MAKE_ID(DATA_NS_PARAM, param_get_uid(container, val_id, 0));
 }
-// one parameter, from any owner. user_data is the opaque handle from
-// param_get_handle.
 static const char *cx_param_name(void *user_data) {
     PRM_CONTAIN *container;
     int val_id;
@@ -842,10 +842,12 @@ static DataActionResult cx_param_action_do(void *user_data,
     }
     return DATA_ACTION_ERR_INVALID;
 }
-static const DataOps clap_param_ops = {
+// fully owner-agnostic - nothing in here knows or cares which subsystem the
+// param came from, so every owner's params can share this one table
+static const DataOps cx_param_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_VALUE | DATA_CAP_HIDDEN |
                    DATA_CAP_PROPERTIES | DATA_CAP_ACTIONS,
-    .id = clap_param_id,
+    .id = cx_param_id,
     .name = cx_param_name,
     .value_as_string = cx_param_value_as_string,
     .value_range = cx_param_value_range,
@@ -928,7 +930,7 @@ static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
     if (idx < n) {
         void *handle = param_get_handle(container, sorted[idx]);
         if (handle) {
-            out->ops = &clap_param_ops;
+            out->ops = &cx_param_ops;
             out->user_data = handle;
             ok = true;
         }

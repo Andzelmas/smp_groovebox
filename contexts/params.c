@@ -142,6 +142,12 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     return param_container;
 }
 
+// monotonic counter for every param's uid, across every container, never
+// reset - so a uid identifies a param program-wide, not just within its own
+// container. Only param_add_param touches this, and that is [main-thread] only
+// (it mallocs).
+static uint32_t next_param_uid = 0;
+
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
                     uint32_t owner_id, uint32_t flags, const char *category,
@@ -150,9 +156,16 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
         return -1;
     if (!name)
         return -1;
-    // uid must stay unique within this container - fail loudly here rather
-    // than silently corrupting the CX layer later (see param_get_uid's doc)
-    if (param_find_uid(param_container, uid) != -1)
+    if (uid == 0) {
+        // "genuinely new, mint one" - the owner matches survivors by its own
+        // key and passes their existing uid back (see params_container_
+        // resync), it never invents a number itself
+        uid = ++next_param_uid;
+    }
+    // a caller-supplied uid must stay unique within this container - fail
+    // loudly here rather than silently corrupting the CX layer later (see
+    // param_get_uid's doc). A minted one is unique by construction.
+    else if (param_find_uid(param_container, uid) != -1)
         return -1;
 
     PRM_PARAM_RT *new_rt_param = malloc(sizeof(PRM_PARAM_RT));
@@ -263,7 +276,8 @@ void params_container_resync(PRM_CONTAIN *param_container,
 
     // pass 2: add anything not already alive via param_add_param (reuses a
     // freed slot if pass 1 left one). A survivor is left untouched -
-    // value/name refresh is the owner's own job.
+    // value/name refresh is the owner's own job. An item carrying uid 0
+    // ("new, mint it") never matches here, since no live param can hold 0.
     for (unsigned int i = 0; i < new_count; i++) {
         if (param_find_uid(param_container, new_params[i].uid) != -1)
             continue;

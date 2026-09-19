@@ -61,11 +61,12 @@ typedef struct _params_cont_user_data {
 PRM_CONTAIN *
 params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 
-// appends one parameter to the container. uid is mandatory - a stable id for
-// this parameter, unique within this container (never a positional index -
-// every CX-backed identity built on top of a param needs a stable key to
-// survive an add/remove resync) Fails (returns -1) if uid already exists in
-// this container (checked via param_find_uid) or on allocation failure. name is
+// appends one parameter to the container. Pass uid 0 for a genuinely new
+// parameter and params.c mints one: unique program-wide (not merely within this
+// container) Pass a non-zero uid only to re-add a parameter that already has
+// one - in practice only params_container_resync does that, for a survivor.
+// Fails (returns -1) if a caller-supplied uid already exists in this container
+// (checked via param_find_uid) or on allocation failure. name is
 // copied immediately, not borrowed past this call. owner_id is a second,
 // separate identifier, opaque to params.c - for an owner with its own external
 // id space for this param (e.g. CLAP's clap_id)
@@ -86,10 +87,12 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
 // name is copied, doesn't need to outlive the call. uid: for a survivor,
 // pass its EXISTING uid (via param_find_uid/param_get_uid) - resync matches
 // by uid only, so a wrong value here drops the survivor instead of matching
-// it. For a genuinely new param, mint a fresh uid, never reused for this
-// container's lifetime. flags only takes effect for a genuinely new param -
-// a survivor's flags are left untouched by resync (see params_container_
-// resync's own doc comment), reconciling those is the owner's own job.
+// it. For a genuinely new param pass 0 and params.c mints one (see param_
+// add_param) - the owner does the matching, since only it knows what "the
+// same param" means for its own id space. flags only takes effect for a
+// genuinely new param - a survivor's flags are left untouched by resync (see
+// params_container_ resync's own doc comment), reconciling those is the owner's
+// own job.
 typedef struct _params_resync_item {
     char name[MAX_SHORT_NAME_LENGTH];
     PARAM_T val;
