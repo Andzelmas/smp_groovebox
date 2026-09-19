@@ -686,6 +686,21 @@ static bool cx_param_is_hidden(void *user_data) {
         return false;
     return param_is_hidden(container, val_id) != 0;
 }
+static size_t cx_param_property_list(void *user_data, DataProperty *out,
+                                     size_t cap) {
+    PRM_CONTAIN *container;
+    int val_id;
+    if (!param_handle_resolve(user_data, &container, &val_id))
+        return 0;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataProperty){
+        .name = "category",
+        .label = "Category",
+        .value = param_get_category(container, val_id),
+    };
+    return 1;
+}
 // DATA_CAP_ACTIONS: every param can SET_VALUE/ADJUST_VALUE; an enum param
 // (PARAM_FLAG_ENUM) additionally gets SET_CHOICE. All three disabled if the
 // param is readonly (PARAM_FLAG_READONLY).
@@ -829,12 +844,13 @@ static DataActionResult cx_param_action_do(void *user_data,
 }
 static const DataOps clap_param_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_VALUE | DATA_CAP_HIDDEN |
-                   DATA_CAP_ACTIONS,
+                   DATA_CAP_PROPERTIES | DATA_CAP_ACTIONS,
     .id = clap_param_id,
     .name = cx_param_name,
     .value_as_string = cx_param_value_as_string,
     .value_range = cx_param_value_range,
     .is_hidden = cx_param_is_hidden,
+    .property_list = cx_param_property_list,
     .action_list = cx_param_action_list,
     .action_args = cx_param_action_args,
     .list_count = cx_param_list_count,

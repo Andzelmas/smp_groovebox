@@ -30,7 +30,19 @@ typedef enum {
     DATA_CAP_VALUE = 1 << 3,
     // is_hidden
     DATA_CAP_HIDDEN = 1 << 4,
+    // property_list
+    DATA_CAP_PROPERTIES = 1 << 5,
 } DataCapabilities;
+
+// one read-only, presentational fact about an object (e.g. a param's
+// category) - the display dual of DataAction. Always a plain display
+// string. Not for anything read on a hot path or that gates behaviour
+// (value, is_hidden)
+typedef struct {
+    const char *name;  // stable key, e.g. "category" - borrowed, static
+    const char *label; // display label, e.g. "Category"
+    const char *value; // borrowed, same lifetime contract as name()
+} DataProperty;
 
 struct DataOps {
     // bitmask of DataCapabilities
@@ -68,6 +80,10 @@ struct DataOps {
     // DATA_CAP_HIDDEN
     // is this object currently hidden? A property of an already-existing object
     bool (*is_hidden)(void *user_data);
+
+    // DATA_CAP_PROPERTIES
+    // fill *out with up to cap presentational properties for this object.
+    size_t (*property_list)(void *user_data, DataProperty *out, size_t cap);
 
     // DATA_CAP_ACTIONS - see data_actions.h for the flow and struct docs.
     // fill *out with up to cap available actions for this object.
@@ -153,6 +169,13 @@ static inline bool data_is_hidden(const DataObject *obj) {
     if (!data_obj_has(obj, DATA_CAP_HIDDEN) || !obj->ops->is_hidden)
         return false;
     return obj->ops->is_hidden(obj->user_data);
+}
+
+static inline size_t data_property_list(const DataObject *obj,
+                                        DataProperty *out, size_t cap) {
+    if (!data_obj_has(obj, DATA_CAP_PROPERTIES) || !obj->ops->property_list)
+        return 0;
+    return obj->ops->property_list(obj->user_data, out, cap);
 }
 
 static inline ContextId data_id(const DataObject *obj) {

@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include "ids.h"
 #include "cx_events.h"
-#include "data_actions.h"
+#include "data_object.h"
 
 // ContextId cannot be 0; kept as an alias for the shared sentinel
 #define CONTEXT_ID_INVALID CONTEXT_ID_NULL
@@ -143,6 +143,8 @@ ContextId ui_layer_context_parent_return(UI_LAYER *ui_layer, ContextId context);
 const char* ui_layer_context_value_as_string(UI_LAYER* ui_layer, ContextId context);
 // is the context hidden (informed by the data layer)
 bool ui_layer_context_is_hidden(UI_LAYER* ui_layer, ContextId context);
+// fill *out with up to cap available properties for the context
+size_t ui_layer_context_properties(UI_LAYER* ui_layer, ContextId context, DataProperty* out, size_t cap);
 
 // ACTIONS - thin pass-throughs to app_intrf's nav_cx_* (see data_actions.h
 // for the full contract and struct docs, and app_intrf.h for the flow).

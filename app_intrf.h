@@ -3,7 +3,7 @@
 #include "types.h"
 #include "ids.h"
 #include "cx_events.h"
-#include "data_actions.h"
+#include "data_object.h"
 #include <stdbool.h>
 
 // Interface for building the data layer structure.
@@ -64,6 +64,8 @@ NavPollResult nav_poll_event(APP_INTRF *app_intrf, NavCursor *cursor,
 const char* nav_cx_value_as_string(APP_INTRF* app_intrf, ContextId context);
 // is this context hidden
 bool nav_cx_is_hidden(APP_INTRF* app_intrf, ContextId context);
+// fill *out with up to cap available properties for the context
+size_t nav_cx_properties(APP_INTRF* app_intrf, ContextId context, DataProperty* out, size_t cap);
 
 // ACTIONS - see data_actions.h for the full contract and struct docs. Three
 // step flow, every buffer caller-owned (stack array or a single struct),

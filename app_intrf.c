@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include <string.h>
 #include "app_data.h"
-#include "data_object.h"
 #include "data_events.h"
 #include "cx_events.h"
 #include "types.h"
@@ -566,11 +565,18 @@ bool nav_cx_is_hidden(APP_INTRF* app_intrf, ContextId context){
         return false;
     return data_is_hidden(&cx->data); 
 }
+size_t nav_cx_properties(APP_INTRF* app_intrf, ContextId context, DataProperty* out, size_t cap){
+    if(!app_intrf || context == CONTEXT_ID_NULL)
+        return 0;
+    CX* cx = ht_get(app_intrf->cx_hashtable, context);
+    if(!cx)
+        return 0;
+    return data_property_list(&cx->data, out, cap);
+}
 
 // ACTIONS - pure pass-throughs: resolve context to its CX, call through to
 // the DataObject. app_intrf knows no specific action, arg or list; see
 // data_actions.h for the contract these all share end to end.
-
 size_t nav_cx_actions(APP_INTRF *app_intrf, ContextId context, DataAction *out,
                       size_t cap) {
     if (!app_intrf || context == CONTEXT_ID_NULL)
