@@ -25,9 +25,7 @@ enum paramOperType {
 };
 
 // per-parameter property bits, translated by the owner from its own flag
-// source (e.g. CLAP's clap_param_info_flags) at discovery/creation time -
-// params.c only knows what param_is_hidden/param_is_readonly say a bit
-// means. Own numbering, independent of any owner's own flag values - more
+// source. Own numbering, independent of any owner's own flag values - more
 // bits get added here as something actually needs them.
 enum paramFlags {
     PARAM_FLAG_HIDDEN   = 1 << 0,
@@ -195,9 +193,7 @@ int param_get_if_changed_rt(PRM_CONTAIN *param_container, int val_id);
 int param_get_if_any_changed_rt(PRM_CONTAIN *param_container);
 
 // return the parameter's whole flags bitmask (see enum paramFlags), 0 on
-// error - ui-only. For reconciling an owner's current report against a
-// param's stored flags (e.g. a masked merge) without dropping a bit that
-// has no dedicated param_is_* query yet.
+// error - ui-only.
 uint32_t param_get_flags(PRM_CONTAIN *param_container, int val_id);
 
 // get if parameter is hidden or not (PARAM_FLAG_HIDDEN) - ui-only, the rt
@@ -220,10 +216,7 @@ unsigned int param_is_enum(PRM_CONTAIN *param_container, int val_id);
 const char *param_get_name(PRM_CONTAIN *param_container, int val_id);
 
 // opaque per-param handle, stable for exactly the param's own lifetime (same
-// underlying storage as the param itself - no separate allocation/lifetime
-// management needed). For an owner that needs one pointer identifying a
-// specific param without separately tracking (container, val_id) itself
-// (e.g. a DataObject's user_data). NULL on error. ui-only.
+// underlying storage as the param itself. NULL on error. ui-only.
 void *param_get_handle(PRM_CONTAIN *param_container, int val_id);
 
 // resolve a handle from param_get_handle back to its container/val_id.

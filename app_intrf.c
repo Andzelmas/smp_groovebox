@@ -612,7 +612,7 @@ DataActionResult nav_cx_action_do(APP_INTRF *app_intrf, ContextId context,
     ContextId new_id = CONTEXT_ID_NULL;
     DataActionResult result = data_action_do(&cx->data, req, &new_id);
 
-    // Phase D: synchronously reconcile before returning to the caller, so
+    // synchronously reconcile before returning to the caller, so
     // the CX tree, its change log, and out_new below are already consistent
     // with whatever the action just did.
     app_intrf_sync(app_intrf);

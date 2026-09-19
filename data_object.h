@@ -66,9 +66,7 @@ struct DataOps {
                         double *out_inc);
 
     // DATA_CAP_HIDDEN
-    // is this object currently hidden? A property of an already-existing
-    // object, not a structural fact - changes surface as DATA_EVENT_CHANGED,
-    // never a child-set change.
+    // is this object currently hidden? A property of an already-existing object
     bool (*is_hidden)(void *user_data);
 
     // DATA_CAP_ACTIONS - see data_actions.h for the flow and struct docs.

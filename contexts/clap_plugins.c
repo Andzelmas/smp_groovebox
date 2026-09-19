@@ -126,9 +126,7 @@ typedef struct _clap_plug_plug {
                       // factory
     char plug_path[MAX_PATH_STRING];            // the path for the clap file
     PRM_CONTAIN *plug_params;   // plugin parameter container for params.c
-    // did plug_params' param SET change (added/removed)? distinct from
-    // CLAP_PLUG_INFO's own plugins_dirty, which means "the set of instances
-    // changed" - this means "this instance's own param set changed"
+    // did plug_params' param SET change (added/removed)? 
     bool params_dirty;
     clap_host_t clap_host_info; // need when creating the plugin instance, this
                                 // struct has this CLAP_PLUG_PLUG in the
