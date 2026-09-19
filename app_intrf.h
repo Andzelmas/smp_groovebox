@@ -58,6 +58,13 @@ void nav_cursor_init(APP_INTRF *app_intrf, NavCursor *cursor);
 NavPollResult nav_poll_event(APP_INTRF *app_intrf, NavCursor *cursor,
                              CxEvent *out);
 
+// general DataOps capabilities available for users
+// if the context has this capability (usually parameters), what is the value
+// the string is BORROWED
+const char* nav_cx_value_as_string(APP_INTRF* app_intrf, ContextId context);
+// is this context hidden
+bool nav_cx_is_hidden(APP_INTRF* app_intrf, ContextId context);
+
 // ACTIONS - see data_actions.h for the full contract and struct docs. Three
 // step flow, every buffer caller-owned (stack array or a single struct),
 // nothing here allocates:

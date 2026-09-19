@@ -19,6 +19,8 @@ typedef struct _context_intrf_info{
     // BORROWED STRING ADDRESS
     const char *name;
     size_t child_count;
+    bool is_hidden; //is this context hidden (as informed by the data layer)
+    const char* value; //value of a context with a value, BORROWED
 } CONTEXT_INTRF_INFO;
 
 // one (context, action) pair still reachable this drill round, plus where in
@@ -85,14 +87,14 @@ static bool helper_context_info_get( UI_LAYER *ui_layer, ContextId context, CONT
     if (!ui_layer_context_valid(ui_layer, context))
         return false;
 
-    const char* cx_name =
-        ui_layer_context_name_return(ui_layer, context);
+    const char *cx_name = ui_layer_context_name_return(ui_layer, context);
     if (!cx_name)
         return false;
-    info->name = cx_name;
 
-    info->child_count =
-        ui_layer_context_children_count(ui_layer, context);
+    info->name = cx_name;
+    info->child_count = ui_layer_context_children_count(ui_layer, context);
+    info->value = ui_layer_context_value_as_string(ui_layer, context);
+    info->is_hidden = ui_layer_context_is_hidden(ui_layer, context);
 
     return true;
 }
@@ -829,12 +831,17 @@ int main() {
                 CONTEXT_INTRF_INFO state_main_current_child_info;
                 ContextId cur_child = ui_layer_context_child_at(ui_layer, state_main_context_current, i);
                 if(helper_context_info_get(ui_layer, cur_child, &state_main_current_child_info)){
+                    if(state_main_current_child_info.is_hidden)
+                        continue;
                     if(cur_child == state_main_id_hovered && state_current == state_main){
-                        printf(">%s\n", state_main_current_child_info.name);
+                        printf(">%s", state_main_current_child_info.name);
                     }
                     else{
-                        printf("%s\n", state_main_current_child_info.name);
+                        printf("%s", state_main_current_child_info.name);
                     }
+                    state_main_current_child_info.value
+                        ? printf(" --- %s\n", state_main_current_child_info.value)
+                        : printf("\n");
                 }
             }
         }

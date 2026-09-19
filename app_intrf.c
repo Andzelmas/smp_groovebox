@@ -1,4 +1,5 @@
 #include "app_intrf.h"
+#include "ids.h"
 #include "util_funcs/hash_table.h"
 #include <stdint.h>
 #include <string.h>
@@ -546,6 +547,24 @@ NavPollResult nav_poll_event(APP_INTRF *app_intrf, NavCursor *cursor,
     *out = app_intrf->cx_ring[slot].ev;
     cursor->next_seq += 1;
     return NAV_POLL_EVENT;
+}
+
+// general context capabilities available to the user
+const char* nav_cx_value_as_string(APP_INTRF* app_intrf, ContextId context){
+    if(!app_intrf || context == CONTEXT_ID_NULL)
+        return NULL;
+    CX* cx = ht_get(app_intrf->cx_hashtable, context);
+    if(!cx)
+        return NULL;
+    return data_value_as_string(&cx->data); 
+};
+bool nav_cx_is_hidden(APP_INTRF* app_intrf, ContextId context){
+    if(!app_intrf || context == CONTEXT_ID_NULL)
+        return false;
+    CX* cx = ht_get(app_intrf->cx_hashtable, context);
+    if(!cx)
+        return false;
+    return data_is_hidden(&cx->data); 
 }
 
 // ACTIONS - pure pass-throughs: resolve context to its CX, call through to

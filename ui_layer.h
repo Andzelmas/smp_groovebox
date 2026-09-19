@@ -138,6 +138,12 @@ ContextId ui_layer_context_child_at(UI_LAYER *ui_layer, ContextId parent, size_t
 // return the context parent
 ContextId ui_layer_context_parent_return(UI_LAYER *ui_layer, ContextId context);
 
+// general context capabilities for the UI
+// the value of the context, if it has this capability (usually parameters)
+const char* ui_layer_context_value_as_string(UI_LAYER* ui_layer, ContextId context);
+// is the context hidden (informed by the data layer)
+bool ui_layer_context_is_hidden(UI_LAYER* ui_layer, ContextId context);
+
 // ACTIONS - thin pass-throughs to app_intrf's nav_cx_* (see data_actions.h
 // for the full contract and struct docs, and app_intrf.h for the flow).
 // fill *out with up to cap available actions for context.

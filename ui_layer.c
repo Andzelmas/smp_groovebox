@@ -778,6 +778,21 @@ ContextId ui_layer_context_parent_return(UI_LAYER *ui_layer, ContextId context)
     return nav_cx_parent_return(ui_layer->app_intrf, context);
 }
 
+// context general capabilities available for the UI
+
+const char* ui_layer_context_value_as_string(UI_LAYER* ui_layer, ContextId context){
+    if(!ui_layer)
+        return NULL;
+    return nav_cx_value_as_string(ui_layer->app_intrf, context);
+}
+bool ui_layer_context_is_hidden(UI_LAYER* ui_layer, ContextId context){
+    if(!ui_layer)
+        return false;
+    return nav_cx_is_hidden(ui_layer->app_intrf, context);
+}
+
+// context available actions
+
 size_t ui_layer_context_actions(UI_LAYER *ui_layer, ContextId context,
                                 DataAction *out, size_t cap)
 {
