@@ -742,8 +742,6 @@ static uint32_t clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
         out[written].uid = uid;
         out[written].owner_id = param_info.id;
         out[written].flags = param_flags;
-        snprintf(out[written].category, MAX_SHORT_NAME_LENGTH, "%s",
-                 param_info.module);
         out[written].cookie = param_info.cookie;
         written++;
     }

@@ -100,13 +100,13 @@ JACK_INFO* jack_initialize(void *arg, const char *client_name,
     //initialize the general song trk parameters like current bar, beat, play etc.
     jack_data->trk_params = params_init_param_container(NULL);
     // uid 0 - params.c mints. 
-    param_add_param(jack_data->trk_params, "Tempo", 100, 10, 500, 1, 0, 0, 0, NULL, NULL);
-    param_add_param(jack_data->trk_params, "Bar", 1, 1, MAX_BARS, 1, 0, 0, 0, NULL, NULL);
-    param_add_param(jack_data->trk_params, "Beat", 1, 1, 16, 1, 0, 0, 0, NULL, NULL);
-    param_add_param(jack_data->trk_params, "Tick", 0, 0, 2000, floor(time_ticks_per_beat/4), 0, 0, 0, NULL, NULL);
-    param_add_param(jack_data->trk_params, "Play", 0, 0, 1, 1, 0, 0, 0, NULL, NULL);
-    param_add_param(jack_data->trk_params, "BPB", 4, 2, 16, 1, 0, 0, 0, NULL, NULL);
-    param_add_param(jack_data->trk_params, "Beat_Type", 4, 2, 16, 1, 0, 0, 0, NULL, NULL);
+    param_add_param(jack_data->trk_params, "Tempo", 100, 10, 500, 1, 0, 0, 0, NULL);
+    param_add_param(jack_data->trk_params, "Bar", 1, 1, MAX_BARS, 1, 0, 0, 0, NULL);
+    param_add_param(jack_data->trk_params, "Beat", 1, 1, 16, 1, 0, 0, 0, NULL);
+    param_add_param(jack_data->trk_params, "Tick", 0, 0, 2000, floor(time_ticks_per_beat/4), 0, 0, 0, NULL);
+    param_add_param(jack_data->trk_params, "Play", 0, 0, 1, 1, 0, 0, 0, NULL);
+    param_add_param(jack_data->trk_params, "BPB", 4, 2, 16, 1, 0, 0, 0, NULL);
+    param_add_param(jack_data->trk_params, "Beat_Type", 4, 2, 16, 1, 0, 0, 0, NULL);
     if(!jack_data->trk_params){
 	jack_clean_memory(jack_data);
 	return NULL;

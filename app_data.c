@@ -686,21 +686,6 @@ static bool cx_param_is_hidden(void *user_data) {
         return false;
     return param_is_hidden(container, val_id) != 0;
 }
-static size_t cx_param_property_list(void *user_data, DataProperty *out,
-                                     size_t cap) {
-    PRM_CONTAIN *container;
-    int val_id;
-    if (!param_handle_resolve(user_data, &container, &val_id))
-        return 0;
-    if (!out || cap < 1)
-        return 0;
-    out[0] = (DataProperty){
-        .name = "category",
-        .label = "Category",
-        .value = param_get_category(container, val_id),
-    };
-    return 1;
-}
 // DATA_CAP_ACTIONS: every param can SET_VALUE/ADJUST_VALUE; an enum param
 // (PARAM_FLAG_ENUM) additionally gets SET_CHOICE. All three disabled if the
 // param is readonly (PARAM_FLAG_READONLY).
@@ -845,61 +830,19 @@ static DataActionResult cx_param_action_do(void *user_data,
 // fully owner-agnostic - nothing in here knows or cares which subsystem the
 // param came from, so every owner's params can share this one table
 static const DataOps cx_param_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_VALUE | DATA_CAP_HIDDEN |
-                   DATA_CAP_PROPERTIES | DATA_CAP_ACTIONS,
+    .capabilities =
+        DATA_CAP_NAME | DATA_CAP_VALUE | DATA_CAP_HIDDEN | DATA_CAP_ACTIONS,
     .id = cx_param_id,
     .name = cx_param_name,
     .value_as_string = cx_param_value_as_string,
     .value_range = cx_param_value_range,
     .is_hidden = cx_param_is_hidden,
-    .property_list = cx_param_property_list,
     .action_list = cx_param_action_list,
     .action_args = cx_param_action_args,
     .list_count = cx_param_list_count,
     .list_at = cx_param_list_at,
     .action_do = cx_param_action_do,
 };
-
-// one entry while sorting a container's alive params by category - val_id
-// is a tiebreak, so equal categories stay in a fixed order regardless of
-// qsort's own (unspecified) stability.
-typedef struct {
-    int val_id;
-    const char *category;
-} CxParamSortEntry;
-
-static int cx_param_sort_cmp(const void *a, const void *b) {
-    const CxParamSortEntry *ea = (const CxParamSortEntry *)a;
-    const CxParamSortEntry *eb = (const CxParamSortEntry *)b;
-    int c = strcmp(ea->category, eb->category);
-    if (c != 0)
-        return c;
-    return (ea->val_id > eb->val_id) - (ea->val_id < eb->val_id);
-}
-
-// fills out[] with every alive val_id in container, sorted by category then
-// val_id - uncategorized ("") params sort first, since "" precedes every
-// non-empty string. out[] is caller-owned, sized to hold at least param_
-// return_num_params(container, 0) entries. Returns how many were written.
-static unsigned int cx_param_sorted_val_ids(PRM_CONTAIN *container, int *out) {
-    unsigned int total = param_return_num_params(container, 0);
-    CxParamSortEntry *entries = malloc(total * sizeof(CxParamSortEntry));
-    if (!entries)
-        return 0;
-    unsigned int n = 0;
-    for (unsigned int i = 0; i < total; i++) {
-        if (!param_get_name(container, (int)i))
-            continue;
-        entries[n].val_id = (int)i;
-        entries[n].category = param_get_category(container, (int)i);
-        n++;
-    }
-    qsort(entries, n, sizeof(CxParamSortEntry), cx_param_sort_cmp);
-    for (unsigned int i = 0; i < n; i++)
-        out[i] = entries[i].val_id;
-    free(entries);
-    return n;
-}
 
 // single loaded clap plugin. user_data is the plugin handle from
 // clap_plug_plugin_return.
@@ -920,23 +863,23 @@ static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
     if (!container)
         return false;
     unsigned int total = param_return_num_params(container, 0);
-    if (total == 0)
-        return false;
-    int *sorted = malloc(total * sizeof(int));
-    if (!sorted)
-        return false;
-    unsigned int n = cx_param_sorted_val_ids(container, sorted);
-    bool ok = false;
-    if (idx < n) {
-        void *handle = param_get_handle(container, sorted[idx]);
-        if (handle) {
+    // idx counts only alive params, so tombstoned (NULL) slots are skipped
+    // rather than indexed past
+    size_t alive = 0;
+    for (unsigned int i = 0; i < total; i++) {
+        if (!param_get_name(container, (int)i))
+            continue;
+        if (alive == idx) {
+            void *handle = param_get_handle(container, (int)i);
+            if (!handle)
+                return false;
             out->ops = &cx_param_ops;
             out->user_data = handle;
-            ok = true;
+            return true;
         }
+        alive++;
     }
-    free(sorted);
-    return ok;
+    return false;
 }
 static ContextId clap_plugin_id(void *user_data) {
     return MAKE_ID(DATA_NS_CLAP_PLUG, clap_plug_plugin_uid(user_data));

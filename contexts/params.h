@@ -73,15 +73,12 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 // cookie is optional convenience storage for the owner (e.g. a CLAP param's
 // cookie) - may be NULL, and is only ever readable from the rt side (see
 // param_cookie_return_rt). flags is this param's initial paramFlags bitmask
-// (0 if the owner has no flag source). category is presentational grouping
-// metadata only (e.g. CLAP's clap_param_info_t.module) - may be NULL/"" for
-// uncategorized, copied immediately like name. Reuses a freed slot if one
-// exists, else grows the container. Returns the new val_id (same index on
-// both the rt and ui side) on success.
+// (0 if the owner has no flag source). Reuses a freed slot if one exists,
+// else grows the container. Returns the new val_id (same index on both the
+// rt and ui side) on success.
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    uint32_t owner_id, uint32_t flags, const char *category,
-                    void *cookie);
+                    uint32_t owner_id, uint32_t flags, void *cookie);
 
 // one parameter as the owner currently sees it, for params_container_resync.
 // name is copied, doesn't need to outlive the call. uid: for a survivor,
@@ -102,7 +99,6 @@ typedef struct _params_resync_item {
     uint32_t uid;
     uint32_t owner_id;
     uint32_t flags;
-    char category[MAX_SHORT_NAME_LENGTH];
     void *cookie;
 } PARAM_RESYNC_ITEM;
 
@@ -221,12 +217,6 @@ unsigned int param_is_enum(PRM_CONTAIN *param_container, int val_id);
 // callers that need to keep it past that must copy,  Returns NULL on error. Use
 // only on [main-thread].
 const char *param_get_name(PRM_CONTAIN *param_container, int val_id);
-
-// get the parameter's presentational category (see param_add_param) -
-// ui-only, mirrors param_get_name. Never NULL - "" if uncategorized/on
-// error, so a caller can always compare it directly against the previous
-// row's category without a NULL check.
-const char *param_get_category(PRM_CONTAIN *param_container, int val_id);
 
 // opaque per-param handle, stable for exactly the param's own lifetime (same
 // underlying storage as the param itself. NULL on error. ui-only.

@@ -1238,8 +1238,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
              ct_iter++) {
             PLUG_CONTROL *cur_ctrl = plug->controls[ct_iter];
             if (!cur_ctrl) {
-                param_add_param(plug_params, "", 0, 0, 0, 0, 0, 0, 0,
-                                NULL, NULL);
+                param_add_param(plug_params, "", 0, 0, 0, 0, 0, 0, 0, NULL);
                 continue;
             }
 
@@ -1296,8 +1295,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
             if (cur_ctrl->is_enumeration)
                 p_flags |= PARAM_FLAG_ENUM;
             param_add_param(plug_params, param_name, param_val, param_min,
-                            param_max, cur_inc, 0, 0, p_flags, NULL,
-                            NULL);
+                            param_max, cur_inc, 0, 0, p_flags, NULL);
         }
         // TODO val_to_string callback reading them straight from plug->controls
         // can be added here whenever something actually calls

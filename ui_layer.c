@@ -790,11 +790,6 @@ bool ui_layer_context_is_hidden(UI_LAYER* ui_layer, ContextId context){
         return false;
     return nav_cx_is_hidden(ui_layer->app_intrf, context);
 }
-size_t ui_layer_context_properties(UI_LAYER* ui_layer, ContextId context, DataProperty* out, size_t cap){
-    if(!ui_layer)
-        return 0;
-    return nav_cx_properties(ui_layer->app_intrf, context, out, cap);
-};
 
 // context available actions
 size_t ui_layer_context_actions(UI_LAYER *ui_layer, ContextId context,

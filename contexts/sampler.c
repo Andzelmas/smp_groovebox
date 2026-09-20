@@ -313,7 +313,7 @@ uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {
     cur_smp->params = params_init_param_container(NULL);
     // uid 0 - params.c mints. owner_id 0 too: this module has no external
     // id space to mirror into it
-    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0, 0, 0, NULL, NULL);
+    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0, 0, 0, NULL);
 
     // TODO samplerate is not needed, when we load sample to memory we also need
     // to convert it to the system sample rate, when system sample rate changes,
