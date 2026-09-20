@@ -265,8 +265,52 @@ UiStalePolicy modes are therefore ERGONOMICS (re-anchor to a sibling
 instead of snapping to index 0), not safety.
 
 --------------------------------------------------------------------------------
-STEP A - app_intrf: whole-subtree diff resync
+STEP A - app_intrf: whole-subtree diff resync   [DONE 2026-09-20]
 --------------------------------------------------------------------------------
+IMPLEMENTED as mark/sweep/add rather than by building two id->parent sets:
+the CX tree is ALREADY indexed by id in app_intrf->cx_hashtable, so "does
+this desired node exist?" is an O(1) ht_get and only the other direction
+needs help. CX gains a uint64_t sync_stamp and APP_INTRF a counter
+incremented once per resync (a fresh CX is calloc'd to 0 and stamps start
+at 1, so a never-marked CX can't look current by accident). Three static
+helpers, then app_intrf_cx_resync is six lines:
+  app_intrf_cx_mark_desired  - recurse the DATA subtree, stamp every CX
+      that already represents one of its nodes. Takes the parent's
+      ContextId and stamps ONLY when the CX already sits under that same
+      parent, so a node that moved is left unstamped on purpose - the
+      sweep frees it and the add phase re-creates it in its new place.
+      That remove+add is what a move degrades to until CX_MOVED exists.
+  app_intrf_cx_sweep         - recurse the CX subtree backwards (cx_
+      subtree_free shifts the array down), free anything unstamped, and
+      only descend into survivors.
+  app_intrf_cx_add_missing   - recurse the DATA subtree top down, create
+      what has no CX. A created node's subtree is materialised by
+      app_intrf_cx_children_create so it is not descended into; only an
+      already-existing node is. Guards the one case the sweep cannot
+      reach - an id living under a DIFFERENT parent outside this subtree
+      - by leaving it alone rather than ht_set-ing over it and stranding
+      the old CX. Nothing moves today; CX_MOVED is the real fix.
+VERIFIED: clean build, no warnings. pty-driven CLI, valgrind 0/0/0 lost
+(the 14890 errors from 1 context are SG-323's own uninitialised read in
+SG323AudioProcessor::processBlock, third-party and pre-existing):
+  - CLAP add / enter / remove, LV2 add / enter / remove: unchanged.
+  - hover persistence: enter a plugin, hover the 4th param, exit,
+    re-enter -> still on the 4th param, i.e. survivors really are left
+    untouched.
+  - TWO SG-323 instances, remove one: the other keeps its full param
+    list AND its hover. This is the real test of the recursion - the
+    mark phase has to walk Clap_Plugins -> plugin -> params two levels
+    down and stamp the survivor's params, or they would be swept too.
+KNOWN, UNCHANGED FROM BEFORE (not a regression, but STEP D has to deal
+with it): a child added by a resync is APPENDED to cx_children, not
+inserted at the data layer's index, and nav_cx_child_at reads display
+order straight off that array. So after a resync the displayed order can
+drift from the order the data layer returns. Invisible today (params were
+appended in val_id order anyway), but once STEP D returns groups-then-
+leaves the order matters and an append would put a newly-added category
+after the params instead of before them.
+
+ORIGINAL SPEC, for reference:
 WHAT: replace app_intrf_cx_resync's one-level, interleaved remove/add
 with a diff computed BEFORE anything is mutated:
   1. walk the data layer under parent_cx  -> desired {id: (parent, idx)}

@@ -59,6 +59,11 @@ typedef struct _cx {
     // stored, it is read live from data_name(&data) in nav_cx_name_return().
     DataObject data;
     struct _cx *cx_parent;
+    // set by the MARK phase of app_intrf_cx_resync. A CX whose stamp does not
+    // match the pass currently running is no longer in the data layer's tree
+    // and gets swept. A fresh CX is calloc'd to 0 and stamps start at 1, so a
+    // never-marked CX can never look current by accident.
+    uint64_t sync_stamp;
 
     //contexts array of children
     struct _cx_array cx_children;
@@ -95,6 +100,9 @@ typedef struct _app_intrf {
     // emits are off during the initial tree build and during teardown (no
     // views can be listening then, and it would just churn the ring).
     bool cx_emit_enabled;
+    // incremented once per app_intrf_cx_resync so every pass gets a stamp no
+    // CX can already be carrying. See CX.sync_stamp.
+    uint64_t sync_stamp;
 } APP_INTRF;
 
 // append one event to the change log. Overwrites the oldest slot silently;
@@ -312,55 +320,110 @@ static void cx_subtree_free(APP_INTRF *app_intrf, CX *cur_cx) {
     app_intrf_cx_children_pop(app_intrf, cur_cx);
 }
 
-// re-sync parent_cx's direct children against the data layer, by identity:
-//  - free the subtree of each CX whose data child is gone,
-//  - create a CX (and materialise its subtree) for each data child not present,
-//  - leave the rest untouched, so their ContextIds stay valid.
-// only touches one level; deeper changes arrive as their own events.
+// MARK phase of app_intrf_cx_resync: walk the DATA subtree under `data` and
+// stamp every CX that already represents one of its nodes. Creates nothing.
+// parent_id is the ContextId of `data` itself, so a CX only counts as current
+// if it is already sitting under the SAME parent - one that moved elsewhere is
+// deliberately left unstamped, so the sweep frees it and the add phase
+// re-creates it in its new place. That remove+add is what a move degrades to
+// until CX_MOVED exists; it is correct, just lossier than a real reparent.
+static void app_intrf_cx_mark_desired(APP_INTRF *app_intrf,
+                                      const DataObject *data,
+                                      ContextId parent_id, uint64_t stamp) {
+    size_t n = data_child_count(data);
+    for (size_t i = 0; i < n; i++) {
+        DataObject child;
+        if (!data_child_at(data, i, &child))
+            continue;
+        ContextId cid = data_id(&child);
+        if (cid == CONTEXT_ID_NULL)
+            continue;
+        CX *cx = ht_get(app_intrf->cx_hashtable, cid);
+        if (cx && cx->cx_parent && cx->cx_parent->data_id == parent_id)
+            cx->sync_stamp = stamp;
+        app_intrf_cx_mark_desired(app_intrf, &child, cid, stamp);
+    }
+}
+
+// SWEEP phase: free every CX in parent_cx's subtree the MARK phase did not
+// stamp. Walks backwards because cx_subtree_free shifts the array down, and
+// only descends into survivors - an unstamped node takes its whole subtree
+// with it (cx_subtree_free emits CX_REMOVED post-order for all of them).
+static void app_intrf_cx_sweep(APP_INTRF *app_intrf, CX *parent_cx,
+                               uint64_t stamp) {
+    for (int i = (int)parent_cx->cx_children.count - 1; i >= 0; i--) {
+        CX *child = parent_cx->cx_children.contexts[i];
+        if (!child)
+            continue;
+        if (child->sync_stamp != stamp) {
+            cx_subtree_free(app_intrf, child);
+            continue;
+        }
+        app_intrf_cx_sweep(app_intrf, child, stamp);
+    }
+}
+
+// ADD phase: create a CX for every data node that has none, top down. A node
+// created here has its whole subtree materialised by app_intrf_cx_children_
+// create, so there is nothing left to descend into; only an already-existing
+// node is recursed through.
+static void app_intrf_cx_add_missing(APP_INTRF *app_intrf, CX *parent_cx) {
+    size_t n = data_child_count(&parent_cx->data);
+    for (size_t i = 0; i < n; i++) {
+        DataObject child;
+        if (!data_child_at(&parent_cx->data, i, &child))
+            continue;
+        ContextId cid = data_id(&child);
+        if (cid == CONTEXT_ID_NULL)
+            continue;
+        CX *existing = ht_get(app_intrf->cx_hashtable, cid);
+        if (existing) {
+            // already ours - just keep walking down
+            if (existing->cx_parent == parent_cx) {
+                app_intrf_cx_add_missing(app_intrf, existing);
+                continue;
+            }
+            // live under a DIFFERENT parent, and the sweep didn't reach it, so
+            // it moved in from outside this subtree. Creating here would
+            // ht_set over the existing entry and strand the old CX, so leave
+            // it alone: nothing moves today, and CX_MOVED is what will handle
+            // this properly.
+            continue;
+        }
+        CX *created = app_intrf_cx_create(app_intrf, parent_cx, child);
+        if (!created)
+            continue;
+        app_intrf_cx_children_create(app_intrf, created);
+        // announce the new node only (its subtree, if any, is materialised
+        // fresh and no view could be tracking those ids yet)
+        app_intrf_emit(app_intrf, CX_ADDED, created->data_id,
+                       parent_cx->data_id,
+                       created->idx >= 0 ? (size_t)created->idx : 0);
+    }
+}
+
+// re-sync parent_cx's WHOLE SUBTREE against the data layer, by identity:
+// mark what the data layer still has, sweep what it no longer has, then add
+// what it has gained. Survivors are left untouched, so their ContextIds (and
+// anything a ui view filed under them) stay valid.
+//
+// Two things make this a full-subtree diff. It has to reach every depth,
+// because once the data layer nests (params inside categories) a change below
+// the first level is invisible to a single-level comparison. And every removal
+// has to land before any addition: the same ContextId can leave one parent and
+// arrive under another in a single reconciliation, and adding first would
+// ht_set the new CX and then ht_remove that id on the way out, leaving a live
+// CX that nothing can look up again. (When CX_MOVED lands, the order flips to
+// ADD -> MOVE -> REMOVE for the opposite reason - see the plan in task_list.)
 static void app_intrf_cx_resync(APP_INTRF *app_intrf, CX *parent_cx) {
     if (!app_intrf || !parent_cx)
         return;
 
-    size_t n = data_child_count(&parent_cx->data);
-
-    // pass 1: drop CX whose data child is gone. walk backwards so the index
-    // shift on removal does not make us skip an entry.
-    for (int i = (int)parent_cx->cx_children.count - 1; i >= 0; i--) {
-        CX *child = parent_cx->cx_children.contexts[i];
-        bool still_there = false;
-        for (size_t j = 0; j < n && !still_there; j++) {
-            DataObject dobj;
-            if (data_child_at(&parent_cx->data, j, &dobj) &&
-                data_id(&dobj) == child->data_id)
-                still_there = true;
-        }
-        if (!still_there)
-            cx_subtree_free(app_intrf, child);
-    }
-
-    // pass 2: create CX for data children not yet materialised.
-    for (size_t j = 0; j < n; j++) {
-        DataObject dobj;
-        if (!data_child_at(&parent_cx->data, j, &dobj))
-            continue;
-        ContextId cid = data_id(&dobj);
-        bool have = false;
-        for (unsigned int i = 0;
-             i < parent_cx->cx_children.count && !have; i++)
-            if (parent_cx->cx_children.contexts[i]->data_id == cid)
-                have = true;
-        if (have)
-            continue;
-        CX *created = app_intrf_cx_create(app_intrf, parent_cx, dobj);
-        if (created) {
-            app_intrf_cx_children_create(app_intrf, created);
-            // announce the new node only (its subtree, if any, is materialised
-            // fresh and no view could be tracking those ids yet)
-            app_intrf_emit(app_intrf, CX_ADDED, created->data_id,
-                           parent_cx->data_id,
-                           created->idx >= 0 ? (size_t)created->idx : 0);
-        }
-    }
+    uint64_t stamp = ++app_intrf->sync_stamp;
+    app_intrf_cx_mark_desired(app_intrf, &parent_cx->data,
+                              parent_cx->data_id, stamp);
+    app_intrf_cx_sweep(app_intrf, parent_cx, stamp);
+    app_intrf_cx_add_missing(app_intrf, parent_cx);
 }
 
 // drain the data layer's event queue and reconcile the CX tree. synchronous:
