@@ -334,8 +334,45 @@ plugins, add/remove samples, force a CLAP param rescan; same screens,
 same hover behaviour, valgrind clean.
 
 --------------------------------------------------------------------------------
-STEP B - params.c: generation counter + generic dirty polling
+STEP B - params.c: generation counter + generic dirty polling  [DONE 2026-09-20]
 --------------------------------------------------------------------------------
+IMPLEMENTED: PRM_CONTAIN gains `generation` plus `generation_polled`, and
+params.c exposes one check-and-clear accessor:
+    bool param_container_changed(PRM_CONTAIN *c);
+It compares the two and syncs them, so "changed since you last asked"
+needs NO state in the caller - which matters because app_data has nowhere
+natural to keep a per-container value (MAX_INSTANCES isn't visible to it
+and containers come and go). The container is the right home anyway: the
+counter is freed with it automatically.
+`generation` is bumped in exactly two places - param_add_param (covers
+every add, from any path) and params_container_resync's free pass (covers
+every remove). A value, name or flag change does NOT bump it; nothing
+structural moved. A raw `param_container_generation()` accessor was
+deliberately NOT added - STEP D's memo can expose it when it actually has
+a second consumer, rather than landing unused now.
+REMOVED: CLAP_PLUG_PLUG.params_dirty, its two assignment sites, clap_plug_
+plugin_params_dirty() and its declaration. app_data_update now asks
+param_container_changed(clap_plug_plugin_param_container(plug)) instead.
+Owners no longer have to remember to raise a flag, which is the actual
+point - LV2/sampler/synth get the same polling by adding their own loop
+once their params become CX children.
+KNOWN AND ACCEPTED: a container counts as changed from the moment its
+first param is added, so the first poll after an owner populates it
+returns true even though no watcher could have seen an earlier state.
+That is one no-op resync per container, which then settles. The old
+params_dirty avoided it only because the owner hand-set the flag on
+rescan but not on create - i.e. by being manual, the thing this replaces.
+VERIFIED: clean build, no warnings; grep finds no params_dirty anywhere.
+Temporarily instrumented the poll with a log line and ran two SG-323
+instances through load / enter / hover / exit / re-enter / remove: it
+fired EXACTLY TWICE for the whole session, once per plugin uid - so it
+really does settle rather than re-firing per frame. Instrumentation then
+removed. Under valgrind: params render, hover survives exit+re-entry (4th
+row, "Mix"), removing one instance leaves the other's params and hover
+intact, 0 definitely/indirectly/possibly lost. (The 14899 errors from 1
+context are SG-323's own processBlock read, third-party, pre-existing.)
+
+ORIGINAL SPEC, for reference:
 WHAT: uint32_t generation on PRM_CONTAIN, bumped by param_add_param and
 params_container_resync; param_container_generation(container). app_data
 remembers the last generation it saw per container and emits DATA_EVENT_

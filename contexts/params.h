@@ -227,6 +227,19 @@ void *param_get_handle(PRM_CONTAIN *param_container, int val_id);
 bool param_handle_resolve(void *handle, PRM_CONTAIN **out_container,
                           int *out_val_id);
 
+// has the SET of parameters on this container changed (one added or one
+// freed) since the last call? Check-and-clear, mirroring the *_is_dirty
+// flags the modules expose for their own lists. Owner-agnostic on purpose:
+// params.c bumps its own counter from param_add_param/params_container_
+// resync, so no owner has to remember to raise a flag. A value, name or
+// flag change is NOT a change here - nothing structural moved.
+// [main-thread] only.
+// NOTE: a container is "changed" from the moment its first param is added,
+// so the first call after an owner populates it returns true even though no
+// watcher could have seen an earlier state. That costs one no-op resync per
+// container and then settles.
+bool param_container_changed(PRM_CONTAIN *param_container);
+
 // return how many parameters are on the container, for whichever side
 // rt_params selects (both sides always hold the same count - param_add_param
 // grows them together

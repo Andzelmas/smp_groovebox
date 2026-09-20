@@ -86,6 +86,12 @@ typedef struct _params_container {
     RING_BUFFER *param_rt_to_ui;
     RING_BUFFER *param_ui_to_rt;
     PRM_CONT_USER_DATA user_data;
+    // bumped every time the SET of params changes (one added or one freed),
+    // never by a value/name/flag change - see param_container_changed.
+    // generation_polled is the value the last param_container_changed call
+    // saw, so "changed since you last asked" needs no state in the caller.
+    uint32_t generation;
+    uint32_t generation_polled;
     // scratch buffer param_get_value_as_string formats into and returns a
     // pointer to - valid only until the next param_get_value_as_string call
     // on this container (any val_id)
@@ -115,6 +121,8 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     param_container->num_of_params_ui = 0;
     param_container->rt_params = NULL;
     param_container->ui_params = NULL;
+    param_container->generation = 0;
+    param_container->generation_polled = 0;
     param_container->user_data.user_data = NULL;
     param_container->user_data.build_value = NULL;
     param_container->user_data.val_to_string = NULL;
@@ -235,6 +243,8 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     new_ui_param->self_container = param_container;
     new_ui_param->self_val_id = (int)idx;
 
+    param_container->generation++;
+
     return (int)idx;
 }
 
@@ -266,6 +276,7 @@ void params_container_resync(PRM_CONTAIN *param_container,
         param_container->rt_params[val_id] = NULL;
         free(param_container->ui_params[val_id]);
         param_container->ui_params[val_id] = NULL;
+        param_container->generation++;
     }
 
     // pass 2: add anything not already alive via param_add_param (reuses a
@@ -687,6 +698,15 @@ bool param_handle_resolve(void *handle, PRM_CONTAIN **out_container,
         *out_container = ui->self_container;
     if (out_val_id)
         *out_val_id = ui->self_val_id;
+    return true;
+}
+
+bool param_container_changed(PRM_CONTAIN *param_container) {
+    if (!param_container)
+        return false;
+    if (param_container->generation == param_container->generation_polled)
+        return false;
+    param_container->generation_polled = param_container->generation;
     return true;
 }
 

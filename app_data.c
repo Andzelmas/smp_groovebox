@@ -1515,12 +1515,15 @@ void app_data_update(void *root_user_data) {
         app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_CLAP_PLUGINS));
 
-    // same, one level down: did any one CLAP instance's own param set change
+    // same, one level down: did any one CLAP instance's own param set change.
+    // asked of the param container itself rather than of a CLAP-specific
+    // flag, so every other owner can be polled the same way once its params
+    // become CX children too.
     for (unsigned int i = 0;; i++) {
         void *plug = clap_plug_plugin_return(app_data->clap_plug_data, i);
         if (!plug)
             break;
-        if (clap_plug_plugin_params_dirty(plug))
+        if (param_container_changed(clap_plug_plugin_param_container(plug)))
             app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
                                 MAKE_ID(DATA_NS_CLAP_PLUG,
                                        clap_plug_plugin_uid(plug)));

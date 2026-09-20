@@ -98,10 +98,6 @@ uint32_t clap_plug_plugin_uid(void *plug);
 // return if the plugins array is dirty - if it changed
 bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data);
 
-// did this one instance's own param set change (added/removed) since the
-// last call? check-and-clear, like clap_plug_plugins_is_dirty.
-bool clap_plug_plugin_params_dirty(void *plug);
-
 // return this plugin instance's own param container, NULL on error/none yet
 PRM_CONTAIN *clap_plug_plugin_param_container(void *plug);
 

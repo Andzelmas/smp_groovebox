@@ -127,7 +127,6 @@ typedef struct _clap_plug_plug {
     char plug_path[MAX_PATH_STRING];            // the path for the clap file
     PRM_CONTAIN *plug_params;   // plugin parameter container for params.c
     // did plug_params' param SET change (added/removed)? 
-    bool params_dirty;
     clap_host_t clap_host_info; // need when creating the plugin instance, this
                                 // struct has this CLAP_PLUG_PLUG in the
                                 // host_data var as (void*)
@@ -914,7 +913,6 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
         params_container_resync(plug->plug_params, items, item_count);
         clap_plug_reconcile_survivors(plug->plug_params, items, item_count);
         free(items);
-        plug->params_dirty = true;
     }
 }
 
@@ -1683,7 +1681,6 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->plug_inst_id = -1;
         plug->plug_inst_processing = 0;
         plug->plug_params = NULL;
-        plug->params_dirty = false;
         plug->preset_fac = NULL;
     }
 
@@ -2101,17 +2098,6 @@ bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data){
         return false;
     bool is_dirty = plug_data->plugins_dirty;
     plug_data->plugins_dirty = false;
-    return is_dirty;
-}
-
-// did this one instance's own param set change (added/removed)? see
-// CLAP_PLUG_PLUG.params_dirty
-bool clap_plug_plugin_params_dirty(void *plug){
-    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG*)plug;
-    if(!cur_plug)
-        return false;
-    bool is_dirty = cur_plug->params_dirty;
-    cur_plug->params_dirty = false;
     return is_dirty;
 }
 
