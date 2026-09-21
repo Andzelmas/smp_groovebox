@@ -279,7 +279,7 @@ static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, Contex
         return;
 
     ContextId cx_curr = helper_purpose_get(ui_layer, state, *parent, purpose);
-    if(ui_layer_context_valid(ui_layer, cx_curr) && ui_layer_context_children_count(ui_layer, *parent) > 0){
+    if(ui_layer_context_valid(ui_layer, cx_curr) && ui_layer_context_children_count(ui_layer, cx_curr) > 0){
         *parent = cx_curr;
     }
 }
