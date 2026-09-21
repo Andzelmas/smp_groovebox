@@ -3,6 +3,7 @@
 #include "../../util_funcs/log_funcs.h"
 #include "../../util_funcs/path_funcs.h"
 #include "../../util_funcs/string_funcs.h"
+#include <complex.h>
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -137,12 +138,16 @@ static bool clap_ext_preset_indexer_declare_soundpack(
     const struct clap_preset_discovery_indexer *indexer,
     const clap_preset_discovery_soundpack_t *soundpack) {
     // TODO soundpacks are not used as of now
+    (void)indexer;
+    (void)soundpack;
     return true;
 }
 static const void *clap_ext_preset_indexer_get_extension(
     const struct clap_preset_discovery_indexer *indexer,
     const char *extension_id) {
     // TODO not checking preset extensions now
+    (void)indexer;
+    (void)extension_id;
     return NULL;
 }
 
@@ -217,6 +222,7 @@ void clap_ext_preset_clean(CLAP_EXT_PRESET_FACTORY *clap_ext_preset_data) {
 static void clap_ext_preset_meta_on_error(
     const struct clap_preset_discovery_metadata_receiver *receiver,
     int32_t os_error, const char *error_message) {
+    (void)os_error;
     CLAP_EXT_PRESET_SINGLE_LOC *cur_loc =
         (CLAP_EXT_PRESET_SINGLE_LOC *)receiver->receiver_data;
     if (!cur_loc)
@@ -240,6 +246,7 @@ static void clap_ext_preset_meta_on_error(
         cur_container->location = NULL;
     }
 }
+
 static bool clap_ext_preset_meta_begin_preset(
     const struct clap_preset_discovery_metadata_receiver *receiver,
     const char *name, const char *load_key) {
@@ -341,42 +348,58 @@ static void clap_ext_preset_meta_add_plugin_id(
 static void clap_ext_preset_meta_set_soundpack_id(
     const struct clap_preset_discovery_metadata_receiver *receiver,
     const char *soundpack_id) {
+    (void)receiver;
+    (void)soundpack_id;
     // TODO not used at this moment
     return;
 }
 static void clap_ext_preset_meta_set_flags(
     const struct clap_preset_discovery_metadata_receiver *receiver,
     uint32_t flags) {
+    (void)receiver;
+    (void)flags;
     // TODO not used at this moment
     return;
 }
 static void clap_ext_preset_meta_add_creator(
     const struct clap_preset_discovery_metadata_receiver *receiver,
     const char *creator) {
+    (void)receiver;
+    (void)creator;
     // TODO not used at this moment
     return;
 }
 static void clap_ext_preset_meta_set_description(
     const struct clap_preset_discovery_metadata_receiver *receiver,
     const char *description) {
+    (void)receiver;
+    (void)description;
     // TODO not used at this moment
     return;
 }
 static void clap_ext_preset_meta_set_timestamps(
     const struct clap_preset_discovery_metadata_receiver *receiver,
     clap_timestamp creation_time, clap_timestamp modification_time) {
+    (void)receiver;
+    (void)creation_time;
+    (void)modification_time;
     // TODO not used at this moment
     return;
 }
 static void clap_ext_preset_meta_add_feature(
     const struct clap_preset_discovery_metadata_receiver *receiver,
     const char *feature) {
+    (void)receiver;
+    (void)feature;
     // TODO not used at this moment
     return;
 }
 static void clap_ext_preset_meta_add_extra_info(
     const struct clap_preset_discovery_metadata_receiver *receiver,
     const char *key, const char *value) {
+    (void)receiver;
+    (void)key;
+    (void)value;
     // TODO not used at this moment
     return;
 }
@@ -422,7 +445,7 @@ static void clap_ext_preset_location_crawl(
     const clap_preset_discovery_metadata_receiver_t *metada_rec,
     const clap_preset_discovery_provider_t *preset_discovery) {
     if (!preset_data)
-        ;
+        return;
     if (!cur_loc)
         return;
     if (!location_path)
@@ -458,7 +481,6 @@ static void clap_ext_preset_location_crawl(
             if (!dir)
                 return;
             d = readdir(dir);
-            int found = 0;
             while (d != NULL) {
                 char full_path[MAX_PATH_STRING];
                 snprintf(full_path, MAX_PATH_STRING, "%s/%s", location_path,
@@ -499,7 +521,6 @@ static void clap_ext_preset_location_crawl(
     if (!dir)
         return;
     d = readdir(dir);
-    int found = 0;
     while (d != NULL) {
         if (strcmp(d->d_name, ".") == 0) {
             d = readdir(dir);

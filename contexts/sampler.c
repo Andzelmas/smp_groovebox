@@ -24,6 +24,14 @@
 //module - the name leaves as a const char* so callers need no matching define.
 #define SMP_SAMPLE_NAME_MAX 128
 
+//this module's own id space for its params, passed to param_add_param as
+//owner_id. Source-defined, so it is stable across runs and is what a saved
+//value gets matched back by - never a positional index. 0 stays reserved
+//for "no owner id".
+enum smpParamId {
+    SMP_PARAM_NOTE = 1,
+};
+
 static thread_local bool is_audio_thread = false;
 
 typedef struct _smp_smp{
@@ -104,7 +112,7 @@ typedef struct _smp_info{
 //this can be called only on [main-thread]
 static int smp_sys_msg(void* user_data, const char* msg){
     //TODO right now smp_data is not used, but there is a future feature to not write string messages to file so often
-    SMP_INFO* smp_data = (SMP_INFO*)user_data;
+    (void)user_data;
     log_append_logfile("%s", msg);
     return 0;
 }
@@ -214,7 +222,7 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 	free(smp_data);
 	return NULL;
     }
-    for(int i = 0; i< smp_data->num_ports; i++){
+    for(unsigned int i = 0; i< smp_data->num_ports; i++){
 	smp_data->ports[i].id = i;
 	if(i==0){
 	    smp_data->ports[i].port_flow = PORT_FLOW_INPUT;
@@ -269,7 +277,7 @@ int smp_activate_backend_ports(SMP_INFO* smp_data){
     if(!smp_data)return -1;
     if(!smp_data->audio_backend)return -1;
     if(!smp_data->ports)return -1;
-    for(int i = 0; i < smp_data->num_ports; i++){
+    for(unsigned int i = 0; i < smp_data->num_ports; i++){
 	SMP_PORT* cur_port = &(smp_data->ports[i]);
 	cur_port->sys_port = app_jack_create_port_on_client(smp_data->audio_backend, cur_port->port_type,
 						     cur_port->port_flow, cur_port->port_name);
@@ -311,9 +319,9 @@ uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {
     SMP_SMP *cur_smp = &(smp_data->samples[smp_id]);
     // init the sample parameters to default values
     cur_smp->params = params_init_param_container(NULL);
-    // uid 0 - params.c mints. owner_id 0 too: this module has no external
-    // id space to mirror into it
-    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0, 0, 0, NULL);
+    // uid 0 - params.c mints; owner_id is this module's own enum
+    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0, SMP_PARAM_NOTE,
+                    0, 0, NULL);
 
     // TODO samplerate is not needed, when we load sample to memory we also need
     // to convert it to the system sample rate, when system sample rate changes,
@@ -360,6 +368,20 @@ uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {
     return cur_smp->uid;
 }
 
+static void smp_sum_channel_buffers_rt(SMP_SMP* cur_smp, SAMPLE_T* out_L, SAMPLE_T* out_R,
+			     SAMPLE_T mult, int chans){
+    //the cur_smp has the same number of channels as the system
+    if(cur_smp->chans == chans){
+	*out_L += cur_smp->buffer[cur_smp->offset] * mult;
+	*out_R += cur_smp->buffer[cur_smp->offset + 1] * mult;
+    }
+    //if there are less sample channels then the port buffers
+    if(cur_smp->chans < chans){
+	*out_L += cur_smp->buffer[cur_smp->offset] * mult;
+	*out_R += cur_smp->buffer[cur_smp->offset+(cur_smp->chans-1)] * mult;
+    }    
+}
+
 int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
     SMP_PORT* midi_port = &(smp_data->ports[0]);
     SMP_PORT* out_L_port = &(smp_data->ports[1]);
@@ -388,12 +410,12 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
 	//get the note parameter from the current samples rt_param array
 	unsigned char cur_note = (unsigned char)param_get_value(cur_smp->params, 0, 1);
 	//go through the frames
-	//TODO really like that goes through each frame, but not sure how to find the
+	//TODO really do not like that goes through each frame, but not sure how to find the
 	//midi event differently
-	for(int cur_frame = 0; cur_frame < nframes; cur_frame++){
+	for(unsigned int cur_frame = 0; cur_frame < nframes; cur_frame++){
 	    //find if there is a note of a sample in the notes
 	    unsigned char this_vel = 0;
-	    for(int i = 0; i<midi_cont->num_events; i++){
+	    for(unsigned int i = 0; i<midi_cont->num_events; i++){
 		//if the note is played not on this time slice skip it
 		if(midi_cont->nframe_nums[i] != cur_frame)continue;
 		//we are only looking for note on
@@ -433,20 +455,6 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
     }
     
     return 0;
-}
-
-static void smp_sum_channel_buffers_rt(SMP_SMP* cur_smp, SAMPLE_T* out_L, SAMPLE_T* out_R,
-			     SAMPLE_T mult, int chans){
-    //the cur_smp has the same number of channels as the system
-    if(cur_smp->chans == chans){
-	*out_L += cur_smp->buffer[cur_smp->offset] * mult;
-	*out_R += cur_smp->buffer[cur_smp->offset + 1] * mult;
-    }
-    //if there are less sample channels then the port buffers
-    if(cur_smp->chans < chans){
-	*out_L += cur_smp->buffer[cur_smp->offset] * mult;
-	*out_R += cur_smp->buffer[cur_smp->offset+(cur_smp->chans-1)] * mult;
-    }    
 }
 
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){
@@ -489,6 +497,13 @@ uint32_t smp_sample_uid(void* smp){
     return cur_smp->uid;
 }
 
+PRM_CONTAIN *smp_sample_param_container(void *smp){
+    SMP_SMP *cur_smp = (SMP_SMP*)smp;
+    if(!cur_smp)
+        return NULL;
+    return cur_smp->params;
+}
+
 bool smp_samples_is_dirty(SMP_INFO* smp_data){
     if(!smp_data)return false;
     bool is_dirty = smp_data->samples_dirty;
@@ -517,7 +532,7 @@ int smp_clean_memory(SMP_INFO *smp_data){
     }
 
     if(smp_data->ports){
-	for(int i = 0; i< smp_data->num_ports; i++){
+	for(unsigned int i = 0; i< smp_data->num_ports; i++){
 	    SMP_PORT* port = &(smp_data->ports[i]);
 	    if(port->sys_port){
 		app_jack_unregister_port(smp_data->audio_backend, port->sys_port);

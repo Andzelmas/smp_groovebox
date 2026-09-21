@@ -193,7 +193,7 @@ UI_STATE* ui_layer_state_init(UI_LAYER* ui_layer){
         return NULL;
     }
     // attach the change-log cursor at the current head: this view will react
-    // only to changes from here on.
+    // only to changes from here.
     nav_cursor_init(ui_layer->app_intrf, &state->cursor);
     return state;
 }
@@ -686,6 +686,9 @@ static void ui_reconcile_full_sweep(UI_LAYER* ui_layer, UI_STATE* state){
     entries_maybe_shrink(state);
 }
 
+// --------------------------------------------------
+
+// UI LAYER Functions for the user interface
 UiReconcileResult ui_layer_state_reconcile(UI_LAYER* ui_layer, UI_STATE* state){
     if(!ui_layer || !state)
         return UI_RECONCILE_OK;
@@ -722,9 +725,7 @@ UiReconcileResult ui_layer_state_reconcile(UI_LAYER* ui_layer, UI_STATE* state){
     entries_maybe_shrink(state);
     return result;
 }
-// --------------------------------------------------
 
-// UI LAYER Functions for the user interface
 void ui_layer_update_cycle(UI_LAYER* ui_layer){
     if(!ui_layer)
         return;

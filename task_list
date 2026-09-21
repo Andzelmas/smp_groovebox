@@ -1,637 +1,173 @@
 ================================================================================
-CROSS-CUTTING INVARIANT — identity/storage rule for anything CX-backed
+INVARIANT - anything CX-backed
 ================================================================================
-The CX layer resolves a ContextId to a module's raw user_data pointer ONCE
-and reuses that SAME pointer across many later calls, without re-resolving
-it each time. So: a fixed-array/pointer-backed module must NEVER move a
-surviving item's storage once a ContextId has been handed out for it - no
-compaction on remove. Free slots become gaps/tombstones, reused only by a
-later NEW item (which gets a new identity). Already how samples/plugins
-work (contexts/sampler.c, app_data.c's ops tables), and how params.c's own
-param_add_param/params_container_resync work (NULL-tombstone a freed
-slot, never shift a survivor).
+The CX layer resolves a ContextId to a module's user_data pointer ONCE and
+reuses that same pointer. So a module must never move a surviving item's
+storage once a ContextId has been handed out for it - no compaction on
+remove; free slots become tombstones, reused only by a NEW item with a new
+identity.
 
 ================================================================================
-STAGE 3 — parameters as CX contexts, integrated into the action system
+ENTITY PATTERN - params/categories are the reference implementation
 ================================================================================
-Agreed direction: params become CX tree nodes (like plugin instances),
-not a live external list (like JACK ports). Build the full vertical
-slice (steps below) on CLAP first, then replicate the same shape to
-LV2/sampler/synth - each has its own small deltas, noted per step.
-
-STEPS 0-4: DONE for CLAP. STEP 5 implemented, then removed - see its own
-entry below for why. STEP 6 was built and worked, but its whole design
-(a category STRING per param, params staying flat) is now SUPERSEDED by
-"CATEGORIES - entity model" below - read that, not STEP 6.
-Steps 0-4 verified via clean build (-Wall -Wextra, no new warnings) and
-a real pty-driven CLI run loading SG-323 under valgrind (0 definitely/
-indirectly/possibly lost; the only reported errors are a pre-existing
-uninitialised-value warning inside SG-323's own JUCE code, unrelated to
-this work) - params show up as real named CX children with correctly
-gated actions. STEP 6 was verified the same way against Surge XT
-(hundreds of real params): valgrind clean (0/0/0, 0 errors), and
-child_at's category sort visibly confirmed - 273 contiguous Scene A
-params, then 273 contiguous Scene B, then 209 contiguous FX params,
-uncategorized Bypass sorting first. That sort (cx_param_sorted_val_ids)
-is deleted by the entity plan's STEP E - do not build anything new on
-it. One thing surfaced along the way and is still open: the CLI can't
-yet collect a DATA_ARG_NUMBER value (tracked below). jack_funcs.c/Trk's
-own literal-uid params surfaced here too and are now FIXED - params.c
-mints every uid (see "params.c mints uids").
-
-STEP 0 - param ContextId: DONE, and since SUPERSEDED - it originally
-called for one namespace per owner kind (DATA_NS_CLAP_PARAM/DATA_NS_
-LV2_PARAM/...), because a uid was only unique within its owner's own
-counter. params.c now mints every uid from ONE counter across every
-container (see the "params.c mints uids" item under the category
-section), so there is a single DATA_NS_PARAM instead, and a param's
-.id() is the flat one-liner MAKE_ID(DATA_NS_PARAM, param_get_uid(
-container, val_id, 0)) for every owner. No folding/hash-chaining at any
-nesting depth, same reasoning as before, just program-wide now.
-
-STEP 1 - params exist structurally, nothing displays them:
-Real child_count/child_at for clap_plugin_ops (first), skipping
-tombstoned (NULL) slots, params' .id() from STEP 0, hidden params
-included too. capabilities = 0 otherwise - no NAME/VALUE/ACTIONS yet.
-Verify via build+valgrind/pty harness before the live CLI; confirm
-helper_context_info_get handles a NULL name safely first.
-
-STEP 2 - structural add/remove events:
-Per-instance params_dirty bool (distinct from the container-level
-plugins_dirty), set right after params_container_resync, checked in
-clap_read_rt_to_ui_messages. app_data_update turns it into DATA_EVENT_
-CHILDREN_CHANGED, mirroring the existing plugins_dirty handling exactly.
-Fulfills clap_plugins.c's own "TODO (STAGE 3): flag this instance's
-params_dirty here" at the CLAP_PARAM_RESCAN_ALL branch. The CX diff
-itself (CX_ADDED/CX_REMOVED) is already fully generic - no new code
-there. LV2/sampler/synth's params don't change shape after creation, so
-their flag can stay unconditionally false for now, same precedent as
-synth's own instance-level dirty flag.
-
-STEP 3 - UI shows names, values, and range:
-- DATA_CAP_NAME/name() - param_get_name.
-- DATA_CAP_VALUE/value_as_string() - param_get_value_as_string, with a
-  fallback added: format the raw value as a plain number when the owner
-  registered no val_to_string (sampler and LV2 do params_init_param_
-  container(NULL) today - no callback at all). Decimal count derived
-  from the param's own increment: smallest d where inc*10^d is (within
-  an epsilon) a whole number, capped at 6 - inc=1 -> 0 decimals, inc=
-  0.001 -> 3. Fulfills plugins.c's own "TODO val_to_string callback...
-  can be added here whenever something actually calls param_get_value_
-  as_string" - decided: LV2 uses the raw-numeric fallback only, no
-  custom formatter.
-- value_range() (min, max, inc) - same DATA_CAP_VALUE capability,
-  bundled with value_as_string() as one query.
-
-STEP 4 - UI can change values:
-- DATA_ARG_NUMBER added to DataArgKind (data_actions.h currently has
-  only STRING/PATH/CHOICE/MULTI_CHOICE) - needed before SET_VALUE/
-  ADJUST_VALUE can declare their arg via action_args.
-- DATA_ACTION_SET_VALUE (absolute) + DATA_ACTION_ADJUST_VALUE (signed
-  step count, not a raw value - action_do maps sign to Operation_
-  Increase/Decrease) - one-line param_set_value calls in action_do.
-- DATA_ACTION_SET_CHOICE for CLAP_PARAM_IS_ENUM params - reuse list_at/
-  DataChoice/helper_choice_list_step as-is, list_at walks min..max
-  calling param_get_value_as_string per step for the label.
-- DATA_CAP_HIDDEN/is_hidden() as a query ONLY - no DATA_ACTION_TOGGLE_
-  HIDDEN. is_hidden reflects the plugin's own classification, not a user
-  preference - a future "user hides/shows something in their own view"
-  concept, if built, should be its own separate mechanism, not reuse
-  this.
-- IS_READONLY gating on SET_VALUE/ADJUST_VALUE/SET_CHOICE's DataAction.
-  enabled, generalized per owner: CLAP's CLAP_PARAM_IS_READONLY flag,
-  LV2's cur_ctrl->is_writable == 0 (fulfills plugins.c's own "TODO now
-  if the param is not writable... it should have a property for this
-  parameter to not send it to ui_to_rt ring buffer" - achieved via
-  action-gating rather than literally suppressing the ring-buffer send).
-
-- Flags system (replaces the single is_hidden bool, fulfills params.c's
-  own pre-existing "TODO instead of is hidden implement flag system"):
-  new enum paramFlags in params.h, own independent bit numbering (not
-  CLAP's - params.h stays owner-agnostic, same reasoning as owner_id),
-  doc-commented per bit, only what's implemented now:
-    PARAM_FLAG_HIDDEN   = 1 << 0
-    PARAM_FLAG_READONLY = 1 << 1
-  PRM_PARAM_UI.is_hidden (uint16_t) -> PRM_PARAM_UI.flags (uint32_t,
-  matching clap_param_info_flags' width). param_add_param gains a
-  uint32_t flags parameter (every call site updated: clap_plugins.c,
-  plugins.c, sampler.c, synth.c, params_container_resync's own pass-2
-  call - 0 where a module has no flag source yet). PARAM_RESYNC_ITEM
-  gains a matching flags field. Operation_ToggleHidden renamed/
-  repurposed to Operation_SetFlags (sets the WHOLE flags value to
-  set_to, not a single-bit toggle - reconciliation below hands the
-  plugin's current full flag state wholesale, not a delta). param_is_
-  hidden stays (now backed by flags & PARAM_FLAG_HIDDEN); new param_is_
-  readonly added the same way.
-
-  Fulfills clap_plugins.c's two flags-related TODOs. Both need their own
-  reconciliation, since RESCAN_INFO and RESCAN_ALL can fire independently
-  of each other:
-  - clap_plug_discover_params's empty CLAP_PARAM_IS_HIDDEN block:
-    translate CLAP_PARAM_IS_HIDDEN/CLAP_PARAM_IS_READONLY into PARAM_
-    RESYNC_ITEM.flags for every discovered param. New adds get correct
-    initial flags straight from param_add_param - no follow-up needed.
-    Survivors are untouched by resync itself (same tombstone-preserving
-    guarantee as name/value) so still need reconciling: after params_
-    container_resync returns (clap_plug_params_create and RESCAN_ALL),
-    walk the discovered list again, and only for entries param_find_uid
-    finds already alive, apply Operation_SetFlags with a MASKED merge -
-    (current_flags & ~KNOWN_MASK) | (discovered_flags & KNOWN_MASK), not
-    a blind overwrite, so a future non-CLAP-sourced flag bit is never
-    silently clobbered - only if it differs from current.
-  - RESCAN_INFO's own "get if any parameter is hidden or not" TODO: not
-    made redundant by the above, since RESCAN_INFO can fire alone without
-    RESCAN_ALL - needs the same masked Operation_SetFlags reconciliation
-    in its own branch, alongside its existing name check.
-  - LV2 needs neither reconciliation pass at all: confirmed LV2 has no
-    plugin-to-host "something changed" mechanism in this app at all
-    (param_get_if_changed_rt only propagates UI-driven changes OUT to the
-    plugin; the one path that could carry a change back - parsing an
-    incoming patch:Set atom - is unparsed, plugins.c's own TODO, already
-    self-deprioritized). LV2's flags are set once, correctly, at param_
-    add_param time and never need touching again.
-
-STEP 5 - UI reacts to individual param changes: implemented, then
-reverted - decided against. PRM_PARAM_UI got a ui_changed flag, set by
-param_msgs_process on a ui-side apply, polled by app_data_update to
-push a per-param DATA_EVENT_CHANGED. Removed because: (1) it only ever
-fired for value changes (name/flags apply directly to ui_params, never
-through the ring buffer, so it was never the "no value/name
-distinction" signal it claimed to be), (2) a fast-modulated param could
-flip it every app_data_update cycle with no natural pacing, and (3)
-most importantly, it wasn't protecting anything real - unlike the rt
-side's val_changed (gates genuinely expensive, avoidable work: re-
-sending a CLAP event, recomputation), PRM_PARAM_UI is already kept
-continuously live by param_msgs_process regardless of who's watching,
-so any consumer that just re-reads it on its own schedule (a redraw, a
-coarser event, anything) already gets correct data for free - a per-
-value push notification wasn't gating any real cost, just adding an
-unpaced event source. If a future UI genuinely needs to know "something
-in this instance's params changed" for its own redraw scheduling, the
-already-existing per-instance params_dirty/DATA_EVENT_CHILDREN_CHANGED
-(structural) is the right level to hook - polling only happens once per
-app_data_update cycle either way, so per-param granularity never bought
-any latency, only a saved linear rescan over an already-cheap, bounded
-param count.
-
-STEP 6 - categories: SUPERSEDED, see "CATEGORIES - entity model" below.
-The original plan here (a category/module STRING field on PRM_PARAM_UI,
-params staying FLAT CX children, child_at returning them sorted by
-category so a UI could print a header over contiguous runs) was built
-and worked, but is being replaced wholesale - categories become real CX
-tree nodes backed by real entities. Kept only as the record of what the
-string-field version was, so nobody re-derives it.
-
-DATA_CAP_PROPERTIES: built, then REMOVED ENTIRELY (2026-09-20) along with
-everything else category-related - see the purge note under CATEGORIES
-below. It was one DataOps entry, `size_t (*property_list)(void*,
-DataProperty*, size_t)`, the read-only dual of DATA_CAP_ACTIONS, with
-DataProperty a plain {name, label, value} display string and a full
-pass-through chain (data_property_list -> nav_cx_properties ->
-ui_layer_context_properties). Its ONLY producer was the param "category"
-entry and it never had a consumer - no UI ever called it - so once
-categories went, the whole chain was dead in both directions. Recorded
-here because the design reasoning still holds if it's ever wanted again:
-is_hidden/value_as_string/value_range deliberately stayed their own
-dedicated DataOps entries rather than being folded in, since they're read
-on a hot path or gate behaviour (filtering, enabling), unlike a purely
-presentational property.
+Any new CX-backed object should follow this rather than re-deriving it:
+1. Flat, tombstoned storage. Nesting is NOT nesting the storage.
+2. uid minted by the owning module from a file-static, never-reset counter,
+   so it is unique program-wide. 0 = "none" / "mint me one".
+3. Opaque handle = pointer to the entity's own struct carrying self_container
+   + self_local_id, plus a resolve function. See param_get_handle /
+   param_handle_resolve and mirror it; do not invent a second convention.
+4. Parent/child is a parent_uid FIELD on the entity - that is what makes a
+   move a field write instead of a storage move.
+5. app_data wraps each entity KIND in one DataOps table taking only the
+   handle, so every owner shares it (cx_param_ops, cx_param_cat_ops).
+6. ContextId = MAKE_ID(one namespace per KIND, uid). Per kind, never per
+   owner - rule 2 makes uids program-unique.
+7. Structural change = a generation counter on the store; app_data polls it
+   and emits DATA_EVENT_CHILDREN_CHANGED; app_intrf diffs the whole subtree.
 
 ================================================================================
-CATEGORIES - entity model (supersedes EVERY earlier category design)
+PLAN
 ================================================================================
-Three designs preceded this one and all three are dead: (1) flat params
-with an inline printed header, (2) a CLI-local active_category with
-visible-row indirection, (3) categories synthesized as a VIEW from each
-param's full path STRING, with identity = fnv1a64(path) and a per-
-container intern table of path strings. Do not resurrect any of them.
+1. PLUGIN PRESET BROWSING, with categories.
+   Same shape as the existing "Add plugin" catalog list (a DataChoice list
+   over list_count/list_at) but with category rows to drill into. Design is
+   below, under DESIGN FOR (1).
+   The clap module-level half exists already: clap_plug_presets_iterate /
+   _name_return / _path_return / _categories_iterate / _clean_preset,
+   clap_plug_preset_load_from_path, and the clap_ext_preset_factory
+   extension. Missing is the DataObject side - a categorised choice list
+   plus a load action.
+   NAMING TRAP: clap_plug_presets_categories_iterate and friends are PRESET
+   categories (a string path from the plugin's preset factory). Nothing to
+   do with parameter categories (PRM_PARAM_CATEGORY). Same word, different
+   mechanism.
 
-What killed (3): the requirement grew to "the user authors and EDITS
-categories" (e.g. writes them in a preset file). With a path-derived
-identity a rename cannot be non-destructive - the identity IS the thing
-being edited, so renaming "Custom/Osc" destroys that node and its whole
-subtree and rebuilds it under a new id, losing every hover position
-inside it. (3) was the right call while categories were read-only
-metadata from CLAP's clap_param_info_t.module; it stopped being right
-when they became user data.
+2. CLAP + LV2 optimisation / cleanup. Owns the CLAP-vs-spec gaps listed
+   under OPEN below. Fold anything found while doing (1) into it.
 
---------------------------------------------------------------------------------
-THE ENTITY PATTERN - params/categories are the REFERENCE IMPLEMENTATION
---------------------------------------------------------------------------------
-Any future object that needs CX-backed identity, nesting, or reparenting
-should follow this shape rather than re-deriving one. The rules:
-1. The owning module keeps a FLAT, tombstoned store. A survivor's
-   storage never moves (CROSS-CUTTING INVARIANT at the top of this file).
-   Nesting is NOT expressed by nesting the storage.
-2. Every entity gets a uid minted BY THE OWNING MODULE from a file-
-   static, never-reset counter, so it is unique program-wide and not
-   merely within one container. 0 is reserved to mean "none" / "mint me
-   one". (params.c already does this for params; categories get their
-   own separate counter - different namespaces, so sharing one buys no
-   uniqueness and only makes both sequences gappy and hard to read.)
-3. The module hands out an OPAQUE handle - a pointer to the entity's own
-   struct, which carries self_container + self_local_id - plus a resolve
-   function that turns it back into (container, local_id). Nothing above
-   the module ever sees the struct. See param_get_handle/param_handle_
-   resolve; mirror that shape exactly, don't invent a second convention.
-4. Parent/child structure is a `parent_uid` FIELD on the entity. That is
-   what makes reparenting a field write instead of a storage move, and
-   it is the whole reason this model can do (STEP F) what the path-
-   string model could not.
-5. app_data wraps each entity KIND in exactly one DataOps table whose
-   functions take only the handle - so the table is owner-agnostic and
-   every owner shares it (cx_param_ops is already like this).
-6. ContextId = MAKE_ID(one namespace per entity KIND, uid). One
-   namespace per KIND, never per owner, because rule 2 makes uids
-   program-unique.
-7. Structural-change notification = a generation counter on the store.
-   app_data polls it and emits DATA_EVENT_CHILDREN_CHANGED on the owning
-   node; app_intrf diffs the whole subtree (STEP A). The data layer never
-   has to describe WHAT changed, only that something under here did.
+3. SAVING. Deliberately after (1) and (2): do not design the save format
+   until what it must save has stopped moving - presets change what a
+   plugin's restorable state even is, and the cleanup may change the param/
+   state surface.
+   NEVER serialise a params.c uid or a ContextId: the uid counter restarts
+   at 0 every launch, so uid 7 is a different param next run. Save DOMAIN
+   identity - plugin URI, the plugin's own param id (owner_id), sample path,
+   port name. Every owner now supplies a real owner_id; LV2's is the control
+   index and must be mapped to plug->controls[owner_id - 1]->symbol before
+   writing, never persisted as the index.
 
---------------------------------------------------------------------------------
-TARGET-LIST CONTRACT (verified - settled, do not re-litigate)
---------------------------------------------------------------------------------
-ui_layer's only HARD obligation is that no stored ContextId ever names a
-DESTROYED context. Beyond that a view may store whatever it likes in a
-target list; a stale-but-still-valid id is the view's own business and
-self-heals. Verified in smp_groovebox_ui_cli.c: helper_nav_context_
-single_purpose_set scans the parent's LIVE children for the stored id
-and falls back to index 0 when it isn't found, so the stored id is a
-hint and the live child list is the source of truth. What makes this
-safe is DataOps.id's "program-unique, never reused for a different
-object", which the minting counters of rule 2 guarantee. The
-UiStalePolicy modes are therefore ERGONOMICS (re-anchor to a sibling
-instead of snapping to index 0), not safety.
+4. CX_MOVED + reparenting. DEFERRED - no trigger yet.
+   Only buys a non-destructive rename/move IN PLACE, which needs user-
+   authored categories. NOT needed by CLAP rescan: a param changing category
+   is already handled correctly as remove+add (see DECISIONS).
+   If built: detection is nearly free from app_intrf_cx_resync's existing
+   diff ("in both, different parent"); CxEvent needs no new field (a move
+   carries the OLD parent/index, like CX_REMOVED); the hashtable entry does
+   not change (keyed by data_id, which is what did not change); the apply
+   order INVERTS to ADD -> MOVE -> REMOVE (additions first so a move's
+   destination exists, removals last so survivors are moved out of doomed
+   subtrees) - getting that backwards silently frees live nodes. ui_layer
+   cost is ~3 lines: mark the view touched, no pruning (see DECISIONS).
 
---------------------------------------------------------------------------------
-STEP A - app_intrf: whole-subtree diff resync   [DONE 2026-09-20]
---------------------------------------------------------------------------------
-IMPLEMENTED as mark/sweep/add rather than by building two id->parent sets:
-the CX tree is ALREADY indexed by id in app_intrf->cx_hashtable, so "does
-this desired node exist?" is an O(1) ht_get and only the other direction
-needs help. CX gains a uint64_t sync_stamp and APP_INTRF a counter
-incremented once per resync (a fresh CX is calloc'd to 0 and stamps start
-at 1, so a never-marked CX can't look current by accident). Three static
-helpers, then app_intrf_cx_resync is six lines:
-  app_intrf_cx_mark_desired  - recurse the DATA subtree, stamp every CX
-      that already represents one of its nodes. Takes the parent's
-      ContextId and stamps ONLY when the CX already sits under that same
-      parent, so a node that moved is left unstamped on purpose - the
-      sweep frees it and the add phase re-creates it in its new place.
-      That remove+add is what a move degrades to until CX_MOVED exists.
-  app_intrf_cx_sweep         - recurse the CX subtree backwards (cx_
-      subtree_free shifts the array down), free anything unstamped, and
-      only descend into survivors.
-  app_intrf_cx_add_missing   - recurse the DATA subtree top down, create
-      what has no CX. A created node's subtree is materialised by
-      app_intrf_cx_children_create so it is not descended into; only an
-      already-existing node is. Guards the one case the sweep cannot
-      reach - an id living under a DIFFERENT parent outside this subtree
-      - by leaving it alone rather than ht_set-ing over it and stranding
-      the old CX. Nothing moves today; CX_MOVED is the real fix.
-VERIFIED: clean build, no warnings. pty-driven CLI, valgrind 0/0/0 lost
-(the 14890 errors from 1 context are SG-323's own uninitialised read in
-SG323AudioProcessor::processBlock, third-party and pre-existing):
-  - CLAP add / enter / remove, LV2 add / enter / remove: unchanged.
-  - hover persistence: enter a plugin, hover the 4th param, exit,
-    re-enter -> still on the 4th param, i.e. survivors really are left
-    untouched.
-  - TWO SG-323 instances, remove one: the other keeps its full param
-    list AND its hover. This is the real test of the recursion - the
-    mark phase has to walk Clap_Plugins -> plugin -> params two levels
-    down and stamp the survivor's params, or they would be swept too.
-KNOWN, UNCHANGED FROM BEFORE (not a regression, but STEP D has to deal
-with it): a child added by a resync is APPENDED to cx_children, not
-inserted at the data layer's index, and nav_cx_child_at reads display
-order straight off that array. So after a resync the displayed order can
-drift from the order the data layer returns. Invisible today (params were
-appended in val_id order anyway), but once STEP D returns groups-then-
-leaves the order matters and an append would put a newly-added category
-after the params instead of before them.
-
-ORIGINAL SPEC, for reference:
-WHAT: replace app_intrf_cx_resync's one-level, interleaved remove/add
-with a diff computed BEFORE anything is mutated:
-  1. walk the data layer under parent_cx  -> desired {id: (parent, idx)}
-  2. walk the CX tree under parent_cx     -> current {id: (parent, idx)}
-  3. REMOVED = current - desired, ADDED = desired - current
-  4. apply ALL removals, THEN all additions top-down
-WHY FIRST: every later step needs a tree deeper than one level, and this
-is the only step that can be verified with NO new features - its
-observable behaviour must be identical to today's.
-WHY THE ORDER: the same ContextId can leave one parent and arrive under
-another in a single reconciliation (a param whose category changed).
-Interleaved per-level apply can ht_set the new CX and then ht_remove the
-id, leaving a live CX that is no longer in the hashtable - silent, and it
-surfaces much later as an inexplicable navigation failure. Removals
-strictly first makes that safe. (STEP F inverts this order once CX_MOVED
-exists - see there, and note the inversion is deliberate.)
-NOT A BUG TODAY: the tree under a plugin is currently flat, so one level
-genuinely suffices. This is prerequisite work, not a fix.
-TEST ON ITS OWN: identical behaviour to today. Load/remove CLAP and LV2
-plugins, add/remove samples, force a CLAP param rescan; same screens,
-same hover behaviour, valgrind clean.
-
---------------------------------------------------------------------------------
-STEP B - params.c: generation counter + generic dirty polling  [DONE 2026-09-20]
---------------------------------------------------------------------------------
-IMPLEMENTED: PRM_CONTAIN gains `generation` plus `generation_polled`, and
-params.c exposes one check-and-clear accessor:
-    bool param_container_changed(PRM_CONTAIN *c);
-It compares the two and syncs them, so "changed since you last asked"
-needs NO state in the caller - which matters because app_data has nowhere
-natural to keep a per-container value (MAX_INSTANCES isn't visible to it
-and containers come and go). The container is the right home anyway: the
-counter is freed with it automatically.
-`generation` is bumped in exactly two places - param_add_param (covers
-every add, from any path) and params_container_resync's free pass (covers
-every remove). A value, name or flag change does NOT bump it; nothing
-structural moved. A raw `param_container_generation()` accessor was
-deliberately NOT added - STEP D's memo can expose it when it actually has
-a second consumer, rather than landing unused now.
-REMOVED: CLAP_PLUG_PLUG.params_dirty, its two assignment sites, clap_plug_
-plugin_params_dirty() and its declaration. app_data_update now asks
-param_container_changed(clap_plug_plugin_param_container(plug)) instead.
-Owners no longer have to remember to raise a flag, which is the actual
-point - LV2/sampler/synth get the same polling by adding their own loop
-once their params become CX children.
-KNOWN AND ACCEPTED: a container counts as changed from the moment its
-first param is added, so the first poll after an owner populates it
-returns true even though no watcher could have seen an earlier state.
-That is one no-op resync per container, which then settles. The old
-params_dirty avoided it only because the owner hand-set the flag on
-rescan but not on create - i.e. by being manual, the thing this replaces.
-VERIFIED: clean build, no warnings; grep finds no params_dirty anywhere.
-Temporarily instrumented the poll with a log line and ran two SG-323
-instances through load / enter / hover / exit / re-enter / remove: it
-fired EXACTLY TWICE for the whole session, once per plugin uid - so it
-really does settle rather than re-firing per frame. Instrumentation then
-removed. Under valgrind: params render, hover survives exit+re-entry (4th
-row, "Mix"), removing one instance leaves the other's params and hover
-intact, 0 definitely/indirectly/possibly lost. (The 14899 errors from 1
-context are SG-323's own processBlock read, third-party, pre-existing.)
-
-ORIGINAL SPEC, for reference:
-WHAT: uint32_t generation on PRM_CONTAIN, bumped by param_add_param and
-params_container_resync; param_container_generation(container). app_data
-remembers the last generation it saw per container and emits DATA_EVENT_
-CHILDREN_CHANGED when it differs.
-REPLACES: clap_plug_plugin_params_dirty and its per-instance polling -
-a CLAP-specific mechanism doing a job every owner needs.
-TEST ON ITS OWN: force a CLAP rescan, confirm CHILDREN_CHANGED still
-fires and the param list still updates; delete params_dirty entirely and
-confirm no regression. sampler/synth/LV2 don't change params after
-creation, so verify they produce NO spurious events.
-WHY BEFORE CATEGORIES: the category work needs a structural-change
-signal that isn't CLAP-shaped, and this same counter is the natural
-cache key if enumeration ever needs memoising.
-
---------------------------------------------------------------------------------
-STEP C - params.c: category entities (storage only, nothing renders)
---------------------------------------------------------------------------------
-WHAT:
-  typedef struct _param_category {
-      PRM_CONTAIN *self_container;   // same self-ref trick as PRM_PARAM_UI
-      int self_cat_id;
-      uint32_t uid;                  // minted, never reused
-      uint32_t parent_uid;           // 0 = top level
-      char name[MAX_CATEGORY_SEGMENT]; // OWN SEGMENT ONLY, never a path
-  } PRM_PARAM_CATEGORY;
-  on PRM_CONTAIN: PRM_PARAM_CATEGORY **categories; unsigned int
-  num_categories - each descriptor its OWN malloc, because the outer
-  array is realloc'd on growth and a handed-out address must never move
-  (identical reasoning to the rt_params/ui_params comment at params.c:76).
-  static uint32_t next_category_uid, SEPARATE from next_param_uid.
-API (mirroring param_get_handle/param_handle_resolve exactly):
-  void *param_category_intern(PRM_CONTAIN *c, uint32_t parent_uid,
-                              const char *name);   // find-or-create
-  uint32_t param_category_intern_path(PRM_CONTAIN *c, const char *path);
-                              // walks "a/b/c", creates the chain,
-                              // returns the LEAF's uid
-  bool param_category_resolve(void *h, PRM_CONTAIN **c, int *cat_id);
-  void *param_category_handle(PRM_CONTAIN *c, int cat_id);
-  const char *param_category_name(PRM_CONTAIN *c, int cat_id);
-  uint32_t param_category_parent(PRM_CONTAIN *c, int cat_id);
-  uint32_t param_category_uid(PRM_CONTAIN *c, int cat_id);
-PARAM SIDE: PRM_PARAM_UI.category[MAX_SHORT_NAME_LENGTH] becomes
-uint32_t category_uid (0 = uncategorized). param_add_param and PARAM_
-RESYNC_ITEM take category_uid instead of a category string. param_get_
-category (string) is REPLACED by param_get_category_uid - it does not
-survive alongside.
-OWNERS: clap_plug_discover_params calls param_category_intern_path(
-container, param_info.module) and stores the returned uid. Every other
-owner passes 0.
-Free the category array in param_clean_param_container.
-BONUS - a whole hazard disappears: the old design needed a MAX_CATEGORY_
-PATH large enough for CLAP's 1024-byte module string, because a
-TRUNCATED path silently MERGES two distinct categories (and, since the
-path was the intern key, merges their CX nodes too). Storing one segment
-per entity means a path is never held whole and that failure mode is
-gone. MAX_CATEGORY_SEGMENT only has to fit one segment.
-TEST ON ITS OWN: nothing renders differently - child_at is still flat.
-Load Surge XT, confirm the same param list as before, valgrind clean. A
-temporary debug dump of the interned chain is worth writing to eyeball
-that "Osc/Set" and "Osc/Basic" resolve to ONE shared "Osc" parent.
-
---------------------------------------------------------------------------------
-STEP D - app_data.c: category CX nodes (the tree appears)
---------------------------------------------------------------------------------
-WHAT:
-- DATA_NS_PARAM_CATEGORY (generic from day one, like DATA_NS_PARAM).
-- cx_param_cat_ops, capabilities DATA_CAP_NAME | DATA_CAP_CHILDREN:
-  cx_param_cat_id   -> MAKE_ID(DATA_NS_PARAM_CATEGORY, category uid)
-  cx_param_cat_name -> the segment name (already just the segment)
-  cx_param_cat_child_count / _child_at
-- ONE shared enumerator, cx_param_level_count/_at(container,
-  parent_cat_uid): children are every category whose parent_uid ==
-  parent_cat_uid (sorted by name), THEN every alive param whose
-  category_uid == parent_cat_uid (val_id order, so the plugin author's
-  intended ordering survives). Integer compares only - no strncmp, no
-  path slicing, no dedup scan, no qsort over strings. Groups always
-  before leaves.
-- clap_plugin_child_count/_child_at become two-line delegations with
-  parent_cat_uid 0.
-DEPENDS ON STEP A: without the deep diff a rescan cannot reach params
-below the first level.
-TEST ON ITS OWN: navigate a Surge XT instance in the CLI - modules
-appear as folders, entering one shows sub-modules and params, and hover
-position is restored on re-entry with NO new code (the generic machinery
-keyed by ContextId already does it, which was the entire point of making
-categories real contexts). SG-323 has no modules, so every category_uid
-is 0 and it must still show one flat param list.
-
---------------------------------------------------------------------------------
-STEP E - DONE UP FRONT (2026-09-20), before STEP A
---------------------------------------------------------------------------------
-Done first, deliberately: a half-removed old design leaking into a new
-one is worse than either state, so the whole category implementation was
-purged before the plan starts rather than unpicked step by step.
-REMOVED:
-- params.c/h: PRM_PARAM_UI.category[], param_add_param's `category`
-  parameter and its snprintf, PARAM_RESYNC_ITEM.category, param_get_
-  category, and every doc comment describing category as presentational
-  grouping metadata. param_add_param is 10 args again.
-- clap_plugins.c: the snprintf of param_info.module into the resync
-  item. This also retired the -Wformat-truncation warning it caused
-  (1024-byte module into a 100-byte buffer).
-- app_data.c: cx_param_sorted_val_ids, CxParamSortEntry, cx_param_sort_
-  cmp, and cx_param_property_list. clap_plugin_child_at reverted to flat
-  tombstone-skipping enumeration (what STEP 1 originally specified) -
-  it no longer mallocs or sorts per call.
-- the whole DATA_CAP_PROPERTIES chain: DataProperty, DATA_CAP_
-  PROPERTIES, DataOps.property_list, data_property_list (data_object.h),
-  nav_cx_properties (app_intrf.c/h), ui_layer_context_properties
-  (ui_layer.c/h). Zero producers and zero consumers once the category
-  entry went - see its own entry above for the reasoning worth keeping.
-- all param_add_param call sites in sampler.c, synth.c, plugins.c,
-  jack_funcs.c.
-VERIFIED: clean build, no warnings; grep finds no DataProperty/DATA_CAP_
-PROPERTIES/property_list/param_get_category/sorted_val_ids anywhere; the
-only surviving "category" in the tree is clap_plug_preset_return_
-category, which is the CLAP PRESET browser (the FUTURE DataChoice case
-at the bottom of this file), unrelated. Real pty-driven CLI run loading
-SG-323 under valgrind: params still render with values and actions, 0
-definitely/indirectly/possibly lost.
-STILL TO DO WHEN STEP D LANDS: decide whether a param wants a "category"
-display property at all. Under the entity model its tree POSITION is its
-category, so it is redundant for a tree view and only meaningful for a
-flat one - and it would then be built by walking parent_uid upward, not
-read from a stored string. If the answer is yes, DATA_CAP_PROPERTIES
-comes back with it.
-
---------------------------------------------------------------------------------
-STEP F - DEFERRED until user-authored categories actually exist
---------------------------------------------------------------------------------
-Do NOT build this speculatively. Build it when a preset file (or any
-other user-facing editor) can actually write categories, and only if
-losing hover on rename turns out to matter in practice.
-- Operation_SetCategory in param_set_value, mirroring Operation_Change
-  Name: a ui-only field, no rt side, no ring-buffer message. Must bump
-  the STEP B generation counter.
-- A category RENAME is NOT structural under this model: mutate name,
-  emit DATA_EVENT_CHANGED. No CX churn, no lost hover. This is the main
-  thing the entity model buys over the dead path-derived design, where a
-  rename changed the id and destroyed the whole subtree.
-- A MOVE (param to another category, or a category to another parent) is
-  one parent_uid/category_uid field write. To make it non-destructive:
-  * CX_MOVED added to CxEventType. Detection is nearly free once STEP
-    A's diff exists: "in both sets, different parent".
-  * CxEvent needs NO new field. A move carries the OLD parent/index -
-    exactly what a view needs to re-anchor, same as CX_REMOVED.
-  * app_intrf reparent = pop from the old parent's cx_children array,
-    push to the new one, update cx_parent/idx. The HASHTABLE ENTRY DOES
-    NOT CHANGE - it is keyed by data_id, which is precisely what did not
-    change. app_intrf_cx_children_pop already does the array surgery; it
-    just needs splitting from its free/ht_remove half.
-  * APPLY ORDER INVERTS to ADD (top-down) -> MOVE -> REMOVE: additions
-    first so a move's destination exists even when it is brand new,
-    removals last so survivors have been moved out of doomed subtrees
-    before those are freed. This is the opposite of STEP A's order and
-    getting it backwards silently frees live nodes.
-  * ui_layer cost is ~3 lines: on CX_MOVED mark the view touched so
-    ui_layer_state_reconcile returns UI_RECONCILE_CHANGED and it
-    redraws. NO pruning is needed - see the TARGET-LIST CONTRACT above;
-    the context still exists, nothing dangles, and a view that filed the
-    id under the old parent re-derives on its own. Applying an item
-    stale policy on a move is OPTIONAL polish (re-anchor to a sibling
-    instead of snapping to index 0).
-
-Once proven on CLAP, replicate steps 1-4 to LV2/sampler/synth (each's
-deltas noted above, per step) - STEP 5 stays unimplemented everywhere,
-see its own entry above. STEP 6 is NOT on that list: categories now come
-from the entity plan above, and STEPS C/D there are owner-agnostic by
-construction, so every owner gets them at once rather than one at a time.
-
-TODO - found while implementing STEPS 0-4, not yet fixed:
-- CLI can't collect a DATA_ARG_NUMBER arg: smp_groovebox_ui_cli.c's
-  generic action-arg-collection code (around line 719-726) only handles
-  DATA_ARG_PATH/DATA_ARG_CHOICE, falling through to "unsupported
-  arguments" for anything else. SET_VALUE/ADJUST_VALUE are fully wired
-  and correctly gated at the DataOps/action_do layer (verified - the
-  action is offered, enabled, and would execute correctly given a
-  value) but aren't actually usable from the CLI yet. Needs its own
-  small design: digit accumulation, decimal point/negative sign
-  handling, confirm/cancel keys - new CLI input-handling code, not a
-  DataObject/params.c change.
-- jack_funcs.c mints Trk's own params (Tempo/Bar/Beat/Tick/Play/BPB/
-  Beat_Type, jack_funcs.c ~line 102-108) with the same literal, non-
-  globally-unique per-container uid pattern (0-6) that CLAP/LV2/
-  sampler/synth all had before this session's earlier fix - Trk was
-  never included in that pass. FIXED: all seven now pass uid 0 and
-  params.c mints, along with every other owner (see the "params.c mints
-  uids" item). owner_id went to 0 too - Trk has no external id space,
-  and nothing read it. val_id order is untouched, which is what the
-  hardcoded val_ids in jack_funcs.c's transport code (param_set_value_
-  rt(..., 1, bar) and friends) depend on.
-
-TODO - gaps found checking clap_plugins.c against the vendored clap/ext/
-params.h, future consideration, not part of the STEP plan above:
-- CLAP_PARAM_IS_PERIODIC: no handling at all, not decided.
-- CLAP_PARAM_IS_BYPASS: still an empty TODO stub, exposed as an ordinary
-  param for now - decide later whether it deserves dedicated treatment.
-- clap_output_events_read never parses a CLAP_EVENT_PARAM_VALUE the
-  plugin itself sends (own TODO: "need to find a plugin that outputs
-  them") - the plugin's own internal value changes never reach us.
-- Gesture begin/end (CLAP_EVENT_PARAM_GESTURE_BEGIN/_END): SET_VALUE/
-  ADJUST_VALUE would send a bare PARAM_VALUE with no gesture wrapping -
-  unverified against a plugin that keys behaviour off gesture end.
-- clap_host_params.request_flush()/flush(): matters if a plugin is
-  loaded/active while process() isn't being called. Not audited.
-- Automation/modulation (IS_AUTOMATABLE*/IS_MODULATABLE*, PER_NOTE_ID/
-  PER_KEY/PER_CHANNEL/PER_PORT, CLAP_EVENT_PARAM_MOD): deliberately out
-  of scope - automation needs a recorded-timeline/playback engine this
-  app doesn't have; modulation would compose with a routing action
-  related to but not reducible to CONNECT. Revisit only when specifically
-  decided to build either.
-- clap_plug_discover_params reuses a param's uid across RESCAN_ALL by
-  matching owner_id (clap_id) against the not-yet-pruned old container -
-  if a plugin frees a clap_id and reassigns it to an unrelated new param
-  within the SAME rescan, the new param gets misidentified as a survivor
-  of the old one and its freshly-read name/min/max/default are discarded
-  (params_container_resync leaves survivors untouched). Not fixed: no
-  params.c setter exists for a live param's min/max/inc, and adding one
-  raises its own reclamp-in-flight questions. Narrow, plugin-behavior-
-  dependent edge case - revisit only if an actual plugin is found to hit
-  it.
-
-If LV2 ever needs its own params_container_resync (it doesn't today -
-plug->controls is fixed at load, no add/remove-ports mechanism in LV2
-core or the patch/parameters/port-props extensions this app uses): its
-uid would need to stop being ct_iter (position) and become the port/
-control's SYMBOL hashed into a uint32_t instead - position is exactly
-what goes unstable across a reconfiguration. Not automatic, a deliberate
-plugins.c change.
+5. SLOT-TABLE EXTRACTION. DEFERRED - no trigger yet.
+   The tribal rules above (1-3) are not enforced anywhere; getting one wrong
+   is a silent use-after-free. Extract into util_funcs/ when a THIRD growable
+   identity-bearing entity appears (a pattern/clip list, a modulation matrix,
+   user macros). Not before: the only two growable ones are params and
+   categories, both in params.c, and they already disagree on whether removal
+   exists - so which behaviour is "general" is not yet knowable.
 
 ================================================================================
-FUTURE - categories for CHOICE / MULTI_CHOICE lists (not scheduled -
-needed once plugin preset browsers are built)
+DESIGN FOR (1) - categories in CHOICE / MULTI_CHOICE lists
 ================================================================================
-No new DataListId/DataArgKind/DataActionType needed - still a flat,
-idx-enumerable list_at. TODO when built:
-- DataChoice gains DATA_CHOICE_CATEGORY (1u << 1), alongside the existing
-  DATA_CHOICE_LINKED (1u << 0) - a row with this bit set is a node to
-  descend into, not a pickable leaf.
-- DataActionReq gains a top-level field, sibling to `type`, OUTSIDE the
-  per-action union: `uint64_t category_scope;` (0 = list root). Set by
-  the UI while drilling; ignored by list_at for non-categorised lists.
-  Must be a dedicated top-level field, not a reused union field (e.g. NOT
-  add_choice.choice_value - collides with CONNECT's own union usage).
-- CLI-side drilling: one more branch in the existing "on SELECTED"
-  handling already used by helper_choice_list_step's callers - category
-  row updates category_scope/resets cursor and re-browses; leaf row
-  behaves exactly as today. Backing out (h/ESC) needs a small caller-
-  owned breadcrumb stack (scope, cursor) per level, capped like ACTION_
-  ARG_COUNT elsewhere in this CLI - no heap.
-- A category node's DataChoice.value must hash its FULL path (e.g.
-  fnv1a64("Bass/Analog/Warm")), not just its own name, or two different
-  parents with a same-named child collide.
-  Do NOT "fix" this later to match the param-category entity model. The
-  two cases are genuinely different: a DataChoice row is STATELESS - it
-  is enumerated on demand from a catalog and there is no persistent
-  struct to mint a uid from or hang identity off, so a content-derived
-  hash is the only option. Param categories are real entities with
-  storage, so they mint instead (see "CATEGORIES - entity model"). Same
-  word, different problem.
-- Only the immediate parent's scope value is ever needed by list_at, not
-  the whole ancestor chain.
+No new DataListId/DataArgKind/DataActionType - still a flat, idx-enumerable
+list_at.
+- DataChoice gains DATA_CHOICE_CATEGORY (1u << 1) beside DATA_CHOICE_LINKED
+  (1u << 0): a row with this bit is a node to descend into, not a leaf.
+- DataActionReq gains a TOP-LEVEL field, sibling to `type`, outside the
+  per-action union: `uint64_t category_scope;` (0 = root). Must not reuse a
+  union field - add_choice.choice_value collides with CONNECT's usage.
+- CLI drilling: one more branch in the existing "on SELECTED" handling that
+  helper_choice_list_step's callers already have. A category row sets
+  category_scope, resets the cursor, re-browses; a leaf behaves as today.
+  Backing out needs a small caller-owned breadcrumb stack (scope, cursor)
+  per level, capped like ACTION_ARG_COUNT - no heap.
+- A category row's DataChoice.value must hash its FULL path, e.g.
+  fnv1a64("Bass/Analog/Warm"), not just its own name, or two parents with a
+  same-named child collide.
+- list_at only ever needs the immediate parent's scope, not the ancestor
+  chain.
+
+================================================================================
+OPEN
+================================================================================
+- CLI cannot collect a DATA_ARG_NUMBER arg. smp_groovebox_ui_cli.c's generic
+  action-arg collection handles only DATA_ARG_PATH/DATA_ARG_CHOICE and falls
+  through to "unsupported arguments". SET_VALUE/ADJUST_VALUE are fully wired
+  and correctly gated at the DataOps layer but are unusable from the CLI.
+  Needs CLI input work (digit accumulation, decimal point, sign, confirm/
+  cancel) - not a DataObject or params.c change.
+- CLAP vs the vendored clap/ext/params.h, for item (2):
+  * CLAP_PARAM_IS_PERIODIC: no handling, undecided.
+  * CLAP_PARAM_IS_BYPASS: empty stub, exposed as an ordinary param.
+  * clap_output_events_read never parses a CLAP_EVENT_PARAM_VALUE the plugin
+    sends, so plugin-side value changes never reach us.
+  * Gesture BEGIN/END never wrapped around SET_VALUE/ADJUST_VALUE.
+  * clap_host_params.request_flush()/flush() not audited - matters if a
+    plugin is active while process() is not being called.
+  * RESCAN_ALL survivor matching is by owner_id against the not-yet-pruned
+    container: a plugin that frees a clap_id and reassigns it to an
+    unrelated param within the SAME rescan gets the new param misidentified
+    as a survivor, discarding its fresh name/min/max/default. Not fixed -
+    params.c has no setter for a live param's min/max/inc and adding one
+    raises reclamp-in-flight questions. Narrow; revisit if a real plugin
+    hits it.
+  * Automation/modulation (IS_AUTOMATABLE*/IS_MODULATABLE*, PER_NOTE_ID/
+    PER_KEY/PER_CHANNEL/PER_PORT, CLAP_EVENT_PARAM_MOD): out of scope -
+    automation needs a timeline engine this app lacks; modulation needs a
+    routing concept related to but not reducible to CONNECT.
+- Header hygiene: types.h has accumulated defines used by ONE module, which
+  forces unrelated recompiles. MAX_CATEGORY_SEGMENT was moved to params.h
+  for this reason. Walk the rest: anything referenced from a single .c/.h
+  pair belongs in that pair's header; only genuinely cross-cutting things
+  (PARAM_T, SAMPLE_T, MAX_SHORT_NAME_LENGTH) stay.
+
+================================================================================
+DECISIONS - settled, do not re-litigate
+================================================================================
+- user_data stays a borrowed POINTER, not a revalidatable key. A key
+  ({owner, slot, uid} by value, re-resolved per call) would delete the
+  INVARIANT above and make staleness detectable instead of UB - and it is
+  already the pattern one layer down (PARAM_RING_DATA_BIT carries val_id AND
+  uid for exactly that reason). Deferred anyway: whole-codebase refactor of
+  every ops table, every accessor becomes a lookup, and params itself barely
+  benefits since val_id stability is load-bearing for the rt side and Trk.
+  Revisit only for data owned out of process / freed concurrently, a
+  scripting layer defining its own tree, or UI state restored by identity
+  across runs (and even then, serialising a path of names beats persisting
+  ids).
+- Param categories MINT uids; DataChoice category rows HASH their path. Not
+  an inconsistency: a DataChoice row is stateless, enumerated on demand with
+  no struct to hang identity off. Param categories are real entities with
+  storage.
+- A param changing category is handled as remove+add and that is CORRECT,
+  not a degradation: a param has no children so there is no hover state
+  inside it, and the old parent's hover pointing at it SHOULD re-anchor,
+  having genuinely left that list. Categories themselves never move under a
+  rescan - interning matches by (parent, name), so a changed module path
+  interns a new chain and the old entity just goes empty.
+- Empty categories are not garbage-collected. The interned entry lingers
+  (a pointer + a name buffer, freed with the container); the CX disappears
+  because the enumerator stops returning it. Its hover entry goes with it,
+  which is correct - a category with no params is genuinely gone.
+- TARGET-LIST CONTRACT: ui_layer's only hard obligation is that no stored
+  ContextId ever names a DESTROYED context. Beyond that a view may store
+  what it likes; a stale-but-valid id self-heals (helper_nav_context_single_
+  purpose_set scans the parent's live children and falls back to index 0).
+  What makes that safe is DataOps.id's "never reused for a different object".
+  UiStalePolicy modes are ergonomics, not safety.
+- is_hidden/value_as_string/value_range stay their own DataOps entries
+  rather than generic "properties": they are read on hot paths or gate
+  behaviour. DATA_CAP_PROPERTIES was built for the param category and
+  removed with it - it had no consumer.

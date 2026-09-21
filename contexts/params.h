@@ -5,8 +5,9 @@
 #include <stdint.h>
 // operations param_set_value can apply to a parameter - the four value ops
 // (Decrease/Increase/SetValue/DefValue) clamp and may propagate to the rt
-// side; the three property ops (SetIncr/ChangeName/SetFlags) only ever
-// mutate ui-only fields (see param_set_value's own doc comment).
+// side; the property ops (SetIncr/SetDefValue/ChangeName/SetFlags/
+// SetCategory) only ever mutate ui-only fields (see param_set_value's own
+// doc comment).
 enum paramOperType {
     Operation_Nothing = 0x00,
     Operation_Decrease = 0x01,
@@ -21,17 +22,25 @@ enum paramOperType {
     // change the name of the parameter
     Operation_ChangeName = 0x07,
     // replace the whole flags bitmask (see enum paramFlags) with set_to
-    Operation_SetFlags = 0x08
+    Operation_SetFlags = 0x08,
+    // move the param into the category whose uid is set_to (0 = none). The
+    // only property op that is STRUCTURAL - it changes which parent the param
+    // hangs under, so it bumps the container generation
+    Operation_SetCategory = 0x09
 };
 
 // per-parameter property bits, translated by the owner from its own flag
-// source. Own numbering, independent of any owner's own flag values - more
-// bits get added here as something actually needs them.
+// source. 
 enum paramFlags {
     PARAM_FLAG_HIDDEN   = 1 << 0,
     PARAM_FLAG_READONLY = 1 << 1,
     PARAM_FLAG_ENUM     = 1 << 2,
 };
+
+// max length of ONE parameter-category name segment (see param_category_
+// intern). A segment is never a whole path, so this only has to hold
+// "Oscillators", not "Oscillators/Wavetable 1/Unison".
+#define MAX_CATEGORY_SEGMENT 128
 
 // struct that holds the parameters
 typedef struct _params_container PRM_CONTAIN;
@@ -41,8 +50,7 @@ typedef struct _params_container PRM_CONTAIN;
 // build_value: turns a param's raw stored value into the value param_get_
 // value should return - curve mapping, interpolation, anything the owner
 // wants. May be NULL, in which case param_get_value returns the raw value
-// unchanged. rt_params tells the callback which side is asking, for owners
-// whose transform differs by side (e.g. rt-only smoothing)
+// unchanged. rt_params tells the callback which side is asking
 // val_to_string: writes a display string for a param's value - the owner
 // decides the whole presentation (plain number, dB, True/False, a choice
 // label, anything). May be NULL, in which case param_get_value_as_string
@@ -68,17 +76,20 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 // Fails (returns -1) if a caller-supplied uid already exists in this container
 // (checked via param_find_uid) or on allocation failure. name is
 // copied immediately, not borrowed past this call. owner_id is a second,
-// separate identifier, opaque to params.c - for an owner with its own external
-// id space for this param (e.g. CLAP's clap_id)
+// separate identifier, opaque to params.c - the OWNER's own name for this
+// param, in whatever id space the owner uses (CLAP's clap_id, an index into
+// the owner's own array, a module-private enum). 
 // cookie is optional convenience storage for the owner (e.g. a CLAP param's
 // cookie) - may be NULL, and is only ever readable from the rt side (see
 // param_cookie_return_rt). flags is this param's initial paramFlags bitmask
-// (0 if the owner has no flag source). Reuses a freed slot if one exists,
-// else grows the container. Returns the new val_id (same index on both the
-// rt and ui side) on success.
+// (0 if the owner has no flag source). category_uid is which category this
+// param sits in (see param_category_intern), 0 for none. Reuses a freed
+// slot if one exists, else grows the container. Returns the new val_id (same
+// index on both the rt and ui side) on success.
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    uint32_t owner_id, uint32_t flags, void *cookie);
+                    uint32_t owner_id, uint32_t flags, uint32_t category_uid,
+                    void *cookie);
 
 // one parameter as the owner currently sees it, for params_container_resync.
 // name is copied, doesn't need to outlive the call. uid: for a survivor,
@@ -99,6 +110,7 @@ typedef struct _params_resync_item {
     uint32_t uid;
     uint32_t owner_id;
     uint32_t flags;
+    uint32_t category_uid;
     void *cookie;
 } PARAM_RESYNC_ITEM;
 
@@ -115,6 +127,21 @@ typedef struct _params_resync_item {
 void params_container_resync(PRM_CONTAIN *param_container,
                              const PARAM_RESYNC_ITEM *new_params,
                              unsigned int new_count);
+
+// opaque per-param handle, stable for exactly the param's own lifetime (same
+// underlying storage as the param itself. NULL on error. ui-only.
+void *param_get_handle(PRM_CONTAIN *param_container, int val_id);
+
+// resolve a handle from param_get_handle back to its container/val_id.
+// Returns false (leaving the out-params untouched) if handle is NULL.
+bool param_handle_resolve(void *handle, PRM_CONTAIN **out_container,
+                          int *out_val_id);
+
+// return how many parameters are on the container, for whichever side
+// rt_params selects (both sides always hold the same count - param_add_param
+// grows them together
+unsigned int param_return_num_params(PRM_CONTAIN *param_container,
+                                     unsigned int rt_params);
 
 // process ring_buffers - apply value messages that crossed from the other
 // side. Each message is already the final, clamped value (see
@@ -149,6 +176,11 @@ uint32_t param_get_uid(PRM_CONTAIN *param_container, int val_id,
 // already have a val_id for.
 int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid);
 
+// find the val_id whose owner_id matches, -1 if not found. owner_id 0 means
+// "this owner has no id for it" and never matches. ui-only, and a linear
+// scan - do NOT call it from the rt path, cache the val_id instead.
+int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id);
+
 // return this param's owner_id (see param_add_param) for whichever side
 // rt_params selects, 0 on error. Opaque to params.c - meaningless without
 // knowing what the owner put there (e.g. CLAP's clap_id). 
@@ -169,27 +201,22 @@ PARAM_T param_get_max(PRM_CONTAIN *param_container, int val_id);
 
 // get the parameter value for whichever side rt_params selects, run through
 // the owner's build_value callback if one is registered (see
-// PRM_CONT_USER_DATA), otherwise the raw stored value. On the rt side this
-// also clears that side's "changed since last read" tracking (see
-// param_get_if_changed_rt) - the ui side has no such tracking to clear.
+// PRM_CONT_USER_DATA), otherwise the raw stored value. 
+// Also clears "was this parameter changed".
 PARAM_T param_get_value(PRM_CONTAIN *param_container, int val_id,
                         unsigned int rt_params);
 
 // return a display string for `value` on this param, via the owner's
-// val_to_string callback. value is caller-supplied, not read from the
-// param's current state - pass param_get_value(container, val_id, 0) for
-// "what does this param currently show", or any other value to preview a
-// hypothetical one. Returns NULL if no callback is registered or on error.
-// The string is owned by the container and valid only until the next
-// param_get_value_as_string call on it (any val_id) - callers that need to
+// val_to_string callback. return the value with a default format if no callback
+// is provided. The string is owned by the container and valid only until the
+// next param_get_value_as_string call on it (any val_id) - callers that need to
 // keep it must copy on [main-thread] - there is no rt variant.
 const char *param_get_value_as_string(PRM_CONTAIN *param_container,
                                       int val_id, PARAM_T value);
 
 // check if this param's value changed since param_get_value(..., 1) last
-// read it - rt-only, this tracking only exists on the rt side. Used to
-// decide whether an external protocol (a CLAP/LV2 event, a JACK transport
-// update) still needs to be told about this param.
+// read it - rt-only. Used to decide whether an external protocol (a CLAP/LV2
+// event, a JACK transport update) still needs to be told about this param.
 int param_get_if_changed_rt(PRM_CONTAIN *param_container, int val_id);
 // check if any parameter's rt-side value has changed - see
 // param_get_if_changed_rt.
@@ -218,18 +245,55 @@ unsigned int param_is_enum(PRM_CONTAIN *param_container, int val_id);
 // only on [main-thread].
 const char *param_get_name(PRM_CONTAIN *param_container, int val_id);
 
-// opaque per-param handle, stable for exactly the param's own lifetime (same
-// underlying storage as the param itself. NULL on error. ui-only.
-void *param_get_handle(PRM_CONTAIN *param_container, int val_id);
+// PARAMETER CATEGORIES
+// --------------------------------------------------------------------------
+// A category is a real entity with its own minted, program-unique uid.
+// Nesting is the parent_uid FIELD below, never nesting in storage - which is
+// what lets a param (or a whole category) move by writing one field instead
+// of relocating anything. Categories are
+// interned per container: one entity per distinct (parent, name), so
+// "Osc/Set" and "Osc/Basic" share a single "Osc" parent rather than
+// repeating it. They are never individually removed, so a cat_id stays valid
+// for the container's whole life - there is no tombstone case, unlike params.
+// All [main-thread] only.
 
-// resolve a handle from param_get_handle back to its container/val_id.
-// Returns false (leaving the out-params untouched) if handle is NULL.
-bool param_handle_resolve(void *handle, PRM_CONTAIN **out_container,
-                          int *out_val_id);
+// find-or-create ONE category by (parent_uid, name) and return its uid, 0 for
+// an empty name or on error. name is a single segment - params.c has no
+// concept of a path or of any separator, because that is the OWNER's
+// convention, not the parameter model's (CLAP uses "/", another owner may
+// not). An owner with a nested grouping walks its own syntax and calls this
+// once per level, passing the previous level's uid as parent_uid; passing 0
+// creates a top-level category.
+uint32_t param_category_intern(PRM_CONTAIN *param_container,
+                               uint32_t parent_uid, const char *name);
+
+// how many categories this container has interned. Every index in
+// [0, count) is valid - categories are never freed individually.
+unsigned int param_return_num_categories(PRM_CONTAIN *param_container);
+
+// this category's own minted uid / its parent's uid (0 = top level) / its own
+// path SEGMENT, not a full path. 0 / 0 / NULL on error.
+uint32_t param_category_uid(PRM_CONTAIN *param_container, int cat_id);
+uint32_t param_category_parent(PRM_CONTAIN *param_container, int cat_id);
+const char *param_category_name(PRM_CONTAIN *param_container, int cat_id);
+
+// find the cat_id whose uid matches, -1 if not found.
+int param_category_find_uid(PRM_CONTAIN *param_container, uint32_t uid);
+
+// opaque per-category handle and its resolve, exactly mirroring param_get_
+// handle/param_handle_resolve - so the layer above can hold a category the
+// same way it holds a param, without seeing either struct.
+void *param_category_handle(PRM_CONTAIN *param_container, int cat_id);
+bool param_category_resolve(void *handle, PRM_CONTAIN **out_container,
+                            int *out_cat_id);
+
+// which category this param sits in (see param_add_param), 0 if none/on
+// error - ui-only, mirrors param_get_name.
+uint32_t param_get_category_uid(PRM_CONTAIN *param_container, int val_id);
+// --------------------------------------------------------------------------
 
 // has the SET of parameters on this container changed (one added or one
-// freed) since the last call? Check-and-clear, mirroring the *_is_dirty
-// flags the modules expose for their own lists. Owner-agnostic on purpose:
+// freed) since the last call? Check-and-clear. Owner-agnostic on purpose:
 // params.c bumps its own counter from param_add_param/params_container_
 // resync, so no owner has to remember to raise a flag. A value, name or
 // flag change is NOT a change here - nothing structural moved.
@@ -239,12 +303,6 @@ bool param_handle_resolve(void *handle, PRM_CONTAIN **out_container,
 // watcher could have seen an earlier state. That costs one no-op resync per
 // container and then settles.
 bool param_container_changed(PRM_CONTAIN *param_container);
-
-// return how many parameters are on the container, for whichever side
-// rt_params selects (both sides always hold the same count - param_add_param
-// grows them together
-unsigned int param_return_num_params(PRM_CONTAIN *param_container,
-                                     unsigned int rt_params);
 
 // cleans the parameter container
 void param_clean_param_container(PRM_CONTAIN *param_container);

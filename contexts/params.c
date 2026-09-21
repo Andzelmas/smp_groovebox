@@ -10,16 +10,11 @@
 // max size for the ui<->rt parameter ring buffer messaging arrays
 #define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 1024
 
-// message struct for the ui<->rt ring buffers - always "this param's value
-// is now X", never an operation to replay. Whichever side (rt/ui)
-// originates a change computes the final, already-clamped result itself
-// (it has its own min_val/max_val) and sends just that - the receiving
-// side stores it verbatim, no re-computation. val_id (position in the
-// container) - never an owner_id, this never crosses into any module's own
-// external id space (e.g. CLAP's clap_id).
-// uid rides along too, as a safety check: val_id alone is only a position,
-// and add/remove resync can reuse a freed slot for a DIFFERENT
-// param. 
+// message struct for the ui<->rt ring buffers - always "this param's value is
+// now X", never an operation to replay. Whichever side (rt/ui) originates a
+// change computes the final, already-clamped result itself val_id (position in
+// the container) uid rides along too, as a safety check: val_id alone is only a
+// position, and add/remove resync can reuse a freed slot for a DIFFERENT param.
 typedef struct _params_ring_data_bit {
     int val_id;
     uint32_t uid;
@@ -62,6 +57,10 @@ typedef struct _params_param_ui {
     uint32_t owner_id;
     // bitmask of enum paramFlags
     uint32_t flags;
+    // which category this param sits in, 0 = none (see param_category_
+    // intern). A uid, not an index - so it survives anything that
+    // renumbers, and a re-categorise is a single field write.
+    uint32_t category_uid;
     // set once by param_add_param - lets param_get_handle/param_handle_
     // resolve turn this struct's own address into an opaque (container,
     // val_id) handle without exposing PRM_PARAM_UI itself outside params.c
@@ -69,14 +68,28 @@ typedef struct _params_param_ui {
     int self_val_id;
 } PRM_PARAM_UI;
 
+// one interned parameter category. Like PRM_PARAM_RT/UI each of these is its
+// OWN malloc, for the same reason: the outer array is realloc'd on growth, and
+// a handle handed out to the layer above must never move.
+typedef struct _param_category {
+    // set once at intern time - lets param_category_handle/param_category_
+    // resolve turn this struct's own address into an opaque (container,
+    // cat_id) handle, without exposing the struct itself outside params.c
+    PRM_CONTAIN *self_container;
+    int self_cat_id;
+    uint32_t uid;
+    // 0 = top level. The tree lives in THIS FIELD, not in the storage layout
+    uint32_t parent_uid;
+    // this category's own path segment only, never a whole path
+    char name[MAX_CATEGORY_SEGMENT];
+} PRM_PARAM_CATEGORY;
+
 typedef struct _params_container {
     // the parameter arrays - each element is its OWN malloc'd PRM_PARAM_RT/UI.
     // That's deliberate: param_add_param grows these OUTER arrays with
-    // realloc, which is only safe because they hold pointer VALUES. If the
-    // params themselves lived in one realloc'd block, an address already
-    // handed out could be silently invalidated the next time a parameter
-    // gets added. rt_params should be touched only by the rt thread, and
-    // the ui_params only by the ui thread.
+    // realloc, which is only safe because they hold pointer VALUES. rt_params
+    // should be touched only by the rt thread, and the ui_params only by the ui
+    // thread.
     PRM_PARAM_RT **rt_params;
     PRM_PARAM_UI **ui_params;
     // how many parameters are there
@@ -86,22 +99,25 @@ typedef struct _params_container {
     RING_BUFFER *param_rt_to_ui;
     RING_BUFFER *param_ui_to_rt;
     PRM_CONT_USER_DATA user_data;
-    // bumped every time the SET of params changes (one added or one freed),
-    // never by a value/name/flag change - see param_container_changed.
+    // bumped whenever the CX tree shape changes: a param added or freed, or
+    // one moved to another category (Operation_SetCategory). Never by a
+    // value/name/flag change - see param_container_changed.
     // generation_polled is the value the last param_container_changed call
     // saw, so "changed since you last asked" needs no state in the caller.
     uint32_t generation;
     uint32_t generation_polled;
+    // interned categories - own malloc each, outer array realloc'd (see
+    // PRM_PARAM_CATEGORY). Never removed individually, so num_categories only
+    // grows and every index below it is alive.
+    PRM_PARAM_CATEGORY **categories;
+    unsigned int num_categories;
     // scratch buffer param_get_value_as_string formats into and returns a
     // pointer to - valid only until the next param_get_value_as_string call
     // on this container (any val_id)
     char value_string_scratch[MAX_STRING_MSG_LENGTH];
 } PRM_CONTAIN;
 
-// clamps val into [min_val, max_val] - shared by both sides, since both can
-// originate a value change and each clamps against its own min/max before
-// sending the final value across (see the "send final value" protocol on
-// param_set_value_rt/param_set_value).
+// clamps val into [min_val, max_val].
 static PARAM_T param_clamp(PARAM_T val, PARAM_T min_val, PARAM_T max_val) {
     if (val < min_val)
         return min_val;
@@ -123,6 +139,8 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     param_container->ui_params = NULL;
     param_container->generation = 0;
     param_container->generation_polled = 0;
+    param_container->categories = NULL;
+    param_container->num_categories = 0;
     param_container->user_data.user_data = NULL;
     param_container->user_data.build_value = NULL;
     param_container->user_data.val_to_string = NULL;
@@ -155,7 +173,8 @@ static uint32_t next_param_uid = 0;
 
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    uint32_t owner_id, uint32_t flags, void *cookie) {
+                    uint32_t owner_id, uint32_t flags, uint32_t category_uid,
+                    void *cookie) {
     if (!param_container)
         return -1;
     if (!name)
@@ -240,6 +259,7 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     new_ui_param->uid = uid;
     new_ui_param->owner_id = owner_id;
     new_ui_param->flags = flags;
+    new_ui_param->category_uid = category_uid;
     new_ui_param->self_container = param_container;
     new_ui_param->self_val_id = (int)idx;
 
@@ -289,7 +309,8 @@ void params_container_resync(PRM_CONTAIN *param_container,
         param_add_param(param_container, new_params[i].name, new_params[i].val,
                         new_params[i].min, new_params[i].max, new_params[i].inc,
                         new_params[i].uid, new_params[i].owner_id,
-                        new_params[i].flags, new_params[i].cookie);
+                        new_params[i].flags, new_params[i].category_uid,
+                        new_params[i].cookie);
     }
 }
 
@@ -312,10 +333,8 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
             ring_buffer_read(ring_buffer, &cur_bit, sizeof(cur_bit));
         if (read_buffer <= 0)
             continue;
-        // the value crossing the ring buffer is already final and clamped by
-        // whichever side sent it (see param_set_value_rt/param_set_value) -
-        // store it verbatim, nothing to recompute here. NULL/uid checks
-        // reject a message targeting a freed or freed-and-reused slot.
+        //  NULL/uid checks reject a message targeting a freed or
+        //  freed-and-reused slot.
         if (rt_params) {
             if ((unsigned int)cur_bit.val_id >=
                 param_container->num_of_params_rt)
@@ -395,6 +414,16 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
         return 0;
     case Operation_SetFlags:
         cur_param->flags = (uint32_t)set_to;
+        return 0;
+    case Operation_SetCategory:
+        // structural: the param hangs under a different parent afterwards, so
+        // the generation has to move even though the param SET is unchanged.
+        // Only when it actually differs - a rescan re-reporting the same
+        // category must not trigger a resync.
+        if (cur_param->category_uid != (uint32_t)set_to) {
+            cur_param->category_uid = (uint32_t)set_to;
+            param_container->generation++;
+        }
         return 0;
     default:
         break;
@@ -486,12 +515,23 @@ int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid) {
         return -1;
     // uid is identical on both sides once param_add_param sets it - checking
     // the ui side alone is sufficient, nothing on the rt side has ever
-    // needed to resolve a uid it doesn't already have a val_id for. Skips
-    // NULL (freed) slots.
+    // needed to resolve a uid it doesn't already have a val_id for. 
     for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
         if (!param_container->ui_params[i])
             continue;
         if (param_container->ui_params[i]->uid == uid)
+            return (int)i;
+    }
+    return -1;
+}
+
+int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id) {
+    if (!param_container || owner_id == 0)
+        return -1;
+    for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
+        if (!param_container->ui_params[i])
+            continue;
+        if (param_container->ui_params[i]->owner_id == owner_id)
             return (int)i;
     }
     return -1;
@@ -701,6 +741,118 @@ bool param_handle_resolve(void *handle, PRM_CONTAIN **out_container,
     return true;
 }
 
+// monotonic counter for every interned category's uid, across every
+// container, never reset - so a category uid is unique program-wide the same
+// way a param uid is. 
+static uint32_t next_category_uid = 0;
+
+uint32_t param_category_intern(PRM_CONTAIN *param_container,
+                               uint32_t parent_uid, const char *name) {
+    if (!param_container || !name || name[0] == '\0')
+        return 0;
+    for (unsigned int i = 0; i < param_container->num_categories; i++) {
+        PRM_PARAM_CATEGORY *cat = param_container->categories[i];
+        if (cat && cat->parent_uid == parent_uid &&
+            strcmp(cat->name, name) == 0)
+            return cat->uid;
+    }
+
+    unsigned int idx = param_container->num_categories;
+    // growing this outer pointer array is safe to realloc for the same reason
+    // rt_params/ui_params are - it only moves pointer VALUES
+    PRM_PARAM_CATEGORY **grown =
+        realloc(param_container->categories,
+                (idx + 1) * sizeof(PRM_PARAM_CATEGORY *));
+    if (!grown)
+        return 0;
+    param_container->categories = grown;
+
+    PRM_PARAM_CATEGORY *cat = malloc(sizeof(PRM_PARAM_CATEGORY));
+    if (!cat)
+        return 0;
+    snprintf(cat->name, MAX_CATEGORY_SEGMENT, "%s", name);
+    cat->parent_uid = parent_uid;
+    cat->uid = ++next_category_uid;
+    cat->self_container = param_container;
+    cat->self_cat_id = (int)idx;
+
+    param_container->categories[idx] = cat;
+    param_container->num_categories = idx + 1;
+    // no generation bump here: a category nothing points at yet is not
+    // enumerated, so nothing is visible until a param is added into it or
+    // moved into it - and both of those bump it themselves
+    return cat->uid;
+}
+
+unsigned int param_return_num_categories(PRM_CONTAIN *param_container) {
+    if (!param_container)
+        return 0;
+    return param_container->num_categories;
+}
+
+// shared bounds check - categories are never freed individually, so a valid
+// index always yields a live entity
+static PRM_PARAM_CATEGORY *param_category_at(PRM_CONTAIN *param_container,
+                                             int cat_id) {
+    if (!param_container)
+        return NULL;
+    if (cat_id < 0 || (unsigned int)cat_id >= param_container->num_categories)
+        return NULL;
+    return param_container->categories[cat_id];
+}
+
+uint32_t param_category_uid(PRM_CONTAIN *param_container, int cat_id) {
+    PRM_PARAM_CATEGORY *cat = param_category_at(param_container, cat_id);
+    return cat ? cat->uid : 0;
+}
+
+uint32_t param_category_parent(PRM_CONTAIN *param_container, int cat_id) {
+    PRM_PARAM_CATEGORY *cat = param_category_at(param_container, cat_id);
+    return cat ? cat->parent_uid : 0;
+}
+
+const char *param_category_name(PRM_CONTAIN *param_container, int cat_id) {
+    PRM_PARAM_CATEGORY *cat = param_category_at(param_container, cat_id);
+    return cat ? cat->name : NULL;
+}
+
+int param_category_find_uid(PRM_CONTAIN *param_container, uint32_t uid) {
+    if (!param_container || uid == 0)
+        return -1;
+    for (unsigned int i = 0; i < param_container->num_categories; i++) {
+        PRM_PARAM_CATEGORY *cat = param_container->categories[i];
+        if (cat && cat->uid == uid)
+            return (int)i;
+    }
+    return -1;
+}
+
+void *param_category_handle(PRM_CONTAIN *param_container, int cat_id) {
+    return (void *)param_category_at(param_container, cat_id);
+}
+
+bool param_category_resolve(void *handle, PRM_CONTAIN **out_container,
+                            int *out_cat_id) {
+    if (!handle)
+        return false;
+    PRM_PARAM_CATEGORY *cat = (PRM_PARAM_CATEGORY *)handle;
+    if (out_container)
+        *out_container = cat->self_container;
+    if (out_cat_id)
+        *out_cat_id = cat->self_cat_id;
+    return true;
+}
+
+uint32_t param_get_category_uid(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return 0;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return 0;
+    if (!param_container->ui_params[val_id])
+        return 0;
+    return param_container->ui_params[val_id]->category_uid;
+}
+
 bool param_container_changed(PRM_CONTAIN *param_container) {
     if (!param_container)
         return false;
@@ -735,6 +887,12 @@ void param_clean_param_container(PRM_CONTAIN *param_container) {
             if (param_container->ui_params[i])
                 free(param_container->ui_params[i]);
         free(param_container->ui_params);
+    }
+    if (param_container->categories) {
+        for (unsigned int i = 0; i < param_container->num_categories; i++)
+            if (param_container->categories[i])
+                free(param_container->categories[i]);
+        free(param_container->categories);
     }
 
     free(param_container);

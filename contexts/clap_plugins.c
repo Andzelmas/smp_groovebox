@@ -110,11 +110,11 @@ typedef struct _clap_plug_plug {
                                           // (now to match if preset container
                                           // from preset-factory is can be used
                                           // with the plugin)
-    void* dso_handle; //the dso handle to which plug_entry is dlsym() linked
+    void *dso_handle; // the dso handle to which plug_entry is dlsym() linked
     clap_plugin_entry_t *plug_entry; // the clap library file for this plugin
     const clap_plugin_t *plug_inst;  // the plugin instance
     unsigned int plug_inst_created;  // was a init function called in the
-                                    // descriptor for this plugin
+                                     // descriptor for this plugin
     unsigned int
         plug_inst_activated; // was the activate function called on this plugin
     // 0 - not processing, 1 - processing, 2 - sleeping (not processing, but
@@ -124,13 +124,12 @@ typedef struct _clap_plug_plug {
                                        // touch only on [audio_thread]
     int plug_inst_id; // the plugin instance index in the array of the plugin
                       // factory
-    char plug_path[MAX_PATH_STRING];            // the path for the clap file
-    PRM_CONTAIN *plug_params;   // plugin parameter container for params.c
-    // did plug_params' param SET change (added/removed)? 
+    char plug_path[MAX_PATH_STRING]; // the path for the clap file
+    PRM_CONTAIN *plug_params;        // plugin parameter container for params.c
     clap_host_t clap_host_info; // need when creating the plugin instance, this
                                 // struct has this CLAP_PLUG_PLUG in the
                                 // host_data var as (void*)
-    CLAP_PLUG_INFO *plug_data; // CLAP_PLUG_INFO struct address for convenience
+    CLAP_PLUG_INFO *plug_data;  // CLAP_PLUG_INFO struct address for convenience
     // CLAP_PLUG_PORT holds an array of sys backend audio ports (to connect to
     // jack for example) and the clap_audio_buffer_t arrays, to send to plugin
     // process function
@@ -155,8 +154,9 @@ typedef struct _clap_plug_info {
     // the middle); clap_plug_plugin_return() walks the occupied slots in order
     // for the UI.
     struct _clap_plug_plug plugins[MAX_INSTANCES];
-    bool plugins_dirty; //did plugins array change?
-    uint32_t next_plug_uid; //monotonic counter for CLAP_PLUG_PLUG.uid, never reset
+    bool plugins_dirty; // did plugins array change?
+    uint32_t
+        next_plug_uid; // monotonic counter for CLAP_PLUG_PLUG.uid, never reset
     SAMPLE_T sample_rate;
     // for clap there can be min and max buffer sizes, for not changing buffer
     // sizes set as the same
@@ -180,8 +180,8 @@ typedef struct _clap_plug_info {
                              // (severity is not sent)
     clap_host_audio_ports_t ext_audio_ports; // struct that holds functions for
                                              // the audio_ports extensions
-    clap_host_note_ports_t ext_note_ports; // struct that holds functions for
-                                           // the note-ports extension
+    clap_host_note_ports_t ext_note_ports;   // struct that holds functions for
+                                             // the note-ports extension
     clap_host_params_t
         ext_params; // struct that holds functions for the params extension
     clap_host_preset_load_t ext_preset_load; // struct that holds functions for
@@ -654,19 +654,35 @@ static unsigned int clap_plug_params_value_to_text(const void *user_data,
     return convert_err;
 }
 
-// find this container's val_id whose owner_id equals this clap_id, -1 if
-// not found. Checks param_get_name (not owner_id==0) to skip freed slots,
-// since 0 is a legal clap_id.
-static int clap_plug_find_val_id_by_clap_id(PRM_CONTAIN *plug_params,
-                                            uint32_t clap_id) {
-    unsigned int count = param_return_num_params(plug_params, 0);
-    for (unsigned int val_id = 0; val_id < count; val_id++) {
-        if (!param_get_name(plug_params, (int)val_id))
-            continue;
-        if (param_get_owner_id(plug_params, (int)val_id, 0) == clap_id)
-            return (int)val_id;
+// clap_param_info_t.module is a "/"-separated tree path (its own doc: e.g.
+// "Oscillators/Wavetable 1"). params.c only ever interns
+// one segment at a time and has no notion of a path. Returns the leaf
+// category's uid, 0 for an empty/absent module.
+static uint32_t clap_plug_intern_module(PRM_CONTAIN *params,
+                                        const char *module) {
+    if (!params || !module)
+        return 0;
+    uint32_t parent_uid = 0;
+    const char *seg = module;
+    while (*seg) {
+        const char *slash = strchr(seg, '/');
+        size_t len = slash ? (size_t)(slash - seg) : strlen(seg);
+        if (len > 0) {
+            char name[MAX_CATEGORY_SEGMENT];
+            if (len >= MAX_CATEGORY_SEGMENT)
+                len = MAX_CATEGORY_SEGMENT - 1;
+            memcpy(name, seg, len);
+            name[len] = '\0';
+            uint32_t uid = param_category_intern(params, parent_uid, name);
+            if (uid == 0)
+                return parent_uid; // out of memory - keep what resolved
+            parent_uid = uid;
+        }
+        if (!slash)
+            break;
+        seg = slash + 1; // an empty segment just advances, so "a//b" == "a/b"
     }
-    return -1;
+    return parent_uid;
 }
 
 // translate the CLAP_PARAM_IS_HIDDEN/READONLY/ENUM bits of a clap_param_
@@ -685,14 +701,14 @@ static uint32_t clap_plug_translate_param_flags(uint32_t clap_flags) {
 // walks CLAP's current param list and fills out[] with one PARAM_RESYNC_
 // ITEM per param (up to max_out). uid is reused via an existing owner_id
 // match if present, else freshly minted. Returns entries written.
-static uint32_t clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
-                                          const clap_plugin_params_t *clap_params,
-                                          PARAM_RESYNC_ITEM *out,
-                                          uint32_t max_out) {
+static uint32_t
+clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
+                          const clap_plugin_params_t *clap_params,
+                          PARAM_RESYNC_ITEM *out, uint32_t max_out) {
     uint32_t param_count = clap_params->count(plug->plug_inst);
     uint32_t written = 0;
     for (uint32_t clap_idx = 0; clap_idx < param_count && written < max_out;
-        clap_idx++) {
+         clap_idx++) {
         clap_param_info_t param_info;
         if (!clap_params->get_info(plug->plug_inst, clap_idx, &param_info))
             continue;
@@ -720,17 +736,19 @@ static uint32_t clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
             CLAP_PARAM_IS_READONLY) {
             param_inc = 0;
         }
-        uint32_t param_flags = clap_plug_translate_param_flags(param_info.flags);
+        uint32_t param_flags =
+            clap_plug_translate_param_flags(param_info.flags);
 
         int existing_val_id =
-            plug->plug_params ? clap_plug_find_val_id_by_clap_id(
-                                    plug->plug_params, param_info.id)
-                              : -1;
+            plug->plug_params
+                ? param_find_owner_id(plug->plug_params, param_info.id)
+                : -1;
         // a survivor keeps the uid it already has; a genuinely new param goes
         // in as 0 and params.c mints one.
-        uint32_t uid = (existing_val_id != -1)
-                          ? param_get_uid(plug->plug_params, existing_val_id, 0)
-                          : 0;
+        uint32_t uid =
+            (existing_val_id != -1)
+                ? param_get_uid(plug->plug_params, existing_val_id, 0)
+                : 0;
 
         snprintf(out[written].name, MAX_SHORT_NAME_LENGTH, "%s",
                  param_info.name);
@@ -741,6 +759,10 @@ static uint32_t clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
         out[written].uid = uid;
         out[written].owner_id = param_info.id;
         out[written].flags = param_flags;
+        // the chain is interned, so every param under "Oscillators/..."
+        // resolves to the same "Oscillators" entity
+        out[written].category_uid =
+            clap_plug_intern_module(plug->plug_params, param_info.module);
         out[written].cookie = param_info.cookie;
         written++;
     }
@@ -750,8 +772,22 @@ static uint32_t clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
 // paramFlags bits clap_plug_discover_params can translate - a reconciliation
 // merge only ever touches these, so a future non-CLAP-sourced flag bit is
 // never silently clobbered.
-#define CLAP_PLUG_KNOWN_PARAM_FLAGS \
+#define CLAP_PLUG_KNOWN_PARAM_FLAGS                                            \
     (PARAM_FLAG_HIDDEN | PARAM_FLAG_READONLY | PARAM_FLAG_ENUM)
+
+// reconcile one survivor param's category against CLAP's current report for
+// it. CLAP lists module among the fields a RESCAN_INFO may change, so a
+// plugin can move a param between modules at any time. No-op if val_id is -1
+// (not found/alive); param_set_value only bumps the generation when the
+// category actually differs.
+static void clap_plug_reconcile_param_category(PRM_CONTAIN *plug_params,
+                                               int val_id,
+                                               uint32_t category_uid) {
+    if (val_id == -1)
+        return;
+    param_set_value(plug_params, val_id, (PARAM_T)category_uid, NULL,
+                    Operation_SetCategory);
+}
 
 // reconcile one survivor param's flags against CLAP's current report for it
 // - masked merge (only CLAP_PLUG_KNOWN_PARAM_FLAGS), only if it actually
@@ -779,6 +815,8 @@ static void clap_plug_reconcile_survivors(PRM_CONTAIN *plug_params,
     for (uint32_t i = 0; i < item_count; i++) {
         int val_id = param_find_uid(plug_params, items[i].uid);
         clap_plug_reconcile_param_flags(plug_params, val_id, items[i].flags);
+        clap_plug_reconcile_param_category(plug_params, val_id,
+                                           items[i].category_uid);
     }
 }
 
@@ -866,7 +904,7 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
         // rendered again it will do so automaticaly on the next ui cycle
     }
     if ((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO) {
-        // go through the params and change the names
+        // go through the params and change the names, flags, categories
         const clap_plugin_params_t *clap_params =
             plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
         if (!clap_params)
@@ -879,8 +917,7 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
             clap_param_info_t param_info;
             if (!clap_params->get_info(plug->plug_inst, clap_idx, &param_info))
                 continue;
-            int val_id = clap_plug_find_val_id_by_clap_id(plug->plug_params,
-                                                          param_info.id);
+            int val_id = param_find_owner_id(plug->plug_params, param_info.id);
             if (val_id == -1)
                 continue;
             param_set_value(plug->plug_params, val_id, 0.0, param_info.name,
@@ -888,6 +925,9 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
             clap_plug_reconcile_param_flags(
                 plug->plug_params, val_id,
                 clap_plug_translate_param_flags(param_info.flags));
+            clap_plug_reconcile_param_category(
+                plug->plug_params, val_id,
+                clap_plug_intern_module(plug->plug_params, param_info.module));
         }
     }
     if ((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL) {
@@ -906,10 +946,9 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
         if (param_count > 0 && !items)
             return;
         uint32_t item_count =
-            param_count > 0
-                ? clap_plug_discover_params(plug, clap_params, items,
-                                           param_count)
-                : 0;
+            param_count > 0 ? clap_plug_discover_params(plug, clap_params,
+                                                        items, param_count)
+                            : 0;
         params_container_resync(plug->plug_params, items, item_count);
         clap_plug_reconcile_survivors(plug->plug_params, items, item_count);
         free(items);
@@ -921,6 +960,9 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
 static void clap_plug_ext_params_clear(const clap_host_t *host,
                                        clap_id param_id,
                                        clap_param_clear_flags flags) {
+    (void)host;
+    (void)param_id;
+    (void)flags;
     return;
 }
 
@@ -1006,6 +1048,7 @@ static void clap_plug_ext_audio_ports_rescan(const clap_host_t *host,
 // for note-ports extension return what note dialects are supported by this host
 static uint32_t
 clap_plug_ext_note_ports_supported_dialects(const clap_host_t *host) {
+    (void)host;
     if (is_audio_thread)
         return 0;
     uint32_t supported = 0;
@@ -1093,6 +1136,12 @@ static void clap_ext_preset_load_on_error(const clap_host_t *host,
                                           const char *location,
                                           const char *load_key,
                                           int32_t os_error, const char *msg) {
+    (void)host;
+    (void)location_kind;
+    (void)location;
+    (void)load_key;
+    (void)os_error;
+    (void)msg;
     return;
 }
 
@@ -1100,6 +1149,10 @@ static void clap_ext_preset_load_on_load(const clap_host_t *host,
                                          uint32_t location_kind,
                                          const char *location,
                                          const char *load_key) {
+    (void)host;
+    (void)location_kind;
+    (void)location;
+    (void)load_key;
     return;
 }
 
@@ -1134,7 +1187,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
         plug->plug_entry = NULL;
         plug->dso_handle = NULL;
     }
-    snprintf(plug->plug_path, MAX_PATH_STRING, "");
+    plug->plug_path[0] = '\0';
 
     // clean the audio ports
     clap_plug_destroy_ports(plug_data, &(plug->output_ports));
@@ -1161,9 +1214,9 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     return 0;
 }
 
-int clap_plug_plug_stop_and_clean(void *plug){
-    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG*)plug;
-    if(!cur_plug)
+int clap_plug_plug_stop_and_clean(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug)
         return -1;
     if (!cur_plug->plug_data)
         return -1;
@@ -1179,15 +1232,17 @@ static bool clap_plug_return_is_audio_thread() { return is_audio_thread; }
 // extension functions for thread-check.h to return is this audio or main thread
 // for the clap_host_thread_t extension
 static bool clap_plug_ext_is_audio_thread(const clap_host_t *host) {
+    (void)host;
     return clap_plug_return_is_audio_thread();
 }
 
 static bool clap_plug_ext_is_main_thread(const clap_host_t *host) {
+    (void)host;
     return !(clap_plug_return_is_audio_thread());
 }
 
 static int clap_sys_msg(void *user_data, const char *msg) {
-    CLAP_PLUG_INFO *plug_data = (CLAP_PLUG_INFO *)user_data;
+    (void)user_data;
     // if(!plug_data)return -1;
     log_append_logfile("%s", msg);
     return 0;
@@ -1196,6 +1251,7 @@ static int clap_sys_msg(void *user_data, const char *msg) {
 // extension function for log.h to send messages in [thread-safe] manner
 static void clap_plug_ext_log(const clap_host_t *host,
                               clap_log_severity severity, const char *msg) {
+    (void)severity;
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
         return;
@@ -1208,7 +1264,8 @@ static void clap_plug_ext_log(const clap_host_t *host,
                          clap_plug_return_is_audio_thread(), msg);
 }
 
-const void *get_extension(const clap_host_t *host, const char *ex_id) {
+static const void *clap_plug_get_extension(const clap_host_t *host,
+                                           const char *ex_id) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
         return NULL;
@@ -1291,7 +1348,7 @@ static int clap_plug_restart(void *user_data) {
     return clap_plug_activate_start_processing((void *)plug);
 }
 
-void request_restart(const clap_host_t *host) {
+static void clap_plug_request_restart(const clap_host_t *host) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
         return;
@@ -1303,7 +1360,7 @@ void request_restart(const clap_host_t *host) {
                             clap_plug_return_is_audio_thread());
 }
 
-void request_process(const clap_host_t *host) {
+static void clap_plug_request_process(const clap_host_t *host) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
         return;
@@ -1326,7 +1383,7 @@ static int clap_plug_callback(void *user_data) {
     return 0;
 }
 
-void request_callback(const clap_host_t *host) {
+static void clap_plug_request_callback(const clap_host_t *host) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
         return;
@@ -1636,10 +1693,10 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     clap_info_host.vendor = "bru";
     clap_info_host.url = "https://brumakes.com";
     clap_info_host.version = "0.2";
-    clap_info_host.get_extension = get_extension;
-    clap_info_host.request_restart = request_restart;
-    clap_info_host.request_process = request_process;
-    clap_info_host.request_callback = request_callback;
+    clap_info_host.get_extension = clap_plug_get_extension;
+    clap_info_host.request_restart = clap_plug_request_restart;
+    clap_info_host.request_process = clap_plug_request_process;
+    clap_info_host.request_callback = clap_plug_request_callback;
 
     plug_data->clap_host_info = clap_info_host;
 
@@ -1688,10 +1745,13 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
 }
 
 // search if another plugin has the same path as the plug->plug_path
-// returns the id of the plugin first found 
-static int clap_plug_find_same_path(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug){
-    if (!plug_data)return -1;
-    if (!plug)return -1;
+// returns the id of the plugin first found
+static int clap_plug_find_same_path(CLAP_PLUG_INFO *plug_data,
+                                    CLAP_PLUG_PLUG *plug) {
+    if (!plug_data)
+        return -1;
+    if (!plug)
+        return -1;
 
     for (unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++) {
         CLAP_PLUG_PLUG cur_plug = plug_data->plugins[plug_num];
@@ -1709,18 +1769,22 @@ static int clap_plug_find_same_path(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* p
 
 // create the entry on the plug
 // plug has to have plug_path
-static void clap_plug_entry_create(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* plug){
-    if(!plug_data)return;
-    if(!plug)return;
+static void clap_plug_entry_create(CLAP_PLUG_INFO *plug_data,
+                                   CLAP_PLUG_PLUG *plug) {
+    if (!plug_data)
+        return;
+    if (!plug)
+        return;
     void *handle;
     int *iptr;
 
     handle = dlopen(plug->plug_path, RTLD_LOCAL | RTLD_LAZY);
-    if (!handle) return;
+    if (!handle)
+        return;
 
     iptr = (int *)dlsym(handle, "clap_entry");
     clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t *)iptr;
-    if(!plug_entry){
+    if (!plug_entry) {
         dlclose(handle);
         return;
     }
@@ -1733,12 +1797,16 @@ static void clap_plug_entry_create(CLAP_PLUG_INFO* plug_data, CLAP_PLUG_PLUG* pl
     plug->dso_handle = handle;
 }
 
-int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
-    if(!plug_data)return -1;
-    PLUGIN_LIST* plugin_list = &(plug_data->clap_plugin_list);
-    if(plugin_list->plugin_list)free(plugin_list->plugin_list);
-    plugin_list->plugin_list = calloc(PTR_ARRAY_COUNT, sizeof(PLUGIN_LIST_ITEM));
-    if(!plugin_list->plugin_list)return -1;
+int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data) {
+    if (!plug_data)
+        return -1;
+    PLUGIN_LIST *plugin_list = &(plug_data->clap_plugin_list);
+    if (plugin_list->plugin_list)
+        free(plugin_list->plugin_list);
+    plugin_list->plugin_list =
+        calloc(PTR_ARRAY_COUNT, sizeof(PLUGIN_LIST_ITEM));
+    if (!plugin_list->plugin_list)
+        return -1;
     plugin_list->size_curr = 0;
     plugin_list->size_max = PTR_ARRAY_COUNT;
 
@@ -1746,7 +1814,7 @@ int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
     struct dirent *dir = NULL;
     unsigned int iter = 0;
     const char *clap_path = clap_paths[iter];
-    while(clap_path){
+    while (clap_path) {
         d = opendir(clap_path);
         if (d) {
             while ((dir = readdir(d)) != NULL) {
@@ -1764,33 +1832,35 @@ int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
                 if (strcmp(after_delim, "clap") != 0)
                     continue;
 
-                // Go through the plugins names in the path and create a plugin_list_item
-                // per valiable name
+                // Go through the plugins names in the path and create a
+                // plugin_list_item per valiable name
                 char total_file_path[MAX_PATH_STRING];
-                snprintf(total_file_path, MAX_PATH_STRING, "%s%s", clap_path, dir->d_name);
+                snprintf(total_file_path, MAX_PATH_STRING, "%s%s", clap_path,
+                         dir->d_name);
                 void *handle;
                 int *iptr;
 
                 handle = dlopen(total_file_path, RTLD_LOCAL | RTLD_LAZY);
-                if(!handle)
+                if (!handle)
                     continue;
 
-                iptr = (int*)dlsym(handle, "clap_entry");
-                clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t*)iptr;
-                if(!plug_entry){
+                iptr = (int *)dlsym(handle, "clap_entry");
+                clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t *)iptr;
+                if (!plug_entry) {
                     dlclose(handle);
                     continue;
                 }
                 unsigned int init_err = plug_entry->init(total_file_path);
-                if(!init_err){
+                if (!init_err) {
                     dlclose(handle);
                     continue;
                 }
 
-                const clap_plugin_factory_t *plug_fac = plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
+                const clap_plugin_factory_t *plug_fac =
+                    plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
                 uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
-                
-                for(uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++){
+
+                for (uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++) {
                     const clap_plugin_descriptor_t *plug_desc =
                         plug_fac->get_plugin_descriptor(plug_fac, pl_iter);
                     if (!plug_desc)
@@ -1812,9 +1882,12 @@ int clap_plug_plugin_list_init(CLAP_PLUG_INFO* plug_data){
                     }
                     plugin_list->size_curr = cur_list_size;
                     unsigned int cur_member = plugin_list->size_curr - 1;
-                    PLUGIN_LIST_ITEM* cur_item = &(plugin_list->plugin_list[cur_member]);
-                    snprintf(cur_item->path, MAX_PATH_STRING, "%s", total_file_path);
-                    snprintf(cur_item->short_name, MAX_SHORT_NAME_LENGTH, "%s", plug_desc->name);
+                    PLUGIN_LIST_ITEM *cur_item =
+                        &(plugin_list->plugin_list[cur_member]);
+                    snprintf(cur_item->path, MAX_PATH_STRING, "%s",
+                             total_file_path);
+                    snprintf(cur_item->short_name, MAX_SHORT_NAME_LENGTH, "%s",
+                             plug_desc->name);
                     cur_item->plug_data = plug_data;
                     cur_item->plug_inst_id = pl_iter;
                 }
@@ -1837,14 +1910,16 @@ unsigned int clap_plug_plugin_list_count(CLAP_PLUG_INFO *plug_data) {
     return plug_data->clap_plugin_list.size_curr;
 }
 
-void *clap_plug_plugin_list_item_get(CLAP_PLUG_INFO *plug_data, unsigned int idx){
-    if(!plug_data)
+void *clap_plug_plugin_list_item_get(CLAP_PLUG_INFO *plug_data,
+                                     unsigned int idx) {
+    if (!plug_data)
         return NULL;
     PLUGIN_LIST cur_plugin_list = plug_data->clap_plugin_list;
-    if(idx >= cur_plugin_list.size_curr)
+    if (idx >= cur_plugin_list.size_curr)
         return NULL;
-    PLUGIN_LIST_ITEM *cur_plugin_list_item = &(cur_plugin_list.plugin_list[idx]);
-    return (void*)cur_plugin_list_item;
+    PLUGIN_LIST_ITEM *cur_plugin_list_item =
+        &(cur_plugin_list.plugin_list[idx]);
+    return (void *)cur_plugin_list_item;
 }
 
 const char *clap_plug_plugin_list_item_name(void *plugin_item) {
@@ -1869,11 +1944,11 @@ static void clap_plug_set_display_name(CLAP_PLUG_PLUG *plug) {
     snprintf(plug->name, sizeof(plug->name), "%s", plug->plug_inst->desc->name);
 }
 
-uint32_t clap_plug_load_and_activate(void* plugin_item) {
+uint32_t clap_plug_load_and_activate(void *plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
     if (!plugin_list_item)
         return 0;
-    CLAP_PLUG_INFO* plug_data = plugin_list_item->plug_data;
+    CLAP_PLUG_INFO *plug_data = plugin_list_item->plug_data;
     if (!plug_data)
         return 0;
 
@@ -1889,13 +1964,14 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
         break;
     }
 
-    // if id is not in range an error occured or there is no space for the plugin
+    // if id is not in range an error occured or there is no space for the
+    // plugin
     if (id < 0 || id >= MAX_INSTANCES)
         return 0;
 
     CLAP_PLUG_PLUG *plug = &(plug_data->plugins[id]);
     // if id is in the possible range, clean the slot just in case its occupied
-    clap_plug_plug_stop_and_clean((void*)plug);
+    clap_plug_plug_stop_and_clean((void *)plug);
 
     snprintf(plug->plug_path, MAX_PATH_STRING, "%s", plugin_list_item->path);
     // try to find a plugin with the same entry
@@ -1907,12 +1983,12 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
         // create the plugin entry if a plugin with same path does not exist
         clap_plug_entry_create(plug_data, plug);
     }
-    if(!plug->plug_entry){
+    if (!plug->plug_entry) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
                              "Could not create entry point for %s plugin\n",
                              plug->plug_path);
-        clap_plug_plug_stop_and_clean((void*)plug);
+        clap_plug_plug_stop_and_clean((void *)plug);
         return 0;
     }
 
@@ -1927,7 +2003,7 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
                              clap_plug_return_is_audio_thread(),
                              "Could not get plugin %s descriptor\n",
                              plug->plug_path);
-        clap_plug_plug_stop_and_clean((void*)plug);
+        clap_plug_plug_stop_and_clean((void *)plug);
         return 0;
     }
     if (plug_desc->name) {
@@ -1966,7 +2042,7 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
                              "Failed to create %s plugin\n", plug->plug_path);
-        clap_plug_plug_stop_and_clean((void*)plug);
+        clap_plug_plug_stop_and_clean((void *)plug);
         return 0;
     }
 
@@ -1977,7 +2053,7 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
                              "Failed to init %s plugin\n", plug->plug_path);
-        clap_plug_plug_stop_and_clean((void*)plug);
+        clap_plug_plug_stop_and_clean((void *)plug);
         return 0;
     }
 
@@ -1991,7 +2067,7 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
                              clap_plug_return_is_audio_thread(),
                              "Failed to create %s plugin audio ports\n",
                              plug->plug_path);
-        clap_plug_plug_stop_and_clean((void*)plug);
+        clap_plug_plug_stop_and_clean((void *)plug);
         return 0;
     }
 
@@ -2008,7 +2084,7 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
         context_sub_send_msg(
             plug_data->control_data, (void *)plug_data, is_audio_thread,
             "Failed to create %s plugin clap event structs\n", plug->plug_path);
-        clap_plug_plug_stop_and_clean((void*)plug);
+        clap_plug_plug_stop_and_clean((void *)plug);
         return 0;
     }
 
@@ -2020,7 +2096,7 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
                              clap_plug_return_is_audio_thread(),
                              "Failed to create %s plugin note ports\n",
                              plug->plug_path);
-        clap_plug_plug_stop_and_clean((void*)plug);
+        clap_plug_plug_stop_and_clean((void *)plug);
         return 0;
     }
     // create the parameter cotainer
@@ -2028,14 +2104,16 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
         context_sub_send_msg(
             plug_data->control_data, (void *)plug_data,
             clap_plug_return_is_audio_thread(),
-            "Failed to create %s plugin parameters container\n", plug->plug_path);
-        clap_plug_plug_stop_and_clean((void*)plug);
+            "Failed to create %s plugin parameters container\n",
+            plug->plug_path);
+        clap_plug_plug_stop_and_clean((void *)plug);
         return 0;
     }
 
     // assign the identity uid once, at load
     plug->uid = ++plug_data->next_plug_uid;
-    // build the display name once, now that plug->plug_inst and plug->id are set
+    // build the display name once, now that plug->plug_inst and plug->id are
+    // set
     clap_plug_set_display_name(plug);
 
     // start processing the plugin
@@ -2047,14 +2125,14 @@ uint32_t clap_plug_load_and_activate(void* plugin_item) {
     return plug->uid;
 }
 
-void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx){
-    if(!plug_data)
+void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx) {
+    if (!plug_data)
         return NULL;
 
     // the plugins array can have gaps, walk the occupied slots in order and
     // return the idx-th one; NULL once idx is past the last occupied slot
     unsigned int found = 0;
-    for(unsigned int i = 0; i < MAX_INSTANCES; i++){
+    for (unsigned int i = 0; i < MAX_INSTANCES; i++) {
         CLAP_PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
         if (!cur_plug->plug_inst)
             continue;
@@ -2065,11 +2143,11 @@ void *clap_plug_plugin_return(CLAP_PLUG_INFO *plug_data, unsigned int idx){
     return NULL;
 }
 
-const char *clap_plug_plugin_name(void *plug){
-    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG*)plug;
-    if(!cur_plug)
+const char *clap_plug_plugin_name(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug)
         return NULL;
-    if(!cur_plug->plug_entry)
+    if (!cur_plug->plug_entry)
         return NULL;
     CLAP_PLUG_INFO *plug_data = cur_plug->plug_data;
     if (!plug_data)
@@ -2078,23 +2156,23 @@ const char *clap_plug_plugin_name(void *plug){
     return cur_plug->name;
 }
 
-uint32_t clap_plug_plugin_uid(void *plug){
-    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG*)plug;
-    if(!cur_plug)
+uint32_t clap_plug_plugin_uid(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug)
         return 0;
     return cur_plug->uid;
 }
 
 // return this plugin instance's own param container, NULL on error/none yet
-PRM_CONTAIN *clap_plug_plugin_param_container(void *plug){
-    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG*)plug;
-    if(!cur_plug)
+PRM_CONTAIN *clap_plug_plugin_param_container(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug)
         return NULL;
     return cur_plug->plug_params;
 }
 
-bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data){
-    if(!plug_data)
+bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data) {
+    if (!plug_data)
         return false;
     bool is_dirty = plug_data->plugins_dirty;
     plug_data->plugins_dirty = false;
@@ -2206,6 +2284,7 @@ static int clap_prepare_output_ports(CLAP_PLUG_INFO *plug_data,
 // return 1 if successful and the output not quiet
 static int clap_output_events_read(CLAP_PLUG_INFO *plug_data,
                                    unsigned int nframes, CLAP_PLUG_PLUG *plug) {
+    (void)nframes;
     if (!plug_data)
         return -1;
     if (!plug)
@@ -2260,11 +2339,13 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
 
         clap_event_param_value_t param_val;
         param_val.channel = -1;
-        param_val.cookie = param_cookie_return_rt(plug->plug_params, (int)param_idx);
+        param_val.cookie =
+            param_cookie_return_rt(plug->plug_params, (int)param_idx);
         param_val.header = head;
         param_val.key = -1;
         param_val.note_id = -1;
-        param_val.param_id = param_get_owner_id(plug->plug_params, (int)param_idx, 1);
+        param_val.param_id =
+            param_get_owner_id(plug->plug_params, (int)param_idx, 1);
         param_val.port_index = -1;
         param_val.value =
             (double)param_get_value(plug->plug_params, (int)param_idx, 1);

@@ -125,6 +125,8 @@ static bool helper_target_list_add_reset_on_full(UI_LAYER* ui_layer, UI_TARGET_L
     return true;
 }
 // Helper function to add a add_id, if the array is full, double its size
+// TODO not used at his time, since no UI_TARGET_LISTS with growing arrays
+/*
 static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* target_list, ContextId add_id){
     if(!ui_layer)
         return false;
@@ -152,6 +154,7 @@ static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* ta
 
     return true;
 }
+*/
 
 // select previous child of parent (or next if next true).
 // cur_idx - address of the current index in the parent children array
@@ -276,13 +279,13 @@ static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, Contex
         return;
 
     ContextId cx_curr = helper_purpose_get(ui_layer, state, *parent, purpose);
-    if(ui_layer_context_valid(ui_layer, cx_curr)){
+    if(ui_layer_context_valid(ui_layer, cx_curr) && ui_layer_context_children_count(ui_layer, *parent) > 0){
         *parent = cx_curr;
     }
 }
 
 // change the parent to the parents parent
-static void helper_nav_context_exit(UI_LAYER* ui_layer, UI_STATE* state, ContextId* parent, UiPurpose purpose){
+static void helper_nav_context_exit(UI_LAYER* ui_layer, UI_STATE* state, ContextId* parent){
     if(!ui_layer)
         return;
     if(!state)
@@ -692,10 +695,7 @@ static ContextId helper_action_do_connect(UI_LAYER *ui_layer, ContextId context,
 }
 
 // dispatch to the function that knows how to collect that action's arguments
-// and execute it Extending or replacing how an action behaves (a real file
-// browser for ADD_FILE_PATH, a different CONNECT UI) means adding/swapping one
-// helper_action_do_* function and one dispatch line here - every other action's
-// function is untouched.
+// and execute it
 static ContextId helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
                                        char *msg, size_t msg_cap) {
     if (!msg || msg_cap == 0)
@@ -781,15 +781,19 @@ int main() {
     while (1) {
         // erase the terminal
         printf("\033[2J\033[H");
-        // update the interface, of course should be in a loop
+
+        // update the ui_layer - it updates the data underneath
         ui_layer_update_cycle(ui_layer);
 
         // let each view react to contexts that appeared / were removed
         for (size_t si = 0; si < STATES_COUNT; si++) {
             UiReconcileResult rr =
                 ui_layer_state_reconcile(ui_layer, states_all[si]);
-            if (rr == UI_RECONCILE_REBUILD && states_all[si] == state_main) {
-                // the view's cursor fell behind - fall back to the root
+            // the view's cursor fell behind, so per-event anchoring was lost -
+            // if the ContextIds this UI uses are not valid anymore, fallback to
+            // the root ContextId
+            if (rr == UI_RECONCILE_REBUILD && states_all[si] == state_main &&
+                !ui_layer_context_valid(ui_layer, state_main_context_current)) {
                 state_main_context_current = id_root;
             }
         }
@@ -868,12 +872,12 @@ int main() {
         }
         if (need_gather) {
             candidate_count = 0;
-            helper_action_candidates_gather(ui_layer, *state_current_context_current,
-                                            candidates, MAX_ACTION_CANDIDATES,
-                                            &candidate_count);
-            helper_action_candidates_gather(ui_layer, state_current_context_hovered,
-                                            candidates, MAX_ACTION_CANDIDATES,
-                                            &candidate_count);
+            helper_action_candidates_gather(
+                ui_layer, *state_current_context_current, candidates,
+                MAX_ACTION_CANDIDATES, &candidate_count);
+            helper_action_candidates_gather(
+                ui_layer, state_current_context_hovered, candidates,
+                MAX_ACTION_CANDIDATES, &candidate_count);
             helper_action_candidates_assign_letters(candidates, candidate_count,
                                                     true);
         }
@@ -980,8 +984,7 @@ int main() {
                     break;
                 case 'h':
                     helper_nav_context_exit(ui_layer, state_current,
-                                            state_current_context_current,
-                                            UI_PURPOSE_HOVERED);
+                                            state_current_context_current);
                     break;
                 case 'q':
                     exit = 1;

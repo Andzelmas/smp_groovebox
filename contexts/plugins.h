@@ -86,21 +86,11 @@ const char *plug_plugin_name(void *plug);
 // never reused for a different plugin.
 uint32_t plug_plugin_uid(void *plug);
 
-// chechk if the plugins array changed (became dirty)
+// return this plugin instance's own param container, NULL on error/none yet
+PRM_CONTAIN *plug_plugin_param_container(void *plug);
+
+// check if the plugins array changed (became dirty)
 bool plug_plugins_is_dirty(PLUG_INFO *plug_data);
-
-// a callback to send to lilv_state_restore to set the control ports directly
-// without circle buffer
-static void plug_set_value_direct(const char *port_symbol, void *data,
-                                  const void *value, uint32_t size,
-                                  uint32_t type);
-
-// find port by its name
-static PLUG_PORT *plug_find_port_by_name(PLUG_PLUG *plug, const char *name);
-
-// create controls that are properties not ports
-static void plug_create_properties(PLUG_INFO *plug_data, PLUG_PLUG *plug,
-                                   bool writable);
 
 // set the samplerate of the plug_data, should usually be done before launching
 // any plugins
@@ -116,9 +106,6 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug);
 // connect the ports, run the plugins instances for nframes, and update the
 // output ports, use on [audio-thread]
 void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes);
-
-// run the plugin for nframes
-static void plug_run_rt(PLUG_PLUG *plug, unsigned int nframes);
 
 // stop processing the plugin and remove it.
 // plugin will be stopped on [audio-thread], if there is no [audio-thread] this

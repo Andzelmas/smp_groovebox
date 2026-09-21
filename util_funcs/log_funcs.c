@@ -30,7 +30,7 @@ char *log_getline_logfile(int line_num) {
     char c;
     while (!feof(fp)) {
         c = fgetc(fp);
-        if (curr_line == line_num) {
+        if (curr_line == (unsigned int)line_num) {
             line_size += 1;
             if (!return_line) {
                 return_line = (char *)malloc(sizeof(char));
@@ -67,7 +67,6 @@ unsigned int log_calclines_logfile() {
     fp = fopen(LOGFILE, "r");
     if (!fp)
         return 0;
-    char *return_line = NULL;
     unsigned int curr_line = 0;
     char c;
     while (!feof(fp)) {

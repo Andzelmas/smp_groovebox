@@ -221,7 +221,9 @@ enum {
     DATA_NS_CLAP_PLUG = 4,
     DATA_NS_SYNTH_OSC = 5,
     DATA_NS_PARAM = 6,
+    DATA_NS_PARAM_CATEGORY = 7,
 };
+
 // mask for everything below the namespace byte (56 bits). MAKE_ID keeps all
 // of them rather than truncating local to uint32_t: every existing local is
 // a uint32_t module uid, well inside 56 bits, so this is a no-op for those -
@@ -241,12 +243,9 @@ enum {
     SID_TRK,
 };
 
-/* DataListId composition mirrors ContextId (namespace in the top byte, see
- * MAKE_ID above) but is a distinct id space - a DataListId is never compared
- * against a ContextId, only named separately so the two are never confused
- * while reading the code. List kinds are static constants (LID_*), not
- * counter-allocated: there is exactly one "LV2 catalogue" list etc. for the
- * life of the program. */
+/* DataListId composition mirrors ContextId. List kinds are static constants
+ * (LID_*), not counter-allocated: there is exactly one "LV2 catalogue" list
+ * etc. for the life of the program. */
 enum {
     DATA_LIST_NS_CATALOG = 1,
     DATA_LIST_NS_PORTS = 2,
@@ -274,14 +273,12 @@ enum {
     LID_PORTS_IN,
 };
 
-// FNV-1a 64-bit, for hashing a plugin catalogue entry's URI/path into a
-// stable DataChoice.value key (MAKE_ID(list_ns, item_key) - see
-// data_actions.h). Never a positional index: the same plugin hashes to the
-// same key across a catalogue re-scan even if its array position moved.
-// 64 bits (56 of which MAKE_ID actually keeps, see CTXID_LOCAL_MASK) rather
-// than 32: this is not a cryptographic hash, so collisions are only
-// statistically unlikely, not impossible - the wider the key, the smaller
-// that (already tiny, for realistic list sizes) probability gets.
+// FNV-1a 64-bit, for hashing a URI/path into a stable DataChoice.value key
+// (MAKE_ID(list_ns, item_key) - see data_actions.h). Never a positional index:
+// the same string hashes to the same key across a re-scan even if its array
+// position moved. 64 bits (56 of which MAKE_ID actually keeps, see
+// CTXID_LOCAL_MASK) this is not a cryptographic hash, so collisions are only
+// statistically unlikely, not impossible
 static uint64_t fnv1a64(const char *s) {
     uint64_t h = 14695981039346656037ULL;
     if (!s)
@@ -292,354 +289,6 @@ static uint64_t fnv1a64(const char *s) {
     }
     return h;
 }
-
-// the Trk container: constant name, no children. user_data is unused.
-static size_t trk_child_count(void *user_data) {
-    (void)user_data;
-    return 0;
-}
-static bool trk_child_at(void *user_data, size_t idx, DataObject *out) {
-    (void)user_data;
-    (void)idx;
-    (void)out;
-    return false;
-}
-static const char *trk_name(void *user_data) {
-    (void)user_data;
-    return TRK_NAME;
-}
-static ContextId trk_id(void *user_data) {
-    (void)user_data;
-    return MAKE_ID(DATA_NS_SINGLETON, SID_TRK);
-}
-
-static const DataOps trk_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
-    .id = trk_id,
-    .child_count = trk_child_count,
-    .child_at = trk_child_at,
-    .name = trk_name,
-};
-
-// single loaded sample. user_data is the SMP_SMP* from smp_sample_return.
-static size_t sample_child_count(void *user_data) {
-    (void)user_data;
-    return 0;
-}
-static bool sample_child_at(void *user_data, size_t idx, DataObject *out) {
-    (void)user_data;
-    (void)idx;
-    (void)out;
-    return false;
-}
-static ContextId sample_id(void *user_data) {
-    return MAKE_ID(DATA_NS_SAMPLE, smp_sample_uid(user_data));
-}
-// DATA_CAP_ACTIONS: a loaded sample can only be removed. No args, no lists -
-// action_args/list_count/list_at stay unset (NULL), which the data_object.h
-// wrappers already treat as "0 args" / "empty list".
-static size_t sample_action_list(void *user_data, DataAction *out,
-                                 size_t cap) {
-    (void)user_data;
-    if (!out || cap < 1)
-        return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_REMOVE,
-        .label = "Remove",
-        .tooltip = "Remove this sample",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_DANGEROUS,
-    };
-    return 1;
-}
-static DataActionResult sample_action_do(void *user_data,
-                                         const DataActionReq *req,
-                                         ContextId *out_new) {
-    (void)out_new; // REMOVE creates nothing
-    if (!req || req->type != DATA_ACTION_REMOVE)
-        return DATA_ACTION_ERR_INVALID;
-    if (!user_data)
-        return DATA_ACTION_ERR_INVALID;
-    if (smp_stop_and_remove_sample(user_data) != 0)
-        return DATA_ACTION_ERR_DATA;
-    return DATA_ACTION_OK;
-}
-// smp_sample_name already matches DataOps.name (const char *(*)(void *))
-static const DataOps sample_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
-    .id = sample_id,
-    .child_count = sample_child_count,
-    .child_at = sample_child_at,
-    .name = smp_sample_name,
-    .action_list = sample_action_list,
-    .action_do = sample_action_do,
-};
-
-// container of the loaded samples. user_data is SMP_INFO*.
-static size_t sampler_child_count(void *user_data) {
-    size_t count = 0;
-    while (smp_sample_return((SMP_INFO *)user_data, (unsigned int)count))
-        count++;
-    return count;
-}
-static bool sampler_child_at(void *user_data, size_t idx, DataObject *out) {
-    void *smp = smp_sample_return((SMP_INFO *)user_data, (unsigned int)idx);
-    if (!smp)
-        return false;
-    out->ops = &sample_ops;
-    out->user_data = smp;
-    return true;
-}
-static const char *sampler_name(void *user_data) {
-    (void)user_data;
-    return SAMPLER_NAME;
-}
-static ContextId sampler_id(void *user_data) {
-    (void)user_data;
-    return MAKE_ID(DATA_NS_SINGLETON, SID_SAMPLER);
-}
-// DATA_CAP_ACTIONS: the sampler list can add a sample from a file path. One
-// PATH arg, no list - list_count/list_at stay unset.
-static size_t sampler_action_list(void *user_data, DataAction *out,
-                                  size_t cap) {
-    (void)user_data;
-    if (!out || cap < 1)
-        return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_ADD_FILE_PATH,
-        .label = "Add sample",
-        .tooltip = "Load a sample from a file",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_NORMAL,
-    };
-    return 1;
-}
-static size_t sampler_action_args(void *user_data, DataActionType type,
-                                  DataArgSpec *out, size_t cap) {
-    (void)user_data;
-    if (type != DATA_ACTION_ADD_FILE_PATH)
-        return 0;
-    if (!out || cap < 1)
-        return 0;
-    out[0] = (DataArgSpec){
-        .name = "path",
-        .label = "File path",
-        .kind = DATA_ARG_PATH,
-        .required = true,
-        .list = DATA_LIST_NONE,
-    };
-    return 1;
-}
-static DataActionResult sampler_action_do(void *user_data,
-                                          const DataActionReq *req,
-                                          ContextId *out_new) {
-    SMP_INFO *smp_data = (SMP_INFO *)user_data;
-    if (!smp_data || !req || req->type != DATA_ACTION_ADD_FILE_PATH)
-        return DATA_ACTION_ERR_INVALID;
-    const char *path = req->add_file_path.path;
-    if (!path || !path[0])
-        return DATA_ACTION_ERR_INVALID;
-
-    // smp_add returns the new sample's identity uid (always > 0) on success,
-    // 0 on failure.
-    uint32_t uid = smp_add(smp_data, path, -1);
-    if (uid == 0)
-        return DATA_ACTION_ERR_DATA;
-
-    if (out_new)
-        *out_new = MAKE_ID(DATA_NS_SAMPLE, uid);
-    return DATA_ACTION_OK;
-}
-static const DataOps sampler_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
-    .id = sampler_id,
-    .child_count = sampler_child_count,
-    .child_at = sampler_child_at,
-    .name = sampler_name,
-    .action_list = sampler_action_list,
-    .action_args = sampler_action_args,
-    .action_do = sampler_action_do,
-};
-
-// single loaded lv2 plugin. user_data is the PLUG_PLUG* from plug_plugin_return.
-static size_t lv2_plugin_child_count(void *user_data) {
-    (void)user_data;
-    return 0;
-}
-static bool lv2_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
-    (void)user_data;
-    (void)idx;
-    (void)out;
-    return false;
-}
-static ContextId lv2_plugin_id(void *user_data) {
-    return MAKE_ID(DATA_NS_LV2_PLUG, plug_plugin_uid(user_data));
-}
-// DATA_CAP_ACTIONS: a loaded lv2 plugin can only be removed. No args, no
-// lists - action_args/list_count/list_at stay unset.
-static size_t lv2_plugin_action_list(void *user_data, DataAction *out,
-                                     size_t cap) {
-    (void)user_data;
-    if (!out || cap < 1)
-        return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_REMOVE,
-        .label = "Remove",
-        .tooltip = "Remove this plugin",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_DANGEROUS,
-    };
-    return 1;
-}
-static DataActionResult lv2_plugin_action_do(void *user_data,
-                                             const DataActionReq *req,
-                                             ContextId *out_new) {
-    (void)out_new; // REMOVE creates nothing
-    if (!req || req->type != DATA_ACTION_REMOVE)
-        return DATA_ACTION_ERR_INVALID;
-    if (!user_data)
-        return DATA_ACTION_ERR_INVALID;
-    if (plug_stop_and_remove_plug(user_data) != 0)
-        return DATA_ACTION_ERR_DATA;
-    return DATA_ACTION_OK;
-}
-// plug_plugin_name already matches DataOps.name (const char *(*)(void *))
-static const DataOps lv2_plugin_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
-    .id = lv2_plugin_id,
-    .child_count = lv2_plugin_child_count,
-    .child_at = lv2_plugin_child_at,
-    .name = plug_plugin_name,
-    .action_list = lv2_plugin_action_list,
-    .action_do = lv2_plugin_action_do,
-};
-
-// container of the loaded lv2 plugins. user_data is PLUG_INFO*.
-static size_t lv2_plugins_child_count(void *user_data) {
-    size_t count = 0;
-    while (plug_plugin_return((PLUG_INFO *)user_data, (unsigned int)count))
-        count++;
-    return count;
-}
-static bool lv2_plugins_child_at(void *user_data, size_t idx, DataObject *out) {
-    void *plug = plug_plugin_return((PLUG_INFO *)user_data, (unsigned int)idx);
-    if (!plug)
-        return false;
-    out->ops = &lv2_plugin_ops;
-    out->user_data = plug;
-    return true;
-}
-static const char *lv2_plugins_name(void *user_data) {
-    (void)user_data;
-    return PLUGINS_LV2_NAME;
-}
-static ContextId lv2_plugins_id(void *user_data) {
-    (void)user_data;
-    return MAKE_ID(DATA_NS_SINGLETON, SID_LV2_PLUGINS);
-}
-// DATA_CAP_ACTIONS: the lv2 list can add a plugin chosen from the catalogue.
-// One CHOICE arg, list = the catalogue.
-static size_t lv2_plugins_action_list(void *user_data, DataAction *out,
-                                      size_t cap) {
-    (void)user_data;
-    if (!out || cap < 1)
-        return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_ADD_CHOICE,
-        .label = "Add plugin",
-        .tooltip = "Load an LV2 plugin from the catalogue",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_NORMAL,
-    };
-    return 1;
-}
-static size_t lv2_plugins_action_args(void *user_data, DataActionType type,
-                                      DataArgSpec *out, size_t cap) {
-    (void)user_data;
-    if (type != DATA_ACTION_ADD_CHOICE)
-        return 0;
-    if (!out || cap < 1)
-        return 0;
-    out[0] = (DataArgSpec){
-        .name = "plugin",
-        .label = "Plugin",
-        .kind = DATA_ARG_CHOICE,
-        .required = true,
-        .list = MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG),
-    };
-    return 1;
-}
-static size_t lv2_plugins_list_count(void *user_data, DataListId list,
-                                     const DataActionReq *partial) {
-    (void)partial;
-    if (list != MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG))
-        return 0;
-    return (size_t)plug_plugin_list_count((PLUG_INFO *)user_data);
-}
-static bool lv2_plugins_list_at(void *user_data, DataListId list,
-                                const DataActionReq *partial, size_t idx,
-                                DataChoice *out) {
-    (void)partial;
-    if (list != MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG))
-        return false;
-    void *item =
-        plug_plugin_list_item_get((PLUG_INFO *)user_data, (unsigned int)idx);
-    if (!item)
-        return false;
-    out->value = MAKE_ID(DATA_LIST_NS_CATALOG,
-                         fnv1a64(plug_plugin_list_item_path(item)));
-    out->label = plug_plugin_list_item_name(item);
-    out->flags = 0;
-    return true;
-}
-static DataActionResult lv2_plugins_action_do(void *user_data,
-                                              const DataActionReq *req,
-                                              ContextId *out_new) {
-    PLUG_INFO *plug_data = (PLUG_INFO *)user_data;
-    if (!plug_data || !req || req->type != DATA_ACTION_ADD_CHOICE)
-        return DATA_ACTION_ERR_INVALID;
-
-    ContextId value = (ContextId)req->add_choice.choice_value;
-    if (CTXID_NS(value) != DATA_LIST_NS_CATALOG)
-        return DATA_ACTION_ERR_INVALID; // not a choice from this list
-
-    // MAKE_ID only kept the low 56 bits of the hash (see CTXID_LOCAL_MASK) -
-    // mask the freshly computed one the same way before comparing.
-    uint64_t key = value & CTXID_LOCAL_MASK;
-    unsigned int count = plug_plugin_list_count(plug_data);
-    void *found = NULL;
-    for (unsigned int i = 0; i < count; i++) {
-        void *item = plug_plugin_list_item_get(plug_data, i);
-        if (item &&
-            (fnv1a64(plug_plugin_list_item_path(item)) & CTXID_LOCAL_MASK) ==
-                key) {
-            found = item;
-            break;
-        }
-    }
-    if (!found)
-        return DATA_ACTION_ERR_STALE; // catalogue changed since the pick
-
-    uint32_t uid = plug_load_and_activate(found);
-    if (uid == 0)
-        return DATA_ACTION_ERR_DATA;
-
-    if (out_new)
-        *out_new = MAKE_ID(DATA_NS_LV2_PLUG, uid);
-    return DATA_ACTION_OK;
-}
-static const DataOps lv2_plugins_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
-    .id = lv2_plugins_id,
-    .child_count = lv2_plugins_child_count,
-    .child_at = lv2_plugins_child_at,
-    .name = lv2_plugins_name,
-    .action_list = lv2_plugins_action_list,
-    .action_args = lv2_plugins_action_args,
-    .list_count = lv2_plugins_list_count,
-    .list_at = lv2_plugins_list_at,
-    .action_do = lv2_plugins_action_do,
-};
 
 // one parameter, from any owner. user_data is the opaque handle from
 // param_get_handle.
@@ -827,8 +476,7 @@ static DataActionResult cx_param_action_do(void *user_data,
     }
     return DATA_ACTION_ERR_INVALID;
 }
-// fully owner-agnostic - nothing in here knows or cares which subsystem the
-// param came from, so every owner's params can share this one table
+// owner-agnostic: every owner's params share this one table
 static const DataOps cx_param_ops = {
     .capabilities =
         DATA_CAP_NAME | DATA_CAP_VALUE | DATA_CAP_HIDDEN | DATA_CAP_ACTIONS,
@@ -844,32 +492,84 @@ static const DataOps cx_param_ops = {
     .action_do = cx_param_action_do,
 };
 
-// single loaded clap plugin. user_data is the plugin handle from
-// clap_plug_plugin_return.
-static size_t clap_plugin_child_count(void *user_data) {
-    PRM_CONTAIN *container = clap_plug_plugin_param_container(user_data);
+// forward declaration of the category op functions, because of cyclic
+// dependencies
+static ContextId cx_param_cat_id(void *user_data);
+static const char *cx_param_cat_name(void *user_data);
+static size_t cx_param_cat_child_count(void *user_data);
+static bool cx_param_cat_child_at(void *user_data, size_t idx, DataObject *out);
+
+// A PARAMETER CATEGORY as a CX node. user_data is the opaque handle from
+// param_category_handle. Owner-agnostic, like cx_param_ops.
+static const DataOps cx_param_cat_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = cx_param_cat_id,
+    .name = cx_param_cat_name,
+    .child_count = cx_param_cat_child_count,
+    .child_at = cx_param_cat_child_at,
+};
+
+static size_t cx_param_level_count(PRM_CONTAIN *container,
+                                   uint32_t parent_cat_uid) {
     if (!container)
         return 0;
+    size_t n = 0;
+    unsigned int ncat = param_return_num_categories(container);
+    for (unsigned int i = 0; i < ncat; i++)
+        if (param_category_parent(container, (int)i) == parent_cat_uid)
+            n++;
     unsigned int total = param_return_num_params(container, 0);
-    size_t count = 0;
     for (unsigned int i = 0; i < total; i++) {
-        if (param_get_name(container, (int)i))
-            count++;
+        if (!param_get_name(container, (int)i))
+            continue; // tombstoned slot
+        if (param_get_category_uid(container, (int)i) == parent_cat_uid)
+            n++;
     }
-    return count;
+    return n;
 }
-static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
-    PRM_CONTAIN *container = clap_plug_plugin_param_container(user_data);
+
+// ONE level slice of a param container's category tree, shared by every owner
+// whose params are CX children (they pass parent_cat_uid 0, the top level)
+// and by each category node (which passes its own uid).
+// A level is every sub-category of parent_cat_uid sorted by name, followed by
+// every live param sitting directly in it in val_id order
+static bool cx_param_level_at(PRM_CONTAIN *container, uint32_t parent_cat_uid,
+                              size_t idx, DataObject *out) {
     if (!container)
         return false;
+    unsigned int ncat = param_return_num_categories(container);
+    unsigned int ngroups = 0;
+    for (unsigned int i = 0; i < ncat; i++)
+        if (param_category_parent(container, (int)i) == parent_cat_uid)
+            ngroups++;
+
+    // groups by cat_id, then params by val_id - both DECLARATION order, i.e.
+    // the order the owner first mentioned them.
+    if (idx < ngroups) {
+        size_t want = idx;
+        for (unsigned int i = 0; i < ncat; i++) {
+            if (param_category_parent(container, (int)i) != parent_cat_uid)
+                continue;
+            if (want == 0) {
+                void *handle = param_category_handle(container, (int)i);
+                if (!handle)
+                    return false;
+                out->ops = &cx_param_cat_ops;
+                out->user_data = handle;
+                return true;
+            }
+            want--;
+        }
+        return false;
+    }
+    size_t want = idx - ngroups;
     unsigned int total = param_return_num_params(container, 0);
-    // idx counts only alive params, so tombstoned (NULL) slots are skipped
-    // rather than indexed past
-    size_t alive = 0;
     for (unsigned int i = 0; i < total; i++) {
         if (!param_get_name(container, (int)i))
             continue;
-        if (alive == idx) {
+        if (param_get_category_uid(container, (int)i) != parent_cat_uid)
+            continue;
+        if (want == 0) {
             void *handle = param_get_handle(container, (int)i);
             if (!handle)
                 return false;
@@ -877,9 +577,389 @@ static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
             out->user_data = handle;
             return true;
         }
-        alive++;
+        want--;
     }
     return false;
+}
+
+static ContextId cx_param_cat_id(void *user_data) {
+    PRM_CONTAIN *container;
+    int cat_id;
+    if (!param_category_resolve(user_data, &container, &cat_id))
+        return MAKE_ID(DATA_NS_PARAM_CATEGORY, 0);
+    return MAKE_ID(DATA_NS_PARAM_CATEGORY,
+                   param_category_uid(container, cat_id));
+}
+static const char *cx_param_cat_name(void *user_data) {
+    PRM_CONTAIN *container;
+    int cat_id;
+    if (!param_category_resolve(user_data, &container, &cat_id))
+        return NULL;
+    return param_category_name(container, cat_id);
+}
+static size_t cx_param_cat_child_count(void *user_data) {
+    PRM_CONTAIN *container;
+    int cat_id;
+    if (!param_category_resolve(user_data, &container, &cat_id))
+        return 0;
+    return cx_param_level_count(container,
+                                param_category_uid(container, cat_id));
+}
+static bool cx_param_cat_child_at(void *user_data, size_t idx,
+                                  DataObject *out) {
+    PRM_CONTAIN *container;
+    int cat_id;
+    if (!param_category_resolve(user_data, &container, &cat_id))
+        return false;
+    return cx_param_level_at(container,
+                             param_category_uid(container, cat_id), idx, out);
+}
+
+// the Trk container: constant name, its params as children.
+static size_t trk_child_count(void *user_data) {
+    return cx_param_level_count(app_jack_trk_param_container(user_data), 0);
+}
+static bool trk_child_at(void *user_data, size_t idx, DataObject *out) {
+    return cx_param_level_at(app_jack_trk_param_container(user_data), 0, idx,
+                             out);
+}
+static const char *trk_name(void *user_data) {
+    (void)user_data;
+    return TRK_NAME;
+}
+static ContextId trk_id(void *user_data) {
+    (void)user_data;
+    return MAKE_ID(DATA_NS_SINGLETON, SID_TRK);
+}
+
+static const DataOps trk_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .id = trk_id,
+    .child_count = trk_child_count,
+    .child_at = trk_child_at,
+    .name = trk_name,
+};
+
+// single loaded sample. user_data is the SMP_SMP* from smp_sample_return.
+static size_t sample_child_count(void *user_data) {
+    return cx_param_level_count(smp_sample_param_container(user_data), 0);
+}
+static bool sample_child_at(void *user_data, size_t idx, DataObject *out) {
+    return cx_param_level_at(smp_sample_param_container(user_data), 0, idx, out);
+}
+static ContextId sample_id(void *user_data) {
+    return MAKE_ID(DATA_NS_SAMPLE, smp_sample_uid(user_data));
+}
+// DATA_CAP_ACTIONS: a loaded sample can only be removed. No args, no lists -
+// action_args/list_count/list_at stay unset (NULL), which the data_object.h
+// wrappers already treat as "0 args" / "empty list".
+static size_t sample_action_list(void *user_data, DataAction *out,
+                                 size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataAction){
+        .type = DATA_ACTION_REMOVE,
+        .label = "Remove",
+        .tooltip = "Remove this sample",
+        .enabled = true,
+        .style = DATA_ACTION_STYLE_DANGEROUS,
+    };
+    return 1;
+}
+static DataActionResult sample_action_do(void *user_data,
+                                         const DataActionReq *req,
+                                         ContextId *out_new) {
+    (void)out_new; // REMOVE creates nothing
+    if (!req || req->type != DATA_ACTION_REMOVE)
+        return DATA_ACTION_ERR_INVALID;
+    if (!user_data)
+        return DATA_ACTION_ERR_INVALID;
+    if (smp_stop_and_remove_sample(user_data) != 0)
+        return DATA_ACTION_ERR_DATA;
+    return DATA_ACTION_OK;
+}
+// smp_sample_name already matches DataOps.name (const char *(*)(void *))
+static const DataOps sample_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
+    .id = sample_id,
+    .child_count = sample_child_count,
+    .child_at = sample_child_at,
+    .name = smp_sample_name,
+    .action_list = sample_action_list,
+    .action_do = sample_action_do,
+};
+
+// container of the loaded samples. user_data is SMP_INFO*.
+static size_t sampler_child_count(void *user_data) {
+    size_t count = 0;
+    while (smp_sample_return((SMP_INFO *)user_data, (unsigned int)count))
+        count++;
+    return count;
+}
+static bool sampler_child_at(void *user_data, size_t idx, DataObject *out) {
+    void *smp = smp_sample_return((SMP_INFO *)user_data, (unsigned int)idx);
+    if (!smp)
+        return false;
+    out->ops = &sample_ops;
+    out->user_data = smp;
+    return true;
+}
+static const char *sampler_name(void *user_data) {
+    (void)user_data;
+    return SAMPLER_NAME;
+}
+static ContextId sampler_id(void *user_data) {
+    (void)user_data;
+    return MAKE_ID(DATA_NS_SINGLETON, SID_SAMPLER);
+}
+// DATA_CAP_ACTIONS: the sampler list can add a sample from a file path. One
+// PATH arg, no list - list_count/list_at stay unset.
+static size_t sampler_action_list(void *user_data, DataAction *out,
+                                  size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataAction){
+        .type = DATA_ACTION_ADD_FILE_PATH,
+        .label = "Add sample",
+        .tooltip = "Load a sample from a file",
+        .enabled = true,
+        .style = DATA_ACTION_STYLE_NORMAL,
+    };
+    return 1;
+}
+static size_t sampler_action_args(void *user_data, DataActionType type,
+                                  DataArgSpec *out, size_t cap) {
+    (void)user_data;
+    if (type != DATA_ACTION_ADD_FILE_PATH)
+        return 0;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataArgSpec){
+        .name = "path",
+        .label = "File path",
+        .kind = DATA_ARG_PATH,
+        .required = true,
+        .list = DATA_LIST_NONE,
+    };
+    return 1;
+}
+static DataActionResult sampler_action_do(void *user_data,
+                                          const DataActionReq *req,
+                                          ContextId *out_new) {
+    SMP_INFO *smp_data = (SMP_INFO *)user_data;
+    if (!smp_data || !req || req->type != DATA_ACTION_ADD_FILE_PATH)
+        return DATA_ACTION_ERR_INVALID;
+    const char *path = req->add_file_path.path;
+    if (!path || !path[0])
+        return DATA_ACTION_ERR_INVALID;
+
+    // smp_add returns the new sample's identity uid (always > 0) on success,
+    // 0 on failure.
+    uint32_t uid = smp_add(smp_data, path, -1);
+    if (uid == 0)
+        return DATA_ACTION_ERR_DATA;
+
+    if (out_new)
+        *out_new = MAKE_ID(DATA_NS_SAMPLE, uid);
+    return DATA_ACTION_OK;
+}
+static const DataOps sampler_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
+    .id = sampler_id,
+    .child_count = sampler_child_count,
+    .child_at = sampler_child_at,
+    .name = sampler_name,
+    .action_list = sampler_action_list,
+    .action_args = sampler_action_args,
+    .action_do = sampler_action_do,
+};
+
+// single loaded lv2 plugin. user_data is the PLUG_PLUG* from plug_plugin_return.
+static size_t lv2_plugin_child_count(void *user_data) {
+    return cx_param_level_count(plug_plugin_param_container(user_data), 0);
+}
+static bool lv2_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
+    return cx_param_level_at(plug_plugin_param_container(user_data), 0, idx, out);
+}
+static ContextId lv2_plugin_id(void *user_data) {
+    return MAKE_ID(DATA_NS_LV2_PLUG, plug_plugin_uid(user_data));
+}
+// DATA_CAP_ACTIONS: a loaded lv2 plugin can only be removed. No args, no
+// lists - action_args/list_count/list_at stay unset.
+static size_t lv2_plugin_action_list(void *user_data, DataAction *out,
+                                     size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataAction){
+        .type = DATA_ACTION_REMOVE,
+        .label = "Remove",
+        .tooltip = "Remove this plugin",
+        .enabled = true,
+        .style = DATA_ACTION_STYLE_DANGEROUS,
+    };
+    return 1;
+}
+static DataActionResult lv2_plugin_action_do(void *user_data,
+                                             const DataActionReq *req,
+                                             ContextId *out_new) {
+    (void)out_new; // REMOVE creates nothing
+    if (!req || req->type != DATA_ACTION_REMOVE)
+        return DATA_ACTION_ERR_INVALID;
+    if (!user_data)
+        return DATA_ACTION_ERR_INVALID;
+    if (plug_stop_and_remove_plug(user_data) != 0)
+        return DATA_ACTION_ERR_DATA;
+    return DATA_ACTION_OK;
+}
+// plug_plugin_name already matches DataOps.name (const char *(*)(void *))
+static const DataOps lv2_plugin_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
+    .id = lv2_plugin_id,
+    .child_count = lv2_plugin_child_count,
+    .child_at = lv2_plugin_child_at,
+    .name = plug_plugin_name,
+    .action_list = lv2_plugin_action_list,
+    .action_do = lv2_plugin_action_do,
+};
+
+// container of the loaded lv2 plugins. user_data is PLUG_INFO*.
+static size_t lv2_plugins_child_count(void *user_data) {
+    size_t count = 0;
+    while (plug_plugin_return((PLUG_INFO *)user_data, (unsigned int)count))
+        count++;
+    return count;
+}
+static bool lv2_plugins_child_at(void *user_data, size_t idx, DataObject *out) {
+    void *plug = plug_plugin_return((PLUG_INFO *)user_data, (unsigned int)idx);
+    if (!plug)
+        return false;
+    out->ops = &lv2_plugin_ops;
+    out->user_data = plug;
+    return true;
+}
+static const char *lv2_plugins_name(void *user_data) {
+    (void)user_data;
+    return PLUGINS_LV2_NAME;
+}
+static ContextId lv2_plugins_id(void *user_data) {
+    (void)user_data;
+    return MAKE_ID(DATA_NS_SINGLETON, SID_LV2_PLUGINS);
+}
+// DATA_CAP_ACTIONS: the lv2 list can add a plugin chosen from the catalogue.
+// One CHOICE arg, list = the catalogue.
+static size_t lv2_plugins_action_list(void *user_data, DataAction *out,
+                                      size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataAction){
+        .type = DATA_ACTION_ADD_CHOICE,
+        .label = "Add plugin",
+        .tooltip = "Load an LV2 plugin from the catalogue",
+        .enabled = true,
+        .style = DATA_ACTION_STYLE_NORMAL,
+    };
+    return 1;
+}
+static size_t lv2_plugins_action_args(void *user_data, DataActionType type,
+                                      DataArgSpec *out, size_t cap) {
+    (void)user_data;
+    if (type != DATA_ACTION_ADD_CHOICE)
+        return 0;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = (DataArgSpec){
+        .name = "plugin",
+        .label = "Plugin",
+        .kind = DATA_ARG_CHOICE,
+        .required = true,
+        .list = MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG),
+    };
+    return 1;
+}
+static size_t lv2_plugins_list_count(void *user_data, DataListId list,
+                                     const DataActionReq *partial) {
+    (void)partial;
+    if (list != MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG))
+        return 0;
+    return (size_t)plug_plugin_list_count((PLUG_INFO *)user_data);
+}
+static bool lv2_plugins_list_at(void *user_data, DataListId list,
+                                const DataActionReq *partial, size_t idx,
+                                DataChoice *out) {
+    (void)partial;
+    if (list != MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG))
+        return false;
+    void *item =
+        plug_plugin_list_item_get((PLUG_INFO *)user_data, (unsigned int)idx);
+    if (!item)
+        return false;
+    out->value = MAKE_ID(DATA_LIST_NS_CATALOG,
+                         fnv1a64(plug_plugin_list_item_path(item)));
+    out->label = plug_plugin_list_item_name(item);
+    out->flags = 0;
+    return true;
+}
+static DataActionResult lv2_plugins_action_do(void *user_data,
+                                              const DataActionReq *req,
+                                              ContextId *out_new) {
+    PLUG_INFO *plug_data = (PLUG_INFO *)user_data;
+    if (!plug_data || !req || req->type != DATA_ACTION_ADD_CHOICE)
+        return DATA_ACTION_ERR_INVALID;
+
+    ContextId value = (ContextId)req->add_choice.choice_value;
+    if (CTXID_NS(value) != DATA_LIST_NS_CATALOG)
+        return DATA_ACTION_ERR_INVALID; // not a choice from this list
+
+    // MAKE_ID only kept the low 56 bits of the hash (see CTXID_LOCAL_MASK) -
+    // mask the freshly computed one the same way before comparing.
+    uint64_t key = value & CTXID_LOCAL_MASK;
+    unsigned int count = plug_plugin_list_count(plug_data);
+    void *found = NULL;
+    for (unsigned int i = 0; i < count; i++) {
+        void *item = plug_plugin_list_item_get(plug_data, i);
+        if (item &&
+            (fnv1a64(plug_plugin_list_item_path(item)) & CTXID_LOCAL_MASK) ==
+                key) {
+            found = item;
+            break;
+        }
+    }
+    if (!found)
+        return DATA_ACTION_ERR_STALE; // catalogue changed since the pick
+
+    uint32_t uid = plug_load_and_activate(found);
+    if (uid == 0)
+        return DATA_ACTION_ERR_DATA;
+
+    if (out_new)
+        *out_new = MAKE_ID(DATA_NS_LV2_PLUG, uid);
+    return DATA_ACTION_OK;
+}
+static const DataOps lv2_plugins_ops = {
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
+    .id = lv2_plugins_id,
+    .child_count = lv2_plugins_child_count,
+    .child_at = lv2_plugins_child_at,
+    .name = lv2_plugins_name,
+    .action_list = lv2_plugins_action_list,
+    .action_args = lv2_plugins_action_args,
+    .list_count = lv2_plugins_list_count,
+    .list_at = lv2_plugins_list_at,
+    .action_do = lv2_plugins_action_do,
+};
+
+// single loaded clap plugin. user_data is the plugin handle from
+// clap_plug_plugin_return.
+static size_t clap_plugin_child_count(void *user_data) {
+    return cx_param_level_count(clap_plug_plugin_param_container(user_data), 0);
+}
+static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
+    return cx_param_level_at(clap_plug_plugin_param_container(user_data), 0,
+                             idx, out);
 }
 static ContextId clap_plugin_id(void *user_data) {
     return MAKE_ID(DATA_NS_CLAP_PLUG, clap_plug_plugin_uid(user_data));
@@ -1054,14 +1134,10 @@ static const DataOps clap_plugins_ops = {
 // single synth oscillator. user_data is the handle from synth_osc_return - it
 // represents "oscillator number N" on the synth, not a SYNTH_OSC* pointer.
 static size_t osc_child_count(void *user_data) {
-    (void)user_data;
-    return 0;
+    return cx_param_level_count(synth_osc_param_container(user_data), 0);
 }
 static bool osc_child_at(void *user_data, size_t idx, DataObject *out) {
-    (void)user_data;
-    (void)idx;
-    (void)out;
-    return false;
+    return cx_param_level_at(synth_osc_param_container(user_data), 0, idx, out);
 }
 static ContextId osc_id(void *user_data) {
     return MAKE_ID(DATA_NS_SYNTH_OSC, synth_osc_uid(user_data));
@@ -1155,8 +1231,7 @@ static ContextId root_id(void *user_data) {
 #define JACK_PORT_NAME_MAX 320
 // scratch for the one DataChoice.label a list_at call hands back. Valid only
 // until the NEXT list_count/list_at call on this ops table - callers must
-// read/copy it before asking for another choice, same discipline as
-// nav_cx_name_return's borrowed pointer.
+// read/copy it before asking for another choice
 static char root_connect_port_name_buf[JACK_PORT_NAME_MAX];
 
 // search jack_data's ports of the given flow (JackPortIsOutput/
@@ -1263,19 +1338,9 @@ static size_t root_connect_action_args(void *user_data, DataActionType type,
     return 2;
 }
 
-static size_t root_connect_list_count(void *user_data, DataListId list,
-                             const DataActionReq *partial) {
-    (void)user_data;
-    (void)partial;
-    if (list != MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_OUT) &&
-        list != MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_IN))
-        return 0;
-    // unknown up front (would mean scanning just to count, then scanning
-    // again to fetch) - page via list_at until it returns false, per the
-    // contract's own "0 = unknown" allowance.
-    return 0;
-}
-
+// there is no root_connect_list_count, because it would need to iterate the
+// ports twice, not worth the effort. The data_list_count will return 0 for
+// root_ops, but this simply means "use _list_at until hit false"
 static bool root_connect_list_at(void *user_data, DataListId list,
                         const DataActionReq *partial, size_t idx,
                         DataChoice *out) {
@@ -1362,7 +1427,6 @@ static const DataOps root_ops = {
     .child_at = root_child_at,
     .action_list = root_connect_action_list,
     .action_args = root_connect_action_args,
-    .list_count = root_connect_list_count,
     .list_at = root_connect_list_at,
     .action_do = root_connect_action_do,
     .name = root_name,
@@ -1444,8 +1508,6 @@ DataObject app_init(void) {
         return invalid;
     }
     // build the catalogue of installed lv2 plugins for DATA_ACTION_ADD_CHOICE.
-    // an empty system-wide catalogue is not a startup failure - the action
-    // just has nothing to offer.
     plug_plugin_list_init(app_data->plug_data);
 
     clap_plug_status_t clap_plug_errors = 0;
@@ -1502,9 +1564,9 @@ void app_data_update(void *root_user_data) {
     // context
     synth_read_rt_to_ui_messages(app_data->synth_data);
 
-    // now that all rt->ui messages are drained, turn each module's "my list
-    // changed" flag into a CHILDREN_CHANGED event for that list's context.
-    // (the synth has no such flag - its oscillators are fixed.)
+    // now that all rt->ui messages are drained, turn each module's "my contents
+    // is dirty" flag into a CHILDREN_CHANGED event.
+    // (the synth and trk has no such flag - their oscillators are fixed.)
     if (smp_samples_is_dirty(app_data->smp_data))
         app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_SAMPLER));
@@ -1516,9 +1578,7 @@ void app_data_update(void *root_user_data) {
                             MAKE_ID(DATA_NS_SINGLETON, SID_CLAP_PLUGINS));
 
     // same, one level down: did any one CLAP instance's own param set change.
-    // asked of the param container itself rather than of a CLAP-specific
-    // flag, so every other owner can be polled the same way once its params
-    // become CX children too.
+    // asked of the param container itself rather than of a CLAP-specific flag
     for (unsigned int i = 0;; i++) {
         void *plug = clap_plug_plugin_return(app_data->clap_plug_data, i);
         if (!plug)
@@ -1529,12 +1589,13 @@ void app_data_update(void *root_user_data) {
                                        clap_plug_plugin_uid(plug)));
     }
 
-    // ports/connections are never materialised into the CX tree (see Trk)
+    // since JACK ports are not in CX tree, if they changed, report as a context
+    // data changed event, not a context structure change event
     bool ports_changed = app_jack_ports_changed(app_data->trk_jack);
     bool connections_changed = app_jack_connections_changed(app_data->trk_jack);
     if (ports_changed || connections_changed)
         app_data_push_event(app_data, DATA_EVENT_CHANGED,
-                            MAKE_ID(DATA_NS_SINGLETON, SID_TRK));
+                            MAKE_ID(DATA_NS_SINGLETON, SID_ROOT));
 }
 
 void app_stop_and_clean(void *root_user_data) {

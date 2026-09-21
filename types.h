@@ -14,7 +14,7 @@
 
 #define MAX_STRING_MSG_LENGTH 128 // max string size for sys messages
 
-#define MAX_SHORT_NAME_LENGTH 100 // max length for a short display name (param, plugin, preset, CX...)
+#define MAX_SHORT_NAME_LENGTH 256 // max length for a short display name (param, plugin, preset, CX...)
 
 // max size for ring buffer arrays in sys messages between threads
 #define MAX_SYS_BUFFER_ARRAY_SIZE 256

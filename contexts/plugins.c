@@ -179,7 +179,7 @@ typedef struct _plug_port {
     int param_index; // index on the plug_plug->controls arrays if this is a
                      // CONTROL type port (will be the same index as on
                      // plug_params array)
-    float control; ///< For control ports, otherwise 0.0f
+    float control;   ///< For control ports, otherwise 0.0f
     // for convenience we can save the current port urid of its type
     LV2_URID port_type_urid;
 } PLUG_PORT;
@@ -281,7 +281,7 @@ typedef struct _plug_plug {
     PLUG_CONTROL **controls;   // parameters (properties and port controls)
     unsigned int num_controls; // number of PLUG_CONTROL
     PRM_CONTAIN *plug_params;  // plugin parameter container for params.c
-    PLUG_INFO *plug_data; // plug_data struct for convenience
+    PLUG_INFO *plug_data;      // plug_data struct for convenience
 } PLUG_PLUG;
 
 typedef struct _plug_info {
@@ -661,6 +661,7 @@ static const char *unmap_uri(LV2_URID_Unmap_Handle handle, LV2_URID urid) {
 // internal function for printf for the log feature
 static int plug_vprintf(LV2_Log_Handle handle, LV2_URID type, const char *fmt,
                         va_list ap) {
+    (void)type;
     PLUG_INFO *plug_data = (PLUG_INFO *)handle;
     int ret = -1;
     char send_msg[MAX_STRING_MSG_LENGTH];
@@ -985,13 +986,57 @@ int plug_plugin_preset_path(PLUG_INFO *plug_data, void *preset_info,
     return 0;
 }
 
+static PLUG_PORT *plug_find_port_by_name(PLUG_PLUG *plug, const char *name) {
+    if (!plug)
+        return NULL;
+    if (!name)
+        return NULL;
+    for (uint32_t i = 0; i < plug->num_ports; ++i) {
+        PLUG_PORT *const cur_port = &(plug->ports[i]);
+        if (!cur_port)
+            continue;
+        const LilvNode *port_name =
+            lilv_port_get_symbol(plug->plug, cur_port->lilv_port);
+        if (strcmp(lilv_node_as_string(port_name), name) == 0) {
+            return cur_port;
+        }
+    }
+    return NULL;
+}
+
+static void plug_set_value_direct(const char *port_symbol, void *data,
+                                  const void *value, uint32_t size,
+                                  uint32_t type) {
+    (void)size;
+    PLUG_PLUG *plug = (PLUG_PLUG *)data;
+    if (!plug)
+        return;
+    PLUG_PORT *port = plug_find_port_by_name(plug, port_symbol);
+    if (!port)
+        return;
+    float fvalue = 0.0f;
+    if (type == plug->forge.Float) {
+        fvalue = *(const float *)value;
+    } else if (type == plug->forge.Double) {
+        fvalue = *(const double *)value;
+    } else if (type == plug->forge.Int) {
+        fvalue = *(const int32_t *)value;
+    } else if (type == plug->forge.Long) {
+        fvalue = *(const int64_t *)value;
+    } else {
+        return;
+    }
+
+    port->control = fvalue;
+}
+
 int plug_load_preset(PLUG_INFO *plug_data, unsigned int plug_id,
                      const char *preset_name) {
     if (!plug_data)
         return -1;
     if (!preset_name)
         return -1;
-    if (plug_id >= MAX_INSTANCES || plug_id < 0)
+    if (plug_id >= MAX_INSTANCES)
         return -1;
     PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
     context_sub_wait_for_stop(plug_data->control_data, (void *)plug);
@@ -1018,6 +1063,8 @@ int plug_load_preset(PLUG_INFO *plug_data, unsigned int plug_id,
 
     // TODO we could check here if the plugin allows safe_restore, if yes we
     // would not need to pause the rt process.
+    // TODO not used at all, check the bug a bit further down
+    /*
     const LV2_Feature *state_features[9] = {
         &(plug->features.map_feature),
         &(plug->features.unmap_feature),
@@ -1027,6 +1074,7 @@ int plug_load_preset(PLUG_INFO *plug_data, unsigned int plug_id,
         &(plug->features.log_feature),
         &(plug->features.options_feature),
         NULL};
+        */
 
     // TODO here depending if the plug has safe_restore or does not we send
     // different set port values functions one sets the values directly (if
@@ -1099,7 +1147,7 @@ static void plug_set_display_name(PLUG_PLUG *plug) {
 }
 
 // classifies an LV2 control's value - used only to decide the size of this
-// control's param increment (see the controls loop below, val_t). 
+// control's param increment (see the controls loop below, val_t).
 enum appReturnType {
     Uchar_type = 0x01,
     Int_type = 0x02,
@@ -1113,385 +1161,6 @@ enum appReturnType {
     Curve_Float_Return_Type = 0x06
 };
 
-uint32_t plug_load_and_activate(void *plugin_item) {
-    PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM*)plugin_item;
-    if (!plugin_list_item)
-        return 0;
-    PLUG_INFO *plug_data = plugin_list_item->plug_data;
-    if (!plug_data) {
-        return 0;
-    }
-    if (!plug_data->lv_world) {
-        return 0;
-    }
-
-    const LilvPlugin *plugins = lilv_world_get_all_plugins(plug_data->lv_world);
-    LilvNode *name_uri = lilv_new_uri(plug_data->lv_world, plugin_list_item->plugin_path);
-    const LilvPlugin *plugin = lilv_plugins_get_by_uri(plugins, name_uri);
-    lilv_node_free(name_uri);
-    if (!plugin) {
-        return 0;
-    }
-    int plug_id = -1;
-    // find next empty plugin and fill it in
-    for (int i = 0; i < MAX_INSTANCES; i++) {
-        PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
-        if (cur_plug->plug_instance)
-            continue;
-        plug_id = cur_plug->id;
-        break;
-    }
-
-    if (plug_id == -1 || plug_id >= MAX_INSTANCES)
-        return 0;
-
-    PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
-    // just in case clean the plugin up
-    plug_stop_and_remove_plug((void*)plug);
-
-    plug->plug = plugin;
-
-    zix_sem_init(&(plug->work_lock), 1);
-    // check safe restore
-    LilvNode *state_threadSafeRestore =
-        lilv_new_uri(plug_data->lv_world, LV2_STATE__threadSafeRestore);
-    if (lilv_plugin_has_feature(plug->plug, state_threadSafeRestore)) {
-        plug->safe_restore = true;
-    }
-    lilv_node_free(state_threadSafeRestore);
-    // init features that have no data
-    const LV2_Feature static_features[] = {
-        {LV2_STATE__loadDefaultState, NULL},
-        {LV2_BUF_SIZE__powerOf2BlockLength, NULL},
-        {LV2_BUF_SIZE__fixedBlockLength, NULL},
-        {LV2_BUF_SIZE__boundedBlockLength, NULL}};
-    // build the features list to pass to plugins
-    const LV2_Feature *const features[] = {
-        &(plug->features.map_feature),
-        &(plug->features.unmap_feature),
-        &(plug->features.sched_feature),
-        &(plug->features.state_sched_feature),
-        &(plug->features.log_feature),
-        &(plug->features.safe_restore_feature),
-        &(plug->features.options_feature),
-        &static_features[0],
-        &static_features[1],
-        &static_features[2],
-        &static_features[3],
-        NULL};
-
-    plug->feature_list = (const LV2_Feature **)calloc(1, sizeof(features));
-    if (!plug->feature_list) {
-        plug_stop_and_remove_plug((void*)plug);
-        return 0;
-    }
-    memcpy(plug->feature_list, features, sizeof(features));
-    // instantiate and activate the plugin
-    plug->plug_instance = lilv_plugin_instantiate(
-        plugin, plug_data->sample_rate, plug->feature_list);
-
-    // Create workers if necessary
-    if (lilv_plugin_has_extension_data(plug->plug,
-                                       plug_data->nodes.work_interface)) {
-        plug->worker = jalv_worker_new(&(plug->work_lock), true);
-        plug->features.sched.handle = plug->worker;
-        if (plug->safe_restore) {
-            plug->state_worker = jalv_worker_new(&(plug->work_lock), false);
-            plug->features.ssched.handle = plug->state_worker;
-        }
-    }
-    // somethings need to get instance
-    plug->features.ext_data.data_access =
-        lilv_instance_get_descriptor(plug->plug_instance)->extension_data;
-    const LV2_Worker_Interface *worker_iface =
-        (const LV2_Worker_Interface *)lilv_instance_get_extension_data(
-            plug->plug_instance, LV2_WORKER__interface);
-    jalv_worker_start(plug->worker, worker_iface,
-                      plug->plug_instance->lv2_handle);
-    jalv_worker_start(plug->state_worker, worker_iface,
-                      plug->plug_instance->lv2_handle);
-
-    // create the ports on audio_client from the sys_ports
-    if (plug_activate_backend_ports(plug_data, plug) != 0) {
-        plug_stop_and_remove_plug((void*)plug);
-        return 0;
-    }
-
-    //--------------------------------------------------
-    // create controls if they are properties and not ports
-    plug_create_properties(plug_data, plug, true);
-    plug_create_properties(plug_data, plug, false);
-    //--------------------------------------------------
-
-    // go through all created controls and create a param for each of them.
-    // params are created in the same order as plug->controls, which never
-    // reorders/resyncs after load - val_id is kept in lockstep with plug->
-    // controls' own indices, since plug_run_rt later indexes params by the
-    // same ctrl_iter it uses for plug->controls - a gap here would desync
-    // every param after it. uid is unrelated to val_id - passed as 0 so
-    // params.c mints it; owner_id stays 0 too, this module has no external
-    // id space to put there.
-    if (plug->controls) {
-        PRM_CONTAIN *plug_params = params_init_param_container(NULL);
-
-        for (unsigned int ct_iter = 0; ct_iter < plug->num_controls;
-             ct_iter++) {
-            PLUG_CONTROL *cur_ctrl = plug->controls[ct_iter];
-            if (!cur_ctrl) {
-                param_add_param(plug_params, "", 0, 0, 0, 0, 0, 0, 0, NULL);
-                continue;
-            }
-
-            const char *param_name = lilv_node_as_string(cur_ctrl->symbol);
-            if (!param_name)
-                param_name = "";
-            PARAM_T param_val = 0;
-            if (lilv_node_is_float(cur_ctrl->def) == 1 ||
-                lilv_node_is_int(cur_ctrl->def) == 1) {
-                param_val = lilv_node_as_float(cur_ctrl->def);
-            }
-            PARAM_T param_min = lilv_node_as_float(cur_ctrl->min);
-            PARAM_T param_max = lilv_node_as_float(cur_ctrl->max);
-
-            unsigned char val_t = Float_type;
-            if (cur_ctrl->is_integer || cur_ctrl->is_toggle) {
-                val_t = Int_type;
-            }
-            if (cur_ctrl->is_enumeration) {
-                val_t = String_Return_Type;
-            }
-            // TODO now if the param is not writable it will simply have
-            // increment of 0 and the user wont be able to increase or decrease
-            // it should have a property for this parameter to not send it to
-            // ui_to_rt ring buffer and only get its value from the plugin
-            PARAM_T cur_inc = 0;
-            if (cur_ctrl->is_writable == 1) {
-                // decide how big the increment of the parameter will be
-                PARAM_T total_range = param_max - param_min;
-                if (total_range < 0)
-                    total_range *= -1;
-                cur_inc = 1;
-                if (val_t == Float_type) {
-                    cur_inc = total_range * 0.01;
-                }
-                if (val_t == Int_type) {
-                    if (total_range <= 10)
-                        cur_inc = 1;
-                    if (total_range <= 100)
-                        cur_inc = 5;
-                    if (total_range <= 1000)
-                        cur_inc = 10;
-                    if (total_range > 1000)
-                        cur_inc = (unsigned int)(total_range * 0.05);
-                }
-                if (cur_ctrl->is_toggle)
-                    cur_inc = 1;
-                if (cur_ctrl->is_enumeration)
-                    cur_inc = 1;
-            }
-            uint32_t p_flags = 0;
-            if (cur_ctrl->is_writable == 0)
-                p_flags |= PARAM_FLAG_READONLY;
-            if (cur_ctrl->is_enumeration)
-                p_flags |= PARAM_FLAG_ENUM;
-            param_add_param(plug_params, param_name, param_val, param_min,
-                            param_max, cur_inc, 0, 0, p_flags, NULL);
-        }
-        // TODO val_to_string callback reading them straight from plug->controls
-        // can be added here whenever something actually calls
-        // param_get_value_as_string for this container (nothing does yet -
-        // params are not wired into any UI at this stage)
-
-        plug->plug_params = plug_params;
-    }
-
-    plug->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
-    if (!plug->midi_cont) {
-        plug_stop_and_remove_plug((void*)plug);
-        return 0;
-    }
-
-    // activate the plugin instance
-    lilv_instance_activate(plug->plug_instance);
-    plug->plug_instance_activated = 1;
-    plug->plug_data = plug_data;
-    // assign the identity uid once, at load
-    plug->uid = ++plug_data->next_plug_uid;
-    // build the display name once, now that plug->plug and plug->id are set
-    plug_set_display_name(plug);
-    // wait for the plugin to start processing
-    context_sub_wait_for_start(plug_data->control_data, (void *)plug);
-    plug_data->plugins_dirty = true;
-
-    return plug->uid;
-}
-
-void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx){
-    if(!plug_data)
-        return NULL;
-
-    // the plugins array can have gaps, walk the occupied slots in order and
-    // return the idx-th one; NULL once idx is past the last occupied slot
-    unsigned int found = 0;
-    for(unsigned int i = 0; i < MAX_INSTANCES; i++){
-        PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
-        if(!cur_plug->plug_instance)
-            continue;
-        if(found == idx)
-            return (void *)cur_plug;
-        found++;
-    }
-    return NULL;
-}
-
-const char *plug_plugin_name(void *plug){
-    PLUG_PLUG *cur_plug = (PLUG_PLUG*)plug;
-    if(!cur_plug)
-        return NULL;
-    if(!cur_plug->plug_instance)
-        return NULL;
-
-    return cur_plug->name;
-}
-
-uint32_t plug_plugin_uid(void *plug){
-    PLUG_PLUG *cur_plug = (PLUG_PLUG*)plug;
-    if(!cur_plug)
-        return 0;
-    return cur_plug->uid;
-}
-
-bool plug_plugins_is_dirty(PLUG_INFO *plug_data){
-    if(!plug_data)
-        return false;
-    bool is_dirty = plug_data->plugins_dirty;
-    plug_data->plugins_dirty = false;
-    return is_dirty;
-}
-
-static void plug_set_value_direct(const char *port_symbol, void *data,
-                                  const void *value, uint32_t size,
-                                  uint32_t type) {
-    PLUG_PLUG *plug = (PLUG_PLUG *)data;
-    if (!plug)
-        return;
-    PLUG_PORT *port = plug_find_port_by_name(plug, port_symbol);
-    if (!port)
-        return;
-    float fvalue = 0.0f;
-    if (type == plug->forge.Float) {
-        fvalue = *(const float *)value;
-    } else if (type == plug->forge.Double) {
-        fvalue = *(const double *)value;
-    } else if (type == plug->forge.Int) {
-        fvalue = *(const int32_t *)value;
-    } else if (type == plug->forge.Long) {
-        fvalue = *(const int64_t *)value;
-    } else {
-        return;
-    }
-
-    port->control = fvalue;
-}
-
-static PLUG_PORT *plug_find_port_by_name(PLUG_PLUG *plug, const char *name) {
-    if (!plug)
-        return NULL;
-    if (!name)
-        return NULL;
-    for (uint32_t i = 0; i < plug->num_ports; ++i) {
-        PLUG_PORT *const cur_port = &(plug->ports[i]);
-        if (!cur_port)
-            continue;
-        const LilvNode *port_name =
-            lilv_port_get_symbol(plug->plug, cur_port->lilv_port);
-        if (strcmp(lilv_node_as_string(port_name), name) == 0) {
-            return cur_port;
-        }
-    }
-    return NULL;
-}
-// compare scale points for sorting
-static int scale_point_cmp(const ScalePoint *a, const ScalePoint *b) {
-    if (a->value < b->value) {
-        return -1;
-    }
-
-    if (a->value == b->value) {
-        return 0;
-    }
-
-    return 1;
-}
-// create a control from control port
-static PLUG_CONTROL *
-new_port_control(LilvWorld *const world, const LilvPlugin *const plugin,
-                 const LilvPort *const port, uint32_t port_index,
-                 const float sample_rate, const PLUG_NODES *const nodes,
-                 LV2_Atom_Forge *forge) {
-    PLUG_CONTROL *id = (PLUG_CONTROL *)calloc(1, sizeof(PLUG_CONTROL));
-    if (!id)
-        return NULL;
-    id->property = 0;
-    id->type = PORT;
-    id->node = lilv_node_duplicate(lilv_port_get_node(plugin, port));
-    id->symbol = lilv_node_duplicate(lilv_port_get_symbol(plugin, port));
-    id->label = lilv_port_get_name(plugin, port);
-    id->index = port_index;
-    id->group = lilv_port_get(plugin, port, nodes->pg_group);
-    id->value_type = forge->Float;
-    id->is_writable = lilv_port_is_a(plugin, port, nodes->lv2_InputPort);
-    id->is_readable = lilv_port_is_a(plugin, port, nodes->lv2_OutputPort);
-    id->is_toggle = lilv_port_has_property(plugin, port, nodes->lv2_toggled);
-    id->is_integer = lilv_port_has_property(plugin, port, nodes->lv2_integer);
-
-    id->is_enumeration =
-        lilv_port_has_property(plugin, port, nodes->lv2_enumeration);
-    id->is_logarithmic =
-        lilv_port_has_property(plugin, port, nodes->pprops_logarithmic);
-
-    lilv_port_get_range(plugin, port, &id->def, &id->min, &id->max);
-    if (lilv_port_has_property(plugin, port, nodes->lv2_sampleRate)) {
-        if (lilv_node_is_float(id->min) || lilv_node_is_int(id->min)) {
-            const float min = lilv_node_as_float(id->min) * sample_rate;
-            lilv_node_free(id->min);
-            id->min = lilv_new_float(world, min);
-        }
-        if (lilv_node_is_float(id->max) || lilv_node_is_int(id->max)) {
-            const float max = lilv_node_as_float(id->max) * sample_rate;
-            lilv_node_free(id->max);
-            id->max = lilv_new_float(world, max);
-        }
-    }
-
-    LilvScalePoints *sp = lilv_port_get_scale_points(plugin, port);
-    id->points = NULL;
-    if (sp) {
-        id->points = (ScalePoint *)malloc(lilv_scale_points_size(sp) *
-                                          sizeof(ScalePoint));
-        size_t np = 0;
-        if (id->points) {
-            LILV_FOREACH(scale_points, s, sp) {
-                const LilvScalePoint *p = lilv_scale_points_get(sp, s);
-                if (lilv_node_is_float(lilv_scale_point_get_value(p)) ||
-                    lilv_node_is_int(lilv_scale_point_get_value(p))) {
-                    id->points[np].value =
-                        lilv_node_as_float(lilv_scale_point_get_value(p));
-                    id->points[np].label = strdup(
-                        lilv_node_as_string(lilv_scale_point_get_label(p)));
-                    ++np;
-                }
-            }
-        }
-
-        qsort(id->points, np, sizeof(ScalePoint),
-              (int (*)(const void *, const void *))scale_point_cmp);
-        id->n_points = np;
-        lilv_scale_points_free(sp);
-    }
-
-    return id;
-}
 // create a control from property (not a port control)
 static PLUG_CONTROL *new_property_control(LilvWorld *const world,
                                           const LilvNode *property,
@@ -1594,6 +1263,357 @@ static void plug_create_properties(PLUG_INFO *plug_data, PLUG_PLUG *plug,
     lilv_nodes_free(properties);
     lilv_node_free(patch_readable);
     lilv_node_free(patch_writable);
+}
+
+uint32_t plug_load_and_activate(void *plugin_item) {
+    PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
+    if (!plugin_list_item)
+        return 0;
+    PLUG_INFO *plug_data = plugin_list_item->plug_data;
+    if (!plug_data) {
+        return 0;
+    }
+    if (!plug_data->lv_world) {
+        return 0;
+    }
+
+    const LilvPlugin *plugins = lilv_world_get_all_plugins(plug_data->lv_world);
+    LilvNode *name_uri =
+        lilv_new_uri(plug_data->lv_world, plugin_list_item->plugin_path);
+    const LilvPlugin *plugin = lilv_plugins_get_by_uri(plugins, name_uri);
+    lilv_node_free(name_uri);
+    if (!plugin) {
+        return 0;
+    }
+    int plug_id = -1;
+    // find next empty plugin and fill it in
+    for (int i = 0; i < MAX_INSTANCES; i++) {
+        PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
+        if (cur_plug->plug_instance)
+            continue;
+        plug_id = cur_plug->id;
+        break;
+    }
+
+    if (plug_id == -1 || plug_id >= MAX_INSTANCES)
+        return 0;
+
+    PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
+    // just in case clean the plugin up
+    plug_stop_and_remove_plug((void *)plug);
+
+    plug->plug = plugin;
+
+    zix_sem_init(&(plug->work_lock), 1);
+    // check safe restore
+    LilvNode *state_threadSafeRestore =
+        lilv_new_uri(plug_data->lv_world, LV2_STATE__threadSafeRestore);
+    if (lilv_plugin_has_feature(plug->plug, state_threadSafeRestore)) {
+        plug->safe_restore = true;
+    }
+    lilv_node_free(state_threadSafeRestore);
+    // init features that have no data
+    const LV2_Feature static_features[] = {
+        {LV2_STATE__loadDefaultState, NULL},
+        {LV2_BUF_SIZE__powerOf2BlockLength, NULL},
+        {LV2_BUF_SIZE__fixedBlockLength, NULL},
+        {LV2_BUF_SIZE__boundedBlockLength, NULL}};
+    // build the features list to pass to plugins
+    const LV2_Feature *const features[] = {
+        &(plug->features.map_feature),
+        &(plug->features.unmap_feature),
+        &(plug->features.sched_feature),
+        &(plug->features.state_sched_feature),
+        &(plug->features.log_feature),
+        &(plug->features.safe_restore_feature),
+        &(plug->features.options_feature),
+        &static_features[0],
+        &static_features[1],
+        &static_features[2],
+        &static_features[3],
+        NULL};
+
+    plug->feature_list = (const LV2_Feature **)calloc(1, sizeof(features));
+    if (!plug->feature_list) {
+        plug_stop_and_remove_plug((void *)plug);
+        return 0;
+    }
+    memcpy(plug->feature_list, features, sizeof(features));
+    // instantiate and activate the plugin
+    plug->plug_instance = lilv_plugin_instantiate(
+        plugin, plug_data->sample_rate, plug->feature_list);
+
+    // Create workers if necessary
+    if (lilv_plugin_has_extension_data(plug->plug,
+                                       plug_data->nodes.work_interface)) {
+        plug->worker = jalv_worker_new(&(plug->work_lock), true);
+        plug->features.sched.handle = plug->worker;
+        if (plug->safe_restore) {
+            plug->state_worker = jalv_worker_new(&(plug->work_lock), false);
+            plug->features.ssched.handle = plug->state_worker;
+        }
+    }
+    // somethings need to get instance
+    plug->features.ext_data.data_access =
+        lilv_instance_get_descriptor(plug->plug_instance)->extension_data;
+    const LV2_Worker_Interface *worker_iface =
+        (const LV2_Worker_Interface *)lilv_instance_get_extension_data(
+            plug->plug_instance, LV2_WORKER__interface);
+    jalv_worker_start(plug->worker, worker_iface,
+                      plug->plug_instance->lv2_handle);
+    jalv_worker_start(plug->state_worker, worker_iface,
+                      plug->plug_instance->lv2_handle);
+
+    // create the ports on audio_client from the sys_ports
+    if (plug_activate_backend_ports(plug_data, plug) != 0) {
+        plug_stop_and_remove_plug((void *)plug);
+        return 0;
+    }
+
+    //--------------------------------------------------
+    // create controls if they are properties and not ports
+    plug_create_properties(plug_data, plug, true);
+    plug_create_properties(plug_data, plug, false);
+    //--------------------------------------------------
+
+    // go through all created controls and create a param for each of them.
+    // params are created in the same order as plug->controls, which never
+    // reorders/resyncs after load - val_id is kept in lockstep with plug->
+    // controls' own indices, since plug_run_rt later indexes params by the
+    // same ctrl_iter it uses for plug->controls - a gap here would desync
+    // every param after it. uid is passed as 0 so params.c mints it.
+    // owner_id is ct_iter + 1, the index into plug->controls (offset because
+    // 0 means "no owner id"). NEVER persist that index - it is in-memory
+    // only. It exists to reach the control's SYMBOL, plug->controls[owner_id
+    // - 1]->symbol, which is what LV2 state keys on and what a saved value
+    // has to be matched by.
+    if (plug->controls) {
+        PRM_CONTAIN *plug_params = params_init_param_container(NULL);
+
+        for (unsigned int ct_iter = 0; ct_iter < plug->num_controls;
+             ct_iter++) {
+            PLUG_CONTROL *cur_ctrl = plug->controls[ct_iter];
+            if (!cur_ctrl) {
+                param_add_param(plug_params, "", 0, 0, 0, 0, 0, ct_iter + 1, 0,
+                                0, NULL);
+                continue;
+            }
+
+            const char *param_name = lilv_node_as_string(cur_ctrl->symbol);
+            if (!param_name)
+                param_name = "";
+            PARAM_T param_val = 0;
+            if (lilv_node_is_float(cur_ctrl->def) == 1 ||
+                lilv_node_is_int(cur_ctrl->def) == 1) {
+                param_val = lilv_node_as_float(cur_ctrl->def);
+            }
+            PARAM_T param_min = lilv_node_as_float(cur_ctrl->min);
+            PARAM_T param_max = lilv_node_as_float(cur_ctrl->max);
+
+            unsigned char val_t = Float_type;
+            if (cur_ctrl->is_integer || cur_ctrl->is_toggle) {
+                val_t = Int_type;
+            }
+            if (cur_ctrl->is_enumeration) {
+                val_t = String_Return_Type;
+            }
+            // TODO now if the param is not writable it will simply have
+            // increment of 0 and the user wont be able to increase or decrease
+            // it should have a property for this parameter to not send it to
+            // ui_to_rt ring buffer and only get its value from the plugin
+            PARAM_T cur_inc = 0;
+            if (cur_ctrl->is_writable == 1) {
+                // decide how big the increment of the parameter will be
+                PARAM_T total_range = param_max - param_min;
+                if (total_range < 0)
+                    total_range *= -1;
+                cur_inc = 1;
+                if (val_t == Float_type) {
+                    cur_inc = total_range * 0.01;
+                }
+                if (val_t == Int_type) {
+                    if (total_range <= 10)
+                        cur_inc = 1;
+                    if (total_range <= 100)
+                        cur_inc = 5;
+                    if (total_range <= 1000)
+                        cur_inc = 10;
+                    if (total_range > 1000)
+                        cur_inc = (unsigned int)(total_range * 0.05);
+                }
+                if (cur_ctrl->is_toggle)
+                    cur_inc = 1;
+                if (cur_ctrl->is_enumeration)
+                    cur_inc = 1;
+            }
+            uint32_t p_flags = 0;
+            if (cur_ctrl->is_writable == 0)
+                p_flags |= PARAM_FLAG_READONLY;
+            if (cur_ctrl->is_enumeration)
+                p_flags |= PARAM_FLAG_ENUM;
+            param_add_param(plug_params, param_name, param_val, param_min,
+                            param_max, cur_inc, 0, ct_iter + 1, p_flags, 0,
+                            NULL);
+        }
+        // TODO val_to_string callback reading them straight from plug->controls
+        // can be added here whenever something actually calls
+        // param_get_value_as_string for this container (nothing does yet -
+        // params are not wired into any UI at this stage)
+
+        plug->plug_params = plug_params;
+    }
+
+    plug->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
+    if (!plug->midi_cont) {
+        plug_stop_and_remove_plug((void *)plug);
+        return 0;
+    }
+
+    // activate the plugin instance
+    lilv_instance_activate(plug->plug_instance);
+    plug->plug_instance_activated = 1;
+    plug->plug_data = plug_data;
+    // assign the identity uid once, at load
+    plug->uid = ++plug_data->next_plug_uid;
+    // build the display name once, now that plug->plug and plug->id are set
+    plug_set_display_name(plug);
+    // wait for the plugin to start processing
+    context_sub_wait_for_start(plug_data->control_data, (void *)plug);
+    plug_data->plugins_dirty = true;
+
+    return plug->uid;
+}
+
+void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx) {
+    if (!plug_data)
+        return NULL;
+
+    // the plugins array can have gaps, walk the occupied slots in order and
+    // return the idx-th one; NULL once idx is past the last occupied slot
+    unsigned int found = 0;
+    for (unsigned int i = 0; i < MAX_INSTANCES; i++) {
+        PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
+        if (!cur_plug->plug_instance)
+            continue;
+        if (found == idx)
+            return (void *)cur_plug;
+        found++;
+    }
+    return NULL;
+}
+
+const char *plug_plugin_name(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return NULL;
+    if (!cur_plug->plug_instance)
+        return NULL;
+
+    return cur_plug->name;
+}
+
+uint32_t plug_plugin_uid(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return 0;
+    return cur_plug->uid;
+}
+
+PRM_CONTAIN *plug_plugin_param_container(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return NULL;
+    return cur_plug->plug_params;
+}
+
+bool plug_plugins_is_dirty(PLUG_INFO *plug_data) {
+    if (!plug_data)
+        return false;
+    bool is_dirty = plug_data->plugins_dirty;
+    plug_data->plugins_dirty = false;
+    return is_dirty;
+}
+
+// compare scale points for sorting
+static int scale_point_cmp(const ScalePoint *a, const ScalePoint *b) {
+    if (a->value < b->value) {
+        return -1;
+    }
+
+    if (a->value == b->value) {
+        return 0;
+    }
+
+    return 1;
+}
+// create a control from control port
+static PLUG_CONTROL *
+new_port_control(LilvWorld *const world, const LilvPlugin *const plugin,
+                 const LilvPort *const port, uint32_t port_index,
+                 const float sample_rate, const PLUG_NODES *const nodes,
+                 LV2_Atom_Forge *forge) {
+    PLUG_CONTROL *id = (PLUG_CONTROL *)calloc(1, sizeof(PLUG_CONTROL));
+    if (!id)
+        return NULL;
+    id->property = 0;
+    id->type = PORT;
+    id->node = lilv_node_duplicate(lilv_port_get_node(plugin, port));
+    id->symbol = lilv_node_duplicate(lilv_port_get_symbol(plugin, port));
+    id->label = lilv_port_get_name(plugin, port);
+    id->index = port_index;
+    id->group = lilv_port_get(plugin, port, nodes->pg_group);
+    id->value_type = forge->Float;
+    id->is_writable = lilv_port_is_a(plugin, port, nodes->lv2_InputPort);
+    id->is_readable = lilv_port_is_a(plugin, port, nodes->lv2_OutputPort);
+    id->is_toggle = lilv_port_has_property(plugin, port, nodes->lv2_toggled);
+    id->is_integer = lilv_port_has_property(plugin, port, nodes->lv2_integer);
+
+    id->is_enumeration =
+        lilv_port_has_property(plugin, port, nodes->lv2_enumeration);
+    id->is_logarithmic =
+        lilv_port_has_property(plugin, port, nodes->pprops_logarithmic);
+
+    lilv_port_get_range(plugin, port, &id->def, &id->min, &id->max);
+    if (lilv_port_has_property(plugin, port, nodes->lv2_sampleRate)) {
+        if (lilv_node_is_float(id->min) || lilv_node_is_int(id->min)) {
+            const float min = lilv_node_as_float(id->min) * sample_rate;
+            lilv_node_free(id->min);
+            id->min = lilv_new_float(world, min);
+        }
+        if (lilv_node_is_float(id->max) || lilv_node_is_int(id->max)) {
+            const float max = lilv_node_as_float(id->max) * sample_rate;
+            lilv_node_free(id->max);
+            id->max = lilv_new_float(world, max);
+        }
+    }
+
+    LilvScalePoints *sp = lilv_port_get_scale_points(plugin, port);
+    id->points = NULL;
+    if (sp) {
+        id->points = (ScalePoint *)malloc(lilv_scale_points_size(sp) *
+                                          sizeof(ScalePoint));
+        size_t np = 0;
+        if (id->points) {
+            LILV_FOREACH(scale_points, s, sp) {
+                const LilvScalePoint *p = lilv_scale_points_get(sp, s);
+                if (lilv_node_is_float(lilv_scale_point_get_value(p)) ||
+                    lilv_node_is_int(lilv_scale_point_get_value(p))) {
+                    id->points[np].value =
+                        lilv_node_as_float(lilv_scale_point_get_value(p));
+                    id->points[np].label = strdup(
+                        lilv_node_as_string(lilv_scale_point_get_label(p)));
+                    ++np;
+                }
+            }
+        }
+
+        qsort(id->points, np, sizeof(ScalePoint),
+              (int (*)(const void *, const void *))scale_point_cmp);
+        id->n_points = np;
+        lilv_scale_points_free(sp);
+    }
+
+    return id;
 }
 
 void plug_set_samplerate(PLUG_INFO *plug_data, float new_sample_rate) {
@@ -1766,6 +1786,34 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
     return 0;
 }
 
+static void plug_run_rt(PLUG_PLUG *plug, unsigned int nframes) {
+    if (!plug)
+        return;
+    if (!plug->plug_instance)
+        return;
+
+    LilvInstance *plug_instance = plug->plug_instance;
+    lilv_instance_run(plug_instance, nframes);
+
+    // Process workers for the plugin
+    LV2_Handle handle = lilv_instance_get_handle(plug->plug_instance);
+    jalv_worker_emit_responses(plug->worker, handle);
+    jalv_worker_emit_responses(plug->state_worker, handle);
+    jalv_worker_end_run(plug->worker);
+}
+
+int plug_stop_and_remove_plug(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return -1;
+    if (!cur_plug->plug_data)
+        return -1;
+    // first stop the plugin process
+    context_sub_wait_for_stop(cur_plug->plug_data->control_data,
+                              (void *)cur_plug);
+    return plug_remove_plug(cur_plug->plug_data, cur_plug->id);
+}
+
 void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
     if (!plug_data) {
         return;
@@ -1823,7 +1871,7 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                             plug->midi_cont->types[i],
                             plug->midi_cont->note_pitches[i],
                             plug->midi_cont->vel_trig[i]};
-                        int write = plug_evbuf_write(
+                        plug_evbuf_write(
                             &iter_buf, plug->midi_cont->nframe_nums[i], 0,
                             cur_port->port_type_urid,
                             plug->midi_cont->buf_size[i], midi_msg);
@@ -1838,13 +1886,13 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                 float bpm = plug_data->bpm;
                 float beat_type = 0;
                 float beats_per_bar = 0;
-                unsigned int tr_playing = app_jack_return_transport_rt(
+                int tr_playing = app_jack_return_transport_rt(
                     plug_data->audio_backend, &cur_bar, &cur_beat, &cur_tick,
                     &ticks_per_beat, &total_frames, &bpm, &beat_type,
                     &beats_per_bar);
                 if (tr_playing != -1) {
                     unsigned int pos_change = 0;
-                    pos_change = (tr_playing != plug_data->isPlaying ||
+                    pos_change = (tr_playing != (int)plug_data->isPlaying ||
                                   total_frames != plug_data->posFrame ||
                                   bpm != plug_data->bpm);
                     if (pos_change) {
@@ -1921,7 +1969,7 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
             }
 
             if (cur_control->type == PROPERTY) {
-                if (plug->control_in < plug->num_ports &&
+                if (plug->control_in < (int)plug->num_ports &&
                     plug->control_in != -1 && plug->controls) {
                     PLUG_PORT *const control_port =
                         &(plug->ports[plug->control_in]);
@@ -1984,14 +2032,13 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                 if (plug_data->rt_tick == 0) {
                     // set the val on param container
                     param_set_value_rt(plug->plug_params, cur_port->param_index,
-                                    cur_port->control);
+                                       cur_port->control);
                     // get the parameter value, so the parameter is_changed will
                     // be 0, otherwise on next cycle this parameter value will
                     // be sent to the plugin no need for that since we got this
                     // value from the plugin already
-                    unsigned char param_val_type = 0;
-                    PARAM_T param_value = param_get_value(
-                        plug->plug_params, cur_port->param_index, 1);
+                    param_get_value(plug->plug_params, cur_port->param_index,
+                                    1);
                 }
             }
             if (cur_port->type == PORT_TYPE_EVENT) {
@@ -2028,33 +2075,6 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
             }
         }
     }
-}
-
-static void plug_run_rt(PLUG_PLUG *plug, unsigned int nframes) {
-    if (!plug)
-        return;
-    if (!plug->plug_instance)
-        return;
-
-    LilvInstance *plug_instance = plug->plug_instance;
-    lilv_instance_run(plug_instance, nframes);
-
-    // Process workers for the plugin
-    LV2_Handle handle = lilv_instance_get_handle(plug->plug_instance);
-    jalv_worker_emit_responses(plug->worker, handle);
-    jalv_worker_emit_responses(plug->state_worker, handle);
-    jalv_worker_end_run(plug->worker);
-}
-
-int plug_stop_and_remove_plug(void *plug) {
-    PLUG_PLUG *cur_plug = (PLUG_PLUG*) plug;
-    if(!cur_plug)
-        return -1;
-    if(!cur_plug->plug_data)
-        return -1;
-    // first stop the plugin process
-    context_sub_wait_for_stop(cur_plug->plug_data->control_data, (void *)cur_plug);
-    return plug_remove_plug(cur_plug->plug_data, cur_plug->id);
 }
 
 void plug_clean_memory(PLUG_INFO *plug_data) {

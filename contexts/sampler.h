@@ -31,9 +31,6 @@ uint32_t smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id);
 //process the samples and return summed audio buffer
 //uses one callback to get_buffer from the sys_ports and another to get_notes from the midi sys_port
 int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes);
-//some the cur_smp buffer to out_L and out_R according to the number of channels of cur_smp
-static void smp_sum_channel_buffers_rt(SMP_SMP* cur_smp, SAMPLE_T* out_L, SAMPLE_T* out_R,
-				       SAMPLE_T mult, int chans);
 //copy to new malloced string and return the file path of the sample
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id);
 //return the idx-th loaded sample (walking occupied slots in order), NULL past
@@ -46,6 +43,9 @@ const char* smp_sample_name(void* smp);
 //return the sample's monotonic identity uid (0 on error). Assigned at load,
 //never reused for a different sample.
 uint32_t smp_sample_uid(void* smp);
+
+// return this sample's own param container, NULL on error/none yet
+PRM_CONTAIN *smp_sample_param_container(void *smp);
 //return (and clear) whether the samples array changed since the last call
 bool smp_samples_is_dirty(SMP_INFO* smp_data);
 //stop processing the sample and remove it. smp is a SMP_SMP* (e.g. from

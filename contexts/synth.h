@@ -29,9 +29,8 @@ const char* synth_osc_name(void* osc);
 //return the oscillator's identity uid (0 on error). Oscillators are fixed, so
 //this is just the (stable) slot number.
 uint32_t synth_osc_uid(void* osc);
-//clean the ports
-static int synth_clean_ports(SYNTH_DATA* synth_data, SYNTH_PORT** osc_ports, unsigned int num_ports);
-//clean one oscillator
-static int synth_clean_osc(SYNTH_DATA* synth_data, SYNTH_OSC* synth_osc);
+
+// return this oscillator's own param container, NULL on error/none yet
+PRM_CONTAIN *synth_osc_param_container(void *osc);
 //clean the synth data
 int synth_clean_memory(SYNTH_DATA* synth_data);

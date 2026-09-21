@@ -31,6 +31,9 @@ typedef struct _jack_info JACK_INFO;
 //function that initializes the client
 JACK_INFO* jack_initialize(void *arg, const char *client_name,
                            int(*process)(jack_nframes_t, void*));
+//return the transport param container (the Trk params), NULL on error
+PRM_CONTAIN* app_jack_trk_param_container(void* jack_data_handle);
+
 //read messages from ui on [audio-thread]
 //update parameters, pause jack process
 int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data);
@@ -44,10 +47,6 @@ void app_jack_clean_midi_cont(JACK_MIDI_CONT* midi_cont);
 JACK_MIDI_CONT* app_jack_init_midi_cont(unsigned int array_size);
 //reset all the arrays of the midi container to 0
 void app_jack_midi_cont_reset(JACK_MIDI_CONT* midi_cont);
-//initializes the ports
-static int init_jack_ports(JACK_INFO *jack_data, int ports_num, unsigned int* ports_types,
-		    unsigned int *io_types,
-		    const char** ports_names);
 //rename the port on client
 int app_jack_port_rename(void* client_in, void* port, const char* new_port_name);
 //register ports on a jack client if its known to the data
