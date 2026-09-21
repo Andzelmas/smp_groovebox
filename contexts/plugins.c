@@ -1389,13 +1389,22 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     // has to be matched by.
     if (plug->controls) {
         PRM_CONTAIN *plug_params = params_init_param_container(NULL);
+        // the lockstep above is an invariant, so check it rather than trust
+        // it: every add must land on val_id == ct_iter. A single failed add
+        // (-1) would shift every param after it and silently pair each one
+        // with the wrong control on the [audio-thread].
+        int lockstep_ok = 1;
 
         for (unsigned int ct_iter = 0; ct_iter < plug->num_controls;
              ct_iter++) {
             PLUG_CONTROL *cur_ctrl = plug->controls[ct_iter];
             if (!cur_ctrl) {
-                param_add_param(plug_params, "", 0, 0, 0, 0, 0, ct_iter + 1, 0,
-                                0, NULL);
+                if (param_add_param(plug_params, "", 0, 0, 0, 0, 0,
+                                    ct_iter + 1, 0, 0,
+                                    NULL) != (int)ct_iter) {
+                    lockstep_ok = 0;
+                    break;
+                }
                 continue;
             }
 
@@ -1417,10 +1426,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
             if (cur_ctrl->is_enumeration) {
                 val_t = String_Return_Type;
             }
-            // TODO now if the param is not writable it will simply have
-            // increment of 0 and the user wont be able to increase or decrease
-            // it should have a property for this parameter to not send it to
-            // ui_to_rt ring buffer and only get its value from the plugin
+
             PARAM_T cur_inc = 0;
             if (cur_ctrl->is_writable == 1) {
                 // decide how big the increment of the parameter will be
@@ -1451,9 +1457,17 @@ uint32_t plug_load_and_activate(void *plugin_item) {
                 p_flags |= PARAM_FLAG_READONLY;
             if (cur_ctrl->is_enumeration)
                 p_flags |= PARAM_FLAG_ENUM;
-            param_add_param(plug_params, param_name, param_val, param_min,
-                            param_max, cur_inc, 0, ct_iter + 1, p_flags, 0,
-                            NULL);
+            if (param_add_param(plug_params, param_name, param_val, param_min,
+                                param_max, cur_inc, 0, ct_iter + 1, p_flags, 0,
+                                NULL) != (int)ct_iter) {
+                lockstep_ok = 0;
+                break;
+            }
+        }
+        if (!lockstep_ok) {
+            param_clean_param_container(plug_params);
+            plug_stop_and_remove_plug((void *)plug);
+            return 0;
         }
         // TODO val_to_string callback reading them straight from plug->controls
         // can be added here whenever something actually calls

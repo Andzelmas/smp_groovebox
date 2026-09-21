@@ -26,7 +26,7 @@ static thread_local bool is_audio_thread = false;
 // using this number a table is built for converting semitones to frequency,
 // given the starting frequency
 #define MAX_SEMITONES 36
-// range of the A/D/R params (params 6/7/9 below) - shared by the init call and
+// range of the A/D/R params - shared by the init call and
 // synth_osc_build_value's curve mapping so they can't drift out of sync
 #define SYNTH_ADSR_TIME_MIN 0.0
 #define SYNTH_ADSR_TIME_MAX 5.0
@@ -43,7 +43,8 @@ static thread_local bool is_audio_thread = false;
 // and is what a saved value gets matched back by - never a positional index.
 // 0 stays reserved for "no owner id".
 enum synthOscParamId {
-    SYNTH_PARAM_AMP = 1,
+    SYNTH_PARAM_NONE = 0,
+    SYNTH_PARAM_AMP,
     SYNTH_PARAM_FREQ,
     SYNTH_PARAM_SPREAD,
     SYNTH_PARAM_WOBBLE,
@@ -53,6 +54,7 @@ enum synthOscParamId {
     SYNTH_PARAM_DECAY,
     SYNTH_PARAM_SUSTAIN,
     SYNTH_PARAM_RELEASE,
+    SYNTH_PARAM_COUNT
 };
 
 typedef struct _synth_adsr {
@@ -116,7 +118,12 @@ typedef struct _synth_osc {
     unsigned int num_voices;
     // parameter container for the oscillator
     PRM_CONTAIN *params;
-    // smooths the raw Amp param (index 0) on [audio-thread] reads
+    // val_ids from param_add_param, indexed by synthOscParamId so
+    // SYNTH_PARAM_NONE's slot is unused. The [audio-thread] indexes params by
+    // these - never by a literal position, and never via a lookup, which
+    // would scan.
+    int val_id[SYNTH_PARAM_COUNT];
+    // smooths the raw Amp param on [audio-thread] reads
     MATH_RAMP_VAL *amp_smooth;
     // which voice played last
     int last_voice;
@@ -183,7 +190,7 @@ typedef struct _synth_data {
     void *audio_backend;
     // this is control for [audio-thread] and [main-thread] sys communication
     //(since there is no need to remove and add the oscillators this is used
-    //right now only for thread safe message sending)
+    // right now only for thread safe message sending)
     CXCONTROL *control_data;
 } SYNTH_DATA;
 
@@ -269,7 +276,7 @@ static PARAM_T synth_osc_build_value(const void *user_data, int val_id,
                          val_curve);
     }
 
-    // Amp (param 0): smoothed so a fast knob turn doesn't click - only ever
+    // Amp: smoothed so a fast knob turn doesn't click - only ever
     // read this way on [audio-thread] (rt_params == 1), matching every
     // existing param_get_value call site for this param
     if (val_id == 0 && rt_params == 1) {
@@ -591,7 +598,7 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
             cur_voice->osc_table = NULL;
         }
 
-        // Amp (param 0) is smoothed on [audio-thread] reads by
+        // Amp is smoothed on [audio-thread] reads by
         // synth_osc_build_value
         cur_osc->amp_smooth =
             math_ramp_val_init(fabs(1.0 - 0.00001), SYNTH_AMP_INTERP_SAMPLES);
@@ -601,30 +608,36 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
                                                    .val_to_string = NULL};
         cur_osc->params = params_init_param_container(&osc_params_user_data);
         // uid 0 - params.c mints; owner_id is this module's own enum
-        param_add_param(cur_osc->params, "Amp", 0.8, 0.00001, 1, 0.01, 0,
-                        SYNTH_PARAM_AMP, 0, 0, NULL);
-        param_add_param(cur_osc->params, "Freq", 0, -12, 12, 0.1, 0,
-                        SYNTH_PARAM_FREQ, 0, 0, NULL);
-        param_add_param(cur_osc->params, "Spread", 0, 0, 1, 0.01, 0,
-                        SYNTH_PARAM_SPREAD, 0, 0, NULL);
-        param_add_param(cur_osc->params, "Wobble", 0, 0, 1, 0.05, 0,
-                        SYNTH_PARAM_WOBBLE, 0, 0, NULL);
-        param_add_param(
+        cur_osc->val_id[SYNTH_PARAM_AMP] =
+            param_add_param(cur_osc->params, "Amp", 0.8, 0.00001, 1, 0.01, 0,
+                            SYNTH_PARAM_AMP, 0, 0, NULL);
+        cur_osc->val_id[SYNTH_PARAM_FREQ] =
+            param_add_param(cur_osc->params, "Freq", 0, -12, 12, 0.1, 0,
+                            SYNTH_PARAM_FREQ, 0, 0, NULL);
+        cur_osc->val_id[SYNTH_PARAM_SPREAD] =
+            param_add_param(cur_osc->params, "Spread", 0, 0, 1, 0.01, 0,
+                            SYNTH_PARAM_SPREAD, 0, 0, NULL);
+        cur_osc->val_id[SYNTH_PARAM_WOBBLE] =
+            param_add_param(cur_osc->params, "Wobble", 0, 0, 1, 0.05, 0,
+                            SYNTH_PARAM_WOBBLE, 0, 0, NULL);
+        cur_osc->val_id[SYNTH_PARAM_OCTAVE] = param_add_param(
             cur_osc->params, "Octave", 0, ((MAX_SEMITONES - 12) / 12.0) * -1,
             (MAX_SEMITONES - 12) / 12.0, 1, 0, SYNTH_PARAM_OCTAVE, 0, 0, NULL);
-        param_add_param(cur_osc->params, "Table", 0, 0, 3, 1, 0,
-                        SYNTH_PARAM_TABLE, 0, 0, NULL);
-        param_add_param(cur_osc->params, "A", 0.0, SYNTH_ADSR_TIME_MIN,
-                        SYNTH_ADSR_TIME_MAX, 0.1, 0, SYNTH_PARAM_ATTACK, 0, 0,
-                        NULL);
-        param_add_param(cur_osc->params, "D", 0.0, SYNTH_ADSR_TIME_MIN,
-                        SYNTH_ADSR_TIME_MAX, 0.1, 0, SYNTH_PARAM_DECAY, 0, 0,
-                        NULL);
-        param_add_param(cur_osc->params, "S", 1.0, 0.0, 1.0, 0.01, 0,
-                        SYNTH_PARAM_SUSTAIN, 0, 0, NULL);
-        param_add_param(cur_osc->params, "R", 0.001, SYNTH_ADSR_TIME_MIN,
-                        SYNTH_ADSR_TIME_MAX, 0.1, 0, SYNTH_PARAM_RELEASE, 0, 0,
-                        NULL);
+        cur_osc->val_id[SYNTH_PARAM_TABLE] =
+            param_add_param(cur_osc->params, "Table", 0, 0, 3, 1, 0,
+                            SYNTH_PARAM_TABLE, 0, 0, NULL);
+        cur_osc->val_id[SYNTH_PARAM_ATTACK] = param_add_param(
+            cur_osc->params, "A", 0.0, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX,
+            0.1, 0, SYNTH_PARAM_ATTACK, 0, 0, NULL);
+        cur_osc->val_id[SYNTH_PARAM_DECAY] = param_add_param(
+            cur_osc->params, "D", 0.0, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX,
+            0.1, 0, SYNTH_PARAM_DECAY, 0, 0, NULL);
+        cur_osc->val_id[SYNTH_PARAM_SUSTAIN] =
+            param_add_param(cur_osc->params, "S", 1.0, 0.0, 1.0, 0.01, 0,
+                            SYNTH_PARAM_SUSTAIN, 0, 0, NULL);
+        cur_osc->val_id[SYNTH_PARAM_RELEASE] = param_add_param(
+            cur_osc->params, "R", 0.001, SYNTH_ADSR_TIME_MIN,
+            SYNTH_ADSR_TIME_MAX, 0.1, 0, SYNTH_PARAM_RELEASE, 0, 0, NULL);
 
         synth_activate_backend_ports(synth_data, cur_osc);
     }
@@ -755,16 +768,25 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
     memset(osc->buffer_R, '\0', sizeof(SAMPLE_T) * nframes);
 
     // interpolate the amp value
-    PARAM_T amp_in = param_get_value(osc->params, 0, 1);
-    PARAM_T freq_in = param_get_value(osc->params, 1, 1);
-    PARAM_T octave_in = param_get_value(osc->params, 4, 1);
-    PARAM_T wobble = param_get_value(osc->params, 3, 1);
-    PARAM_T spread = param_get_value(osc->params, 2, 1);
+    PARAM_T amp_in =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_AMP], 1);
+    PARAM_T freq_in =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_FREQ], 1);
+    PARAM_T octave_in =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_OCTAVE], 1);
+    PARAM_T wobble =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_WOBBLE], 1);
+    PARAM_T spread =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_SPREAD], 1);
     // get the adsr values from the user parameters
-    PARAM_T vco_a = param_get_value(osc->params, 6, 1);
-    PARAM_T vco_d = param_get_value(osc->params, 7, 1);
-    PARAM_T vco_s = param_get_value(osc->params, 8, 1);
-    PARAM_T vco_r = param_get_value(osc->params, 9, 1);
+    PARAM_T vco_a =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_ATTACK], 1);
+    PARAM_T vco_d =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_DECAY], 1);
+    PARAM_T vco_s =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_SUSTAIN], 1);
+    PARAM_T vco_r =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_RELEASE], 1);
 
     for (unsigned int i = 0; i < osc->num_voices; i++) {
         SYNTH_VOICE *cur_voice = &(osc->osc_voices[i]);
@@ -966,7 +988,8 @@ static void synth_play_osc_rt(SYNTH_OSC *osc, MIDI_DATA_T vel, MIDI_DATA_T note,
         // its set before playing the voice so the table does not change while
         // the sound is playing
         to_play_voice->osc_table = osc->sin_osc;
-        PARAM_T table = param_get_value(osc->params, 5, 1);
+        PARAM_T table =
+            param_get_value(osc->params, osc->val_id[SYNTH_PARAM_TABLE], 1);
         if (table == SIN_WAVETABLE)
             to_play_voice->osc_table = osc->sin_osc;
         if (table == TRIANGLE_WAVETABLE)
@@ -1105,11 +1128,7 @@ int synth_process_rt(SYNTH_DATA *synth_data, NFRAMES_T nframes) {
 
         // now process the voices of this oscilator
         // TODO this function could return the highest value or average added to
-        // the buffer Then could have a parameter that is readable only and
-        // update here and in app_data send it to rt_to_ui ring buffer (just go
-        //through just changed rt parameters at the end of the rt thread and
-        //write to rt_to_ui thread) This way could for example show the user
-        // what are the oscillator levels.
+        // the buffer Then could have a parameter that is readable only to show for exmaple Osc volume levels
         synth_process_osc_voices(synth_data, cur_osc, nframes);
     }
 

@@ -29,7 +29,9 @@
 //value gets matched back by - never a positional index. 0 stays reserved
 //for "no owner id".
 enum smpParamId {
-    SMP_PARAM_NOTE = 1,
+    SMP_PARAM_NONE = 0,
+    SMP_PARAM_NOTE,
+    SMP_PARAM_COUNT
 };
 
 static thread_local bool is_audio_thread = false;
@@ -55,6 +57,10 @@ typedef struct _smp_smp{
     int chans;
     //the parameter container, that holds the rt and ui param arrays
     PRM_CONTAIN* params;
+    //val_ids from param_add_param, indexed by smpParamId so SMP_PARAM_NONE's
+    //slot is unused. The [audio-thread] indexes params by these - never by a
+    //literal position, and never via a lookup, which would scan.
+    int val_id[SMP_PARAM_COUNT];
     //the sample buffer that holds the audio sample in memory has to be freed
     SAMPLE_T* buffer;
     //how many samples are loaded
@@ -184,6 +190,8 @@ static int smp_remove_sample(SMP_INFO* smp_data, unsigned int idx){
     cur_smp->playing = 0;
     cur_smp->samplerate = 0;
     cur_smp->samples_loaded = 0;
+    for (int i = 0; i < SMP_PARAM_COUNT; i++)
+        cur_smp->val_id[i] = -1;
 
     smp_data->samples_dirty = true;
 
@@ -319,9 +327,17 @@ uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {
     SMP_SMP *cur_smp = &(smp_data->samples[smp_id]);
     // init the sample parameters to default values
     cur_smp->params = params_init_param_container(NULL);
-    // uid 0 - params.c mints; owner_id is this module's own enum
-    param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0, SMP_PARAM_NOTE,
-                    0, 0, NULL);
+    // uid 0 - params.c mints; owner_id is this module's own enum. Keep the
+    // returned val_id: the [audio-thread] indexes the param by it.
+    cur_smp->val_id[SMP_PARAM_NOTE] =
+        param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0,
+                        SMP_PARAM_NOTE, 0, 0, NULL);
+    // a failed add returns -1, which would index out of range on the
+    //[audio-thread] later
+    if (cur_smp->val_id[SMP_PARAM_NOTE] < 0) {
+        param_clean_param_container(cur_smp->params);
+        cur_smp->params = NULL;
+    }
 
     // TODO samplerate is not needed, when we load sample to memory we also need
     // to convert it to the system sample rate, when system sample rate changes,
@@ -408,7 +424,8 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
 	if(cur_smp->chans<=0)continue;
 	if(cur_smp->samples_loaded <=0)continue;
 	//get the note parameter from the current samples rt_param array
-	unsigned char cur_note = (unsigned char)param_get_value(cur_smp->params, 0, 1);
+	unsigned char cur_note = (unsigned char)param_get_value(
+	    cur_smp->params, cur_smp->val_id[SMP_PARAM_NOTE], 1);
 	//go through the frames
 	//TODO really do not like that goes through each frame, but not sure how to find the
 	//midi event differently
