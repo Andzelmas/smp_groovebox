@@ -2,6 +2,7 @@
 #include <jack/jack.h>
 #include <jack/midiport.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include "../structs.h"
 #include "../contexts/params.h"
 //struct to keep midi events info
@@ -28,6 +29,17 @@ typedef struct _jack_midi_cont{
 //jack main struct
 typedef struct _jack_info JACK_INFO;
 
+// who a port registered by this client belongs to. Opaque to JACK - the port
+// list uses it to group ports by owner instead of parsing port names
+typedef enum {
+    PORT_OWNER_NONE = 0,
+    PORT_OWNER_MAIN,
+    PORT_OWNER_SAMPLER,
+    PORT_OWNER_LV2_PLUG,
+    PORT_OWNER_CLAP_PLUG,
+    PORT_OWNER_SYNTH,
+} PortOwnerKind;
+
 //function that initializes the client
 JACK_INFO* jack_initialize(void *arg, const char *client_name,
                            int(*process)(jack_nframes_t, void*));
@@ -50,8 +62,15 @@ void app_jack_midi_cont_reset(JACK_MIDI_CONT* midi_cont);
 //rename the port on client
 int app_jack_port_rename(void* client_in, void* port, const char* new_port_name);
 //register ports on a jack client if its known to the data
+//owner_kind/owner_uid identify what the port belongs to and are recorded
+//against its full jack name (see app_jack_port_owner)
 void* app_jack_create_port_on_client(void* client_in, unsigned int port_type, unsigned int io_type,
-					    const char* port_name);
+					    const char* port_name, PortOwnerKind owner_kind,
+					    uint64_t owner_uid);
+//owner recorded for the port with this full jack name ("client:port").
+//PORT_OWNER_NONE when this client did not register it. out_uid may be NULL
+PortOwnerKind app_jack_port_owner(JACK_INFO* jack_data, const char* port_name,
+                                  uint64_t* out_uid);
 //return the smaple rate of a jack client (of the server really)
 float app_jack_return_samplerate(JACK_INFO* jack_data);
 //return the buffer size

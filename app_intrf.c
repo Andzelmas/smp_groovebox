@@ -229,26 +229,6 @@ static CX *app_intrf_cx_create(APP_INTRF *app_intrf, CX *parent_cx,
     return new_cx;
 }
 
-// move the just-appended last child into position `to`, shifting the rest
-// right and renumbering every idx it passed. nav_cx_child_at reads display
-// order straight off this array, so a new node has to land where the data
-// layer put it; append-only would drift. Every insertion at its data index,
-// plus removals preserving the relative order of survivors, keeps the array
-// in data order by induction.
-static void app_intrf_cx_children_place_last(CX *parent, unsigned int to) {
-    if (!parent || parent->cx_children.count == 0)
-        return;
-    unsigned int last = parent->cx_children.count - 1;
-    if (to >= last)
-        return; // already where it belongs
-    CX *moved = parent->cx_children.contexts[last];
-    for (unsigned int i = last; i > to; i--)
-        parent->cx_children.contexts[i] = parent->cx_children.contexts[i - 1];
-    parent->cx_children.contexts[to] = moved;
-    for (unsigned int i = to; i <= last; i++)
-        parent->cx_children.contexts[i]->idx = (int)i;
-}
-
 // create children for the parent CX* recursively
 static void app_intrf_cx_children_create(APP_INTRF *app_intrf, CX *parent_cx) {
     if (!app_intrf)
@@ -368,11 +348,48 @@ static void app_intrf_cx_sweep(APP_INTRF *app_intrf, CX *parent_cx,
     }
 }
 
+// put parent_cx's child array into data order, keeping every idx equal to its
+// array position. nav_cx_child_at reads display order straight off this array,
+// so it has to match what the data layer reports. Children the data layer no
+// longer lists are left after the ordered ones rather than dropped.
+static void app_intrf_cx_children_reorder(APP_INTRF *app_intrf, CX *parent_cx) {
+    size_t n = data_child_count(&parent_cx->data);
+    unsigned int count = parent_cx->cx_children.count;
+    unsigned int w = 0;
+    for (size_t i = 0; i < n && w < count; i++) {
+        DataObject child;
+        if (!data_child_at(&parent_cx->data, i, &child))
+            continue;
+        ContextId cid = data_id(&child);
+        if (cid == CONTEXT_ID_NULL)
+            continue;
+        CX *cx = ht_get(app_intrf->cx_hashtable, cid);
+        if (!cx || cx->cx_parent != parent_cx)
+            continue;
+        if (cx->idx < 0 || (unsigned int)cx->idx >= count)
+            continue;
+        unsigned int cur = (unsigned int)cx->idx;
+        if (cur != w) {
+            CX *displaced = parent_cx->cx_children.contexts[w];
+            parent_cx->cx_children.contexts[w] = cx;
+            parent_cx->cx_children.contexts[cur] = displaced;
+            cx->idx = (int)w;
+            displaced->idx = (int)cur;
+        }
+        w++;
+    }
+}
+
 // ADD phase: create a CX for every data node that has none, top down. A node
 // created here has its whole subtree materialised by app_intrf_cx_children_
 // create, so there is nothing left to descend into; only an already-existing
 // node is recursed through.
-static void app_intrf_cx_add_missing(APP_INTRF *app_intrf, CX *parent_cx) {
+//
+// Creation appends, so the level is ordered once after it is built and only
+// then announced - CX_ADDED carries the final index. Survivors were stamped
+// by the MARK phase, so an unstamped child is one this pass created.
+static void app_intrf_cx_add_missing(APP_INTRF *app_intrf, CX *parent_cx,
+                                     uint64_t stamp) {
     size_t n = data_child_count(&parent_cx->data);
     for (size_t i = 0; i < n; i++) {
         DataObject child;
@@ -381,31 +398,30 @@ static void app_intrf_cx_add_missing(APP_INTRF *app_intrf, CX *parent_cx) {
         ContextId cid = data_id(&child);
         if (cid == CONTEXT_ID_NULL)
             continue;
-        CX *existing = ht_get(app_intrf->cx_hashtable, cid);
-        if (existing) {
-            // already ours - just keep walking down
-            if (existing->cx_parent == parent_cx) {
-                app_intrf_cx_add_missing(app_intrf, existing);
-                continue;
-            }
-            // live under a DIFFERENT parent, and the sweep didn't reach it,
-            // so it arrived from outside this subtree. Creating here would
-            // ht_set over the existing entry and strand the old CX, so leave
-            // it alone.
+        // already ours, or living under a DIFFERENT parent the sweep didn't
+        // reach - creating over that would ht_set the id and strand the old CX
+        if (ht_get(app_intrf->cx_hashtable, cid))
             continue;
-        }
         CX *created = app_intrf_cx_create(app_intrf, parent_cx, child);
         if (!created)
             continue;
-        // cx_create appends; put it at the index the data layer gave it, so
-        // the emitted CX_ADDED index is the real one too
-        app_intrf_cx_children_place_last(parent_cx, (unsigned int)i);
         app_intrf_cx_children_create(app_intrf, created);
-        // announce the new node only (its subtree, if any, is materialised
-        // fresh and no view could be tracking those ids yet)
-        app_intrf_emit(app_intrf, CX_ADDED, created->data_id,
-                       parent_cx->data_id,
-                       created->idx >= 0 ? (size_t)created->idx : 0);
+    }
+
+    app_intrf_cx_children_reorder(app_intrf, parent_cx);
+
+    for (unsigned int i = 0; i < parent_cx->cx_children.count; i++) {
+        CX *cx = parent_cx->cx_children.contexts[i];
+        if (!cx)
+            continue;
+        if (cx->sync_stamp != stamp) {
+            // announce the new node only - its subtree is materialised fresh
+            // and no view could be tracking those ids yet
+            app_intrf_emit(app_intrf, CX_ADDED, cx->data_id,
+                           parent_cx->data_id, (size_t)i);
+            continue;
+        }
+        app_intrf_cx_add_missing(app_intrf, cx, stamp);
     }
 }
 
@@ -427,7 +443,7 @@ static void app_intrf_cx_resync(APP_INTRF *app_intrf, CX *parent_cx) {
     app_intrf_cx_mark_desired(app_intrf, &parent_cx->data,
                               parent_cx->data_id, stamp);
     app_intrf_cx_sweep(app_intrf, parent_cx, stamp);
-    app_intrf_cx_add_missing(app_intrf, parent_cx);
+    app_intrf_cx_add_missing(app_intrf, parent_cx, stamp);
 }
 
 // drain the data layer's event queue and reconcile the CX tree. synchronous:

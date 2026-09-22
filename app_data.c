@@ -1473,13 +1473,17 @@ DataObject app_init(void) {
         (SAMPLE_T)app_jack_return_samplerate(app_data->trk_jack);
     // create ports for trk_jack
     app_data->main_in_L = app_jack_create_port_on_client(
-        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_INPUT, "master_in_L");
+        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_INPUT, "master_in_L",
+        PORT_OWNER_MAIN, 0);
     app_data->main_in_R = app_jack_create_port_on_client(
-        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_INPUT, "master_in_R");
+        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_INPUT, "master_in_R",
+        PORT_OWNER_MAIN, 0);
     app_data->main_out_L = app_jack_create_port_on_client(
-        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT, "master_out_L");
+        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT, "master_out_L",
+        PORT_OWNER_MAIN, 0);
     app_data->main_out_R = app_jack_create_port_on_client(
-        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT, "master_out_R");
+        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT, "master_out_R",
+        PORT_OWNER_MAIN, 0);
     // now activate the jack client, it will launch the rt thread
     // (trk_audio_process_rt function) but app_data->is_processing == 0, so the
     // contexts will not be processed, only app_data sys messages (to start the

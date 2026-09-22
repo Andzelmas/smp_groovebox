@@ -288,7 +288,8 @@ int smp_activate_backend_ports(SMP_INFO* smp_data){
     for(unsigned int i = 0; i < smp_data->num_ports; i++){
 	SMP_PORT* cur_port = &(smp_data->ports[i]);
 	cur_port->sys_port = app_jack_create_port_on_client(smp_data->audio_backend, cur_port->port_type,
-						     cur_port->port_flow, cur_port->port_name);
+						     cur_port->port_flow, cur_port->port_name,
+						     PORT_OWNER_SAMPLER, 0);
     }
     return 0;
 }

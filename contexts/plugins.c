@@ -1735,13 +1735,13 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
             cur_port->type = PORT_TYPE_AUDIO;
             cur_port->sys_port = app_jack_create_port_on_client(
                 plug_data->audio_backend, PORT_TYPE_AUDIO, port_io,
-                full_port_name);
+                full_port_name, PORT_OWNER_LV2_PLUG, plug->uid);
         } else if (lilv_port_is_a(plug->plug, cur_port->lilv_port,
                                   plug_data->nodes.lv2_CVPort)) {
             cur_port->type = PORT_TYPE_CV;
             cur_port->sys_port = app_jack_create_port_on_client(
                 plug_data->audio_backend, PORT_TYPE_AUDIO, port_io,
-                full_port_name);
+                full_port_name, PORT_OWNER_LV2_PLUG, plug->uid);
         } else if (lilv_port_is_a(plug->plug, cur_port->lilv_port,
                                   plug_data->nodes.atom_AtomPort)) {
             cur_port->type = PORT_TYPE_EVENT;
@@ -1750,7 +1750,7 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
                 cur_port->port_type_urid = plug_data->urids.midi_MidiEvent;
                 cur_port->sys_port = app_jack_create_port_on_client(
                     plug_data->audio_backend, PORT_TYPE_MIDI, port_io,
-                    full_port_name);
+                    full_port_name, PORT_OWNER_LV2_PLUG, plug->uid);
             }
             // ready the evbuf for the events
             //--------------------

@@ -423,7 +423,7 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO *plug_data, int id,
                     io_flow = PORT_FLOW_INPUT;
                 cur_sys_port->sys_ports[chan] = app_jack_create_port_on_client(
                     plug_data->audio_backend, PORT_TYPE_AUDIO, io_flow,
-                    full_port_name);
+                    full_port_name, PORT_OWNER_CLAP_PLUG, plug->uid);
                 if (!cur_sys_port->sys_ports[chan])
                     continue;
             }
@@ -594,7 +594,8 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO *plug_data, int id,
         if (input_ports == 1)
             io_flow = PORT_FLOW_INPUT;
         note_port->sys_ports[i] = app_jack_create_port_on_client(
-            plug_data->audio_backend, PORT_TYPE_MIDI, io_flow, full_port_name);
+            plug_data->audio_backend, PORT_TYPE_MIDI, io_flow, full_port_name,
+            PORT_OWNER_CLAP_PLUG, plug->uid);
         note_port->ids[i] = note_port_info.id;
         note_port->preferred_dialects[i] = note_port_info.preferred_dialect;
         note_port->supported_dialects[i] = note_port_info.supported_dialects;

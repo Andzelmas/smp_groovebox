@@ -32,6 +32,13 @@ enum trkParamId {
 
 static thread_local bool is_audio_thread = false;
 
+// one port this client registered, and what owns it
+typedef struct _port_owner {
+    char *name; // full "client:port", owned
+    PortOwnerKind kind;
+    uint64_t uid;
+} PORT_OWNER;
+
 // jack main struct
 typedef struct _jack_info {
     int port_size;
@@ -66,7 +73,73 @@ typedef struct _jack_info {
     // two ports are connected/disconnected (including by another program) -
     // read-and-cleared by app_jack_connections_changed.
     atomic_bool connections_changed;
+    // ownership of the ports this client registered, filled at registration.
+    // Foreign ports are simply absent
+    PORT_OWNER *port_owners;
+    size_t port_owner_count;
+    size_t port_owner_max;
 } JACK_INFO;
+
+static void port_owner_add(JACK_INFO *jack_data, const char *port_name,
+                           PortOwnerKind kind, uint64_t uid) {
+    if (!port_name || kind == PORT_OWNER_NONE)
+        return;
+    if (jack_data->port_owner_count == jack_data->port_owner_max) {
+        size_t new_max =
+            jack_data->port_owner_max ? jack_data->port_owner_max * 2 : 16;
+        PORT_OWNER *grown =
+            realloc(jack_data->port_owners, sizeof(PORT_OWNER) * new_max);
+        if (!grown)
+            return;
+        jack_data->port_owners = grown;
+        jack_data->port_owner_max = new_max;
+    }
+    char *name_copy = strdup(port_name);
+    if (!name_copy)
+        return;
+    jack_data->port_owners[jack_data->port_owner_count++] =
+        (PORT_OWNER){.name = name_copy, .kind = kind, .uid = uid};
+}
+
+// order carries no meaning here, so the hole is filled from the end
+static void port_owner_remove(JACK_INFO *jack_data, const char *port_name) {
+    if (!port_name)
+        return;
+    for (size_t i = 0; i < jack_data->port_owner_count; i++) {
+        if (strcmp(jack_data->port_owners[i].name, port_name) != 0)
+            continue;
+        free(jack_data->port_owners[i].name);
+        jack_data->port_owner_count--;
+        if (i != jack_data->port_owner_count)
+            jack_data->port_owners[i] =
+                jack_data->port_owners[jack_data->port_owner_count];
+        return;
+    }
+}
+
+static void port_owners_clean(JACK_INFO *jack_data) {
+    for (size_t i = 0; i < jack_data->port_owner_count; i++)
+        free(jack_data->port_owners[i].name);
+    free(jack_data->port_owners);
+    jack_data->port_owners = NULL;
+    jack_data->port_owner_count = 0;
+    jack_data->port_owner_max = 0;
+}
+
+PortOwnerKind app_jack_port_owner(JACK_INFO *jack_data, const char *port_name,
+                                  uint64_t *out_uid) {
+    if (!jack_data || !port_name)
+        return PORT_OWNER_NONE;
+    for (size_t i = 0; i < jack_data->port_owner_count; i++) {
+        if (strcmp(jack_data->port_owners[i].name, port_name) != 0)
+            continue;
+        if (out_uid)
+            *out_uid = jack_data->port_owners[i].uid;
+        return jack_data->port_owners[i].kind;
+    }
+    return PORT_OWNER_NONE;
+}
+
 // ticks per beat, since user should not set these anyway
 double time_ticks_per_beat = 1920.0;
 static int app_jack_sys_send_msg(void *user_data, const char *msg) {
@@ -110,6 +183,9 @@ JACK_INFO *jack_initialize(void *arg, const char *client_name,
     }
     jack_data->rt_tick = 0;
     jack_data->control_data = NULL;
+    jack_data->port_owners = NULL;
+    jack_data->port_owner_count = 0;
+    jack_data->port_owner_max = 0;
     atomic_init(&jack_data->ports_changed, false);
     atomic_init(&jack_data->connections_changed, false);
 
@@ -384,7 +460,9 @@ int app_jack_port_rename(void *client_in, void *port,
 
 void *app_jack_create_port_on_client(void *client_in, unsigned int port_type,
                                      unsigned int io_type,
-                                     const char *port_name) {
+                                     const char *port_name,
+                                     PortOwnerKind owner_kind,
+                                     uint64_t owner_uid) {
     JACK_INFO *jack_data = (JACK_INFO *)client_in;
     if (!jack_data)
         return NULL;
@@ -406,6 +484,9 @@ void *app_jack_create_port_on_client(void *client_in, unsigned int port_type,
     void *ret_port = jack_port_register(client, port_name, type, io_type, 0);
     if (!ret_port)
         return NULL;
+    // jack prefixes the client name, so record what the port list will see
+    port_owner_add(jack_data, jack_port_name((jack_port_t *)ret_port),
+                   owner_kind, owner_uid);
     return ret_port;
 }
 
@@ -654,6 +735,7 @@ void app_jack_unregister_port(void *client_in, void *port) {
         return;
     JACK_INFO *jack_data = (JACK_INFO *)client_in;
     jack_client_t *client = jack_data->client;
+    port_owner_remove(jack_data, jack_port_name((jack_port_t *)port));
     jack_port_unregister(client, port);
 }
 
@@ -669,6 +751,7 @@ void jack_clean_memory(void *jack_data_in) {
         param_clean_param_container(jack_data->trk_params);
 
     context_sub_clean(jack_data->control_data);
+    port_owners_clean(jack_data);
     free(jack_data);
 }
 

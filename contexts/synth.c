@@ -656,7 +656,7 @@ int synth_activate_backend_ports(SYNTH_DATA *synth_data, SYNTH_OSC *osc) {
         SYNTH_PORT *cur_port = &(osc->ports[i]);
         cur_port->sys_port = app_jack_create_port_on_client(
             synth_data->audio_backend, cur_port->port_type, cur_port->port_flow,
-            cur_port->port_name);
+            cur_port->port_name, PORT_OWNER_SYNTH, synth_osc_uid(osc));
     }
 
     return 0;
