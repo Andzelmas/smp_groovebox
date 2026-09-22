@@ -8,7 +8,10 @@
 #include <termios.h>
 #include <unistd.h>
 
+// limit the display to 10 rows before and after the hovered context
 #define SELECTED_DIST 10 // further away contexts from cx_selected will not be displayed
+#define VIEW_ROWS (SELECTED_DIST * 2 + 1) // hovered row + SELECTED_DIST either side
+
 #define ACTION_LIST_COUNT 5 // maximum possible actions for a context when returning DataAction
 #define ACTION_ARG_COUNT 4 // maximum possible DataArgSpec for a single DataAction
 #define STATES_COUNT 2 // how many states on this program
@@ -23,6 +26,17 @@ typedef struct _context_intrf_info{
     bool is_hidden; //is this context hidden (as informed by the data layer)
     const char* value; //value of a context with a value, BORROWED
 } CONTEXT_INTRF_INFO;
+
+// the slice of a parent's visible children that fits on screen, built around
+// the hovered one. Everything here is in *visible child* terms, so hidden
+// children never consume a row or trigger a truncation marker.
+typedef struct _child_view{
+    ContextId rows[VIEW_ROWS];
+    size_t row_count;
+    size_t hovered_row; // index into rows, row_count when nothing is hovered
+    bool more_before;   // visible children exist above rows[0]
+    bool more_after;    // ... and below rows[row_count - 1]
+} CHILD_VIEW;
 
 // one (context, action) pair still reachable this drill round, plus where in
 // its own label the next letter search should resume from if it survives
@@ -156,7 +170,138 @@ static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* ta
 }
 */
 
-// select previous child of parent (or next if next true).
+// ---------------------------------------------------------------------------
+// visible children. Navigation and rendering must agree on which children
+// exist, otherwise the cursor lands on rows that are never drawn - so every
+// index that travels between them goes through the helpers below.
+
+// a child is visible when it can be read and the data layer does not hide it.
+// Deliberately the same info_get the renderer uses, so "visible" always means
+// "will be drawn"
+static bool helper_child_visible_at(UI_LAYER* ui_layer, ContextId parent, size_t idx, ContextId* out_child){
+    ContextId child = ui_layer_context_child_at(ui_layer, parent, idx);
+    CONTEXT_INTRF_INFO info;
+    if(!helper_context_info_get(ui_layer, child, &info))
+        return false;
+    if(info.is_hidden)
+        return false;
+    if(out_child)
+        *out_child = child;
+    return true;
+}
+
+// step one visible child away from `from`, wrapping at the ends.
+// returns child_count when the parent has no visible child at all
+static size_t helper_child_visible_step(UI_LAYER* ui_layer, ContextId parent, size_t child_count, size_t from, bool next){
+    if(child_count == 0)
+        return 0;
+
+    size_t idx = from;
+    for(size_t steps = 0; steps < child_count; steps++){
+        if(next)
+            idx = (idx + 1 >= child_count) ? 0 : idx + 1;
+        else
+            idx = (idx == 0 || idx > child_count) ? child_count - 1 : idx - 1;
+        if(helper_child_visible_at(ui_layer, parent, idx, NULL))
+            return idx;
+    }
+
+    return child_count;
+}
+
+// `from` itself when it is visible, else the next visible child after it.
+// returns child_count when the parent has no visible child at all
+static size_t helper_child_visible_nearest(UI_LAYER* ui_layer, ContextId parent, size_t child_count, size_t from){
+    if(from < child_count && helper_child_visible_at(ui_layer, parent, from, NULL))
+        return from;
+    return helper_child_visible_step(ui_layer, parent, child_count, from, true);
+}
+
+// collect up to cap visible children walking away from `from` in one
+// direction (no wrapping), nearest first. Sets *more when at least one more
+// visible child was left behind
+static size_t helper_child_visible_collect(UI_LAYER* ui_layer, ContextId parent, size_t child_count,
+                                           size_t from, bool next, size_t cap, ContextId* out, bool* more){
+    size_t count = 0;
+    *more = false;
+
+    size_t idx = from;
+    while(next ? (idx + 1 < child_count) : (idx > 0)){
+        idx = next ? idx + 1 : idx - 1;
+        ContextId child;
+        if(!helper_child_visible_at(ui_layer, parent, idx, &child))
+            continue;
+        if(count == cap){
+            *more = true;
+            break;
+        }
+        out[count++] = child;
+    }
+
+    return count;
+}
+
+// build the on-screen slice of parent's visible children around hovered_idx
+// (an index into the parent child array, as returned by
+// helper_nav_context_single_purpose_set). An out of range or hidden
+// hovered_idx yields an empty view
+static void helper_child_view_build(UI_LAYER* ui_layer, ContextId parent, size_t child_count,
+                                    size_t hovered_idx, CHILD_VIEW* view){
+    view->row_count = 0;
+    view->hovered_row = 0;
+    view->more_before = false;
+    view->more_after = false;
+
+    ContextId hovered_child;
+    if(hovered_idx >= child_count)
+        return;
+    if(!helper_child_visible_at(ui_layer, parent, hovered_idx, &hovered_child))
+        return;
+
+    // gather as much as either side could ever need, then split the
+    // VIEW_ROWS - 1 non-hovered rows between them
+    ContextId before[VIEW_ROWS - 1];
+    ContextId after[VIEW_ROWS - 1];
+    size_t before_count = helper_child_visible_collect(ui_layer, parent, child_count, hovered_idx,
+                                                       false, VIEW_ROWS - 1, before, &view->more_before);
+    size_t after_count = helper_child_visible_collect(ui_layer, parent, child_count, hovered_idx,
+                                                      true, VIEW_ROWS - 1, after, &view->more_after);
+
+    // centre the hovered row, then hand whatever the short side left unused
+    // to the other one, so the screen stays full near either end of the list
+    size_t take_before = before_count < SELECTED_DIST ? before_count : SELECTED_DIST;
+    size_t take_after = after_count < SELECTED_DIST ? after_count : SELECTED_DIST;
+    size_t spare = (VIEW_ROWS - 1) - take_before - take_after;
+
+    size_t grow = after_count - take_after;
+    if(grow > spare)
+        grow = spare;
+    take_after += grow;
+    spare -= grow;
+
+    grow = before_count - take_before;
+    if(grow > spare)
+        grow = spare;
+    take_before += grow;
+
+    // before[] came back nearest-first, so it unwinds into the view backwards
+    for(size_t i = take_before; i > 0; i--)
+        view->rows[view->row_count++] = before[i - 1];
+    view->hovered_row = view->row_count;
+    view->rows[view->row_count++] = hovered_child;
+    for(size_t i = 0; i < take_after; i++)
+        view->rows[view->row_count++] = after[i];
+
+    // rows dropped by the split are truncation just as much as the ones
+    // collect left behind
+    if(take_before < before_count)
+        view->more_before = true;
+    if(take_after < after_count)
+        view->more_after = true;
+}
+
+// select previous child of parent (or next if next true), skipping hidden
+// children so the cursor only ever rests on a drawn row.
 // cur_idx - address of the current index in the parent children array
 static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, ContextId parent, UiPurpose purpose, size_t* cur_idx, bool next){
     if(!ui_layer)
@@ -166,87 +311,87 @@ static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, Conte
     if(!cur_idx)
         return;
 
+    CONTEXT_INTRF_INFO cx_info;
+    if(!helper_context_info_get(ui_layer, parent, &cx_info))
+        return;
+
+    size_t new_idx = helper_child_visible_step(ui_layer, parent, cx_info.child_count, *cur_idx, next);
+    if(new_idx >= cx_info.child_count)
+        return;
+
+    ContextId new_context = ui_layer_context_child_at(ui_layer, parent, new_idx);
+    if(!ui_layer_context_valid(ui_layer, new_context))
+        return;
+
     UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, parent, purpose);
     if(!target_list)
         return;
 
-    int old_idx = (int)*cur_idx;
-    int new_idx = 0;
-    if (!next)
-        new_idx = old_idx - 1;
-    else
-        new_idx = old_idx + 1;
-
-    CONTEXT_INTRF_INFO cx_info;
-    if(helper_context_info_get(ui_layer, parent, &cx_info)){
-        if(new_idx < 0){
-            new_idx = (int)cx_info.child_count - 1;
-        }
-        if(new_idx >= (int)cx_info.child_count){
-            new_idx = 0;
-        }
-
-        ContextId new_context = ui_layer_context_child_at(ui_layer, parent, (size_t)new_idx);
-
-        if(ui_layer_context_valid(ui_layer, new_context)){
-            *cur_idx = (size_t)new_idx;
-            helper_target_list_add_reset_on_full(ui_layer, target_list, new_context);
-        }
-    }
+    *cur_idx = new_idx;
+    helper_target_list_add_reset_on_full(ui_layer, target_list, new_context);
 
     ui_layer_nav_target_list_end(state);
 }
 
-// find the parent + purpose on the state and return the target ContextId index
-// in the parent child array if the parent + purpose does not exist create it
-// (capacity 1) and add the first child as the target ContextId
+// find the parent + purpose on the state (creating the entry with capacity 1
+// when it does not exist) and point it at a *visible* child: the stored one
+// while it is still there and not hidden, otherwise the nearest visible one.
+// Returns that child's index in the parent child array, or child_count when
+// the parent has no visible child to point at - so callers can tell "nothing
+// to point at" apart from "points at index 0"
 static size_t
 helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
                                       ContextId parent, UiPurpose purpose,
                                       UiStalePolicy stale_policy) {
     if(!ui_layer)
         return 0;
+    if(!state)
+        return 0;
     if(!ui_layer_context_valid(ui_layer, parent))
         return 0;
-    CONTEXT_INTRF_INFO state_main_current_info;
-    if(helper_context_info_get(ui_layer, parent, &state_main_current_info)){
-        if(state_main_current_info.child_count > 0){
-            UI_TARGET_LIST* selected_target = ui_layer_nav_target_list_begin(state, parent, purpose);
-            if (selected_target) {
 
-                size_t return_idx = 0;
-                ContextId cur_purpose = ui_layer_nav_target_list_get(selected_target, 0);
-                for(size_t i = 0; i < state_main_current_info.child_count; i ++){
-                    ContextId cur_child = ui_layer_context_child_at(ui_layer, parent, i);
-                    if(cur_child == cur_purpose){
-                       return_idx = i;
-                       break;
-                    }
-                }
-                ui_layer_nav_target_list_end(state);
-                return return_idx;
-            }
-            else{
-                ui_layer_state_entry_set(state, parent, purpose, 1);
-                UI_TARGET_LIST* targets = ui_layer_nav_target_list_begin(state, parent, purpose);
+    CONTEXT_INTRF_INFO parent_info;
+    if(!helper_context_info_get(ui_layer, parent, &parent_info))
+        return 0;
+    if(parent_info.child_count == 0)
+        return 0;
 
-                if(targets){
-                    ui_layer_target_list_set_stale_policy(targets,
-                                                          stale_policy);
-                    ContextId new_purpose =
-                        ui_layer_context_child_at(ui_layer, parent, 0);
-                    if (ui_layer_context_valid(ui_layer, new_purpose)) {
-                        helper_target_list_add_reset_on_full(ui_layer, targets,
-                                                             new_purpose);
-                    }
-                    ui_layer_nav_target_list_end(state);
-                    return 0;
-                }
+    UI_TARGET_LIST* targets = ui_layer_nav_target_list_begin(state, parent, purpose);
+    if(!targets){
+        // begin does not borrow when it finds nothing, so entry_set is safe here
+        ui_layer_state_entry_set(state, parent, purpose, 1);
+        targets = ui_layer_nav_target_list_begin(state, parent, purpose);
+        if(!targets)
+            return 0;
+        ui_layer_target_list_set_stale_policy(targets, stale_policy);
+    }
+
+    // where the stored target sits now - child_count when it is not a child
+    // of parent (anymore), which also covers a freshly created entry
+    size_t stored_idx = parent_info.child_count;
+    ContextId stored = ui_layer_nav_target_list_get(targets, 0);
+    if(ui_layer_context_valid(ui_layer, stored)){
+        for(size_t i = 0; i < parent_info.child_count; i++){
+            if(ui_layer_context_child_at(ui_layer, parent, i) == stored){
+                stored_idx = i;
+                break;
             }
         }
     }
 
-    return 0;
+    // a hidden row is never drawn, so the purpose must not rest on one
+    size_t visible_idx = helper_child_visible_nearest(ui_layer, parent, parent_info.child_count, stored_idx);
+    if(visible_idx < parent_info.child_count && visible_idx != stored_idx){
+        ContextId visible_child = ui_layer_context_child_at(ui_layer, parent, visible_idx);
+        if(ui_layer_context_valid(ui_layer, visible_child)){
+            ui_layer_nav_target_list_clear(targets);
+            helper_target_list_add_reset_on_full(ui_layer, targets, visible_child);
+        }
+    }
+
+    ui_layer_nav_target_list_end(state);
+
+    return visible_idx;
 }
 
 // return the (single) ContextId saved for parent+purpose on state, or
@@ -812,8 +957,6 @@ int main() {
         state_main_hovered_idx = helper_nav_context_single_purpose_set(
             ui_layer, state_main, state_main_context_current, UI_PURPOSE_HOVERED,
             (UiStalePolicy){.mode = UI_STALE_PREV_SIBLING});
-        ContextId state_main_id_hovered = helper_purpose_get(
-            ui_layer, state_main, state_main_context_current, UI_PURPOSE_HOVERED);
 
         // update the parent
         ContextId parent = ui_layer_context_parent_return(ui_layer, state_main_context_current);
@@ -830,25 +973,34 @@ int main() {
             printf("\e[2m");
 
         CONTEXT_INTRF_INFO state_main_current_info;
-        if(helper_context_info_get(ui_layer, state_main_context_current, &state_main_current_info)){
+        if (helper_context_info_get(ui_layer, state_main_context_current,
+                                    &state_main_current_info)) {
             printf("----| %s |----\n\n", state_main_current_info.name);
-            for(size_t i = 0; i < state_main_current_info.child_count; i++){
-                CONTEXT_INTRF_INFO state_main_current_child_info;
-                ContextId cur_child = ui_layer_context_child_at(ui_layer, state_main_context_current, i);
-                if(helper_context_info_get(ui_layer, cur_child, &state_main_current_child_info)){
-                    if(state_main_current_child_info.is_hidden)
-                        continue;
-                    if(cur_child == state_main_id_hovered && state_current == state_main){
-                        printf(">%s", state_main_current_child_info.name);
-                    }
-                    else{
-                        printf("%s", state_main_current_child_info.name);
-                    }
-                    state_main_current_child_info.value
-                        ? printf(" --- %s\n", state_main_current_child_info.value)
-                        : printf("\n");
-                }
+
+            // the window of children that fits on screen around the hovered
+            // one. The builder owns the hidden/limit geometry, so all that is
+            // left here is drawing rows
+            CHILD_VIEW view;
+            helper_child_view_build(ui_layer, state_main_context_current,
+                                    state_main_current_info.child_count,
+                                    state_main_hovered_idx, &view);
+
+            if (view.more_before)
+                printf("-...-\n");
+            for (size_t row = 0; row < view.row_count; row++) {
+                CONTEXT_INTRF_INFO child_info;
+                if (!helper_context_info_get(ui_layer, view.rows[row],
+                                             &child_info))
+                    continue;
+                if (row == view.hovered_row && state_current == state_main)
+                    printf(">%s", child_info.name);
+                else
+                    printf("%s", child_info.name);
+                child_info.value ? printf(" --- %s\n", child_info.value)
+                                 : printf("\n");
             }
+            if (view.more_after)
+                printf("-...-\n");
         }
 
         // --------------------------------------------------
