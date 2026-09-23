@@ -29,7 +29,7 @@ PI_DIR = ~/Audio/Source/smp_groovebox/
 
 
 create_smp_sampler: make_dir
-	$(CC) -Wall -Wextra -g -x c -o $(FILE) $(UI_DEFAULT) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
+	$(CC) -Wall -Wextra -Wshadow -g -x c -o $(FILE) $(UI_DEFAULT) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
 build_sanitize: make_dir
 	$(CC) -g -fsanitize=thread -x c -o $(FILE) $(UI_CLI) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
 run:

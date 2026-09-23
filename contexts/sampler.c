@@ -104,6 +104,9 @@ typedef struct _smp_info{
     //callback functions for the audio backend to manipulate ports, midi etc.
     //the audio client data 
     void* audio_backend;
+    //name the sampler's ports are registered under
+    uint64_t owner_tag;
+    uint64_t owner_uid;
     //the midi container that has the note pitches etc.
     JACK_MIDI_CONT* midi_cont;
     //control_data struct to control sys messages between [audio-thread] and [main-thread] (stop processing sample, start processing sample and etc.)
@@ -200,7 +203,7 @@ static int smp_remove_sample(SMP_INFO* smp_data, unsigned int idx){
 
 SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 		   smp_status_t *status,
-		   void* audio_backend){
+		   void* audio_backend, uint64_t owner_tag, uint64_t owner_uid){
     /*allocate memory for the smp_data struct, that will contain the other samples*/
     SMP_INFO *smp_data = (SMP_INFO*) malloc(sizeof(SMP_INFO));
     if(!smp_data){
@@ -270,6 +273,8 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
      
      //inititalize the callbacks from the audio backend
      smp_data->audio_backend = audio_backend;
+     smp_data->owner_tag = owner_tag;
+     smp_data->owner_uid = owner_uid;
      smp_data->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
      if(!smp_data->midi_cont){
 	 smp_clean_memory(smp_data);
@@ -289,7 +294,7 @@ int smp_activate_backend_ports(SMP_INFO* smp_data){
 	SMP_PORT* cur_port = &(smp_data->ports[i]);
 	cur_port->sys_port = app_jack_create_port_on_client(smp_data->audio_backend, cur_port->port_type,
 						     cur_port->port_flow, cur_port->port_name,
-						     PORT_OWNER_SAMPLER, 0);
+						     smp_data->owner_tag, smp_data->owner_uid);
     }
     return 0;
 }

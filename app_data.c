@@ -273,23 +273,6 @@ enum {
     LID_PORTS_IN,
 };
 
-// FNV-1a 64-bit, for hashing a URI/path into a stable DataChoice.value key
-// (MAKE_ID(list_ns, item_key) - see data_actions.h). Never a positional index:
-// the same string hashes to the same key across a re-scan even if its array
-// position moved. 64 bits (56 of which MAKE_ID actually keeps, see
-// CTXID_LOCAL_MASK) this is not a cryptographic hash, so collisions are only
-// statistically unlikely, not impossible
-static uint64_t fnv1a64(const char *s) {
-    uint64_t h = 14695981039346656037ULL;
-    if (!s)
-        return h;
-    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-        h ^= *p;
-        h *= 1099511628211ULL;
-    }
-    return h;
-}
-
 // one parameter, from any owner. user_data is the opaque handle from
 // param_get_handle.
 static ContextId cx_param_id(void *user_data) {
@@ -898,7 +881,7 @@ static bool lv2_plugins_list_at(void *user_data, DataListId list,
     if (!item)
         return false;
     out->value = MAKE_ID(DATA_LIST_NS_CATALOG,
-                         fnv1a64(plug_plugin_list_item_path(item)));
+                         str_hash_fnv1a64(plug_plugin_list_item_path(item)));
     out->label = plug_plugin_list_item_name(item);
     out->flags = 0;
     return true;
@@ -922,7 +905,7 @@ static DataActionResult lv2_plugins_action_do(void *user_data,
     for (unsigned int i = 0; i < count; i++) {
         void *item = plug_plugin_list_item_get(plug_data, i);
         if (item &&
-            (fnv1a64(plug_plugin_list_item_path(item)) & CTXID_LOCAL_MASK) ==
+            (str_hash_fnv1a64(plug_plugin_list_item_path(item)) & CTXID_LOCAL_MASK) ==
                 key) {
             found = item;
             break;
@@ -1078,7 +1061,7 @@ static bool clap_plugins_list_at(void *user_data, DataListId list,
     if (!item)
         return false;
     out->value = MAKE_ID(DATA_LIST_NS_CATALOG,
-                         fnv1a64(clap_plug_plugin_list_item_path(item)));
+                         str_hash_fnv1a64(clap_plug_plugin_list_item_path(item)));
     out->label = clap_plug_plugin_list_item_name(item);
     out->flags = 0;
     return true;
@@ -1101,7 +1084,7 @@ static DataActionResult clap_plugins_action_do(void *user_data,
     void *found = NULL;
     for (unsigned int i = 0; i < count; i++) {
         void *item = clap_plug_plugin_list_item_get(plug_data, i);
-        if (item && (fnv1a64(clap_plug_plugin_list_item_path(item)) &
+        if (item && (str_hash_fnv1a64(clap_plug_plugin_list_item_path(item)) &
                      CTXID_LOCAL_MASK) == key) {
             found = item;
             break;
@@ -1253,7 +1236,7 @@ static bool root_connect_resolve_port(JACK_INFO *jack_data, uint64_t key,
             continue;
         bool found = false;
         for (size_t i = 0; names[i]; i++) {
-            if ((fnv1a64(names[i]) & CTXID_LOCAL_MASK) != key)
+            if ((str_hash_fnv1a64(names[i]) & CTXID_LOCAL_MASK) != key)
                 continue;
             snprintf(name_buf, name_buf_size, "%s", names[i]);
             found = true;
@@ -1286,7 +1269,7 @@ static bool root_connect_enumerate_at(JACK_INFO *jack_data, unsigned int type_pa
     for (size_t i = 0; names[i]; i++) {
         if (i != idx)
             continue;
-        out->value = MAKE_ID(DATA_LIST_NS_PORTS, fnv1a64(names[i]));
+        out->value = MAKE_ID(DATA_LIST_NS_PORTS, str_hash_fnv1a64(names[i]));
         snprintf(root_connect_port_name_buf, sizeof(root_connect_port_name_buf), "%s", names[i]);
         out->label = root_connect_port_name_buf;
         out->flags = (linked_against &&
@@ -1474,16 +1457,16 @@ DataObject app_init(void) {
     // create ports for trk_jack
     app_data->main_in_L = app_jack_create_port_on_client(
         app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_INPUT, "master_in_L",
-        PORT_OWNER_MAIN, 0);
+        DATA_NS_SINGLETON, SID_ROOT);
     app_data->main_in_R = app_jack_create_port_on_client(
         app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_INPUT, "master_in_R",
-        PORT_OWNER_MAIN, 0);
+        DATA_NS_SINGLETON, SID_ROOT);
     app_data->main_out_L = app_jack_create_port_on_client(
         app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT, "master_out_L",
-        PORT_OWNER_MAIN, 0);
+        DATA_NS_SINGLETON, SID_ROOT);
     app_data->main_out_R = app_jack_create_port_on_client(
         app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT, "master_out_R",
-        PORT_OWNER_MAIN, 0);
+        DATA_NS_SINGLETON, SID_ROOT);
     // now activate the jack client, it will launch the rt thread
     // (trk_audio_process_rt function) but app_data->is_processing == 0, so the
     // contexts will not be processed, only app_data sys messages (to start the
@@ -1496,7 +1479,8 @@ DataObject app_init(void) {
     /*-----------------------------------------------*/
     smp_status_t smp_status_err = 0;
     app_data->smp_data =
-        smp_init(buffer_size, samplerate, &smp_status_err, app_data->trk_jack);
+        smp_init(buffer_size, samplerate, &smp_status_err, app_data->trk_jack,
+                 DATA_NS_SINGLETON, SID_SAMPLER);
     if (!app_data->smp_data) {
         // clean app_data
         clean_memory(app_data);
@@ -1506,7 +1490,8 @@ DataObject app_init(void) {
     // Init the plugin data object, it will not run any plugins yet
     plug_status_t plug_errors = 0;
     app_data->plug_data =
-        plug_init(buffer_size, samplerate, &plug_errors, app_data->trk_jack);
+        plug_init(buffer_size, samplerate, &plug_errors, app_data->trk_jack,
+                  DATA_NS_LV2_PLUG);
     if (!app_data->plug_data) {
         clean_memory(app_data);
         return invalid;
@@ -1517,7 +1502,7 @@ DataObject app_init(void) {
     clap_plug_status_t clap_plug_errors = 0;
     app_data->clap_plug_data =
         clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors,
-                       app_data->trk_jack);
+                       app_data->trk_jack, DATA_NS_CLAP_PLUG);
     if (!(app_data->clap_plug_data)) {
         clean_memory(app_data);
         return invalid;
@@ -1526,8 +1511,9 @@ DataObject app_init(void) {
     clap_plug_plugin_list_init(app_data->clap_plug_data);
 
     // initiate the Synth data
-    app_data->synth_data = synth_init((unsigned int)buffer_size, samplerate,
-                                      "Synth", 1, app_data->trk_jack);
+    app_data->synth_data =
+        synth_init((unsigned int)buffer_size, samplerate, "Synth", 1,
+                   app_data->trk_jack, DATA_NS_SYNTH_OSC);
     if (!app_data->synth_data) {
         clean_memory(app_data);
         return invalid;
@@ -1595,9 +1581,8 @@ void app_data_update(void *root_user_data) {
 
     // since JACK ports are not in CX tree, if they changed, report as a context
     // data changed event, not a context structure change event
-    bool ports_changed = app_jack_ports_changed(app_data->trk_jack);
-    bool connections_changed = app_jack_connections_changed(app_data->trk_jack);
-    if (ports_changed || connections_changed)
+    JackPortSync port_sync = app_jack_ports_sync(app_data->trk_jack);
+    if (port_sync.ports || port_sync.connections)
         app_data_push_event(app_data, DATA_EVENT_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_ROOT));
 }

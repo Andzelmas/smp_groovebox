@@ -188,6 +188,8 @@ typedef struct _synth_data {
     JACK_MIDI_CONT *midi_cont;
     // this is the audio backend object to send to the audio functions
     void *audio_backend;
+    // paired with an oscillator's uid when registering its ports
+    uint64_t owner_tag;
     // this is control for [audio-thread] and [main-thread] sys communication
     //(since there is no need to remove and add the oscillators this is used
     // right now only for thread safe message sending)
@@ -311,7 +313,7 @@ static int synth_clean_ports(SYNTH_DATA *synth_data, SYNTH_PORT **osc_ports,
 
 SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
                        const char *cx_name, unsigned int with_metronome,
-                       void *audio_backend) {
+                       void *audio_backend, uint64_t owner_tag) {
 
     SYNTH_DATA *synth_data = (SYNTH_DATA *)malloc(sizeof(SYNTH_DATA));
     if (!synth_data)
@@ -336,6 +338,7 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
     synth_data->sin_osc = NULL;
     synth_data->midi_cont = NULL;
     synth_data->audio_backend = audio_backend;
+    synth_data->owner_tag = owner_tag;
     synth_data->semi_to_freq_table = NULL;
     synth_data->log_curve = NULL;
     synth_data->amp_to_exp = NULL;
@@ -656,7 +659,7 @@ int synth_activate_backend_ports(SYNTH_DATA *synth_data, SYNTH_OSC *osc) {
         SYNTH_PORT *cur_port = &(osc->ports[i]);
         cur_port->sys_port = app_jack_create_port_on_client(
             synth_data->audio_backend, cur_port->port_type, cur_port->port_flow,
-            cur_port->port_name, PORT_OWNER_SYNTH, synth_osc_uid(osc));
+            cur_port->port_name, synth_data->owner_tag, synth_osc_uid(osc));
     }
 
     return 0;
@@ -1107,13 +1110,13 @@ int synth_process_rt(SYNTH_DATA *synth_data, NFRAMES_T nframes) {
             MIDI_DATA_T this_vel = 0;
             MIDI_DATA_T this_type = 0;
             MIDI_DATA_T this_pitch = 0;
-            for (unsigned int i = 0; i < synth_data->midi_cont->num_events;
-                 i++) {
-                if (synth_data->midi_cont->nframe_nums[i] != cur_frame)
+            for (unsigned int ev = 0; ev < synth_data->midi_cont->num_events;
+                 ev++) {
+                if (synth_data->midi_cont->nframe_nums[ev] != cur_frame)
                     continue;
-                this_vel = synth_data->midi_cont->vel_trig[i];
-                this_type = synth_data->midi_cont->types[i];
-                this_pitch = synth_data->midi_cont->note_pitches[i];
+                this_vel = synth_data->midi_cont->vel_trig[ev];
+                this_type = synth_data->midi_cont->types[ev];
+                this_pitch = synth_data->midi_cont->note_pitches[ev];
             }
             // note on event
             if ((this_type & 0xf0) == 0x90) {

@@ -188,6 +188,8 @@ typedef struct _clap_plug_info {
                                              // the preset-load extension
     // address of the audio client
     void *audio_backend;
+    // paired with a plugin's uid when registering that plugin's ports
+    uint64_t owner_tag;
 } CLAP_PLUG_INFO;
 
 // return the clap_plug_plug id on the plugins array that has the same
@@ -423,7 +425,7 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO *plug_data, int id,
                     io_flow = PORT_FLOW_INPUT;
                 cur_sys_port->sys_ports[chan] = app_jack_create_port_on_client(
                     plug_data->audio_backend, PORT_TYPE_AUDIO, io_flow,
-                    full_port_name, PORT_OWNER_CLAP_PLUG, plug->uid);
+                    full_port_name, plug_data->owner_tag, plug->uid);
                 if (!cur_sys_port->sys_ports[chan])
                     continue;
             }
@@ -595,7 +597,7 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO *plug_data, int id,
             io_flow = PORT_FLOW_INPUT;
         note_port->sys_ports[i] = app_jack_create_port_on_client(
             plug_data->audio_backend, PORT_TYPE_MIDI, io_flow, full_port_name,
-            PORT_OWNER_CLAP_PLUG, plug->uid);
+            plug_data->owner_tag, plug->uid);
         note_port->ids[i] = note_port_info.id;
         note_port->preferred_dialects[i] = note_port_info.preferred_dialect;
         note_port->supported_dialects[i] = note_port_info.supported_dialects;
@@ -1651,7 +1653,7 @@ int clap_plug_preset_load_from_path(CLAP_PLUG_INFO *plug_data, int plug_id,
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error,
-                               void *audio_backend) {
+                               void *audio_backend, uint64_t owner_tag) {
     if (!audio_backend)
         return NULL;
     CLAP_PLUG_INFO *plug_data =
@@ -1662,6 +1664,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     }
     memset(plug_data, '\0', sizeof(*plug_data));
     plug_data->audio_backend = audio_backend;
+    plug_data->owner_tag = owner_tag;
     plug_data->clap_plugin_list.plugin_list = NULL;
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};

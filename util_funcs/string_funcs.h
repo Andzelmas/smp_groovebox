@@ -1,6 +1,12 @@
 #pragma once
+#include <stdint.h>
 // Functions that manipulate strings in some specific ways to the app
 // infrastructure
+
+// FNV-1a 64-bit, for hashing a URI/path/port name into a stable key. The same
+// string always hashes to the same value, so a key survives a re-scan that
+// moved the item. Not cryptographic - collisions are unlikely, not impossible
+uint64_t str_hash_fnv1a64(const char *s);
 
 // combines a string with integer and padding and _ symbols
 // the result is in the string_in, but it is freed if succesfully combined

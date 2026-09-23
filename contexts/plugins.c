@@ -312,6 +312,8 @@ typedef struct _plug_info {
     PLUG_NODES nodes;
     // the address to the audio client
     void *audio_backend;
+    // paired with a plugin's uid when registering that plugin's ports
+    uint64_t owner_tag;
     // the available plugins list struct
     PLUGIN_LIST plugin_list;
     // transport information, mainly to compare if position info changed and if
@@ -699,7 +701,8 @@ static int plug_plug_stop_process(void *user_data) {
 }
 
 PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
-                     plug_status_t *plug_errors, void *audio_backend) {
+                     plug_status_t *plug_errors, void *audio_backend,
+                     uint64_t owner_tag) {
     PLUG_INFO *plug_data = (PLUG_INFO *)malloc(sizeof(PLUG_INFO));
     if (!plug_data) {
         *plug_errors = plug_failed_malloc;
@@ -740,6 +743,7 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_init_nodes(plug_data->lv_world, &(plug_data->nodes));
 
     plug_data->audio_backend = audio_backend;
+    plug_data->owner_tag = owner_tag;
 
     // init the plugin instances to shell
     plug_data->plugins_dirty = false;
@@ -1735,13 +1739,13 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
             cur_port->type = PORT_TYPE_AUDIO;
             cur_port->sys_port = app_jack_create_port_on_client(
                 plug_data->audio_backend, PORT_TYPE_AUDIO, port_io,
-                full_port_name, PORT_OWNER_LV2_PLUG, plug->uid);
+                full_port_name, plug_data->owner_tag, plug->uid);
         } else if (lilv_port_is_a(plug->plug, cur_port->lilv_port,
                                   plug_data->nodes.lv2_CVPort)) {
             cur_port->type = PORT_TYPE_CV;
             cur_port->sys_port = app_jack_create_port_on_client(
                 plug_data->audio_backend, PORT_TYPE_AUDIO, port_io,
-                full_port_name, PORT_OWNER_LV2_PLUG, plug->uid);
+                full_port_name, plug_data->owner_tag, plug->uid);
         } else if (lilv_port_is_a(plug->plug, cur_port->lilv_port,
                                   plug_data->nodes.atom_AtomPort)) {
             cur_port->type = PORT_TYPE_EVENT;
@@ -1750,7 +1754,7 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
                 cur_port->port_type_urid = plug_data->urids.midi_MidiEvent;
                 cur_port->sys_port = app_jack_create_port_on_client(
                     plug_data->audio_backend, PORT_TYPE_MIDI, port_io,
-                    full_port_name, PORT_OWNER_LV2_PLUG, plug->uid);
+                    full_port_name, plug_data->owner_tag, plug->uid);
             }
             // ready the evbuf for the events
             //--------------------
@@ -1880,15 +1884,16 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                     app_jack_return_notes_vels_rt(a_buffer, plug->midi_cont);
                     // go through the returned audio backend midi event and
                     // write to the evbuf
-                    for (uint32_t i = 0; i < plug->midi_cont->num_events; i++) {
+                    for (uint32_t ev = 0; ev < plug->midi_cont->num_events;
+                         ev++) {
                         const unsigned char midi_msg[3] = {
-                            plug->midi_cont->types[i],
-                            plug->midi_cont->note_pitches[i],
-                            plug->midi_cont->vel_trig[i]};
+                            plug->midi_cont->types[ev],
+                            plug->midi_cont->note_pitches[ev],
+                            plug->midi_cont->vel_trig[ev]};
                         plug_evbuf_write(
-                            &iter_buf, plug->midi_cont->nframe_nums[i], 0,
+                            &iter_buf, plug->midi_cont->nframe_nums[ev], 0,
                             cur_port->port_type_urid,
-                            plug->midi_cont->buf_size[i], midi_msg);
+                            plug->midi_cont->buf_size[ev], midi_msg);
                     }
                 }
                 // send plugin the transport information
@@ -2063,14 +2068,17 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                     app_jack_midi_clear_buffer_rt(buf);
                 }
                 // write from sys_port out to the audio client midi out
-                for (PLUG_EVBUF_ITERATOR i = plug_evbuf_begin(cur_port->evbuf);
-                     plug_evbuf_is_valid(i); i = plug_evbuf_next(i)) {
+                for (PLUG_EVBUF_ITERATOR iter_buf =
+                         plug_evbuf_begin(cur_port->evbuf);
+                     plug_evbuf_is_valid(iter_buf);
+                     iter_buf = plug_evbuf_next(iter_buf)) {
                     uint32_t frames = 0;
                     uint32_t subframes = 0;
                     LV2_URID type = 0;
                     uint32_t size = 0;
                     void *data = NULL;
-                    plug_evbuf_get(i, &frames, &subframes, &type, &size, &data);
+                    plug_evbuf_get(iter_buf, &frames, &subframes, &type, &size,
+                                   &data);
                     if (buf && type == plug_data->urids.midi_MidiEvent) {
                         app_jack_midi_events_write_rt(buf, frames, data, size);
                     }

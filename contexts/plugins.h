@@ -18,9 +18,11 @@ typedef struct _plug_evbuf_impl PLUG_EVBUF;
 // the event iterator for PLUG_EVBUF
 typedef struct _plug_evbuf_iterator_impl PLUG_EVBUF_ITERATOR;
 
-// inititialize the plugin host data
+// inititialize the plugin host data. owner_tag is what the caller pairs with a
+// plugin's uid to name the owner of that plugin's ports
 PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
-                     plug_status_t *plug_errors, void *audio_backend);
+                     plug_status_t *plug_errors, void *audio_backend,
+                     uint64_t owner_tag);
 
 // Creates a list of available plugins on the plug_data. If it already exists
 // free it and create it again

@@ -7,6 +7,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+uint64_t str_hash_fnv1a64(const char *s) {
+    uint64_t h = 14695981039346656037ULL;
+    if (!s)
+        return h;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        h ^= *p;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 void str_combine_str_int(char **string_in, int num) {
     char *ret_string = NULL;
     if (!(*string_in))

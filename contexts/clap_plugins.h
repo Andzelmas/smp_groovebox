@@ -51,11 +51,12 @@ void clap_plug_presets_clean_preset(CLAP_PLUG_INFO *plug_data,
 int clap_plug_preset_load_from_path(CLAP_PLUG_INFO *plug_data, int plug_id,
                                     const char *preset_path);
 
-// initiate the main plugin data struct.
+// initiate the main plugin data struct. owner_tag is what the caller pairs
+// with a plugin's uid to name the owner of that plugin's ports
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error,
-                               void *audio_backend);
+                               void *audio_backend, uint64_t owner_tag);
 
 // initialize the plugin list
 // it contains all the plugins on the system available to the user

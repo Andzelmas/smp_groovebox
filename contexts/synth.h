@@ -12,8 +12,10 @@ typedef struct _synth_data SYNTH_DATA;
 int synth_read_ui_to_rt_messages(SYNTH_DATA* synth_data);
 int synth_read_rt_to_ui_messages(SYNTH_DATA* synth_data);
 //initiate the synth data
+//owner_tag is what the caller pairs with an oscillator's uid to name the owner
+//of that oscillator's ports
 SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const char* cx_name, unsigned int with_metronome,
-			void* audio_backend);
+			void* audio_backend, uint64_t owner_tag);
 //process the synth_data oscillators
 int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes);
 //activate the audio ports

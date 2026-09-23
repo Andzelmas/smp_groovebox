@@ -32,10 +32,32 @@ enum trkParamId {
 
 static thread_local bool is_audio_thread = false;
 
-// one port this client registered, and what owns it
+// a port name and the identity minted for it. Outlives the port list, so a
+// key keeps meaning the same port across rebuilds and across a port that
+// disappears and comes back
+typedef struct _port_ident {
+    char *name;
+    size_t rec; // index into ports, SIZE_MAX when not currently present
+} PORT_IDENT;
+
+// one cached port. conn_first/conn_count index the flat adjacency array
+typedef struct _jack_port_rec {
+    char *name;
+    const char *client; // into the interned client list
+    uint64_t key;
+    unsigned int type;
+    unsigned long flow;
+    uint64_t owner_tag;
+    uint64_t owner_uid;
+    size_t conn_first;
+    size_t conn_count;
+} JACK_PORT_REC;
+
+// one port this client registered, and the caller's two-number name for what
+// owns it
 typedef struct _port_owner {
     char *name; // full "client:port", owned
-    PortOwnerKind kind;
+    uint64_t tag;
     uint64_t uid;
 } PORT_OWNER;
 
@@ -67,22 +89,41 @@ typedef struct _jack_info {
     // set (true) by app_jack_port_registration_cb, on JACK's own notification
     // thread, whenever a port is registered/unregistered anywhere on the
     // system (not just by this client) - read-and-cleared by
-    // app_jack_ports_changed on [main-thread].
+    // app_jack_ports_sync on [main-thread].
     atomic_bool ports_changed;
     // same as ports_changed, but set by app_jack_port_connect_cb whenever any
     // two ports are connected/disconnected (including by another program) -
-    // read-and-cleared by app_jack_connections_changed.
+    // read-and-cleared by app_jack_ports_sync too.
     atomic_bool connections_changed;
     // ownership of the ports this client registered, filled at registration.
     // Foreign ports are simply absent
     PORT_OWNER *port_owners;
     size_t port_owner_count;
     size_t port_owner_max;
+    // snapshot of every audio/midi port on the system, rebuilt by
+    // app_jack_ports_sync. Grouped by (flow, type), so each JackPortList is a
+    // contiguous run described by list_first/list_count
+    JACK_PORT_REC *ports;
+    size_t port_count;
+    size_t list_first[JACK_PORT_LIST_COUNT];
+    size_t list_count[JACK_PORT_LIST_COUNT];
+    // client names, interned once so every port of a client shares one string
+    char **clients;
+    size_t client_count;
+    size_t client_max;
+    // adjacency for ports, sliced per record by conn_first/conn_count
+    size_t *conns;
+    size_t conn_total;
+    // every port name seen this session. A record's key is its index here + 1,
+    // so 0 is free to mean "no port"
+    PORT_IDENT *idents;
+    size_t ident_count;
+    size_t ident_max;
 } JACK_INFO;
 
 static void port_owner_add(JACK_INFO *jack_data, const char *port_name,
-                           PortOwnerKind kind, uint64_t uid) {
-    if (!port_name || kind == PORT_OWNER_NONE)
+                           uint64_t tag, uint64_t uid) {
+    if (!port_name || tag == 0)
         return;
     if (jack_data->port_owner_count == jack_data->port_owner_max) {
         size_t new_max =
@@ -98,7 +139,7 @@ static void port_owner_add(JACK_INFO *jack_data, const char *port_name,
     if (!name_copy)
         return;
     jack_data->port_owners[jack_data->port_owner_count++] =
-        (PORT_OWNER){.name = name_copy, .kind = kind, .uid = uid};
+        (PORT_OWNER){.name = name_copy, .tag = tag, .uid = uid};
 }
 
 // order carries no meaning here, so the hole is filled from the end
@@ -117,6 +158,24 @@ static void port_owner_remove(JACK_INFO *jack_data, const char *port_name) {
     }
 }
 
+static void port_owner_rename(JACK_INFO *jack_data, const char *old_name,
+                              const char *new_name) {
+    if (!old_name || !new_name)
+        return;
+    // a leftover entry under the new name would shadow the renamed one
+    port_owner_remove(jack_data, new_name);
+    for (size_t i = 0; i < jack_data->port_owner_count; i++) {
+        if (strcmp(jack_data->port_owners[i].name, old_name) != 0)
+            continue;
+        char *name_copy = strdup(new_name);
+        if (!name_copy)
+            return;
+        free(jack_data->port_owners[i].name);
+        jack_data->port_owners[i].name = name_copy;
+        return;
+    }
+}
+
 static void port_owners_clean(JACK_INFO *jack_data) {
     for (size_t i = 0; i < jack_data->port_owner_count; i++)
         free(jack_data->port_owners[i].name);
@@ -126,18 +185,384 @@ static void port_owners_clean(JACK_INFO *jack_data) {
     jack_data->port_owner_max = 0;
 }
 
-PortOwnerKind app_jack_port_owner(JACK_INFO *jack_data, const char *port_name,
-                                  uint64_t *out_uid) {
-    if (!jack_data || !port_name)
-        return PORT_OWNER_NONE;
+// tag recorded for this port name, 0 when this client did not register it
+static uint64_t port_owner_find(JACK_INFO *jack_data, const char *port_name,
+                                uint64_t *out_uid) {
+    if (!port_name)
+        return 0;
     for (size_t i = 0; i < jack_data->port_owner_count; i++) {
         if (strcmp(jack_data->port_owners[i].name, port_name) != 0)
             continue;
         if (out_uid)
             *out_uid = jack_data->port_owners[i].uid;
-        return jack_data->port_owners[i].kind;
+        return jack_data->port_owners[i].tag;
     }
-    return PORT_OWNER_NONE;
+    return 0;
+}
+
+// keys are 1-based so that 0 can mean "no port", so this is the only place
+// that turns one back into a slot. NULL when the key names none
+static PORT_IDENT *port_ident_at(JACK_INFO *jack_data, uint64_t key) {
+    if (key == 0 || key > jack_data->ident_count)
+        return NULL;
+    return &jack_data->idents[key - 1];
+}
+
+// key of an already-seen port name, 0 when it has never been seen
+static uint64_t port_ident_find(JACK_INFO *jack_data, const char *port_name) {
+    if (!port_name)
+        return 0;
+    for (size_t i = 0; i < jack_data->ident_count; i++) {
+        if (strcmp(jack_data->idents[i].name, port_name) == 0)
+            return i + 1;
+    }
+    return 0;
+}
+
+// as port_ident_find, but mints an identity for a name seen for the first time
+static uint64_t port_ident_intern(JACK_INFO *jack_data, const char *port_name) {
+    uint64_t key = port_ident_find(jack_data, port_name);
+    if (key)
+        return key;
+    if (jack_data->ident_count == jack_data->ident_max) {
+        size_t new_max = jack_data->ident_max ? jack_data->ident_max * 2 : 32;
+        PORT_IDENT *grown =
+            realloc(jack_data->idents, sizeof(PORT_IDENT) * new_max);
+        if (!grown)
+            return 0;
+        jack_data->idents = grown;
+        jack_data->ident_max = new_max;
+    }
+    char *name_copy = strdup(port_name);
+    if (!name_copy)
+        return 0;
+    jack_data->idents[jack_data->ident_count++] =
+        (PORT_IDENT){.name = name_copy, .rec = SIZE_MAX};
+    return jack_data->ident_count;
+}
+
+// jack keeps the port across a rename, so the identity stays and only its
+// name changes. A new name already interned wins instead - the port called X
+// is the one keyed under X
+static void port_ident_rename(JACK_INFO *jack_data, const char *old_name,
+                              const char *new_name) {
+    if (!old_name || !new_name)
+        return;
+    if (port_ident_find(jack_data, new_name))
+        return;
+    uint64_t key = port_ident_find(jack_data, old_name);
+    PORT_IDENT *ident = port_ident_at(jack_data, key);
+    if (!ident)
+        return;
+    char *name_copy = strdup(new_name);
+    if (!name_copy)
+        return;
+    free(ident->name);
+    ident->name = name_copy;
+}
+
+static void port_idents_clean(JACK_INFO *jack_data) {
+    for (size_t i = 0; i < jack_data->ident_count; i++)
+        free(jack_data->idents[i].name);
+    free(jack_data->idents);
+    jack_data->idents = NULL;
+    jack_data->ident_count = 0;
+    jack_data->ident_max = 0;
+}
+
+// one copy of each client name, shared by all of its ports
+static const char *client_intern(JACK_INFO *jack_data, const char *name,
+                                 size_t len) {
+    for (size_t i = 0; i < jack_data->client_count; i++) {
+        if (strncmp(jack_data->clients[i], name, len) == 0 &&
+            jack_data->clients[i][len] == '\0')
+            return jack_data->clients[i];
+    }
+    if (jack_data->client_count == jack_data->client_max) {
+        size_t new_max = jack_data->client_max ? jack_data->client_max * 2 : 8;
+        char **grown = realloc(jack_data->clients, sizeof(char *) * new_max);
+        if (!grown)
+            return NULL;
+        jack_data->clients = grown;
+        jack_data->client_max = new_max;
+    }
+    char *copy = strndup(name, len);
+    if (!copy)
+        return NULL;
+    jack_data->clients[jack_data->client_count++] = copy;
+    return copy;
+}
+
+static void ports_cache_clear(JACK_INFO *jack_data) {
+    for (size_t i = 0; i < jack_data->port_count; i++)
+        free(jack_data->ports[i].name);
+    free(jack_data->ports);
+    jack_data->ports = NULL;
+    jack_data->port_count = 0;
+    memset(jack_data->list_first, 0, sizeof(jack_data->list_first));
+    memset(jack_data->list_count, 0, sizeof(jack_data->list_count));
+    for (size_t i = 0; i < jack_data->client_count; i++)
+        free(jack_data->clients[i]);
+    free(jack_data->clients);
+    jack_data->clients = NULL;
+    jack_data->client_count = 0;
+    jack_data->client_max = 0;
+    free(jack_data->conns);
+    jack_data->conns = NULL;
+    jack_data->conn_total = 0;
+    for (size_t i = 0; i < jack_data->ident_count; i++)
+        jack_data->idents[i].rec = SIZE_MAX;
+}
+
+static void port_rec_add(JACK_INFO *jack_data, const char *name,
+                         unsigned int type, unsigned long flow,
+                         size_t capacity) {
+    if (jack_data->port_count >= capacity)
+        return;
+    const char *sep = strchr(name, ':');
+    const char *client =
+        client_intern(jack_data, name, sep ? (size_t)(sep - name) : strlen(name));
+    if (!client)
+        return;
+    uint64_t key = port_ident_intern(jack_data, name);
+    PORT_IDENT *ident = port_ident_at(jack_data, key);
+    if (!ident)
+        return;
+    char *name_copy = strdup(name);
+    if (!name_copy)
+        return;
+    ident->rec = jack_data->port_count;
+    JACK_PORT_REC *rec = &jack_data->ports[jack_data->port_count++];
+    rec->name = name_copy;
+    rec->client = client;
+    rec->key = key;
+    rec->type = type;
+    rec->flow = flow;
+    rec->owner_uid = 0;
+    rec->owner_tag = port_owner_find(jack_data, name, &rec->owner_uid);
+    rec->conn_first = 0;
+    rec->conn_count = 0;
+}
+
+// what each JackPortList after ALL is queried with, in list order
+static const struct {
+    unsigned int type;
+    unsigned long flow;
+} port_list_query[JACK_PORT_LIST_COUNT - 1] = {
+    {PORT_TYPE_AUDIO, JackPortIsOutput},
+    {PORT_TYPE_MIDI, JackPortIsOutput},
+    {PORT_TYPE_AUDIO, JackPortIsInput},
+    {PORT_TYPE_MIDI, JackPortIsInput},
+};
+
+// re-read every audio/midi port from jack. Ports of any other type are left
+// out - nothing in the app can connect to one
+static void ports_rebuild(JACK_INFO *jack_data) {
+    ports_cache_clear(jack_data);
+
+    const char **queried[JACK_PORT_LIST_COUNT - 1] = {0};
+    size_t total = 0;
+    for (size_t q = 0; q < JACK_PORT_LIST_COUNT - 1; q++) {
+        queried[q] = app_jack_port_names(jack_data, NULL, port_list_query[q].type,
+                                         port_list_query[q].flow);
+        if (!queried[q])
+            continue;
+        for (size_t i = 0; queried[q][i]; i++)
+            total++;
+    }
+    if (total > 0) {
+        jack_data->ports = calloc(total, sizeof(JACK_PORT_REC));
+        if (!jack_data->ports)
+            total = 0;
+    }
+    for (size_t q = 0; q < JACK_PORT_LIST_COUNT - 1; q++) {
+        jack_data->list_first[q + 1] = jack_data->port_count;
+        if (queried[q]) {
+            for (size_t i = 0; queried[q][i]; i++)
+                port_rec_add(jack_data, queried[q][i], port_list_query[q].type,
+                             port_list_query[q].flow, total);
+            free(queried[q]);
+        }
+        jack_data->list_count[q + 1] =
+            jack_data->port_count - jack_data->list_first[q + 1];
+    }
+    jack_data->list_first[JACK_PORT_LIST_ALL] = 0;
+    jack_data->list_count[JACK_PORT_LIST_ALL] = jack_data->port_count;
+}
+
+// index of the cached port with this key, port_count when there is none
+static size_t port_index_by_key(JACK_INFO *jack_data, uint64_t key) {
+    const PORT_IDENT *ident = port_ident_at(jack_data, key);
+    if (!ident || ident->rec >= jack_data->port_count)
+        return jack_data->port_count;
+    return ident->rec;
+}
+
+// re-read the graph. Only outputs are asked, and each edge is filed on both
+// ends, so the two sides can never disagree
+static void connections_rebuild(JACK_INFO *jack_data) {
+    free(jack_data->conns);
+    jack_data->conns = NULL;
+    jack_data->conn_total = 0;
+    for (size_t i = 0; i < jack_data->port_count; i++) {
+        jack_data->ports[i].conn_first = 0;
+        jack_data->ports[i].conn_count = 0;
+    }
+    if (!jack_data->client || jack_data->port_count == 0)
+        return;
+
+    size_t *edges = NULL;
+    size_t edge_count = 0;
+    size_t edge_max = 0;
+    for (size_t i = 0; i < jack_data->port_count; i++) {
+        if (jack_data->ports[i].flow != JackPortIsOutput)
+            continue;
+        jack_port_t *port =
+            jack_port_by_name(jack_data->client, jack_data->ports[i].name);
+        if (!port)
+            continue;
+        const char **peers = jack_port_get_connections(port);
+        if (!peers)
+            continue;
+        for (size_t c = 0; peers[c]; c++) {
+            size_t j =
+                port_index_by_key(jack_data, port_ident_find(jack_data, peers[c]));
+            if (j >= jack_data->port_count)
+                continue;
+            if (edge_count == edge_max) {
+                size_t new_max = edge_max ? edge_max * 2 : 32;
+                size_t *grown = realloc(edges, sizeof(size_t) * 2 * new_max);
+                if (!grown) {
+                    free(peers);
+                    goto done;
+                }
+                edges = grown;
+                edge_max = new_max;
+            }
+            edges[edge_count * 2] = i;
+            edges[edge_count * 2 + 1] = j;
+            edge_count++;
+        }
+        free(peers);
+    }
+    if (edge_count == 0)
+        goto done;
+
+    for (size_t e = 0; e < edge_count * 2; e++)
+        jack_data->ports[edges[e]].conn_count++;
+    size_t total = 0;
+    for (size_t i = 0; i < jack_data->port_count; i++) {
+        jack_data->ports[i].conn_first = total;
+        total += jack_data->ports[i].conn_count;
+        jack_data->ports[i].conn_count = 0;
+    }
+    jack_data->conns = calloc(total, sizeof(size_t));
+    if (!jack_data->conns)
+        goto done;
+    jack_data->conn_total = total;
+    for (size_t e = 0; e < edge_count; e++) {
+        size_t a = edges[e * 2];
+        size_t b = edges[e * 2 + 1];
+        jack_data->conns[jack_data->ports[a].conn_first +
+                         jack_data->ports[a].conn_count++] = b;
+        jack_data->conns[jack_data->ports[b].conn_first +
+                         jack_data->ports[b].conn_count++] = a;
+    }
+done:
+    free(edges);
+}
+
+JackPortSync app_jack_ports_sync(JACK_INFO *jack_data) {
+    JackPortSync done = {false, false};
+    if (!jack_data)
+        return done;
+    done.ports = atomic_exchange(&jack_data->ports_changed, false);
+    done.connections = atomic_exchange(&jack_data->connections_changed, false);
+    if (done.ports) {
+        ports_rebuild(jack_data);
+        // record indices moved, so the adjacency has to be rebuilt with them
+        done.connections = true;
+    }
+    if (done.connections)
+        connections_rebuild(jack_data);
+    return done;
+}
+
+static void port_info_fill(const JACK_PORT_REC *rec, JackPortInfo *out) {
+    out->name = rec->name;
+    out->client = rec->client;
+    out->key = rec->key;
+    out->type = rec->type;
+    out->flow = rec->flow;
+    out->owner_tag = rec->owner_tag;
+    out->owner_uid = rec->owner_uid;
+}
+
+size_t app_jack_port_count(JACK_INFO *jack_data, JackPortList list) {
+    if (!jack_data || list >= JACK_PORT_LIST_COUNT)
+        return 0;
+    return jack_data->list_count[list];
+}
+
+bool app_jack_port_at(JACK_INFO *jack_data, JackPortList list, size_t idx,
+                      JackPortInfo *out) {
+    if (!jack_data || !out || list >= JACK_PORT_LIST_COUNT)
+        return false;
+    if (idx >= jack_data->list_count[list])
+        return false;
+    port_info_fill(&jack_data->ports[jack_data->list_first[list] + idx], out);
+    return true;
+}
+
+bool app_jack_port_by_key(JACK_INFO *jack_data, uint64_t key,
+                          JackPortInfo *out) {
+    if (!jack_data || !out)
+        return false;
+    size_t i = port_index_by_key(jack_data, key);
+    if (i >= jack_data->port_count)
+        return false;
+    port_info_fill(&jack_data->ports[i], out);
+    return true;
+}
+
+size_t app_jack_port_connection_count(JACK_INFO *jack_data, uint64_t key) {
+    if (!jack_data)
+        return 0;
+    size_t i = port_index_by_key(jack_data, key);
+    if (i >= jack_data->port_count)
+        return 0;
+    return jack_data->ports[i].conn_count;
+}
+
+bool app_jack_port_connection_at(JACK_INFO *jack_data, uint64_t key, size_t idx,
+                                 JackPortInfo *out) {
+    if (!jack_data || !out)
+        return false;
+    size_t i = port_index_by_key(jack_data, key);
+    if (i >= jack_data->port_count)
+        return false;
+    if (idx >= jack_data->ports[i].conn_count)
+        return false;
+    size_t peer = jack_data->conns[jack_data->ports[i].conn_first + idx];
+    if (peer >= jack_data->port_count)
+        return false;
+    port_info_fill(&jack_data->ports[peer], out);
+    return true;
+}
+
+bool app_jack_port_keys_connected(JACK_INFO *jack_data, uint64_t key_a,
+                                  uint64_t key_b) {
+    if (!jack_data)
+        return false;
+    size_t a = port_index_by_key(jack_data, key_a);
+    size_t b = port_index_by_key(jack_data, key_b);
+    if (a >= jack_data->port_count || b >= jack_data->port_count)
+        return false;
+    for (size_t c = 0; c < jack_data->ports[a].conn_count; c++) {
+        if (jack_data->conns[jack_data->ports[a].conn_first + c] == b)
+            return true;
+    }
+    return false;
 }
 
 // ticks per beat, since user should not set these anyway
@@ -158,6 +583,16 @@ static void app_jack_port_registration_cb(jack_port_id_t port, int registered,
                                           void *arg) {
     (void)port;
     (void)registered;
+    JACK_INFO *jack_data = (JACK_INFO *)arg;
+    if (!jack_data)
+        return;
+    atomic_store(&jack_data->ports_changed, true);
+}
+static void app_jack_port_rename_cb(jack_port_id_t port, const char *old_name,
+                                    const char *new_name, void *arg) {
+    (void)port;
+    (void)old_name;
+    (void)new_name;
     JACK_INFO *jack_data = (JACK_INFO *)arg;
     if (!jack_data)
         return;
@@ -186,8 +621,21 @@ JACK_INFO *jack_initialize(void *arg, const char *client_name,
     jack_data->port_owners = NULL;
     jack_data->port_owner_count = 0;
     jack_data->port_owner_max = 0;
-    atomic_init(&jack_data->ports_changed, false);
-    atomic_init(&jack_data->connections_changed, false);
+    jack_data->ports = NULL;
+    jack_data->port_count = 0;
+    memset(jack_data->list_first, 0, sizeof(jack_data->list_first));
+    memset(jack_data->list_count, 0, sizeof(jack_data->list_count));
+    jack_data->clients = NULL;
+    jack_data->client_count = 0;
+    jack_data->client_max = 0;
+    jack_data->conns = NULL;
+    jack_data->conn_total = 0;
+    jack_data->idents = NULL;
+    jack_data->ident_count = 0;
+    jack_data->ident_max = 0;
+    // start dirty so the first sync builds the cache
+    atomic_init(&jack_data->ports_changed, true);
+    atomic_init(&jack_data->connections_changed, true);
 
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
@@ -272,6 +720,10 @@ JACK_INFO *jack_initialize(void *arg, const char *client_name,
     // requirement
     jack_set_port_connect_callback(jack_data->client, app_jack_port_connect_cb,
                                    jack_data);
+    // a rename is its own notification, not a register/unregister pair - own
+    // renames re-key the cache in app_jack_port_rename, this catches the rest
+    jack_set_port_rename_callback(jack_data->client, app_jack_port_rename_cb,
+                                  jack_data);
 
     /*write some jack client attributes to the jack_data struct*/
     // sample rate of the server
@@ -455,13 +907,24 @@ int app_jack_port_rename(void *client_in, void *port,
     jack_port_t *jack_port = (jack_port_t *)port;
     if (!jack_port)
         return -1;
-    return jack_port_rename(jack_data->client, jack_port, new_port_name);
+
+    // jack_port_name points at the port's own storage, so the old name has to
+    // be taken before the rename overwrites it
+    char *old_name = strdup(jack_port_name(jack_port));
+    int result = jack_port_rename(jack_data->client, jack_port, new_port_name);
+    if (result == 0 && old_name) {
+        const char *new_name = jack_port_name(jack_port);
+        port_ident_rename(jack_data, old_name, new_name);
+        port_owner_rename(jack_data, old_name, new_name);
+        atomic_store(&jack_data->ports_changed, true);
+    }
+    free(old_name);
+    return result;
 }
 
 void *app_jack_create_port_on_client(void *client_in, unsigned int port_type,
                                      unsigned int io_type,
-                                     const char *port_name,
-                                     PortOwnerKind owner_kind,
+                                     const char *port_name, uint64_t owner_tag,
                                      uint64_t owner_uid) {
     JACK_INFO *jack_data = (JACK_INFO *)client_in;
     if (!jack_data)
@@ -486,7 +949,8 @@ void *app_jack_create_port_on_client(void *client_in, unsigned int port_type,
         return NULL;
     // jack prefixes the client name, so record what the port list will see
     port_owner_add(jack_data, jack_port_name((jack_port_t *)ret_port),
-                   owner_kind, owner_uid);
+                   owner_tag, owner_uid);
+    atomic_store(&jack_data->ports_changed, true);
     return ret_port;
 }
 
@@ -514,13 +978,6 @@ int app_jack_activate(JACK_INFO *jack_data) {
 }
 
 int app_jack_port_name_size() { return jack_port_name_size(); }
-
-const char *app_jack_return_port_name(void *port) {
-    if (!port)
-        return NULL;
-    const jack_port_t *cur_port = (jack_port_t *)port;
-    return jack_port_name(cur_port);
-}
 
 void *app_jack_get_buffer_rt(void *port, jack_nframes_t nframes) {
     jack_port_t *cur_port = (jack_port_t *)port;
@@ -577,69 +1034,6 @@ void app_jack_return_notes_vels_rt(void *midi_in, JACK_MIDI_CONT *midi_cont) {
             midi_cont->buf_size[midi_cont->w_pos] = in_event.size;
         midi_cont->w_pos += 1;
     }
-}
-
-int app_jack_disconnect_all_ports(JACK_INFO *jack_data,
-                                  unsigned int type_pattern,
-                                  unsigned long flags) {
-    const char **ports =
-        app_jack_port_names(jack_data, jack_get_client_name(jack_data->client),
-                            type_pattern, flags);
-    if (!ports)
-        return -1;
-    if (!ports[0])
-        return -1;
-    int return_val = 0;
-    const char *port = ports[0];
-    unsigned int iter = 0;
-    while (port) {
-        jack_port_t *port_A = jack_port_by_name(jack_data->client, port);
-        const char **connect_ports = jack_port_get_connections(port_A);
-        if (!connect_ports)
-            goto next;
-        const char *con_port = connect_ports[0];
-        unsigned i = 0;
-        while (con_port) {
-            return_val = jack_disconnect(jack_data->client, port, con_port);
-            i += 1;
-            con_port = connect_ports[i];
-        }
-    next:
-        if (connect_ports)
-            free(connect_ports);
-        iter += 1;
-        port = ports[iter];
-    }
-    free(ports);
-    return return_val;
-}
-
-// return (and clear) whether any port was registered/unregistered anywhere on
-// the system since the last call
-bool app_jack_ports_changed(JACK_INFO *jack_data) {
-    if (!jack_data)
-        return false;
-    return atomic_exchange(&jack_data->ports_changed, false);
-}
-
-// same as app_jack_ports_changed, for any port connect/disconnect (including
-// by another program) since the last call.
-bool app_jack_connections_changed(JACK_INFO *jack_data) {
-    if (!jack_data)
-        return false;
-    return atomic_exchange(&jack_data->connections_changed, false);
-}
-
-int app_jack_is_port(JACK_INFO *jack_data, const char *port_name) {
-    if (!jack_data)
-        return -1;
-    if (!jack_data->client)
-        return -1;
-    jack_port_t *port = jack_port_by_name(jack_data->client, port_name);
-    if (port == NULL)
-        return 0;
-
-    return 1;
 }
 
 int app_jack_disconnect_ports(JACK_INFO *jack_data, const char *source_port,
@@ -737,6 +1131,7 @@ void app_jack_unregister_port(void *client_in, void *port) {
     jack_client_t *client = jack_data->client;
     port_owner_remove(jack_data, jack_port_name((jack_port_t *)port));
     jack_port_unregister(client, port);
+    atomic_store(&jack_data->ports_changed, true);
 }
 
 void jack_clean_memory(void *jack_data_in) {
@@ -751,6 +1146,8 @@ void jack_clean_memory(void *jack_data_in) {
         param_clean_param_container(jack_data->trk_params);
 
     context_sub_clean(jack_data->control_data);
+    ports_cache_clear(jack_data);
+    port_idents_clean(jack_data);
     port_owners_clean(jack_data);
     free(jack_data);
 }

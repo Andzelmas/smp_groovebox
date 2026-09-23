@@ -29,17 +29,6 @@ typedef struct _jack_midi_cont{
 //jack main struct
 typedef struct _jack_info JACK_INFO;
 
-// who a port registered by this client belongs to. Opaque to JACK - the port
-// list uses it to group ports by owner instead of parsing port names
-typedef enum {
-    PORT_OWNER_NONE = 0,
-    PORT_OWNER_MAIN,
-    PORT_OWNER_SAMPLER,
-    PORT_OWNER_LV2_PLUG,
-    PORT_OWNER_CLAP_PLUG,
-    PORT_OWNER_SYNTH,
-} PortOwnerKind;
-
 //function that initializes the client
 JACK_INFO* jack_initialize(void *arg, const char *client_name,
                            int(*process)(jack_nframes_t, void*));
@@ -62,15 +51,59 @@ void app_jack_midi_cont_reset(JACK_MIDI_CONT* midi_cont);
 //rename the port on client
 int app_jack_port_rename(void* client_in, void* port, const char* new_port_name);
 //register ports on a jack client if its known to the data
-//owner_kind/owner_uid identify what the port belongs to and are recorded
-//against its full jack name (see app_jack_port_owner)
+//owner_tag/owner_uid are two numbers the caller uses together to identify what
+//the port belongs to - jack interprets neither, it only hands them back on the
+//port's JackPortInfo. A zero owner_tag means "not recorded"
 void* app_jack_create_port_on_client(void* client_in, unsigned int port_type, unsigned int io_type,
-					    const char* port_name, PortOwnerKind owner_kind,
+					    const char* port_name, uint64_t owner_tag,
 					    uint64_t owner_uid);
-//owner recorded for the port with this full jack name ("client:port").
-//PORT_OWNER_NONE when this client did not register it. out_uid may be NULL
-PortOwnerKind app_jack_port_owner(JACK_INFO* jack_data, const char* port_name,
-                                  uint64_t* out_uid);
+
+//which cached list to read. ALL is every port; the others are the ports a
+//source of the opposite flow and the same type can be connected to
+typedef enum {
+    JACK_PORT_LIST_ALL = 0,
+    JACK_PORT_LIST_OUT_AUDIO,
+    JACK_PORT_LIST_OUT_MIDI,
+    JACK_PORT_LIST_IN_AUDIO,
+    JACK_PORT_LIST_IN_MIDI,
+    JACK_PORT_LIST_COUNT
+} JackPortList;
+
+//one cached port. name/client are borrowed and stay valid until the next
+//app_jack_ports_sync that rebuilds the port list
+typedef struct _jack_port_info {
+    const char* name;   //full "client:port"
+    const char* client; //the client part of name
+    uint64_t key;       //identity minted the first time this port name was
+                        //seen, stable for the life of the program
+    unsigned int type;  //PORT_TYPE_AUDIO or PORT_TYPE_MIDI
+    unsigned long flow; //JackPortIsOutput or JackPortIsInput
+    //as given to app_jack_create_port_on_client. Both 0 for a port this client
+    //did not register
+    uint64_t owner_tag;
+    uint64_t owner_uid;
+} JackPortInfo;
+
+//what app_jack_ports_sync rebuilt
+typedef struct _jack_port_sync {
+    bool ports;
+    bool connections;
+} JackPortSync;
+
+//rebuild whatever jack's notifications invalidated since the last call. The
+//only consumer of the port/connection dirty flags - everything else reads the
+//cache through the accessors below
+JackPortSync app_jack_ports_sync(JACK_INFO* jack_data);
+size_t app_jack_port_count(JACK_INFO* jack_data, JackPortList list);
+bool app_jack_port_at(JACK_INFO* jack_data, JackPortList list, size_t idx,
+                      JackPortInfo* out);
+bool app_jack_port_by_key(JACK_INFO* jack_data, uint64_t key, JackPortInfo* out);
+//ports the one named by key is currently connected to
+size_t app_jack_port_connection_count(JACK_INFO* jack_data, uint64_t key);
+bool app_jack_port_connection_at(JACK_INFO* jack_data, uint64_t key, size_t idx,
+                                 JackPortInfo* out);
+bool app_jack_port_keys_connected(JACK_INFO* jack_data, uint64_t key_a,
+                                  uint64_t key_b);
 //return the smaple rate of a jack client (of the server really)
 float app_jack_return_samplerate(JACK_INFO* jack_data);
 //return the buffer size
@@ -86,21 +119,7 @@ int app_jack_midi_events_write_rt(void* buffer, jack_nframes_t time, const jack_
 				  size_t data_size);
 //return three arrays for the midi_in, notes played, velocities and the times for each in nframe
 void app_jack_return_notes_vels_rt(void* midi_in, JACK_MIDI_CONT* midi_cont);
-//disconnect ports belonging to this client
-int app_jack_disconnect_all_ports(JACK_INFO* jack_data, unsigned int type_pattern, unsigned long flags);
 
-//return (and clear) whether any port was registered/unregistered anywhere on
-//the system since the last call - a coarse hint to go re-poll the live port
-//list, not which port. Fed by jack_set_port_registration_callback.
-bool app_jack_ports_changed(JACK_INFO* jack_data);
-//return (and clear) whether any two ports were connected/disconnected
-//anywhere on the system since the last call (including by another program) -
-//same coarse-hint shape as app_jack_ports_changed. Fed by
-//jack_set_port_connect_callback.
-bool app_jack_connections_changed(JACK_INFO* jack_data);
-
-//check if port with the port_name exists on the client
-int app_jack_is_port(JACK_INFO* jack_data, const char* port_name);
 //disconnect two ports
 int app_jack_disconnect_ports(JACK_INFO* jack_data, const char* source_port, const char* dest_port);
 //connect two ports together
@@ -109,8 +128,6 @@ int app_jack_connect_ports(JACK_INFO* jack_data, const char* source_port, const 
 bool app_jack_ports_connected(JACK_INFO* jack_data, const char* source_port, const char* dest_port);
 //return the size allowed for the port name
 int app_jack_port_name_size();
-//return the name of a single port
-const char* app_jack_return_port_name(void* port);
 //return a list of jack port names
 const char** app_jack_port_names(JACK_INFO *jack_data, const char* port_name_pattern,
 				 unsigned int type_pattern,

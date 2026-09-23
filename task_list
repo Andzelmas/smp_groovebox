@@ -78,6 +78,70 @@ PLAN
    categories, both in params.c, and they already disagree on whether removal
    exists - so which behaviour is "general" is not yet knowable.
 
+6. PORTS / PATCHBAY. Landed: batched CX child reorder, port ownership
+   recorded at registration, port cache in JACK_INFO (records + per-flow/type
+   list ranges + edge set + minted identities). Remaining:
+   6a. Rewire root_connect_* onto the cache. LID_PORTS_OUT -> LID_PORTS_ANY
+       (every port, both flows), LID_PORTS_IN -> LID_PORTS_PEERS (opposite
+       flow, matching type): direction-agnostic source resolution makes the
+       old names wrong. root_connect_resolve_port collapses to one cache
+       lookup - flow and type come off the record, so its per-type
+       jack_get_ports loop goes with it. action_do must order the pair
+       (output, input) before jack_connect and reject same-flow as
+       ERR_INVALID. Implement root_connect_list_count: it is what kills the
+       O(N^2) k-at-top walk in helper_choice_list_step.
+       DataChoice gains group_key/group_label. group_key =
+       MAKE_ID(owner_tag, owner_uid) for our ports, str_hash_fnv1a64(client)
+       for foreign ones. group_label for our ports needs the owner's display
+       name, and there is no uid->handle accessor - clap_plug_plugin_return
+       takes an INDEX, so it is a scan per distinct group (same shape as
+       app_data already uses elsewhere).
+       DELETE IN THIS PASS - none of these fall out on their own:
+         * app_jack_ports_connected: zero callers once LINKED comes from the
+           edge set.
+         * app_jack_port_names: loses its app_data callers, only
+           ports_rebuild still uses it -> out of the header, make it static.
+       app_jack_connect_ports/app_jack_disconnect_ports become key-based
+       (jack_funcs owns the key->name->flow resolution) and update the edge
+       set optimistically on success.
+   6b. Generalise the view traversal out of helper_child_view_build: outward
+       walk + budget split, parameterised by accessor and predicate. Contexts
+       pass is_hidden, choice lists pass the group filter, the connections
+       pane passes DATA_CHOICE_LINKED. Viable only after 6a - the blocker was
+       port labels living in a shared scratch buffer.
+   6c. Choice-list sessions from modal sub-loops into UI_MODE_ACTION driven by
+       main; that is what buys resync (the sub-loops never pump
+       ui_layer_update_cycle). helper_action_do_path stays modal - cooked-mode
+       text entry with no live list behind it. Re-anchor the cursor by
+       remembered DataChoice.value on resync, first row only when that value
+       is gone. ERR_STALE stays as the TOCTOU backstop; resync is for what is
+       on screen.
+       MEMO: with the edge set updated on a successful toggle (6a), the
+       override_value/override_flags pair on helper_choice_list_step has
+       nothing left to work around - delete it here.
+   6d. UI-side group filter. Picker built by walking the list for distinct
+       group_key, once when it opens; fewer than two groups = no affordance.
+       list_count is the UNFILTERED count, so "is there more beyond the
+       window" must come from the traversal's own walk - do not optimise it
+       into a count lookup.
+   6e. Two-pane connections view: LID_PORTS_PEERS plus a DATA_CHOICE_LINKED
+       predicate. No new list id, and both directions come free from
+       direction-agnostic peers. Disconnect is the existing CONNECT toggle.
+   LATER: multi-select targets. targets[]/target_count and
+   DATA_ARG_MULTI_CHOICE are already in the contract; only the UI's hardcoded
+   target_count = 1 is in the way.
+   NOT DOING: ports as CX, a filter field in DataActionReq, LID_CLIENTS, a
+   dedicated LID_PORT_CONNECTIONS, an unanchored input list, a grid view.
+   TRAP: the cache holds audio and midi ports only. LID_PORTS_OUT today
+   queries PORT_TYPE_UNKNOWN, so a port of any other type currently appears
+   in the source list and will stop appearing once 6a lands. Intended - a
+   port whose type cannot be matched cannot be connected - but it is a
+   visible behaviour change.
+   SEAM: the connections view still hands list_at a DataActionReq it is not
+   acting on. Defensible while the view is "what CONNECT would show for this
+   port"; the first view with no corresponding action is when `partial` has
+   to become a real query-params struct.
+
 ================================================================================
 DESIGN FOR (1) - categories in CHOICE / MULTI_CHOICE lists
 ================================================================================
@@ -167,6 +231,37 @@ DECISIONS - settled, do not re-litigate
   purpose_set scans the parent's live children and falls back to index 0).
   What makes that safe is DataOps.id's "never reused for a different object".
   UiStalePolicy modes are ergonomics, not safety.
+- Ports are NOT CX. They churn on every plugin instantiate, and each one
+  costs a CX alloc + hash insert + event + a reconcile pass over every view's
+  target lists. The two things a CX would buy - resync and navigation - are
+  already had from the cache plus the windowed traversal. Revisit ONLY for a
+  browse-style patchbay where a CONNECTION is a navigable object with its own
+  actions; that, not the churn, is the decision point. A grid view is not a
+  tree and would not fit either way.
+- Port identity is MINTED, not hashed. jack_funcs interns every port name it
+  has seen; the key is that slot + 1 (so 0 stays "no port"), and the table
+  outlives the port list - a key survives a rebuild, and a port that
+  disappears and comes back keeps it. A rename re-keys the ident in place,
+  because jack keeps the port and its connections across a rename so the
+  identity must too. Renaming onto an already-interned name takes that
+  identity instead.
+- jack_funcs does not know what owns a port. app_jack_create_port_on_client
+  takes owner_tag + owner_uid: two opaque numbers it stores and hands back on
+  JackPortInfo, interpreting neither. app_data passes (namespace, local), so
+  MAKE_ID(tag, uid) reconstructs the owner's real ContextId with no mapping
+  table. Sampler and main I/O supply both numbers, being one owner each;
+  plugin hosts supply only the tag, their instances minting their own uids.
+- Port list filtering is UI-SIDE, on a DataChoice.group_key the data layer
+  publishes as a FIELD. Never parse a group out of a label - that hardcodes a
+  display format in the consumer. Lists stay dense so the window traversal
+  never needs a second index space. "Client" is the wrong axis: every port
+  this app registers lives on one jack client, so grouping by client
+  collapses every plugin into a single row.
+- app_jack_ports_sync is the ONLY consumer of the ports/connections dirty
+  flags - they are read-and-clear, so a second reader silently eats the
+  notification. Our own create/unregister/rename set ports_changed directly
+  rather than waiting on jack's notification thread; the callbacks stay
+  trivial because the cache tables are main-thread data.
 - is_hidden/value_as_string/value_range stay their own DataOps entries
   rather than generic "properties": they are read on hot paths or gate
   behaviour. DATA_CAP_PROPERTIES was built for the param category and
