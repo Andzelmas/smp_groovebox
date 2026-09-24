@@ -191,6 +191,8 @@ static inline bool data_list_at(const DataObject *obj, DataListId list,
     out->value = 0;
     out->label = NULL;
     out->flags = 0;
+    out->group_key = 0;
+    out->group_label = NULL;
     if (!data_obj_has(obj, DATA_CAP_ACTIONS) || !obj->ops->list_at)
         return false;
     return obj->ops->list_at(obj->user_data, list, partial, idx, out);

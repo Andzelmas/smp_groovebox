@@ -78,69 +78,85 @@ PLAN
    categories, both in params.c, and they already disagree on whether removal
    exists - so which behaviour is "general" is not yet knowable.
 
-6. PORTS / PATCHBAY. Landed: batched CX child reorder, port ownership
-   recorded at registration, port cache in JACK_INFO (records + per-flow/type
-   list ranges + edge set + minted identities). Remaining:
-   6a. Rewire root_connect_* onto the cache. LID_PORTS_OUT -> LID_PORTS_ANY
-       (every port, both flows), LID_PORTS_IN -> LID_PORTS_PEERS (opposite
-       flow, matching type): direction-agnostic source resolution makes the
-       old names wrong. root_connect_resolve_port collapses to one cache
-       lookup - flow and type come off the record, so its per-type
-       jack_get_ports loop goes with it. action_do must order the pair
-       (output, input) before jack_connect and reject same-flow as
-       ERR_INVALID. Implement root_connect_list_count: it is what kills the
-       O(N^2) k-at-top walk in helper_choice_list_step.
-       DataChoice gains group_key/group_label. group_key =
-       MAKE_ID(owner_tag, owner_uid) for our ports, str_hash_fnv1a64(client)
-       for foreign ones. group_label for our ports needs the owner's display
-       name, and there is no uid->handle accessor - clap_plug_plugin_return
-       takes an INDEX, so it is a scan per distinct group (same shape as
-       app_data already uses elsewhere).
-       DELETE IN THIS PASS - none of these fall out on their own:
-         * app_jack_ports_connected: zero callers once LINKED comes from the
-           edge set.
-         * app_jack_port_names: loses its app_data callers, only
-           ports_rebuild still uses it -> out of the header, make it static.
-       app_jack_connect_ports/app_jack_disconnect_ports become key-based
-       (jack_funcs owns the key->name->flow resolution) and update the edge
-       set optimistically on success.
+6. PORTS / PATCHBAY.
+   LANDED: batched CX child reorder; port ownership recorded at registration;
+   port cache in JACK_INFO (records + per-flow/type list ranges + edge set +
+   minted identities, re-keyed on rename); root_connect_* on the cache -
+   direction-agnostic, with list_count, group_key/group_label, key-based
+   linking, and the override_value/override_flags pair on
+   helper_choice_list_step deleted (the edge set updates on a successful
+   toggle, so nothing was left for it to work around).
+
+   FIRST: none of the above has run against a live jack server. Unit tests
+   drive jack_funcs through mocks and cannot see whether
+   jack_set_port_rename_callback links at all (JACK_OPTIONAL_WEAK_EXPORT),
+   whether the four typed jack_get_ports queries partition as assumed,
+   whether the owner registry catches every port given registration happens
+   before jack_activate, whether group_label's scans resolve (a loaded plugin
+   must show its own name, not the jack client's), or whether connect works
+   end to end against another patchbay. Everything below assumes the cache is
+   right.
+
+   6a. Choice-list sessions from modal sub-loops into UI_MODE_ACTION driven by
+       main. FIRST of the remaining four, ahead of the traversal work, because
+       the cache introduced a regression only this closes:
+       app_jack_ports_sync runs only from app_data_update <- app_intrf's
+       update cycle <- ui_layer_update_cycle, which the modal loop never
+       pumps - so the port list is now FROZEN for the length of a connect
+       session, where it used to query jack live per row. Connections are
+       unaffected (the optimistic edge update covers the session's own
+       mutations); port appearance/disappearance is what is stuck.
+       Does NOT depend on 6b: land it rendering every row as today, and let
+       6b add the window afterwards.
+       The locals in helper_action_do_connect (mode, both cursors,
+       source_value) join ui_nav_mode / candidates / action_status_msg.
+       *cursor is already caller-owned for exactly this ("survives across
+       calls - including across a mode switch that later resumes the same
+       list"). helper_action_do_path stays modal - cooked-mode text entry,
+       no live list behind it. Re-anchor the cursor by remembered
+       DataChoice.value on resync, first row only when that value is gone.
+       ERR_STALE stays as the TOCTOU backstop; resync is for what is on
+       screen.
+       VERIFY: register a port from another program mid-list - the list
+       updates and the cursor holds its row.
    6b. Generalise the view traversal out of helper_child_view_build: outward
        walk + budget split, parameterised by accessor and predicate. Contexts
        pass is_hidden, choice lists pass the group filter, the connections
-       pane passes DATA_CHOICE_LINKED. Viable only after 6a - the blocker was
-       port labels living in a shared scratch buffer.
-   6c. Choice-list sessions from modal sub-loops into UI_MODE_ACTION driven by
-       main; that is what buys resync (the sub-loops never pump
-       ui_layer_update_cycle). helper_action_do_path stays modal - cooked-mode
-       text entry with no live list behind it. Re-anchor the cursor by
-       remembered DataChoice.value on resync, first row only when that value
-       is gone. ERR_STALE stays as the TOCTOU backstop; resync is for what is
-       on screen.
-       MEMO: with the edge set updated on a successful toggle (6a), the
-       override_value/override_flags pair on helper_choice_list_step has
-       nothing left to work around - delete it here.
-   6d. UI-side group filter. Picker built by walking the list for distinct
-       group_key, once when it opens; fewer than two groups = no affordance.
+       pane passes DATA_CHOICE_LINKED. Only became viable once port labels
+       stopped living in a shared scratch buffer. Retrofit the context path
+       first and confirm it is unchanged before anything else uses it.
+       VERIFY: the context display renders identically and the geometry
+       checks still pass.
+   6c. UI-side group filter. Picker built by walking the list for distinct
+       group_key/group_label, once when it opens; fewer than two groups = no
+       affordance. Filter state is UI-side, the predicate goes into 6b's
+       traversal, no data-layer change.
        list_count is the UNFILTERED count, so "is there more beyond the
-       window" must come from the traversal's own walk - do not optimise it
-       into a count lookup.
-   6e. Two-pane connections view: LID_PORTS_PEERS plus a DATA_CHOICE_LINKED
+       window" must come from the traversal's own walk - do not later
+       optimise it into a count lookup.
+       VERIFY: filtering to one plugin shows exactly that plugin's ports and
+       the window markers stay honest.
+   6d. Two-pane connections view: LID_PORTS_PEERS plus a DATA_CHOICE_LINKED
        predicate. No new list id, and both directions come free from
-       direction-agnostic peers. Disconnect is the existing CONNECT toggle.
+       direction-agnostic peers. Windowed by 6b, filterable by 6c. Disconnect
+       is the existing CONNECT toggle.
+       VERIFY: hovering an output shows its inputs, hovering an input shows
+       what feeds it, and toggling from either side lands the same result.
+
    LATER: multi-select targets. targets[]/target_count and
    DATA_ARG_MULTI_CHOICE are already in the contract; only the UI's hardcoded
    target_count = 1 is in the way.
    NOT DOING: ports as CX, a filter field in DataActionReq, LID_CLIENTS, a
    dedicated LID_PORT_CONNECTIONS, an unanchored input list, a grid view.
-   TRAP: the cache holds audio and midi ports only. LID_PORTS_OUT today
-   queries PORT_TYPE_UNKNOWN, so a port of any other type currently appears
-   in the source list and will stop appearing once 6a lands. Intended - a
-   port whose type cannot be matched cannot be connected - but it is a
-   visible behaviour change.
-   SEAM: the connections view still hands list_at a DataActionReq it is not
-   acting on. Defensible while the view is "what CONNECT would show for this
-   port"; the first view with no corresponding action is when `partial` has
-   to become a real query-params struct.
+   TRAP (already live): the cache holds audio and midi ports only. The source
+   list used to query PORT_TYPE_UNKNOWN, so a port of any other type used to
+   appear there and no longer does. Intended - a port whose type cannot be
+   matched cannot be connected - but it is a visible behaviour change, not a
+   bug to go hunting.
+   SEAM: the connections view hands list_at a DataActionReq it is not acting
+   on. Defensible while the view is "what CONNECT would show for this port";
+   the first view with no corresponding action is when `partial` has to
+   become a real query-params struct.
 
 ================================================================================
 DESIGN FOR (1) - categories in CHOICE / MULTI_CHOICE lists

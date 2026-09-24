@@ -104,6 +104,11 @@ bool app_jack_port_connection_at(JACK_INFO* jack_data, uint64_t key, size_t idx,
                                  JackPortInfo* out);
 bool app_jack_port_keys_connected(JACK_INFO* jack_data, uint64_t key_a,
                                   uint64_t key_b);
+//link or unlink two cached ports. They must be of opposite flow; the pair is
+//ordered for jack here, so either order works. 0 on success
+int app_jack_connect_keys(JACK_INFO* jack_data, uint64_t key_a, uint64_t key_b);
+int app_jack_disconnect_keys(JACK_INFO* jack_data, uint64_t key_a,
+                             uint64_t key_b);
 //return the smaple rate of a jack client (of the server really)
 float app_jack_return_samplerate(JACK_INFO* jack_data);
 //return the buffer size
@@ -120,18 +125,8 @@ int app_jack_midi_events_write_rt(void* buffer, jack_nframes_t time, const jack_
 //return three arrays for the midi_in, notes played, velocities and the times for each in nframe
 void app_jack_return_notes_vels_rt(void* midi_in, JACK_MIDI_CONT* midi_cont);
 
-//disconnect two ports
-int app_jack_disconnect_ports(JACK_INFO* jack_data, const char* source_port, const char* dest_port);
-//connect two ports together
-int app_jack_connect_ports(JACK_INFO* jack_data, const char* source_port, const char* dest_port);
-//is source_port currently connected to dest_port?
-bool app_jack_ports_connected(JACK_INFO* jack_data, const char* source_port, const char* dest_port);
 //return the size allowed for the port name
 int app_jack_port_name_size();
-//return a list of jack port names
-const char** app_jack_port_names(JACK_INFO *jack_data, const char* port_name_pattern,
-				 unsigned int type_pattern,
-				 unsigned long flags);
 //function callback when server changes the sample_rate
 int sample_rate_change(jack_nframes_t new_sample_rate, void *arg);
 //unregister port from client

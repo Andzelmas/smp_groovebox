@@ -32,6 +32,7 @@ enum trkParamId {
 
 static thread_local bool is_audio_thread = false;
 
+
 // a port name and the identity minted for it. Outlives the port list, so a
 // key keeps meaning the same port across rebuilds and across a port that
 // disappears and comes back
@@ -355,6 +356,32 @@ static const struct {
     {PORT_TYPE_MIDI, JackPortIsInput},
 };
 
+static const char **app_jack_port_names(JACK_INFO *jack_data,
+                                 const char *port_name_pattern,
+                                 unsigned int type_pattern,
+                                 unsigned long flags) {
+
+    const char *type = NULL;
+    switch (type_pattern) {
+    case PORT_TYPE_AUDIO:
+        type = JACK_DEFAULT_AUDIO_TYPE;
+        break;
+    case PORT_TYPE_MIDI:
+        type = JACK_DEFAULT_MIDI_TYPE;
+        break;
+    case PORT_TYPE_UNKNOWN:
+        // NULL is jack_get_ports()'s own "match any type" wildcard -
+        // PORT_TYPE_UNKNOWN is otherwise unused by this function, so it doubles
+        // as "give me everything"
+        type = NULL;
+        break;
+    default:
+        type = JACK_DEFAULT_AUDIO_TYPE;
+    }
+
+    return jack_get_ports(jack_data->client, port_name_pattern, type, flags);
+}
+
 // re-read every audio/midi port from jack. Ports of any other type are left
 // out - nothing in the app can connect to one
 static void ports_rebuild(JACK_INFO *jack_data) {
@@ -398,9 +425,9 @@ static size_t port_index_by_key(JACK_INFO *jack_data, uint64_t key) {
     return ident->rec;
 }
 
-// re-read the graph. Only outputs are asked, and each edge is filed on both
-// ends, so the two sides can never disagree
-static void connections_rebuild(JACK_INFO *jack_data) {
+// lay an edge list (pairs of record indices) out as the per-record adjacency
+static void conns_pack(JACK_INFO *jack_data, const size_t *edges,
+                       size_t edge_count) {
     free(jack_data->conns);
     jack_data->conns = NULL;
     jack_data->conn_total = 0;
@@ -408,6 +435,34 @@ static void connections_rebuild(JACK_INFO *jack_data) {
         jack_data->ports[i].conn_first = 0;
         jack_data->ports[i].conn_count = 0;
     }
+    if (edge_count == 0)
+        return;
+    for (size_t e = 0; e < edge_count * 2; e++)
+        jack_data->ports[edges[e]].conn_count++;
+    size_t total = 0;
+    for (size_t i = 0; i < jack_data->port_count; i++) {
+        jack_data->ports[i].conn_first = total;
+        total += jack_data->ports[i].conn_count;
+        jack_data->ports[i].conn_count = 0;
+    }
+    jack_data->conns = calloc(total, sizeof(size_t));
+    if (!jack_data->conns)
+        return;
+    jack_data->conn_total = total;
+    for (size_t e = 0; e < edge_count; e++) {
+        size_t a = edges[e * 2];
+        size_t b = edges[e * 2 + 1];
+        jack_data->conns[jack_data->ports[a].conn_first +
+                         jack_data->ports[a].conn_count++] = b;
+        jack_data->conns[jack_data->ports[b].conn_first +
+                         jack_data->ports[b].conn_count++] = a;
+    }
+}
+
+// re-read the graph. Only outputs are asked, and each edge is filed on both
+// ends, so the two sides can never disagree
+static void connections_rebuild(JACK_INFO *jack_data) {
+    conns_pack(jack_data, NULL, 0);
     if (!jack_data->client || jack_data->port_count == 0)
         return;
 
@@ -445,30 +500,40 @@ static void connections_rebuild(JACK_INFO *jack_data) {
         }
         free(peers);
     }
-    if (edge_count == 0)
-        goto done;
-
-    for (size_t e = 0; e < edge_count * 2; e++)
-        jack_data->ports[edges[e]].conn_count++;
-    size_t total = 0;
-    for (size_t i = 0; i < jack_data->port_count; i++) {
-        jack_data->ports[i].conn_first = total;
-        total += jack_data->ports[i].conn_count;
-        jack_data->ports[i].conn_count = 0;
-    }
-    jack_data->conns = calloc(total, sizeof(size_t));
-    if (!jack_data->conns)
-        goto done;
-    jack_data->conn_total = total;
-    for (size_t e = 0; e < edge_count; e++) {
-        size_t a = edges[e * 2];
-        size_t b = edges[e * 2 + 1];
-        jack_data->conns[jack_data->ports[a].conn_first +
-                         jack_data->ports[a].conn_count++] = b;
-        jack_data->conns[jack_data->ports[b].conn_first +
-                         jack_data->ports[b].conn_count++] = a;
-    }
+    conns_pack(jack_data, edges, edge_count);
 done:
+    free(edges);
+}
+
+// re-pack the adjacency with one edge added or dropped, from what the cache
+// already holds. Not re-read from jack: a connect just issued can still
+// report its old state there for a cycle
+static void edge_set_toggle(JACK_INFO *jack_data, size_t a, size_t b,
+                            bool connect) {
+    size_t cap = jack_data->conn_total / 2 + 1;
+    size_t *edges = malloc(sizeof(size_t) * 2 * cap);
+    if (!edges)
+        return;
+    size_t count = 0;
+    // each edge is filed on both ends, so the output side sees each one once
+    for (size_t i = 0; i < jack_data->port_count; i++) {
+        if (jack_data->ports[i].flow != JackPortIsOutput)
+            continue;
+        for (size_t c = 0; c < jack_data->ports[i].conn_count; c++) {
+            size_t peer = jack_data->conns[jack_data->ports[i].conn_first + c];
+            if ((i == a && peer == b) || (i == b && peer == a))
+                continue;
+            edges[count * 2] = i;
+            edges[count * 2 + 1] = peer;
+            count++;
+        }
+    }
+    if (connect && count < cap) {
+        edges[count * 2] = a;
+        edges[count * 2 + 1] = b;
+        count++;
+    }
+    conns_pack(jack_data, edges, count);
     free(edges);
 }
 
@@ -1036,78 +1101,39 @@ void app_jack_return_notes_vels_rt(void *midi_in, JACK_MIDI_CONT *midi_cont) {
     }
 }
 
-int app_jack_disconnect_ports(JACK_INFO *jack_data, const char *source_port,
-                              const char *dest_port) {
-    if (!jack_data)
+// jack_connect wants the output first, so the pair is ordered here. Two ports
+// of the same flow cannot be linked at all
+static int port_keys_link(JACK_INFO *jack_data, uint64_t key_a, uint64_t key_b,
+                          bool connect) {
+    if (!jack_data || !jack_data->client)
         return -1;
-    if (!jack_data->client)
+    size_t a = port_index_by_key(jack_data, key_a);
+    size_t b = port_index_by_key(jack_data, key_b);
+    if (a >= jack_data->port_count || b >= jack_data->port_count)
         return -1;
-    return jack_disconnect(jack_data->client, source_port, dest_port);
+    if (jack_data->ports[a].flow == jack_data->ports[b].flow)
+        return -1;
+    size_t out = jack_data->ports[a].flow == JackPortIsOutput ? a : b;
+    size_t in = (out == a) ? b : a;
+    int result =
+        connect ? jack_connect(jack_data->client, jack_data->ports[out].name,
+                               jack_data->ports[in].name)
+                : jack_disconnect(jack_data->client, jack_data->ports[out].name,
+                                  jack_data->ports[in].name);
+    if (result != 0)
+        return result;
+    edge_set_toggle(jack_data, out, in, connect);
+    return 0;
 }
 
-int app_jack_connect_ports(JACK_INFO *jack_data, const char *source_port,
-                           const char *dest_port) {
-    if (!jack_data)
-        return -1;
-    if (!jack_data->client)
-        return -1;
-    return jack_connect(jack_data->client, source_port, dest_port);
+int app_jack_connect_keys(JACK_INFO *jack_data, uint64_t key_a,
+                          uint64_t key_b) {
+    return port_keys_link(jack_data, key_a, key_b, true);
 }
 
-const char **app_jack_port_names(JACK_INFO *jack_data,
-                                 const char *port_name_pattern,
-                                 unsigned int type_pattern,
-                                 unsigned long flags) {
-
-    const char *type = NULL;
-    switch (type_pattern) {
-    case PORT_TYPE_AUDIO:
-        type = JACK_DEFAULT_AUDIO_TYPE;
-        break;
-    case PORT_TYPE_MIDI:
-        type = JACK_DEFAULT_MIDI_TYPE;
-        break;
-    case PORT_TYPE_UNKNOWN:
-        // NULL is jack_get_ports()'s own "match any type" wildcard -
-        // PORT_TYPE_UNKNOWN is otherwise unused by this function, so it doubles
-        // as "give me everything"
-        type = NULL;
-        break;
-    default:
-        type = JACK_DEFAULT_AUDIO_TYPE;
-    }
-
-    return jack_get_ports(jack_data->client, port_name_pattern, type, flags);
-}
-
-// is source_port currently connected to dest_port? walks source_port's live
-// connection list
-bool app_jack_ports_connected(JACK_INFO *jack_data, const char *source_port,
-                              const char *dest_port) {
-    if (!jack_data)
-        return false;
-    if (!jack_data->client)
-        return false;
-    if (!source_port || !dest_port)
-        return false;
-
-    jack_port_t *port = jack_port_by_name(jack_data->client, source_port);
-    if (!port)
-        return false;
-
-    const char **connections = jack_port_get_connections(port);
-    if (!connections)
-        return false;
-
-    bool found = false;
-    for (unsigned int i = 0; connections[i]; i++) {
-        if (strcmp(connections[i], dest_port) == 0) {
-            found = true;
-            break;
-        }
-    }
-    free(connections);
-    return found;
+int app_jack_disconnect_keys(JACK_INFO *jack_data, uint64_t key_a,
+                             uint64_t key_b) {
+    return port_keys_link(jack_data, key_a, key_b, false);
 }
 
 int sample_rate_change(jack_nframes_t new_sample_rate, void *arg) {

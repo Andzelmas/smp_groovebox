@@ -86,6 +86,12 @@ typedef struct {
     uint32_t flags;          // bit 0 (DATA_CHOICE_LINKED): already linked to
                               // partial->connect.source. 0 for non-connect
                               // lists (e.g. the plugin catalogue).
+    // which group this row belongs to, for a view that wants to filter by one.
+    // Stable and comparable within this list only - NOT resolvable as a
+    // ContextId. 0 when the list has no grouping, in which case group_label is
+    // NULL too. group_label is borrowed on the same terms as label
+    uint64_t group_key;
+    const char *group_label;
 } DataChoice;
 
 // the filled-in request to execute an action. Strings and the targets[]

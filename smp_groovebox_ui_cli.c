@@ -601,21 +601,11 @@ typedef enum {
 // including across a mode switch that later resumes the same list (see
 // helper_action_do_connect). This is the one primitive every list-based
 // action interaction below is built from.
-//
-// override_value/override_flags let a caller override one row's flags for
-// this render only (override_value == 0, never a real DataChoice.value,
-// means "no override"). This exists because a list's flags can come from a
-// live external source whose own change-notification lags behind an action
-// this same caller just performed (e.g. JACK: app_jack_ports_connected reads
-// a best-effort local cache, not the server, so a just-toggled row can still
-// read as its pre-toggle state for a frame)
 static ListStepResult helper_choice_list_step(UI_LAYER *ui_layer, ContextId context,
                                               DataListId list,
                                               const DataActionReq *partial,
                                               const char *title, const char *status,
-                                              size_t *cursor, DataChoice *out,
-                                              uint64_t override_value,
-                                              uint32_t override_flags) {
+                                              size_t *cursor, DataChoice *out) {
     printf("\033[2J\033[H-- %s (j/k move, l select, h/ESC back) --\n\n",
           title ? title : "");
 
@@ -625,10 +615,8 @@ static ListStepResult helper_choice_list_step(UI_LAYER *ui_layer, ContextId cont
          ui_layer_context_list_at(ui_layer, context, list, partial, i, &row);
          i++) {
         any = true;
-        uint32_t flags = (override_value != 0 && row.value == override_value)
-                            ? override_flags : row.flags;
         printf("%s%s%s\n", i == *cursor ? ">" : "", row.label ? row.label : "?",
-              (flags & DATA_CHOICE_LINKED) ? " [connected]" : "");
+              (row.flags & DATA_CHOICE_LINKED) ? " [connected]" : "");
     }
     if (!any)
         printf("(no options)\n");
@@ -735,7 +723,7 @@ static ContextId helper_action_do_choice_repeat(UI_LAYER *ui_layer, ContextId co
         DataChoice picked;
         ListStepResult step = helper_choice_list_step(
             ui_layer, context, spec->list, &partial,
-            spec->label ? spec->label : spec->name, msg, &cursor, &picked, 0, 0);
+            spec->label ? spec->label : spec->name, msg, &cursor, &picked);
         msg[0] = '\0';
         if (step == LIST_STEP_CANCELLED)
             break;
@@ -774,13 +762,8 @@ static ContextId helper_action_do_connect(UI_LAYER *ui_layer, ContextId context,
     enum { CONNECT_MODE_SOURCE, CONNECT_MODE_TARGETS } mode = CONNECT_MODE_SOURCE;
     size_t source_cursor = 0;
     size_t target_cursor = 0;
-    DataChoice source_choice = {0};
+    uint64_t source_value = 0;
     ContextId last_new = CONTEXT_ID_INVALID;
-    // the row we just toggled, and what we know its flags must now be - see
-    // helper_choice_list_step's override_value doc. Reset to "none" (0) once
-    // shown
-    uint64_t override_value = 0;
-    uint32_t override_flags = 0;
 
     while (1) {
         if (mode == CONNECT_MODE_SOURCE) {
@@ -789,11 +772,11 @@ static ContextId helper_action_do_connect(UI_LAYER *ui_layer, ContextId context,
             ListStepResult step = helper_choice_list_step(
                 ui_layer, context, source_spec->list, &partial,
                 source_spec->label ? source_spec->label : source_spec->name,
-                msg, &source_cursor, &picked, 0, 0);
+                msg, &source_cursor, &picked);
             if (step == LIST_STEP_CANCELLED)
                 break;
             if (step == LIST_STEP_SELECTED) {
-                source_choice = picked;
+                source_value = picked.value;
                 target_cursor = 0;
                 msg[0] = '\0';
                 mode = CONNECT_MODE_TARGETS;
@@ -802,14 +785,13 @@ static ContextId helper_action_do_connect(UI_LAYER *ui_layer, ContextId context,
         }
 
         DataActionReq partial = {.type = DATA_ACTION_CONNECT,
-                                 .connect.source = source_choice.value};
+                                 .connect.source = source_value};
         DataChoice picked;
         ListStepResult step = helper_choice_list_step(
             ui_layer, context, targets_spec->list, &partial,
             targets_spec->label ? targets_spec->label : targets_spec->name,
-            msg, &target_cursor, &picked, override_value, override_flags);
+            msg, &target_cursor, &picked);
         msg[0] = '\0';
-        override_value = 0;
         if (step == LIST_STEP_CANCELLED) {
             mode = CONNECT_MODE_SOURCE;
             continue;
@@ -819,20 +801,14 @@ static ContextId helper_action_do_connect(UI_LAYER *ui_layer, ContextId context,
 
         uint64_t target_value = picked.value;
         DataActionReq req = {.type = DATA_ACTION_CONNECT,
-                             .connect.source = source_choice.value,
+                             .connect.source = source_value,
                              .connect.targets = &target_value,
                              .connect.target_count = 1};
         ContextId out_new = CONTEXT_ID_INVALID;
         DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
         helper_action_result_msg(result, label, msg, msg_cap);
-        if (result == DATA_ACTION_OK) {
+        if (result == DATA_ACTION_OK)
             last_new = out_new;
-            // root_connect_action_do toggles: already-linked -> disconnect, else
-            // connect. picked.flags is this row's LINKED state as read just
-            // before the toggle, so the new state is its exact negation
-            override_value = picked.value;
-            override_flags = picked.flags ^ DATA_CHOICE_LINKED;
-        }
     }
     if (msg[0] == '\0')
         snprintf(msg, msg_cap, "%s: cancelled.", label);
