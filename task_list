@@ -87,8 +87,9 @@ PLAN
    helper_choice_list_step deleted (the edge set updates on a successful
    toggle, so nothing was left for it to work around).
 
-   FIRST: none of the above has run against a live jack server. Unit tests
-   drive jack_funcs through mocks and cannot see whether
+   FIRST: only connect/disconnect has been exercised against a live jack
+   server so far (connect fine, disconnect see 6e). Unit tests drive
+   jack_funcs through mocks and still cannot see whether
    jack_set_port_rename_callback links at all (JACK_OPTIONAL_WEAK_EXPORT),
    whether the four typed jack_get_ports queries partition as assumed,
    whether the owner registry catches every port given registration happens
@@ -142,6 +143,17 @@ PLAN
        is the existing CONNECT toggle.
        VERIFY: hovering an output shows its inputs, hovering an input shows
        what feeds it, and toggling from either side lands the same result.
+   6e. AFTER 6a-6d: disconnecting sometimes needs `l` pressed twice; connecting
+       has not shown it. Deliberately left until the UI refactor is in -
+       6a changes when sync runs relative to a toggle, which may change or
+       hide the symptom. Unconfirmed leads, in the order to check them:
+       * log what jack_connect/jack_disconnect actually return. A link jack
+         refuses skips the edge-set update, so cache and server disagree and
+         the next press issues the other operation.
+       * a toggle's own notification sets connections_changed, and the next
+         sync re-reads the graph from jack. If jack's view has not caught up
+         at that moment, the rebuild restores the old state and nothing
+         corrects it until the next graph change.
 
    LATER: multi-select targets. targets[]/target_count and
    DATA_ARG_MULTI_CHOICE are already in the contract; only the UI's hardcoded

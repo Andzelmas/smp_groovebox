@@ -1,8 +1,10 @@
 #pragma once
 #include "structs.h"
 
-// names for the various contexts
+// the jack client this app registers as
 #define APP_NAME "smp_grvbx"
+// names for the various contexts
+#define ROOT_NAME "grvbx"
 #define PLUGINS_LV2_NAME "Lv2_Plugins"
 #define PLUGINS_CLAP_NAME "Clap_Plugins"
 #define SAMPLER_NAME "Sampler"

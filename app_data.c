@@ -222,6 +222,9 @@ enum {
     DATA_NS_SYNTH_OSC = 5,
     DATA_NS_PARAM = 6,
     DATA_NS_PARAM_CATEGORY = 7,
+    // never a context: groups ports of other jack clients, so their group_key
+    // cannot land on an owner's ContextId
+    DATA_NS_JACK_CLIENT = 8,
 };
 
 // mask for everything below the namespace byte (56 bits). MAKE_ID keeps all
@@ -1199,7 +1202,7 @@ static bool root_child_at(void *user_data, size_t idx, DataObject *out) {
 }
 static const char *root_name(void *user_data) {
     (void)user_data;
-    return APP_NAME;
+    return ROOT_NAME;
 }
 static ContextId root_id(void *user_data) {
     (void)user_data;
@@ -1236,12 +1239,11 @@ static bool root_connect_source(JACK_INFO *jack_data,
 // has only its jack client to go on
 static uint64_t root_port_group_key(const JackPortInfo *info) {
     if (info->owner_tag == 0)
-        return str_hash_fnv1a64(info->client);
+        return MAKE_ID(DATA_NS_JACK_CLIENT, str_hash_fnv1a64(info->client));
     return MAKE_ID(info->owner_tag, info->owner_uid);
 }
 
-// owner handles are only reachable by index, so this is a scan - callers ask
-// once per distinct group, not per row
+// owner handles are only reachable by index, so this is a scan
 static const char *root_port_group_label(APP_INFO *app_data,
                                          const JackPortInfo *info) {
     switch ((unsigned)info->owner_tag) {
@@ -1405,26 +1407,30 @@ static DataActionResult root_connect_action_do(void *user_data,
                               &source))
         return DATA_ACTION_ERR_STALE;
 
-    bool any_failed = false;
+    // every target is checked before any is linked, so a request that is
+    // wrong or out of date changes nothing
     for (size_t i = 0; i < req->connect.target_count; i++) {
         ContextId target_val = (ContextId)req->connect.targets[i];
-        if (CTXID_NS(target_val) != DATA_LIST_NS_PORTS) {
-            any_failed = true;
-            continue;
-        }
+        if (CTXID_NS(target_val) != DATA_LIST_NS_PORTS)
+            return DATA_ACTION_ERR_INVALID;
         JackPortInfo target;
         if (!app_jack_port_by_key(jack_data, target_val & CTXID_LOCAL_MASK,
-                                  &target)) {
-            any_failed = true;
-            continue;
-        }
-        // a same-flow pair is refused by the link itself, no check needed here
+                                  &target))
+            return DATA_ACTION_ERR_STALE;
+        // the peers list only offers opposite flow and matching type
+        if (target.flow == source.flow || target.type != source.type)
+            return DATA_ACTION_ERR_INVALID;
+    }
+
+    bool any_failed = false;
+    for (size_t i = 0; i < req->connect.target_count; i++) {
+        uint64_t target_key = req->connect.targets[i] & CTXID_LOCAL_MASK;
         bool linked =
-            app_jack_port_keys_connected(jack_data, source.key, target.key);
+            app_jack_port_keys_connected(jack_data, source.key, target_key);
         int rc = linked
                      ? app_jack_disconnect_keys(jack_data, source.key,
-                                                target.key)
-                     : app_jack_connect_keys(jack_data, source.key, target.key);
+                                                target_key)
+                     : app_jack_connect_keys(jack_data, source.key, target_key);
         if (rc != 0)
             any_failed = true;
     }
