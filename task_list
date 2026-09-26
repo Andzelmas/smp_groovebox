@@ -86,6 +86,12 @@ PLAN
    linking, and the override_value/override_flags pair on
    helper_choice_list_step deleted (the edge set updates on a successful
    toggle, so nothing was left for it to work around).
+   6a landed: list sessions are a UI_MODE_LIST frame driven by main (not
+   UI_MODE_ACTION - that name was already the action-letter drill), so the
+   update cycle runs between keypresses and the port list no longer freezes.
+   The cursor follows its row by DataChoice.value. j/k wrap through
+   list_count, which retired the walk-to-the-end k at the top of a list.
+   Remaining: 6b-6e.
 
    FIRST: only connect/disconnect has been exercised against a live jack
    server so far (connect fine, disconnect see 6e). Unit tests drive
@@ -98,28 +104,6 @@ PLAN
    end to end against another patchbay. Everything below assumes the cache is
    right.
 
-   6a. Choice-list sessions from modal sub-loops into UI_MODE_ACTION driven by
-       main. FIRST of the remaining four, ahead of the traversal work, because
-       the cache introduced a regression only this closes:
-       app_jack_ports_sync runs only from app_data_update <- app_intrf's
-       update cycle <- ui_layer_update_cycle, which the modal loop never
-       pumps - so the port list is now FROZEN for the length of a connect
-       session, where it used to query jack live per row. Connections are
-       unaffected (the optimistic edge update covers the session's own
-       mutations); port appearance/disappearance is what is stuck.
-       Does NOT depend on 6b: land it rendering every row as today, and let
-       6b add the window afterwards.
-       The locals in helper_action_do_connect (mode, both cursors,
-       source_value) join ui_nav_mode / candidates / action_status_msg.
-       *cursor is already caller-owned for exactly this ("survives across
-       calls - including across a mode switch that later resumes the same
-       list"). helper_action_do_path stays modal - cooked-mode text entry,
-       no live list behind it. Re-anchor the cursor by remembered
-       DataChoice.value on resync, first row only when that value is gone.
-       ERR_STALE stays as the TOCTOU backstop; resync is for what is on
-       screen.
-       VERIFY: register a port from another program mid-list - the list
-       updates and the cursor holds its row.
    6b. Generalise the view traversal out of helper_child_view_build: outward
        walk + budget split, parameterised by accessor and predicate. Contexts
        pass is_hidden, choice lists pass the group filter, the connections

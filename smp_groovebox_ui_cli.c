@@ -86,10 +86,38 @@ enum UiPurpose{
 // navigation modes
 // standard - where standard hjkl navigation works
 // action - where the user started selecting an action for a context
+// list - an action's argument is being picked from a live list
 enum Ui_Modes{
     UI_MODE_STANDARD = 1,
-    UI_MODE_ACTION = 2
+    UI_MODE_ACTION = 2,
+    UI_MODE_LIST = 3
 };
+
+enum { LIST_SESSION_CHOICE, LIST_SESSION_CONNECT };
+enum { CONNECT_PICK_SOURCE, CONNECT_PICK_TARGETS };
+
+// where a list's cursor is, and the row it sits on, so it can follow that row
+// when the list changes under it
+typedef struct _list_cursor{
+    size_t idx;
+    uint64_t value; // 0 until the cursor has landed on a row
+} LIST_CURSOR;
+
+// an action whose argument is picked from a live list. The main loop drives it
+// one frame at a time, so the list resyncs between keypresses.
+// CHOICE browses specs[0] and runs the action per pick, staying open.
+// CONNECT picks a source from specs[0], then toggles links to rows of
+// specs[1]; h/ESC there steps back to the source list
+typedef struct _list_session{
+    int kind;
+    ContextId context;
+    DataActionType type;
+    const char *label; // the action's label, static in the data layer
+    DataArgSpec specs[2];
+    int connect_pick;
+    LIST_CURSOR cursors[2]; // one per spec
+    uint64_t source_value;  // CONNECT: the source picked from specs[0]
+} LIST_SESSION;
 
 static bool helper_context_info_get( UI_LAYER *ui_layer, ContextId context, CONTEXT_INTRF_INFO *info)
 {
@@ -587,27 +615,73 @@ static void helper_string_print_underline(const char* string, char char_underlin
     }
 }
 
-typedef enum {
-    LIST_STEP_CONTINUE,   // cursor moved or just redrawn, keep looping
-    LIST_STEP_SELECTED,   // l on a valid row - *out filled
-    LIST_STEP_CANCELLED,  // h or ESC
-} ListStepResult;
+// list_count may answer 0 for "unknown" rather than "empty" - page with list_at
+// then
+static size_t helper_list_count(UI_LAYER *ui_layer, ContextId context,
+                                DataListId list, const DataActionReq *partial) {
+    size_t count = ui_layer_context_list_count(ui_layer, context, list, partial);
+    if (count > 0)
+        return count;
+    DataChoice row;
+    while (ui_layer_context_list_at(ui_layer, context, list, partial, count,
+                                    &row))
+        count++;
+    return count;
+}
 
-// one render + one keypress against a live DataChoice list: j/k move
-// *cursor (probing the neighbouring index and wrapping on list_at's false -
-// list_at's own false return is the only "no more rows" signal used here,
-// list_count is never needed), l selects the highlighted row into *out,
-// h/ESC cancel. *cursor is caller-owned, so it survives across calls -
-// including across a mode switch that later resumes the same list (see
-// helper_action_do_connect). This is the one primitive every list-based
-// action interaction below is built from.
-static ListStepResult helper_choice_list_step(UI_LAYER *ui_layer, ContextId context,
-                                              DataListId list,
-                                              const DataActionReq *partial,
-                                              const char *title, const char *status,
-                                              size_t *cursor, DataChoice *out) {
-    printf("\033[2J\033[H-- %s (j/k move, l select, h/ESC back) --\n\n",
-          title ? title : "");
+// put the cursor back on the row it was on, wherever the list has moved it;
+// the first row when that row is gone
+static void helper_list_cursor_anchor(UI_LAYER *ui_layer, ContextId context,
+                                      DataListId list,
+                                      const DataActionReq *partial,
+                                      LIST_CURSOR *cur) {
+    DataChoice row;
+    if (cur->value != 0) {
+        if (ui_layer_context_list_at(ui_layer, context, list, partial, cur->idx,
+                                     &row) &&
+            row.value == cur->value)
+            return;
+        for (size_t i = 0;
+             ui_layer_context_list_at(ui_layer, context, list, partial, i, &row);
+             i++) {
+            if (row.value == cur->value) {
+                cur->idx = i;
+                return;
+            }
+        }
+    }
+    cur->idx = 0;
+    cur->value =
+        ui_layer_context_list_at(ui_layer, context, list, partial, 0, &row)
+            ? row.value
+            : 0;
+}
+
+static void helper_list_cursor_move(UI_LAYER *ui_layer, ContextId context,
+                                    DataListId list,
+                                    const DataActionReq *partial,
+                                    LIST_CURSOR *cur, bool next) {
+    size_t count = helper_list_count(ui_layer, context, list, partial);
+    if (count == 0)
+        return;
+    if (next)
+        cur->idx = (cur->idx + 1 >= count) ? 0 : cur->idx + 1;
+    else
+        cur->idx = (cur->idx == 0 || cur->idx >= count) ? count - 1
+                                                         : cur->idx - 1;
+    DataChoice row;
+    cur->value = ui_layer_context_list_at(ui_layer, context, list, partial,
+                                          cur->idx, &row)
+                     ? row.value
+                     : 0;
+}
+
+static void helper_list_render(UI_LAYER *ui_layer, ContextId context,
+                               DataListId list, const DataActionReq *partial,
+                               const char *title, const char *status,
+                               size_t cursor_idx) {
+    printf("-- %s (j/k move, l select, h/ESC back) --\n\n",
+           title ? title : "");
 
     DataChoice row;
     bool any = false;
@@ -615,39 +689,15 @@ static ListStepResult helper_choice_list_step(UI_LAYER *ui_layer, ContextId cont
          ui_layer_context_list_at(ui_layer, context, list, partial, i, &row);
          i++) {
         any = true;
-        printf("%s%s%s\n", i == *cursor ? ">" : "", row.label ? row.label : "?",
-              (row.flags & DATA_CHOICE_LINKED) ? " [connected]" : "");
+        printf("%s%s%s\n", i == cursor_idx ? ">" : "",
+               row.label ? row.label : "?",
+               (row.flags & DATA_CHOICE_LINKED) ? " [connected]" : "");
     }
     if (!any)
         printf("(no options)\n");
 
     if (status && status[0])
         printf("\n%s\n\n", status);
-
-    int input = getchar();
-    if (input == '\e' || input == 'h')
-        return LIST_STEP_CANCELLED;
-    if (input == 'j') {
-        DataChoice probe;
-        size_t next = *cursor + 1;
-        *cursor = ui_layer_context_list_at(ui_layer, context, list, partial,
-                                           next, &probe)
-                    ? next : 0;
-    } else if (input == 'k') {
-        if (*cursor == 0) {
-            DataChoice probe;
-            while (ui_layer_context_list_at(ui_layer, context, list, partial,
-                                            *cursor + 1, &probe))
-                (*cursor)++;
-        } else {
-            (*cursor)--;
-        }
-    } else if (input == 'l') {
-        if (ui_layer_context_list_at(ui_layer, context, list, partial,
-                                     *cursor, out))
-            return LIST_STEP_SELECTED;
-    }
-    return LIST_STEP_CONTINUE;
 }
 
 static void helper_action_result_msg(DataActionResult result, const char *label,
@@ -709,121 +759,102 @@ static ContextId helper_action_do_path(UI_LAYER *ui_layer, ContextId context,
     return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
 }
 
-// single CHOICE arg (ADD_CHOICE): pick, execute, keep browsing - the result
-// shows inline via helper_choice_list_step's status line, so one session can
-// add several items (e.g. plugins) without leaving the picker. Ends on h/ESC.
-static ContextId helper_action_do_choice_repeat(UI_LAYER *ui_layer, ContextId context,
-                                                DataActionType type, const DataArgSpec *spec,
-                                                const char *label, char *msg, size_t msg_cap) {
-    size_t cursor = 0;
-    ContextId last_new = CONTEXT_ID_INVALID;
-    msg[0] = '\0';
-    DataActionReq partial = {.type = type};
-    while (1) {
-        DataChoice picked;
-        ListStepResult step = helper_choice_list_step(
-            ui_layer, context, spec->list, &partial,
-            spec->label ? spec->label : spec->name, msg, &cursor, &picked);
-        msg[0] = '\0';
-        if (step == LIST_STEP_CANCELLED)
-            break;
-        if (step != LIST_STEP_SELECTED)
-            continue;
-
-        DataActionReq req = {.type = type, .add_choice.choice_value = picked.value};
-        ContextId out_new = CONTEXT_ID_INVALID;
-        DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
-        helper_action_result_msg(result, label, msg, msg_cap);
-        if (result == DATA_ACTION_OK)
-            last_new = out_new;
-    }
-    if (msg[0] == '\0')
-        snprintf(msg, msg_cap, "%s: cancelled.", label);
-    return last_new;
+static void helper_list_session_start(LIST_SESSION *session, int kind,
+                                      ContextId context, DataActionType type,
+                                      const char *label,
+                                      const DataArgSpec *specs,
+                                      size_t spec_count) {
+    *session = (LIST_SESSION){0};
+    session->kind = kind;
+    session->context = context;
+    session->type = type;
+    session->label = label;
+    for (size_t i = 0; i < spec_count && i < 2; i++)
+        session->specs[i] = specs[i];
+    session->connect_pick = CONNECT_PICK_SOURCE;
 }
 
-// CONNECT: a dedicated two-mode navigator. SOURCE mode picks specs[0]'s list once and
-// switches to TARGETS mode; TARGETS mode browses specs[1]'s list scoped to
-// the chosen source (each row's [connected] marker comes from
-// DATA_CHOICE_LINKED) and toggles connect/disconnect immediately per row,
-// staying open. h/ESC in TARGETS steps back to SOURCE (cursor preserved);
-// h/ESC in SOURCE leaves the whole picker.
-static ContextId helper_action_do_connect(UI_LAYER *ui_layer, ContextId context,
-                                          const DataArgSpec *specs, size_t spec_count,
-                                          const char *label, char *msg, size_t msg_cap) {
+// one frame of a list session: re-anchor, draw, read a key, act. Returns false
+// once the session is over, with its closing message in msg
+static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
+                                      char *msg, size_t msg_cap) {
+    if (!ui_layer_context_valid(ui_layer, session->context)) {
+        snprintf(msg, msg_cap, "%s: no longer available.", session->label);
+        return false;
+    }
+
+    bool picking_targets = session->kind == LIST_SESSION_CONNECT &&
+                           session->connect_pick == CONNECT_PICK_TARGETS;
+    const DataArgSpec *spec = &session->specs[picking_targets ? 1 : 0];
+    LIST_CURSOR *cur = &session->cursors[picking_targets ? 1 : 0];
+    DataActionReq partial = {.type = session->type};
+    if (picking_targets)
+        partial.connect.source = session->source_value;
+
+    helper_list_cursor_anchor(ui_layer, session->context, spec->list, &partial,
+                              cur);
+    helper_list_render(ui_layer, session->context, spec->list, &partial,
+                       spec->label ? spec->label : spec->name, msg, cur->idx);
+
+    int input = getchar();
+    // a result is shown for exactly one frame
     msg[0] = '\0';
-    if (spec_count < 2) {
-        snprintf(msg, msg_cap, "%s: misconfigured.", label);
-        return CONTEXT_ID_INVALID;
-    }
-    const DataArgSpec *source_spec = &specs[0];
-    const DataArgSpec *targets_spec = &specs[1];
 
-    enum { CONNECT_MODE_SOURCE, CONNECT_MODE_TARGETS } mode = CONNECT_MODE_SOURCE;
-    size_t source_cursor = 0;
-    size_t target_cursor = 0;
-    uint64_t source_value = 0;
-    ContextId last_new = CONTEXT_ID_INVALID;
-
-    while (1) {
-        if (mode == CONNECT_MODE_SOURCE) {
-            DataActionReq partial = {.type = DATA_ACTION_CONNECT};
-            DataChoice picked;
-            ListStepResult step = helper_choice_list_step(
-                ui_layer, context, source_spec->list, &partial,
-                source_spec->label ? source_spec->label : source_spec->name,
-                msg, &source_cursor, &picked);
-            if (step == LIST_STEP_CANCELLED)
-                break;
-            if (step == LIST_STEP_SELECTED) {
-                source_value = picked.value;
-                target_cursor = 0;
-                msg[0] = '\0';
-                mode = CONNECT_MODE_TARGETS;
-            }
-            continue;
+    if (input == '\e' || input == 'h') {
+        if (picking_targets) {
+            session->connect_pick = CONNECT_PICK_SOURCE;
+            return true;
         }
-
-        DataActionReq partial = {.type = DATA_ACTION_CONNECT,
-                                 .connect.source = source_value};
-        DataChoice picked;
-        ListStepResult step = helper_choice_list_step(
-            ui_layer, context, targets_spec->list, &partial,
-            targets_spec->label ? targets_spec->label : targets_spec->name,
-            msg, &target_cursor, &picked);
-        msg[0] = '\0';
-        if (step == LIST_STEP_CANCELLED) {
-            mode = CONNECT_MODE_SOURCE;
-            continue;
-        }
-        if (step != LIST_STEP_SELECTED)
-            continue;
-
-        uint64_t target_value = picked.value;
-        DataActionReq req = {.type = DATA_ACTION_CONNECT,
-                             .connect.source = source_value,
-                             .connect.targets = &target_value,
-                             .connect.target_count = 1};
-        ContextId out_new = CONTEXT_ID_INVALID;
-        DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
-        helper_action_result_msg(result, label, msg, msg_cap);
-        if (result == DATA_ACTION_OK)
-            last_new = out_new;
+        snprintf(msg, msg_cap, "%s: cancelled.", session->label);
+        return false;
     }
-    if (msg[0] == '\0')
-        snprintf(msg, msg_cap, "%s: cancelled.", label);
-    return last_new;
+    if (input == 'j' || input == 'k') {
+        helper_list_cursor_move(ui_layer, session->context, spec->list,
+                                &partial, cur, input == 'j');
+        return true;
+    }
+    if (input != 'l')
+        return true;
+
+    DataChoice picked;
+    if (!ui_layer_context_list_at(ui_layer, session->context, spec->list,
+                                  &partial, cur->idx, &picked))
+        return true;
+
+    if (session->kind == LIST_SESSION_CONNECT && !picking_targets) {
+        session->source_value = picked.value;
+        session->connect_pick = CONNECT_PICK_TARGETS;
+        session->cursors[1] = (LIST_CURSOR){0};
+        return true;
+    }
+
+    DataActionReq req = {.type = session->type};
+    uint64_t target_value = picked.value;
+    if (session->kind == LIST_SESSION_CONNECT) {
+        req.connect.source = session->source_value;
+        req.connect.targets = &target_value;
+        req.connect.target_count = 1;
+    } else {
+        req.add_choice.choice_value = picked.value;
+    }
+    ContextId out_new = CONTEXT_ID_INVALID;
+    DataActionResult result =
+        ui_layer_context_action_do(ui_layer, session->context, &req, &out_new);
+    helper_action_result_msg(result, session->label, msg, msg_cap);
+    return true;
 }
 
-// dispatch to the function that knows how to collect that action's arguments
-// and execute it
-static ContextId helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
-                                       char *msg, size_t msg_cap) {
+// dispatch to the function that knows how to collect that action's arguments.
+// Returns true when that is a list: the session is set up in *session and the
+// main loop drives it from then on
+static bool helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
+                                  LIST_SESSION *session, char *msg,
+                                  size_t msg_cap) {
     if (!msg || msg_cap == 0)
-        return CONTEXT_ID_INVALID;
+        return false;
     msg[0] = '\0';
-    if (!ui_layer || !chosen)
-        return CONTEXT_ID_INVALID;
+    if (!ui_layer || !chosen || !session)
+        return false;
 
     ContextId context = chosen->actions_context;
     DataActionType type = chosen->action.type;
@@ -832,23 +863,34 @@ static ContextId helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *cho
     DataArgSpec specs[ACTION_ARG_COUNT];
     size_t arg_count = ui_layer_context_action_args(ui_layer, context, type,
                                                      specs, ACTION_ARG_COUNT);
-    if (arg_count > 0)
-        printf("\n-- %s --\n", label);
 
-    if (type == DATA_ACTION_CONNECT)
-        return helper_action_do_connect(ui_layer, context, specs, arg_count,
-                                        label, msg, msg_cap);
-    if (arg_count == 0)
-        return helper_action_do_direct(ui_layer, context, type, label, msg, msg_cap);
-    if (arg_count == 1 && specs[0].kind == DATA_ARG_PATH)
-        return helper_action_do_path(ui_layer, context, type, &specs[0], label,
-                                     msg, msg_cap);
-    if (arg_count == 1 && specs[0].kind == DATA_ARG_CHOICE)
-        return helper_action_do_choice_repeat(ui_layer, context, type, &specs[0],
-                                              label, msg, msg_cap);
+    if (type == DATA_ACTION_CONNECT) {
+        if (arg_count < 2) {
+            snprintf(msg, msg_cap, "%s: misconfigured.", label);
+            return false;
+        }
+        helper_list_session_start(session, LIST_SESSION_CONNECT, context, type,
+                                  label, specs, 2);
+        return true;
+    }
+    if (arg_count == 0) {
+        helper_action_do_direct(ui_layer, context, type, label, msg, msg_cap);
+        return false;
+    }
+    if (arg_count == 1 && specs[0].kind == DATA_ARG_PATH) {
+        printf("\n-- %s --\n", label);
+        helper_action_do_path(ui_layer, context, type, &specs[0], label, msg,
+                              msg_cap);
+        return false;
+    }
+    if (arg_count == 1 && specs[0].kind == DATA_ARG_CHOICE) {
+        helper_list_session_start(session, LIST_SESSION_CHOICE, context, type,
+                                  label, specs, 1);
+        return true;
+    }
 
     snprintf(msg, msg_cap, "%s: unsupported arguments.", label);
-    return CONTEXT_ID_INVALID;
+    return false;
 }
 
 static void helper_program_destroy(UI_LAYER* ui_layer, UI_STATE** states, size_t states_capacity){
@@ -898,6 +940,8 @@ int main() {
     size_t candidate_count = 0;
     // result of the last resolved action, shown once at the top of the frame
     char action_status_msg[128] = {0};
+    // the list being browsed while ui_nav_mode == UI_MODE_LIST
+    LIST_SESSION list_session = {0};
 
     while (1) {
         // erase the terminal
@@ -945,6 +989,15 @@ int main() {
 
 
         printf("\e[22m");
+        // a list session owns the whole frame; it runs after the update cycle
+        // above, so it always draws the list as it is now
+        if (ui_nav_mode == UI_MODE_LIST) {
+            if (!helper_list_session_frame(ui_layer, &list_session,
+                                           action_status_msg,
+                                           sizeof(action_status_msg)))
+                ui_nav_mode = UI_MODE_STANDARD;
+            continue;
+        }
         if(ui_nav_mode == UI_MODE_ACTION)
             printf("\e[2m");
 
@@ -1077,11 +1130,11 @@ int main() {
             size_t matches = helper_action_candidates_filter_matching(
                 candidates, &candidate_count, (char)input);
             if (matches == 1) {
-                helper_action_resolve(ui_layer, &candidates[0],
-                                      action_status_msg,
-                                      sizeof(action_status_msg));
+                bool listing = helper_action_resolve(
+                    ui_layer, &candidates[0], &list_session, action_status_msg,
+                    sizeof(action_status_msg));
                 candidate_count = 0;
-                ui_nav_mode = UI_MODE_STANDARD;
+                ui_nav_mode = listing ? UI_MODE_LIST : UI_MODE_STANDARD;
             } else if (matches > 1) {
                 ui_nav_mode = UI_MODE_ACTION;
                 helper_action_candidates_assign_letters(candidates,
