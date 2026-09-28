@@ -95,7 +95,7 @@ PLAN
    an optional shown(idx) predicate) and knows nothing about what an item is.
    The context display and the list session both build through it; checked
    identical to the old context-only build over 40000 random child lists.
-   Remaining: 6c-6e.
+   Remaining: 6c, then 6e. 6d dropped - see NOT DOING.
 
    FIRST: only connect/disconnect has been exercised against a live jack
    server so far (connect fine, disconnect see 6e). Unit tests drive
@@ -108,33 +108,62 @@ PLAN
    end to end against another patchbay. Everything below assumes the cache is
    right.
 
-   6c. UI-side group filter. Picker built by walking the list for distinct
-       group_key/group_label, once when it opens; fewer than two groups = no
-       affordance. Filter state is UI-side, no data-layer change. The filter
-       is the list source's VIEW_SOURCE.shown - today the list passes NULL.
-       Two things 6b left for this step, because an unfiltered list never
-       hits them:
-       * helper_view_build draws NOTHING when the cursor sits on an item
-         that is not shown, so the list cursor must be kept on a shown row.
-         helper_list_cursor_anchor's gone-row fallback is "row 0", which may
-         itself be filtered out - it has to become "nearest shown row".
-       * helper_list_cursor_move wraps by list_count and never skips
-         anything. It needs the step-over-hidden walk that
-         helper_child_visible_step already does for contexts - the natural
-         move is to put that walk (and _nearest) on VIEW_SOURCE too, so
-         contexts and lists share it the way they now share the window.
+   6c. Group scope, group cycling and connected-only for list sessions. All
+       three narrow a list through the one mechanism 6b built: the list's
+       VIEW_SOURCE.shown (today NULL). Predicates compose.
+       CONTRACT. A context can declare the group it stands for in lists:
+       DATA_CAP_GROUP + DataOps.group_key(user_data), 0 = none, with the
+       usual app_intrf/ui_layer pass-through. app_data implements it for LV2
+       and CLAP plugin instances, synth oscillators and the sampler, returning
+       exactly what root_port_group_key gives their ports. Root does NOT
+       implement it. DataChoice.group_key's doc changes from "NOT resolvable
+       as a ContextId" to "matches the group a context declares, if any" -
+       a key is still never turned into a context.
+       SCOPE. Root's actions become a third action source beside current and
+       hovered (not gathered twice when current or hovered already is root),
+       so Connect is reachable from anywhere. When a session starts, walk up
+       from the hovered context: the first context whose declared group
+       appears among the rows of the session's FIRST list scopes that list;
+       none found = unfiltered. For CONNECT that is the source list only - the
+       peers are almost always somewhere else. The rule never mentions ports,
+       root, or how ids are composed. Cost: "Connect" and a param's "Choose"
+       both take `C`, so hovering a param with choices costs one extra drill
+       keypress.
+       CYCLING. `g` steps the active list's filter through all -> each
+       distinct group (by group_label, in list order) -> all, on either list.
+       This is what reaches foreign clients, which no context can scope. The
+       contextual scope is simply where the source list's cycle starts, so
+       cycling to "all" is how scope is dropped - no separate key. Fewer than
+       two groups = `g` does nothing. The group set is rebuilt from the rows
+       when `g` is pressed; if the active group has no rows left (its ports
+       went away mid-session) the filter falls back to all.
+       CONNECTED ONLY. `c` on the peers list toggles a DATA_CHOICE_LINKED
+       predicate, composed with the group filter. The one piece of the dropped
+       6d worth keeping: "what is this port wired to" becomes one keypress
+       instead of scanning the peers for [connected].
+       The title names the active filter, e.g. "Port (Reverb)", "Connect to
+       (system, connected)". Filter state lives per list in the LIST_SESSION,
+       next to the cursors.
+       Two things 6b left for this step, because an unfiltered list never hits
+       them:
+       * helper_view_build draws NOTHING when the cursor sits on an item that
+         is not shown, so the list cursor must always be on a shown row -
+         including right after the filter changes. helper_list_cursor_anchor's
+         gone-row fallback is "row 0", which may itself be filtered out; it
+         has to become "nearest shown row".
+       * helper_list_cursor_move wraps by list_count and never skips anything.
+         It needs the step-over-hidden walk helper_child_visible_step already
+         does for contexts - put that walk (and _nearest) on VIEW_SOURCE, so
+         contexts and lists share it the way they share the window.
        list_count is the UNFILTERED count, so "is there more beyond the
        window" must come from the traversal's own walk - do not later
        optimise it into a count lookup.
-       VERIFY: filtering to one plugin shows exactly that plugin's ports and
-       the window markers stay honest.
-   6d. Two-pane connections view: LID_PORTS_PEERS plus a DATA_CHOICE_LINKED
-       predicate. No new list id, and both directions come free from
-       direction-agnostic peers. Windowed by 6b, filterable by 6c. Disconnect
-       is the existing CONNECT toggle.
-       VERIFY: hovering an output shows its inputs, hovering an input shows
-       what feeds it, and toggling from either side lands the same result.
-   6e. AFTER 6a-6d: disconnecting sometimes needs `l` pressed twice; connecting
+       VERIFY: hovering a plugin, Connect opens on only its ports; at root it
+       opens on all. `g` reaches system/other apps and comes back to all. `c`
+       shows exactly the [connected] peers. Removing the scoped plugin
+       mid-session drops the list back to all. Window markers stay honest
+       under every filter.
+   6e. AFTER 6c: disconnecting sometimes needs `l` pressed twice; connecting
        has not shown it. Deliberately left until the UI refactor is in -
        6a changes when sync runs relative to a toggle, which may change or
        hide the symptom. Unconfirmed leads, in the order to check them:
@@ -145,143 +174,3 @@ PLAN
          sync re-reads the graph from jack. If jack's view has not caught up
          at that moment, the rebuild restores the old state and nothing
          corrects it until the next graph change.
-
-   LATER: multi-select targets. targets[]/target_count and
-   DATA_ARG_MULTI_CHOICE are already in the contract; only the UI's hardcoded
-   target_count = 1 is in the way.
-   NOT DOING: ports as CX, a filter field in DataActionReq, LID_CLIENTS, a
-   dedicated LID_PORT_CONNECTIONS, an unanchored input list, a grid view.
-   TRAP (already live): the cache holds audio and midi ports only. The source
-   list used to query PORT_TYPE_UNKNOWN, so a port of any other type used to
-   appear there and no longer does. Intended - a port whose type cannot be
-   matched cannot be connected - but it is a visible behaviour change, not a
-   bug to go hunting.
-   SEAM: the connections view hands list_at a DataActionReq it is not acting
-   on. Defensible while the view is "what CONNECT would show for this port";
-   the first view with no corresponding action is when `partial` has to
-   become a real query-params struct.
-
-================================================================================
-DESIGN FOR (1) - categories in CHOICE / MULTI_CHOICE lists
-================================================================================
-No new DataListId/DataArgKind/DataActionType - still a flat, idx-enumerable
-list_at.
-- DataChoice gains DATA_CHOICE_CATEGORY (1u << 1) beside DATA_CHOICE_LINKED
-  (1u << 0): a row with this bit is a node to descend into, not a leaf.
-- DataActionReq gains a TOP-LEVEL field, sibling to `type`, outside the
-  per-action union: `uint64_t category_scope;` (0 = root). Must not reuse a
-  union field - add_choice.choice_value collides with CONNECT's usage.
-- CLI drilling: one more branch in the existing "on SELECTED" handling that
-  helper_choice_list_step's callers already have. A category row sets
-  category_scope, resets the cursor, re-browses; a leaf behaves as today.
-  Backing out needs a small caller-owned breadcrumb stack (scope, cursor)
-  per level, capped like ACTION_ARG_COUNT - no heap.
-- A category row's DataChoice.value must hash its FULL path, e.g.
-  fnv1a64("Bass/Analog/Warm"), not just its own name, or two parents with a
-  same-named child collide.
-- list_at only ever needs the immediate parent's scope, not the ancestor
-  chain.
-
-================================================================================
-OPEN
-================================================================================
-- CLI cannot collect a DATA_ARG_NUMBER arg. smp_groovebox_ui_cli.c's generic
-  action-arg collection handles only DATA_ARG_PATH/DATA_ARG_CHOICE and falls
-  through to "unsupported arguments". SET_VALUE/ADJUST_VALUE are fully wired
-  and correctly gated at the DataOps layer but are unusable from the CLI.
-  Needs CLI input work (digit accumulation, decimal point, sign, confirm/
-  cancel) - not a DataObject or params.c change.
-- CLAP vs the vendored clap/ext/params.h, for item (2):
-  * CLAP_PARAM_IS_PERIODIC: no handling, undecided.
-  * CLAP_PARAM_IS_BYPASS: empty stub, exposed as an ordinary param.
-  * clap_output_events_read never parses a CLAP_EVENT_PARAM_VALUE the plugin
-    sends, so plugin-side value changes never reach us.
-  * Gesture BEGIN/END never wrapped around SET_VALUE/ADJUST_VALUE.
-  * clap_host_params.request_flush()/flush() not audited - matters if a
-    plugin is active while process() is not being called.
-  * RESCAN_ALL survivor matching is by owner_id against the not-yet-pruned
-    container: a plugin that frees a clap_id and reassigns it to an
-    unrelated param within the SAME rescan gets the new param misidentified
-    as a survivor, discarding its fresh name/min/max/default. Not fixed -
-    params.c has no setter for a live param's min/max/inc and adding one
-    raises reclamp-in-flight questions. Narrow; revisit if a real plugin
-    hits it.
-  * Automation/modulation (IS_AUTOMATABLE*/IS_MODULATABLE*, PER_NOTE_ID/
-    PER_KEY/PER_CHANNEL/PER_PORT, CLAP_EVENT_PARAM_MOD): out of scope -
-    automation needs a timeline engine this app lacks; modulation needs a
-    routing concept related to but not reducible to CONNECT.
-- Header hygiene: types.h has accumulated defines used by ONE module, which
-  forces unrelated recompiles. MAX_CATEGORY_SEGMENT was moved to params.h
-  for this reason. Walk the rest: anything referenced from a single .c/.h
-  pair belongs in that pair's header; only genuinely cross-cutting things
-  (PARAM_T, SAMPLE_T, MAX_SHORT_NAME_LENGTH) stay.
-
-================================================================================
-DECISIONS - settled, do not re-litigate
-================================================================================
-- user_data stays a borrowed POINTER, not a revalidatable key. A key
-  ({owner, slot, uid} by value, re-resolved per call) would delete the
-  INVARIANT above and make staleness detectable instead of UB - and it is
-  already the pattern one layer down (PARAM_RING_DATA_BIT carries val_id AND
-  uid for exactly that reason). Deferred anyway: whole-codebase refactor of
-  every ops table, every accessor becomes a lookup, and params itself barely
-  benefits since val_id stability is load-bearing for the rt side and Trk.
-  Revisit only for data owned out of process / freed concurrently, a
-  scripting layer defining its own tree, or UI state restored by identity
-  across runs (and even then, serialising a path of names beats persisting
-  ids).
-- Param categories MINT uids; DataChoice category rows HASH their path. Not
-  an inconsistency: a DataChoice row is stateless, enumerated on demand with
-  no struct to hang identity off. Param categories are real entities with
-  storage.
-- A param changing category is handled as remove+add and that is CORRECT,
-  not a degradation: a param has no children so there is no hover state
-  inside it, and the old parent's hover pointing at it SHOULD re-anchor,
-  having genuinely left that list. Categories themselves never move under a
-  rescan - interning matches by (parent, name), so a changed module path
-  interns a new chain and the old entity just goes empty.
-- Empty categories are not garbage-collected. The interned entry lingers
-  (a pointer + a name buffer, freed with the container); the CX disappears
-  because the enumerator stops returning it. Its hover entry goes with it,
-  which is correct - a category with no params is genuinely gone.
-- TARGET-LIST CONTRACT: ui_layer's only hard obligation is that no stored
-  ContextId ever names a DESTROYED context. Beyond that a view may store
-  what it likes; a stale-but-valid id self-heals (helper_nav_context_single_
-  purpose_set scans the parent's live children and falls back to index 0).
-  What makes that safe is DataOps.id's "never reused for a different object".
-  UiStalePolicy modes are ergonomics, not safety.
-- Ports are NOT CX. They churn on every plugin instantiate, and each one
-  costs a CX alloc + hash insert + event + a reconcile pass over every view's
-  target lists. The two things a CX would buy - resync and navigation - are
-  already had from the cache plus the windowed traversal. Revisit ONLY for a
-  browse-style patchbay where a CONNECTION is a navigable object with its own
-  actions; that, not the churn, is the decision point. A grid view is not a
-  tree and would not fit either way.
-- Port identity is MINTED, not hashed. jack_funcs interns every port name it
-  has seen; the key is that slot + 1 (so 0 stays "no port"), and the table
-  outlives the port list - a key survives a rebuild, and a port that
-  disappears and comes back keeps it. A rename re-keys the ident in place,
-  because jack keeps the port and its connections across a rename so the
-  identity must too. Renaming onto an already-interned name takes that
-  identity instead.
-- jack_funcs does not know what owns a port. app_jack_create_port_on_client
-  takes owner_tag + owner_uid: two opaque numbers it stores and hands back on
-  JackPortInfo, interpreting neither. app_data passes (namespace, local), so
-  MAKE_ID(tag, uid) reconstructs the owner's real ContextId with no mapping
-  table. Sampler and main I/O supply both numbers, being one owner each;
-  plugin hosts supply only the tag, their instances minting their own uids.
-- Port list filtering is UI-SIDE, on a DataChoice.group_key the data layer
-  publishes as a FIELD. Never parse a group out of a label - that hardcodes a
-  display format in the consumer. Lists stay dense so the window traversal
-  never needs a second index space. "Client" is the wrong axis: every port
-  this app registers lives on one jack client, so grouping by client
-  collapses every plugin into a single row.
-- app_jack_ports_sync is the ONLY consumer of the ports/connections dirty
-  flags - they are read-and-clear, so a second reader silently eats the
-  notification. Our own create/unregister/rename set ports_changed directly
-  rather than waiting on jack's notification thread; the callbacks stay
-  trivial because the cache tables are main-thread data.
-- is_hidden/value_as_string/value_range stay their own DataOps entries
-  rather than generic "properties": they are read on hot paths or gate
-  behaviour. DATA_CAP_PROPERTIES was built for the param category and
-  removed with it - it had no consumer.
