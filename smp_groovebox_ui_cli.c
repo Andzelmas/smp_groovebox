@@ -27,16 +27,30 @@ typedef struct _context_intrf_info{
     const char* value; //value of a context with a value, BORROWED
 } CONTEXT_INTRF_INFO;
 
-// the slice of a parent's visible children that fits on screen, built around
-// the hovered one. Everything here is in *visible child* terms, so hidden
-// children never consume a row or trigger a truncation marker.
-typedef struct _child_view{
-    ContextId rows[VIEW_ROWS];
+// what a window is built over: count raw items, of which shown() says which
+// are drawn. shown NULL means every item is drawn
+typedef struct _view_source{
+    size_t count;
+    bool (*shown)(void *user, size_t idx);
+    void *user;
+} VIEW_SOURCE;
+
+// the slice of a source's shown items that fits on screen, built around the
+// cursor. rows are raw indices into the source, in order - only shown ones, so
+// an item that is not drawn never costs a row or a truncation marker
+typedef struct _list_view{
+    size_t rows[VIEW_ROWS];
     size_t row_count;
-    size_t hovered_row; // index into rows, row_count when nothing is hovered
-    bool more_before;   // visible children exist above rows[0]
-    bool more_after;    // ... and below rows[row_count - 1]
-} CHILD_VIEW;
+    size_t cursor_row; // index into rows, row_count when nothing is drawn
+    bool more_before;  // shown items exist above rows[0]
+    bool more_after;   // ... and below rows[row_count - 1]
+} LIST_VIEW;
+
+// a context's children as a VIEW_SOURCE: shown means visible
+typedef struct _context_children{
+    UI_LAYER *ui_layer;
+    ContextId parent;
+} CONTEXT_CHILDREN;
 
 // one (context, action) pair still reachable this drill round, plus where in
 // its own label the next letter search should resume from if it survives
@@ -199,6 +213,91 @@ static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* ta
 */
 
 // ---------------------------------------------------------------------------
+// windows. Pure over a VIEW_SOURCE: no ui_layer, no knowledge of what an item is
+
+static bool helper_view_shown(const VIEW_SOURCE *src, size_t idx){
+    if(idx >= src->count)
+        return false;
+    return !src->shown || src->shown(src->user, idx);
+}
+
+// collect up to cap shown items walking away from `from` in one direction (no
+// wrapping), nearest first. Sets *more when at least one more shown item was
+// left behind
+static size_t helper_view_collect(const VIEW_SOURCE *src, size_t from, bool next,
+                                  size_t cap, size_t *out, bool *more){
+    size_t count = 0;
+    *more = false;
+
+    size_t idx = from;
+    while(next ? (idx + 1 < src->count) : (idx > 0)){
+        idx = next ? idx + 1 : idx - 1;
+        if(!helper_view_shown(src, idx))
+            continue;
+        if(count == cap){
+            *more = true;
+            break;
+        }
+        out[count++] = idx;
+    }
+
+    return count;
+}
+
+// build the on-screen slice of src's shown items around cursor_idx. A cursor
+// that is out of range or on an item not shown yields an empty view
+static void helper_view_build(const VIEW_SOURCE *src, size_t cursor_idx, LIST_VIEW *view){
+    view->row_count = 0;
+    view->cursor_row = 0;
+    view->more_before = false;
+    view->more_after = false;
+
+    if(!helper_view_shown(src, cursor_idx))
+        return;
+
+    // gather as much as either side could ever need, then split the
+    // VIEW_ROWS - 1 non-cursor rows between them
+    size_t before[VIEW_ROWS - 1];
+    size_t after[VIEW_ROWS - 1];
+    size_t before_count = helper_view_collect(src, cursor_idx, false, VIEW_ROWS - 1,
+                                              before, &view->more_before);
+    size_t after_count = helper_view_collect(src, cursor_idx, true, VIEW_ROWS - 1,
+                                             after, &view->more_after);
+
+    // centre the cursor row, then hand whatever the short side left unused
+    // to the other one, so the screen stays full near either end of the list
+    size_t take_before = before_count < SELECTED_DIST ? before_count : SELECTED_DIST;
+    size_t take_after = after_count < SELECTED_DIST ? after_count : SELECTED_DIST;
+    size_t spare = (VIEW_ROWS - 1) - take_before - take_after;
+
+    size_t grow = after_count - take_after;
+    if(grow > spare)
+        grow = spare;
+    take_after += grow;
+    spare -= grow;
+
+    grow = before_count - take_before;
+    if(grow > spare)
+        grow = spare;
+    take_before += grow;
+
+    // before[] came back nearest-first, so it unwinds into the view backwards
+    for(size_t i = take_before; i > 0; i--)
+        view->rows[view->row_count++] = before[i - 1];
+    view->cursor_row = view->row_count;
+    view->rows[view->row_count++] = cursor_idx;
+    for(size_t i = 0; i < take_after; i++)
+        view->rows[view->row_count++] = after[i];
+
+    // rows dropped by the split are truncation just as much as the ones
+    // collect left behind
+    if(take_before < before_count)
+        view->more_before = true;
+    if(take_after < after_count)
+        view->more_after = true;
+}
+
+// ---------------------------------------------------------------------------
 // visible children. Navigation and rendering must agree on which children
 // exist, otherwise the cursor lands on rows that are never drawn - so every
 // index that travels between them goes through the helpers below.
@@ -245,87 +344,9 @@ static size_t helper_child_visible_nearest(UI_LAYER* ui_layer, ContextId parent,
     return helper_child_visible_step(ui_layer, parent, child_count, from, true);
 }
 
-// collect up to cap visible children walking away from `from` in one
-// direction (no wrapping), nearest first. Sets *more when at least one more
-// visible child was left behind
-static size_t helper_child_visible_collect(UI_LAYER* ui_layer, ContextId parent, size_t child_count,
-                                           size_t from, bool next, size_t cap, ContextId* out, bool* more){
-    size_t count = 0;
-    *more = false;
-
-    size_t idx = from;
-    while(next ? (idx + 1 < child_count) : (idx > 0)){
-        idx = next ? idx + 1 : idx - 1;
-        ContextId child;
-        if(!helper_child_visible_at(ui_layer, parent, idx, &child))
-            continue;
-        if(count == cap){
-            *more = true;
-            break;
-        }
-        out[count++] = child;
-    }
-
-    return count;
-}
-
-// build the on-screen slice of parent's visible children around hovered_idx
-// (an index into the parent child array, as returned by
-// helper_nav_context_single_purpose_set). An out of range or hidden
-// hovered_idx yields an empty view
-static void helper_child_view_build(UI_LAYER* ui_layer, ContextId parent, size_t child_count,
-                                    size_t hovered_idx, CHILD_VIEW* view){
-    view->row_count = 0;
-    view->hovered_row = 0;
-    view->more_before = false;
-    view->more_after = false;
-
-    ContextId hovered_child;
-    if(hovered_idx >= child_count)
-        return;
-    if(!helper_child_visible_at(ui_layer, parent, hovered_idx, &hovered_child))
-        return;
-
-    // gather as much as either side could ever need, then split the
-    // VIEW_ROWS - 1 non-hovered rows between them
-    ContextId before[VIEW_ROWS - 1];
-    ContextId after[VIEW_ROWS - 1];
-    size_t before_count = helper_child_visible_collect(ui_layer, parent, child_count, hovered_idx,
-                                                       false, VIEW_ROWS - 1, before, &view->more_before);
-    size_t after_count = helper_child_visible_collect(ui_layer, parent, child_count, hovered_idx,
-                                                      true, VIEW_ROWS - 1, after, &view->more_after);
-
-    // centre the hovered row, then hand whatever the short side left unused
-    // to the other one, so the screen stays full near either end of the list
-    size_t take_before = before_count < SELECTED_DIST ? before_count : SELECTED_DIST;
-    size_t take_after = after_count < SELECTED_DIST ? after_count : SELECTED_DIST;
-    size_t spare = (VIEW_ROWS - 1) - take_before - take_after;
-
-    size_t grow = after_count - take_after;
-    if(grow > spare)
-        grow = spare;
-    take_after += grow;
-    spare -= grow;
-
-    grow = before_count - take_before;
-    if(grow > spare)
-        grow = spare;
-    take_before += grow;
-
-    // before[] came back nearest-first, so it unwinds into the view backwards
-    for(size_t i = take_before; i > 0; i--)
-        view->rows[view->row_count++] = before[i - 1];
-    view->hovered_row = view->row_count;
-    view->rows[view->row_count++] = hovered_child;
-    for(size_t i = 0; i < take_after; i++)
-        view->rows[view->row_count++] = after[i];
-
-    // rows dropped by the split are truncation just as much as the ones
-    // collect left behind
-    if(take_before < before_count)
-        view->more_before = true;
-    if(take_after < after_count)
-        view->more_after = true;
+static bool helper_context_child_shown(void *user, size_t idx){
+    CONTEXT_CHILDREN *children = user;
+    return helper_child_visible_at(children->ui_layer, children->parent, idx, NULL);
 }
 
 // select previous child of parent (or next if next true), skipping hidden
@@ -683,18 +704,26 @@ static void helper_list_render(UI_LAYER *ui_layer, ContextId context,
     printf("-- %s (j/k move, l select, h/ESC back) --\n\n",
            title ? title : "");
 
+    VIEW_SOURCE source = {helper_list_count(ui_layer, context, list, partial),
+                          NULL, NULL};
+    LIST_VIEW view;
+    helper_view_build(&source, cursor_idx, &view);
+    if (view.row_count == 0)
+        printf("(no options)\n");
+
+    if (view.more_before)
+        printf("-...-\n");
     DataChoice row;
-    bool any = false;
-    for (size_t i = 0;
-         ui_layer_context_list_at(ui_layer, context, list, partial, i, &row);
-         i++) {
-        any = true;
-        printf("%s%s%s\n", i == cursor_idx ? ">" : "",
+    for (size_t r = 0; r < view.row_count; r++) {
+        if (!ui_layer_context_list_at(ui_layer, context, list, partial,
+                                      view.rows[r], &row))
+            continue;
+        printf("%s%s%s\n", r == view.cursor_row ? ">" : "",
                row.label ? row.label : "?",
                (row.flags & DATA_CHOICE_LINKED) ? " [connected]" : "");
     }
-    if (!any)
-        printf("(no options)\n");
+    if (view.more_after)
+        printf("-...-\n");
 
     if (status && status[0])
         printf("\n%s\n\n", status);
@@ -1009,19 +1038,21 @@ int main() {
             // the window of children that fits on screen around the hovered
             // one. The builder owns the hidden/limit geometry, so all that is
             // left here is drawing rows
-            CHILD_VIEW view;
-            helper_child_view_build(ui_layer, state_main_context_current,
-                                    state_main_current_info.child_count,
-                                    state_main_hovered_idx, &view);
+            CONTEXT_CHILDREN children = {ui_layer, state_main_context_current};
+            VIEW_SOURCE source = {state_main_current_info.child_count,
+                                  helper_context_child_shown, &children};
+            LIST_VIEW view;
+            helper_view_build(&source, state_main_hovered_idx, &view);
 
             if (view.more_before)
                 printf("-...-\n");
             for (size_t row = 0; row < view.row_count; row++) {
+                ContextId child = ui_layer_context_child_at(
+                    ui_layer, state_main_context_current, view.rows[row]);
                 CONTEXT_INTRF_INFO child_info;
-                if (!helper_context_info_get(ui_layer, view.rows[row],
-                                             &child_info))
+                if (!helper_context_info_get(ui_layer, child, &child_info))
                     continue;
-                if (row == view.hovered_row && state_current == state_main)
+                if (row == view.cursor_row && state_current == state_main)
                     printf(">%s", child_info.name);
                 else
                     printf("%s", child_info.name);

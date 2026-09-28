@@ -91,7 +91,11 @@ PLAN
    update cycle runs between keypresses and the port list no longer freezes.
    The cursor follows its row by DataChoice.value. j/k wrap through
    list_count, which retired the walk-to-the-end k at the top of a list.
-   Remaining: 6b-6e.
+   6b landed: the window is helper_view_build over a VIEW_SOURCE (count +
+   an optional shown(idx) predicate) and knows nothing about what an item is.
+   The context display and the list session both build through it; checked
+   identical to the old context-only build over 40000 random child lists.
+   Remaining: 6c-6e.
 
    FIRST: only connect/disconnect has been exercised against a live jack
    server so far (connect fine, disconnect see 6e). Unit tests drive
@@ -104,18 +108,21 @@ PLAN
    end to end against another patchbay. Everything below assumes the cache is
    right.
 
-   6b. Generalise the view traversal out of helper_child_view_build: outward
-       walk + budget split, parameterised by accessor and predicate. Contexts
-       pass is_hidden, choice lists pass the group filter, the connections
-       pane passes DATA_CHOICE_LINKED. Only became viable once port labels
-       stopped living in a shared scratch buffer. Retrofit the context path
-       first and confirm it is unchanged before anything else uses it.
-       VERIFY: the context display renders identically and the geometry
-       checks still pass.
    6c. UI-side group filter. Picker built by walking the list for distinct
        group_key/group_label, once when it opens; fewer than two groups = no
-       affordance. Filter state is UI-side, the predicate goes into 6b's
-       traversal, no data-layer change.
+       affordance. Filter state is UI-side, no data-layer change. The filter
+       is the list source's VIEW_SOURCE.shown - today the list passes NULL.
+       Two things 6b left for this step, because an unfiltered list never
+       hits them:
+       * helper_view_build draws NOTHING when the cursor sits on an item
+         that is not shown, so the list cursor must be kept on a shown row.
+         helper_list_cursor_anchor's gone-row fallback is "row 0", which may
+         itself be filtered out - it has to become "nearest shown row".
+       * helper_list_cursor_move wraps by list_count and never skips
+         anything. It needs the step-over-hidden walk that
+         helper_child_visible_step already does for contexts - the natural
+         move is to put that walk (and _nearest) on VIEW_SOURCE too, so
+         contexts and lists share it the way they now share the window.
        list_count is the UNFILTERED count, so "is there more beyond the
        window" must come from the traversal's own walk - do not later
        optimise it into a count lookup.
