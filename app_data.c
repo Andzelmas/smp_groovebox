@@ -19,9 +19,9 @@
 #include <threads.h>
 static thread_local bool is_audio_thread = false;
 
-// size of the data event queue drained by the context layer each nav_update.
-// only a few events are produced per cycle, so this only needs slack.
-#define APP_DATA_EVENT_RING 64
+// starting size of the data event queue, it grows when a cycle produces more
+// (a CLAP text rescan changes every param of the plugin at once)
+#define APP_DATA_EVENT_QUEUE_START 64
 
 typedef struct _app_info {
     // the smapler data
@@ -47,25 +47,33 @@ typedef struct _app_info {
                                 // be touched only on [audio-thread]
 
     // data event queue (main thread only: produced in app_data_update, drained
-    // by app_data_poll_event). single producer / single consumer, no locking.
-    DataEvent event_ring[APP_DATA_EVENT_RING];
-    size_t event_head; // next slot to write
-    size_t event_tail; // next slot to read
+    // by app_data_poll_event). Grows instead of dropping - a lost
+    // DATA_EVENT_CHANGED would leave a view stale. Emptied once fully drained.
+    DataEvent *events;
+    size_t event_count; // events pushed since the queue was last empty
+    size_t event_read;  // next event to read
+    size_t event_cap;
 } APP_INFO;
 
-// push one event; on a full ring drop the oldest (a missed CHILDREN_CHANGED is
-// recoverable - the next one re-syncs the same parent against current state).
+// push one event, growing the queue if it is full
 static void app_data_push_event(APP_INFO *app_data, DataEventType type,
                                 ContextId id) {
     if (!app_data)
         return;
-    size_t next = (app_data->event_head + 1) % APP_DATA_EVENT_RING;
-    if (next == app_data->event_tail)
-        app_data->event_tail =
-            (app_data->event_tail + 1) % APP_DATA_EVENT_RING;
-    app_data->event_ring[app_data->event_head].type = type;
-    app_data->event_ring[app_data->event_head].id = id;
-    app_data->event_head = next;
+    if (app_data->event_count == app_data->event_cap) {
+        size_t new_cap = app_data->event_cap ? app_data->event_cap * 2
+                                             : APP_DATA_EVENT_QUEUE_START;
+        DataEvent *grown =
+            realloc(app_data->events, new_cap * sizeof(DataEvent));
+        // out of memory - this event is lost
+        if (!grown)
+            return;
+        app_data->events = grown;
+        app_data->event_cap = new_cap;
+    }
+    app_data->events[app_data->event_count].type = type;
+    app_data->events[app_data->event_count].id = id;
+    app_data->event_count++;
 }
 
 // clean memory, without pausing the [audio-thread]
@@ -91,6 +99,7 @@ static int clean_memory(APP_INFO *app_data) {
 
     // clean the app_data
     context_sub_clean(app_data->control_data);
+    free(app_data->events);
     if (app_data)
         free(app_data);
 
@@ -1491,8 +1500,10 @@ DataObject app_init(void) {
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
     app_data->is_processing = 0;
-    app_data->event_head = 0;
-    app_data->event_tail = 0;
+    app_data->events = NULL;
+    app_data->event_count = 0;
+    app_data->event_read = 0;
+    app_data->event_cap = 0;
 
     /*init jack client for the whole program*/
     /*--------------------------------------------------*/
@@ -1582,11 +1593,31 @@ bool app_data_poll_event(void *root_user_data, DataEvent *out) {
     APP_INFO *app_data = (APP_INFO *)root_user_data;
     if (!app_data || !out)
         return false;
-    if (app_data->event_tail == app_data->event_head)
+    if (app_data->event_read == app_data->event_count) {
+        app_data->event_read = 0;
+        app_data->event_count = 0;
         return false;
-    *out = app_data->event_ring[app_data->event_tail];
-    app_data->event_tail = (app_data->event_tail + 1) % APP_DATA_EVENT_RING;
+    }
+    *out = app_data->events[app_data->event_read++];
     return true;
+}
+
+// push a DATA_EVENT_CHANGED for every param of the container whose value, name
+// or flags changed since the last call
+static void app_data_push_param_changes(APP_INFO *app_data,
+                                        PRM_CONTAIN *container) {
+    if (!container)
+        return;
+    int val_ids[64];
+    size_t taken = 0;
+    while ((taken = param_changed_take(container, val_ids, 64)) > 0) {
+        // the same id cx_param_id gives this param
+        for (size_t i = 0; i < taken; i++)
+            app_data_push_event(
+                app_data, DATA_EVENT_CHANGED,
+                MAKE_ID(DATA_NS_PARAM,
+                        param_get_uid(container, val_ids[i], 0)));
+    }
 }
 
 void app_data_update(void *root_user_data) {
@@ -1638,6 +1669,36 @@ void app_data_update(void *root_user_data) {
     if (port_sync.ports || port_sync.connections)
         app_data_push_event(app_data, DATA_EVENT_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_ROOT));
+
+    // param value/name/flag changes, after the structure events above so a
+    // just added param already has its context
+    app_data_push_param_changes(
+        app_data, app_jack_trk_param_container(app_data->trk_jack));
+    for (unsigned int i = 0;; i++) {
+        void *smp = smp_sample_return(app_data->smp_data, i);
+        if (!smp)
+            break;
+        app_data_push_param_changes(app_data, smp_sample_param_container(smp));
+    }
+    for (unsigned int i = 0;; i++) {
+        void *plug = plug_plugin_return(app_data->plug_data, i);
+        if (!plug)
+            break;
+        app_data_push_param_changes(app_data,
+                                    plug_plugin_param_container(plug));
+    }
+    for (unsigned int i = 0;; i++) {
+        void *plug = clap_plug_plugin_return(app_data->clap_plug_data, i);
+        if (!plug)
+            break;
+        app_data_push_param_changes(app_data,
+                                    clap_plug_plugin_param_container(plug));
+    }
+    size_t osc_count = synth_return_osc_num(app_data->synth_data);
+    for (unsigned int i = 0; i < osc_count; i++)
+        app_data_push_param_changes(
+            app_data,
+            synth_osc_param_container(synth_osc_return(app_data->synth_data, i)));
 }
 
 void app_stop_and_clean(void *root_user_data) {

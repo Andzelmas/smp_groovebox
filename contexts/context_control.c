@@ -69,21 +69,6 @@ int context_sub_process_ui(CXCONTROL *cxcontrol_data) {
         if (read_buffer <= 0)
             continue;
 
-        if (cur_bit.msg_enum == MSG_PLUGIN_REQUEST_CALLBACK) {
-            if (cxcontrol_data->ui_funcs_struct.subcx_callback)
-                cxcontrol_data->ui_funcs_struct.subcx_callback(
-                    cur_bit.user_data);
-        }
-        if (cur_bit.msg_enum == MSG_PLUGIN_ACTIVATE_PROCESS) {
-            if (cxcontrol_data->ui_funcs_struct.subcx_activate_start_process)
-                cxcontrol_data->ui_funcs_struct.subcx_activate_start_process(
-                    cur_bit.user_data);
-        }
-        if (cur_bit.msg_enum == MSG_PLUGIN_RESTART) {
-            if (cxcontrol_data->ui_funcs_struct.subcx_restart)
-                cxcontrol_data->ui_funcs_struct.subcx_restart(
-                    cur_bit.user_data);
-        }
         if (cur_bit.msg_enum == MSG_PLUGIN_SENT_STRING) {
             if (cxcontrol_data->ui_funcs_struct.send_msg)
                 cxcontrol_data->ui_funcs_struct.send_msg(cur_bit.user_data,
@@ -154,24 +139,6 @@ int context_sub_wait_for_start(CXCONTROL *cxcontrol_data, void *user_data) {
     return 0;
 }
 
-void context_sub_restart_msg(CXCONTROL *cxcontrol_data, void *user_data,
-                             bool is_audio_thread) {
-    if (!cxcontrol_data)
-        return;
-
-    if (is_audio_thread) {
-        RING_SYS_MSG send_bit;
-        send_bit.msg_enum = MSG_PLUGIN_RESTART;
-        send_bit.user_data = user_data;
-        ring_buffer_write(cxcontrol_data->rt_to_ui_msgs, &send_bit,
-                          sizeof(send_bit));
-        return;
-    }
-
-    if (cxcontrol_data->ui_funcs_struct.subcx_restart)
-        cxcontrol_data->ui_funcs_struct.subcx_restart(user_data);
-}
-
 void context_sub_send_msg(CXCONTROL *cxcontrol_data, void *user_data,
                           bool is_audio_thread, const char *msg, ...) {
     if (!cxcontrol_data)
@@ -193,43 +160,6 @@ void context_sub_send_msg(CXCONTROL *cxcontrol_data, void *user_data,
 
     if (cxcontrol_data->ui_funcs_struct.send_msg)
         cxcontrol_data->ui_funcs_struct.send_msg(user_data, send_msg);
-}
-
-void context_sub_activate_start_process_msg(CXCONTROL *cxcontrol_data,
-                                            void *user_data,
-                                            bool is_audio_thread) {
-    if (!cxcontrol_data)
-        return;
-
-    if (is_audio_thread) {
-        RING_SYS_MSG send_bit;
-        send_bit.msg_enum = MSG_PLUGIN_ACTIVATE_PROCESS;
-        send_bit.user_data = user_data;
-        ring_buffer_write(cxcontrol_data->rt_to_ui_msgs, &send_bit,
-                          sizeof(send_bit));
-        return;
-    }
-
-    if (cxcontrol_data->ui_funcs_struct.subcx_activate_start_process)
-        cxcontrol_data->ui_funcs_struct.subcx_activate_start_process(user_data);
-}
-
-void context_sub_callback_msg(CXCONTROL *cxcontrol_data, void *user_data,
-                              bool is_audio_thread) {
-    if (!cxcontrol_data)
-        return;
-
-    if (is_audio_thread) {
-        RING_SYS_MSG send_bit;
-        send_bit.msg_enum = MSG_PLUGIN_REQUEST_CALLBACK;
-        send_bit.user_data = user_data;
-        ring_buffer_write(cxcontrol_data->rt_to_ui_msgs, &send_bit,
-                          sizeof(send_bit));
-        return;
-    }
-
-    if (cxcontrol_data->ui_funcs_struct.subcx_callback)
-        cxcontrol_data->ui_funcs_struct.subcx_callback(user_data);
 }
 
 int context_sub_clean(CXCONTROL *cxcontrol_data) {

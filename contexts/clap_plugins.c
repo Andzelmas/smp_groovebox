@@ -56,6 +56,21 @@ extern char **environ;
 #define EVENT_LIST_ITEMS 50
 
 static thread_local bool is_audio_thread = false;
+// set in clap_plug_init. Plugins can call the host from their own threads too,
+// so "not audio" does not mean [main-thread]
+static thread_local bool is_main_thread = false;
+
+// requests plugins make through the [thread-safe] host functions. Set on any
+// thread, handled on [main-thread] by clap_plug_requests_process
+enum {
+    CLAP_PLUG_REQ_CALLBACK = 1U << 0,
+    CLAP_PLUG_REQ_RESTART = 1U << 1,
+    CLAP_PLUG_REQ_PROCESS = 1U << 2,
+    CLAP_PLUG_REQ_FLUSH = 1U << 3,
+    // not a plugin request - set by the host when the ui side missed values
+    // from the plugin, so they are read again from the plugin
+    CLAP_PLUG_REQ_SYNC_VALUES = 1U << 4,
+};
 
 // plugin list item - from this struct a clap plugin can be loaded
 typedef struct _plugin_list_item {
@@ -168,6 +183,8 @@ typedef struct _clap_plug_plug {
     // will be created when clap_plug_presets_iterate or
     // clap_plug_preset_load_from_path function is called
     CLAP_EXT_PRESET_FACTORY *preset_fac;
+    // CLAP_PLUG_REQ_* bits, set from any thread
+    atomic_uint requests;
 } CLAP_PLUG_PLUG;
 
 // the main clap struct
@@ -766,7 +783,7 @@ clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
 
         int existing_val_id =
             plug->plug_params
-                ? param_find_owner_id(plug->plug_params, param_info.id)
+                ? param_find_owner_id(plug->plug_params, param_info.id, 0)
                 : -1;
         // a survivor keeps the uid it already has; a genuinely new param goes
         // in as 0 and params.c mints one.
@@ -885,9 +902,38 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     return 0;
 }
 
+// [main-thread] read every param value from the plugin into the param
+// container
+static void clap_plug_params_sync_values(CLAP_PLUG_PLUG *plug) {
+    if (!plug->plug_params)
+        return;
+    const clap_plugin_params_t *clap_params =
+        plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
+    if (!clap_params)
+        return;
+    uint32_t param_count =
+        (uint32_t)param_return_num_params(plug->plug_params, 0);
+    for (uint32_t param_num = 0; param_num < param_count; param_num++) {
+        // this param's real clap_id is stored as owner_id
+        const char *param_name =
+            param_get_name(plug->plug_params, (int)param_num);
+        if (!param_name || param_name[0] == '\0')
+            continue;
+        uint32_t clap_param_id =
+            param_get_owner_id(plug->plug_params, (int)param_num, 0);
+        double cur_value = 0;
+        if (!clap_params->get_value(plug->plug_inst, clap_param_id,
+                                    &cur_value))
+            continue;
+        // the plugin already has this value - do not send it back
+        param_set_value(plug->plug_params, param_num, (PARAM_T)cur_value,
+                        NULL, Operation_SyncValue);
+    }
+}
+
 static void clap_plug_ext_params_rescan(const clap_host_t *host,
                                         clap_param_rescan_flags flags) {
-    if (is_audio_thread)
+    if (!is_main_thread)
         return;
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
@@ -897,36 +943,15 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
     CLAP_PLUG_INFO *plug_data = plug->plug_data;
     if (!plug_data)
         return;
-    if ((flags & CLAP_PARAM_RESCAN_VALUES) == CLAP_PARAM_RESCAN_VALUES) {
-        // go through the params and simply set the values
-        const clap_plugin_params_t *clap_params =
-            plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
-        if (!clap_params)
-            return;
-        uint32_t param_count =
-            (uint32_t)param_return_num_params(plug->plug_params, 0);
-        for (uint32_t param_num = 0; param_num < param_count; param_num++) {
-            // this param's real clap_id is stored as owner_id
-            const char *param_name =
-                param_get_name(plug->plug_params, (int)param_num);
-            if (!param_name || param_name[0] == '\0')
-                continue;
-            uint32_t clap_param_id =
-                param_get_owner_id(plug->plug_params, (int)param_num, 0);
-            double cur_value = 0;
-            if (!clap_params->get_value(plug->plug_inst, clap_param_id,
-                                        &cur_value))
-                continue;
-            param_set_value(plug->plug_params, param_num, (PARAM_T)cur_value,
-                            NULL, Operation_SetValue);
-        }
-    }
+    if ((flags & CLAP_PARAM_RESCAN_VALUES) == CLAP_PARAM_RESCAN_VALUES)
+        clap_plug_params_sync_values(plug);
     if ((flags & CLAP_PARAM_RESCAN_TEXT) == CLAP_PARAM_RESCAN_TEXT) {
         context_sub_send_msg(
             plug_data->control_data, (void *)plug_data, is_audio_thread,
             "Plugin %s requested CLAP_PARAM_RESCAN_TEXT\n", plug->plug_path);
-        // TODO not sure what clap api expects here, if the text needs to be
-        // rendered again it will do so automaticaly on the next ui cycle
+        // the value texts are read from the plugin when drawn, so only tell the
+        // ui side that every param may now read differently
+        param_mark_changed(plug->plug_params, -1);
     }
     if ((flags & CLAP_PARAM_RESCAN_INFO) == CLAP_PARAM_RESCAN_INFO) {
         // go through the params and change the names, flags, categories
@@ -942,7 +967,8 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
             clap_param_info_t param_info;
             if (!clap_params->get_info(plug->plug_inst, clap_idx, &param_info))
                 continue;
-            int val_id = param_find_owner_id(plug->plug_params, param_info.id);
+            int val_id =
+                param_find_owner_id(plug->plug_params, param_info.id, 0);
             if (val_id == -1)
                 continue;
             param_set_value(plug->plug_params, val_id, 0.0, param_info.name,
@@ -991,19 +1017,14 @@ static void clap_plug_ext_params_clear(const clap_host_t *host,
     return;
 }
 
+// [thread-safe, !audio-thread]
 static void clap_plug_ext_params_request_flush(const clap_host_t *host) {
     if (is_audio_thread)
         return;
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
         return;
-    CLAP_PLUG_INFO *plug_data = plug->plug_data;
-    if (!plug_data)
-        return;
-    // since host can call either clap_plugin.process() or
-    // clap_plugin_params.flush(), simply request to process the plugin (run
-    // clap_plugin.process)
-    context_sub_wait_for_start(plug_data->control_data, (void *)plug);
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_FLUSH);
 }
 
 // host extension function for audio_ports - return true if a rescan with the
@@ -1012,7 +1033,7 @@ static bool
 clap_plug_ext_audio_ports_is_rescan_flag_supported(const clap_host_t *host,
                                                    uint32_t flag) {
     // this function is only usable on the [main-thread]
-    if (is_audio_thread)
+    if (!is_main_thread)
         return false;
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
@@ -1040,7 +1061,7 @@ clap_plug_ext_audio_ports_is_rescan_flag_supported(const clap_host_t *host,
 static void clap_plug_ext_audio_ports_rescan(const clap_host_t *host,
                                              uint32_t flags) {
     // this function is only usable on the [main-thread]
-    if (is_audio_thread)
+    if (!is_main_thread)
         return;
     if (flags == 0)
         return;
@@ -1074,7 +1095,7 @@ static void clap_plug_ext_audio_ports_rescan(const clap_host_t *host,
 static uint32_t
 clap_plug_ext_note_ports_supported_dialects(const clap_host_t *host) {
     (void)host;
-    if (is_audio_thread)
+    if (!is_main_thread)
         return 0;
     uint32_t supported = 0;
     supported = (supported | CLAP_NOTE_DIALECT_CLAP);
@@ -1089,7 +1110,7 @@ clap_plug_ext_note_ports_supported_dialects(const clap_host_t *host) {
 // (create the ports again)
 static void clap_plug_ext_note_ports_rescan(const clap_host_t *host,
                                             uint32_t flags) {
-    if (is_audio_thread)
+    if (!is_main_thread)
         return;
     if (flags == 0)
         return;
@@ -1203,6 +1224,9 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
         }
         plug->plug_inst = NULL;
     }
+    // requests left by the destroyed instance must not reach the next plugin
+    // loaded into this slot
+    atomic_store(&plug->requests, 0U);
     if (plug->plug_entry) {
         if (clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug) ==
             -1) {
@@ -1263,7 +1287,7 @@ static bool clap_plug_ext_is_audio_thread(const clap_host_t *host) {
 
 static bool clap_plug_ext_is_main_thread(const clap_host_t *host) {
     (void)host;
-    return !(clap_plug_return_is_audio_thread());
+    return is_main_thread;
 }
 
 static int clap_sys_msg(void *user_data, const char *msg) {
@@ -1373,51 +1397,154 @@ static int clap_plug_restart(void *user_data) {
     return clap_plug_activate_start_processing((void *)plug);
 }
 
+// [thread-safe] clap_host_t requests - only mark them, clap_plug_requests_process
+// does the work on [main-thread]
 static void clap_plug_request_restart(const clap_host_t *host) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
         return;
-    CLAP_PLUG_INFO *plug_data = plug->plug_data;
-    if (!plug_data)
-        return;
-
-    context_sub_restart_msg(plug_data->control_data, (void *)plug,
-                            clap_plug_return_is_audio_thread());
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_RESTART);
 }
 
 static void clap_plug_request_process(const clap_host_t *host) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
         return;
-    CLAP_PLUG_INFO *plug_data = plug->plug_data;
-    if (!plug_data)
-        return;
-
-    context_sub_activate_start_process_msg(plug_data->control_data,
-                                           (void *)plug,
-                                           clap_plug_return_is_audio_thread());
-}
-
-static int clap_plug_callback(void *user_data) {
-    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)user_data;
-    if (!plug)
-        return -1;
-    if (!plug->plug_inst)
-        return -1;
-    plug->plug_inst->on_main_thread(plug->plug_inst);
-    return 0;
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_PROCESS);
 }
 
 static void clap_plug_request_callback(const clap_host_t *host) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
     if (!plug)
         return;
-    CLAP_PLUG_INFO *plug_data = plug->plug_data;
-    if (!plug_data)
-        return;
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_CALLBACK);
+}
 
-    context_sub_callback_msg(plug_data->control_data, (void *)plug,
-                             clap_plug_return_is_audio_thread());
+// push the changed rt params to ub_in as param value events, return 1 if any
+// were pushed. Use on the thread that owns the rt params - [audio-thread], or
+// [main-thread] for a plugin that is not activated
+static int clap_input_events_params_add(CLAP_PLUG_PLUG *plug,
+                                        UB_EVENT *ub_in) {
+    int not_quiet = 0;
+    // TODO right now smp_groovebox does not handle automation or modulation so
+    // simply put the parameter changes into the event buffer first on the 0
+    // offset frame put parameter changes into the event queue
+    uint32_t param_count = param_return_num_params(plug->plug_params, 1);
+    for (uint32_t param_idx = 0; param_idx < param_count; param_idx++) {
+        if (param_get_if_changed_rt(plug->plug_params, (int)param_idx) != 1)
+            continue;
+        if (not_quiet == 0)
+            not_quiet = 1;
+        clap_event_header_t head;
+        head.flags = CLAP_EVENT_IS_LIVE;
+        head.size = sizeof(clap_event_param_value_t);
+        head.space_id = CLAP_CORE_EVENT_SPACE_ID;
+        head.time = 0;
+        head.type = CLAP_EVENT_PARAM_VALUE;
+
+        clap_event_param_value_t param_val;
+        param_val.channel = -1;
+        param_val.cookie =
+            param_cookie_return_rt(plug->plug_params, (int)param_idx);
+        param_val.header = head;
+        param_val.key = -1;
+        param_val.note_id = -1;
+        param_val.param_id =
+            param_get_owner_id(plug->plug_params, (int)param_idx, 1);
+        param_val.port_index = -1;
+        param_val.value =
+            (double)param_get_value(plug->plug_params, (int)param_idx, 1);
+        ub_push(ub_in, (void *)&(param_val),
+                (uint32_t)sizeof(clap_event_param_value_t));
+    }
+    return not_quiet;
+}
+
+// apply the param value events the plugin pushed to ub_out. Use on the thread
+// that owns the rt params - [audio-thread], or [main-thread] for a plugin that
+// is not activated. Returns 1 if ub_out has any events, 0 if none
+static int clap_output_events_params_apply(CLAP_PLUG_PLUG *plug,
+                                           UB_EVENT *ub_out) {
+    uint32_t events_count = ub_size(ub_out);
+    if (!plug->plug_params)
+        return events_count > 0 ? 1 : 0;
+    for (uint32_t i = 0; i < events_count; i++) {
+        const clap_event_header_t *head =
+            (const clap_event_header_t *)ub_item_get(ub_out, i);
+        if (!head || head->space_id != CLAP_CORE_EVENT_SPACE_ID)
+            continue;
+        // TODO gesture begin/end are not used yet (automation recording)
+        if (head->type != CLAP_EVENT_PARAM_VALUE ||
+            head->size < sizeof(clap_event_param_value_t))
+            continue;
+        const clap_event_param_value_t *param_ev =
+            (const clap_event_param_value_t *)head;
+        int val_id =
+            param_find_owner_id(plug->plug_params, param_ev->param_id, 1);
+        if (val_id == -1)
+            continue;
+        // the ui side missed this value (full queue) - read all the values
+        // from the plugin again on [main-thread]
+        if (param_set_value_rt(plug->plug_params, val_id,
+                               (PARAM_T)param_ev->value) != 0)
+            atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_SYNC_VALUES);
+    }
+    return events_count > 0 ? 1 : 0;
+}
+
+// [main-thread] params.flush() for a plugin that is not activated, since it
+// gets no process() calls. [audio-thread] skips a plugin that is not
+// processing, so its rt params and event lists are free to use here.
+// forced == false flushes only if the host changed any params
+static void clap_plug_params_flush_inactive(CLAP_PLUG_PLUG *plug,
+                                            bool forced) {
+    if (!plug->plug_params)
+        return;
+    UB_EVENT *ub_in = (UB_EVENT *)plug->input_events.ctx;
+    UB_EVENT *ub_out = (UB_EVENT *)plug->output_events.ctx;
+    if (!ub_in || !ub_out)
+        return;
+    // take the param changes the [audio-thread] would have picked up
+    param_msgs_process(plug->plug_params, 1);
+    if (!forced && param_get_if_any_changed_rt(plug->plug_params) != 1)
+        return;
+    const clap_plugin_params_t *clap_params =
+        plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
+    if (!clap_params || !clap_params->flush)
+        return;
+    ub_list_reset(ub_in);
+    clap_input_events_params_add(plug, ub_in);
+    ub_list_reset(ub_out);
+    clap_params->flush(plug->plug_inst, &(plug->input_events),
+                       &(plug->output_events));
+    clap_output_events_params_apply(plug, ub_out);
+}
+
+// handle the plugin requests on [main-thread]. Deferred to here even when
+// requested on [main-thread], so the host never acts while still inside the
+// plugin call that made the request
+static void clap_plug_requests_process(CLAP_PLUG_PLUG *plug) {
+    unsigned int reqs = atomic_exchange(&plug->requests, 0U);
+    if (reqs == 0)
+        return;
+    if ((reqs & CLAP_PLUG_REQ_CALLBACK) != 0)
+        plug->plug_inst->on_main_thread(plug->plug_inst);
+    // restart ends by starting the process, which covers process and flush
+    if ((reqs & CLAP_PLUG_REQ_RESTART) != 0)
+        clap_plug_restart((void *)plug);
+    else if ((reqs & CLAP_PLUG_REQ_PROCESS) != 0)
+        clap_plug_activate_start_processing((void *)plug);
+    // process() flushes the params, a no-op if already processing
+    else if ((reqs & CLAP_PLUG_REQ_FLUSH) != 0 &&
+             plug->plug_inst_activated == 1)
+        context_sub_wait_for_start(plug->plug_data->control_data, (void *)plug);
+    // not activated (also when restart or process failed to activate) - no
+    // process() calls, so flush() here
+    if ((reqs & CLAP_PLUG_REQ_FLUSH) != 0 && plug->plug_inst_activated == 0)
+        clap_plug_params_flush_inactive(plug, true);
+    // after the queued (older) values were applied by the caller
+    if ((reqs & CLAP_PLUG_REQ_SYNC_VALUES) != 0)
+        clap_plug_params_sync_values(plug);
 }
 
 static int clap_plug_start_process(void *user_data) {
@@ -1490,15 +1617,20 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data) {
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
     if (!plug_data)
         return -1;
-    // process the sys messages on [main-thread] (send msg, activate and process
-    // a plugin, restart plugin etc.)
+    // process the sys messages on [main-thread] (messages from [audio-thread])
     context_sub_process_ui(plug_data->control_data);
-    // read the param messages for plugins on the [main-thread]
+    // read the param messages and handle the plugin requests on the
+    // [main-thread]
     for (unsigned int i = 0; i < MAX_INSTANCES; i++) {
         CLAP_PLUG_PLUG *cur_plug = &(plug_data->plugins[i]);
         if (!cur_plug->plug_inst)
             continue;
         param_msgs_process(cur_plug->plug_params, 0);
+        clap_plug_requests_process(cur_plug);
+        // host side flush - send the param changes to a plugin that is not
+        // activated, since it gets no process() calls
+        if (cur_plug->plug_inst_activated == 0)
+            clap_plug_params_flush_inactive(cur_plug, false);
     }
     return 0;
 }
@@ -1678,6 +1810,8 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                void *audio_backend, uint64_t owner_tag) {
     if (!audio_backend)
         return NULL;
+    // clap_plug_init is called on [main-thread]
+    is_main_thread = true;
     CLAP_PLUG_INFO *plug_data =
         (CLAP_PLUG_INFO *)malloc(sizeof(CLAP_PLUG_INFO));
     if (!plug_data) {
@@ -1693,10 +1827,6 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     rt_funcs_struct.subcx_start_process = clap_plug_start_process;
     rt_funcs_struct.subcx_stop_process = clap_plug_stop_process;
     ui_funcs_struct.send_msg = clap_sys_msg;
-    ui_funcs_struct.subcx_activate_start_process =
-        clap_plug_activate_start_processing;
-    ui_funcs_struct.subcx_callback = clap_plug_callback;
-    ui_funcs_struct.subcx_restart = clap_plug_restart;
     plug_data->control_data =
         context_sub_init(rt_funcs_struct, ui_funcs_struct);
     if (!plug_data->control_data) {
@@ -1765,6 +1895,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->plug_inst_processing = 0;
         plug->plug_params = NULL;
         plug->preset_fac = NULL;
+        atomic_init(&plug->requests, 0U);
     }
 
     return plug_data;
@@ -2339,8 +2470,7 @@ uint32_t clap_plug_load_and_activate(void *plugin_item) {
     clap_plug_set_display_name(plug);
 
     // start processing the plugin
-    context_sub_activate_start_process_msg(plug_data->control_data,
-                                           (void *)plug, is_audio_thread);
+    clap_plug_activate_start_processing((void *)plug);
 
     plug_data->plugins_dirty = true;
 
@@ -2501,7 +2631,7 @@ static int clap_prepare_output_ports(CLAP_PLUG_INFO *plug_data,
     return not_quiet;
 }
 
-// TODO get events from parameters, midi etc. and use this data
+// TODO midi and note output events are not used yet, only param values
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
 static int clap_output_events_read(CLAP_PLUG_INFO *plug_data,
@@ -2514,17 +2644,7 @@ static int clap_output_events_read(CLAP_PLUG_INFO *plug_data,
     clap_output_events_t *out_events = &(plug->output_events);
     if (!out_events->ctx)
         return -1;
-    UB_EVENT *ub_out = (UB_EVENT *)out_events->ctx;
-    int not_quiet = 0;
-    uint32_t events_count = ub_size(ub_out);
-    // TODO to implement output event processing need to find a plugin that
-    // outputs them
-    if (events_count > 0) {
-        not_quiet = 1;
-        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                             is_audio_thread, "events %d\n", events_count);
-    }
-    return not_quiet;
+    return clap_output_events_params_apply(plug, (UB_EVENT *)out_events->ctx);
 }
 
 // return -1 on error, return 0 if successful but the output was quiet and
@@ -2542,38 +2662,7 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
     UB_EVENT *ub_in = (UB_EVENT *)in_events->ctx;
     // reset the event array
     ub_list_reset(ub_in);
-    int not_quiet = 0;
-    // TODO right now smp_groovebox does not handle automation or modulation so
-    // simply put the parameter changes into the event buffer first on the 0
-    // offset frame put parameter changes into the event queue
-    uint32_t param_count = param_return_num_params(plug->plug_params, 1);
-    for (uint32_t param_idx = 0; param_idx < param_count; param_idx++) {
-        if (param_get_if_changed_rt(plug->plug_params, (int)param_idx) != 1)
-            continue;
-        if (not_quiet == 0)
-            not_quiet = 1;
-        clap_event_header_t head;
-        head.flags = CLAP_EVENT_IS_LIVE;
-        head.size = sizeof(clap_event_param_value_t);
-        head.space_id = CLAP_CORE_EVENT_SPACE_ID;
-        head.time = 0;
-        head.type = CLAP_EVENT_PARAM_VALUE;
-
-        clap_event_param_value_t param_val;
-        param_val.channel = -1;
-        param_val.cookie =
-            param_cookie_return_rt(plug->plug_params, (int)param_idx);
-        param_val.header = head;
-        param_val.key = -1;
-        param_val.note_id = -1;
-        param_val.param_id =
-            param_get_owner_id(plug->plug_params, (int)param_idx, 1);
-        param_val.port_index = -1;
-        param_val.value =
-            (double)param_get_value(plug->plug_params, (int)param_idx, 1);
-        ub_push(ub_in, (void *)&(param_val),
-                (uint32_t)sizeof(clap_event_param_value_t));
-    }
+    int not_quiet = clap_input_events_params_add(plug, ub_in);
     // TODO how to add transport events so everything is sorted by the frames
     // offset?
 

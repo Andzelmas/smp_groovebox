@@ -1110,6 +1110,15 @@ int plug_load_preset(PLUG_INFO *plug_data, unsigned int plug_id,
     // correctly and crashes
     lilv_state_restore(plug->preset, plug->plug_instance, plug_set_value_direct,
                        plug, 0, NULL);
+    // the preset set the control ports directly - sync the params to them,
+    // as values the plugin already has, so they are not sent back
+    for (uint32_t i = 0; i < plug->num_ports; i++) {
+        PLUG_PORT *const cur_port = &(plug->ports[i]);
+        if (cur_port->type != PORT_TYPE_CONTROL || cur_port->param_index < 0)
+            continue;
+        param_set_value(plug->plug_params, cur_port->param_index,
+                        (PARAM_T)cur_port->control, NULL, Operation_SyncValue);
+    }
 
     if (new_preset)
         lilv_node_free(new_preset);
@@ -2075,12 +2084,6 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                     // set the val on param container
                     param_set_value_rt(plug->plug_params, cur_port->param_index,
                                        cur_port->control);
-                    // get the parameter value, so the parameter is_changed will
-                    // be 0, otherwise on next cycle this parameter value will
-                    // be sent to the plugin no need for that since we got this
-                    // value from the plugin already
-                    param_get_value(plug->plug_params, cur_port->param_index,
-                                    1);
                 }
             }
             if (cur_port->type == PORT_TYPE_EVENT) {

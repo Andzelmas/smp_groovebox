@@ -19,6 +19,9 @@ typedef struct _params_ring_data_bit {
     int val_id;
     uint32_t uid;
     PARAM_T param_value;
+    // ui_to_rt only: the value came from the owner (Operation_SyncValue), so
+    // the rt side does not mark it changed
+    bool from_owner;
 } PARAM_RING_DATA_BIT;
 
 // rt-side parameter - only what the audio thread actually touches. it only ever
@@ -66,6 +69,9 @@ typedef struct _params_param_ui {
     // val_id) handle without exposing PRM_PARAM_UI itself outside params.c
     PRM_CONTAIN *self_container;
     int self_val_id;
+    // value, name or flags changed since param_changed_take last returned it
+    // (or param_mark_changed marked it)
+    bool changed;
 } PRM_PARAM_UI;
 
 // one interned parameter category. Like PRM_PARAM_RT/UI each of these is its
@@ -106,6 +112,8 @@ typedef struct _params_container {
     // saw, so "changed since you last asked" needs no state in the caller.
     uint32_t generation;
     uint32_t generation_polled;
+    // any ui param has changed set - lets param_changed_take skip the scan
+    bool any_changed;
     // interned categories - own malloc each, outer array realloc'd (see
     // PRM_PARAM_CATEGORY). Never removed individually, so num_categories only
     // grows and every index below it is alive.
@@ -126,6 +134,13 @@ static PARAM_T param_clamp(PARAM_T val, PARAM_T min_val, PARAM_T max_val) {
     return val;
 }
 
+// mark a ui param as changed for param_changed_take
+static void param_ui_mark_changed(PRM_CONTAIN *param_container,
+                                  PRM_PARAM_UI *cur_param) {
+    cur_param->changed = true;
+    param_container->any_changed = true;
+}
+
 PRM_CONTAIN *
 params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     PRM_CONTAIN *param_container = (PRM_CONTAIN *)malloc(sizeof(PRM_CONTAIN));
@@ -139,6 +154,7 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     param_container->ui_params = NULL;
     param_container->generation = 0;
     param_container->generation_polled = 0;
+    param_container->any_changed = false;
     param_container->categories = NULL;
     param_container->num_categories = 0;
     param_container->user_data.user_data = NULL;
@@ -262,6 +278,7 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     new_ui_param->category_uid = category_uid;
     new_ui_param->self_container = param_container;
     new_ui_param->self_val_id = (int)idx;
+    new_ui_param->changed = false;
 
     param_container->generation++;
 
@@ -343,6 +360,13 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
                 param_container->rt_params[cur_bit.val_id];
             if (!cur_param || cur_param->uid != cur_bit.uid)
                 continue;
+            if (cur_bit.from_owner) {
+                // a ui change not yet sent to the owner wins over the older
+                // value the owner reported
+                if (cur_param->val_changed == 0)
+                    cur_param->val = cur_bit.param_value;
+                continue;
+            }
             cur_param->val = cur_bit.param_value;
             cur_param->val_changed = 1;
         } else {
@@ -352,6 +376,8 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
             PRM_PARAM_UI *cur_param = param_container->ui_params[cur_bit.val_id];
             if (!cur_param || cur_param->uid != cur_bit.uid)
                 continue;
+            if (cur_param->val != cur_bit.param_value)
+                param_ui_mark_changed(param_container, cur_param);
             cur_param->val = cur_bit.param_value;
         }
     }
@@ -373,15 +399,17 @@ int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
     PARAM_T new_val =
         param_clamp(set_to, cur_param->min_val, cur_param->max_val);
     cur_param->val = new_val;
-    // only send the change to the other side if the value actually changed
+    // only send the change to the other side if the value actually changed.
+    // val_changed stays as is - this value came from the owner
     if (new_val != prev_val) {
-        cur_param->val_changed = 1;
         PARAM_RING_DATA_BIT send_bit;
         send_bit.val_id = val_id;
         send_bit.uid = cur_param->uid;
         send_bit.param_value = new_val;
-        ring_buffer_write(param_container->param_rt_to_ui, &send_bit,
-                          sizeof(send_bit));
+        send_bit.from_owner = false;
+        if (ring_buffer_write(param_container->param_rt_to_ui, &send_bit,
+                              sizeof(send_bit)) != 1)
+            return -1;
     }
     return 0;
 }
@@ -408,12 +436,18 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
         cur_param->def_val = set_to;
         return 0;
     case Operation_ChangeName:
-        if (set_string_to)
+        if (set_string_to &&
+            strncmp(cur_param->name, set_string_to, MAX_SHORT_NAME_LENGTH) != 0) {
             snprintf(cur_param->name, MAX_SHORT_NAME_LENGTH, "%s",
                      set_string_to);
+            param_ui_mark_changed(param_container, cur_param);
+        }
         return 0;
     case Operation_SetFlags:
-        cur_param->flags = (uint32_t)set_to;
+        if (cur_param->flags != (uint32_t)set_to) {
+            cur_param->flags = (uint32_t)set_to;
+            param_ui_mark_changed(param_container, cur_param);
+        }
         return 0;
     case Operation_SetCategory:
         // structural: the param hangs under a different parent afterwards, so
@@ -441,6 +475,7 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
         new_val = prev_val + set_to * cur_param->inc_am;
         break;
     case Operation_SetValue:
+    case Operation_SyncValue:
         new_val = set_to;
         break;
     case Operation_DefValue:
@@ -452,10 +487,12 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
     new_val = param_clamp(new_val, cur_param->min_val, cur_param->max_val);
     cur_param->val = new_val;
     if (new_val != prev_val) {
+        param_ui_mark_changed(param_container, cur_param);
         PARAM_RING_DATA_BIT send_bit;
         send_bit.val_id = val_id;
         send_bit.uid = cur_param->uid;
         send_bit.param_value = new_val;
+        send_bit.from_owner = (param_op == Operation_SyncValue);
         ring_buffer_write(param_container->param_ui_to_rt, &send_bit,
                           sizeof(send_bit));
     }
@@ -525,9 +562,19 @@ int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid) {
     return -1;
 }
 
-int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id) {
-    if (!param_container || owner_id == 0)
+int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id,
+                        unsigned int rt_params) {
+    if (!param_container)
         return -1;
+    if (rt_params) {
+        for (unsigned int i = 0; i < param_container->num_of_params_rt; i++) {
+            if (!param_container->rt_params[i])
+                continue;
+            if (param_container->rt_params[i]->owner_id == owner_id)
+                return (int)i;
+        }
+        return -1;
+    }
     for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
         if (!param_container->ui_params[i])
             continue;
@@ -851,6 +898,44 @@ uint32_t param_get_category_uid(PRM_CONTAIN *param_container, int val_id) {
     if (!param_container->ui_params[val_id])
         return 0;
     return param_container->ui_params[val_id]->category_uid;
+}
+
+void param_mark_changed(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return;
+    if (val_id >= 0) {
+        if ((unsigned int)val_id >= param_container->num_of_params_ui)
+            return;
+        if (param_container->ui_params[val_id])
+            param_ui_mark_changed(param_container,
+                                  param_container->ui_params[val_id]);
+        return;
+    }
+    for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
+        if (param_container->ui_params[i])
+            param_ui_mark_changed(param_container, param_container->ui_params[i]);
+    }
+}
+
+size_t param_changed_take(PRM_CONTAIN *param_container, int *val_ids,
+                          size_t cap) {
+    if (!param_container || !val_ids || cap == 0)
+        return 0;
+    if (!param_container->any_changed)
+        return 0;
+    size_t taken = 0;
+    for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
+        PRM_PARAM_UI *cur_param = param_container->ui_params[i];
+        if (!cur_param || !cur_param->changed)
+            continue;
+        // out of room - the rest stay marked for the next call
+        if (taken == cap)
+            return taken;
+        cur_param->changed = false;
+        val_ids[taken++] = (int)i;
+    }
+    param_container->any_changed = false;
+    return taken;
 }
 
 bool param_container_changed(PRM_CONTAIN *param_container) {

@@ -2,10 +2,11 @@
 #include "../structs.h"
 #include "../types.h"
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
-// operations param_set_value can apply to a parameter - the four value ops
-// (Decrease/Increase/SetValue/DefValue) clamp and may propagate to the rt
-// side; the property ops (SetIncr/SetDefValue/ChangeName/SetFlags/
+// operations param_set_value can apply to a parameter - the value ops
+// (Decrease/Increase/SetValue/DefValue/SyncValue) clamp and may propagate to
+// the rt side; the property ops (SetIncr/SetDefValue/ChangeName/SetFlags/
 // SetCategory) only ever mutate ui-only fields (see param_set_value's own
 // doc comment).
 enum paramOperType {
@@ -26,7 +27,11 @@ enum paramOperType {
     // move the param into the category whose uid is set_to (0 = none). The
     // only property op that is STRUCTURAL - it changes which parent the param
     // hangs under, so it bumps the container generation
-    Operation_SetCategory = 0x09
+    Operation_SetCategory = 0x09,
+    // set the value to set_to, reported by the owner (e.g. a CLAP plugin
+    // rescan) - the rt side stores it without marking it changed, so it is
+    // not sent back to the owner
+    Operation_SyncValue = 0x0A
 };
 
 // per-parameter property bits, translated by the owner from its own flag
@@ -148,17 +153,20 @@ unsigned int param_return_num_params(PRM_CONTAIN *param_container,
 // PARAM_RING_DATA_BIT) - this just stores it, no operation is replayed.
 void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params);
 
-// rt-side value setter. Always a direct "set to this value" if the clamped
-// result actually changed, sends that final value across to the ui side.
-// Returns -1 on error.
+// rt-side value setter, for values that come from the owner (a plugin output,
+// the JACK transport). Always a direct "set to this value" if the clamped
+// result actually changed, sends that final value across to the ui side. Does
+// not mark the param changed, so the owner is not sent its own value back.
+// Returns -1 on error, including a full rt_to_ui queue - the rt side still
+// has the value then, but the ui side misses it.
 int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
                        PARAM_T set_to);
 
 // ui-side value/property setter. param_op is a paramOperType (above) to
 // apply - unlike the rt side, every operation is meaningful here, since the
-// ui struct holds inc_am/def_val/name/is_hidden. The four value operations
-//(Increase/Decrease/SetValue/DefValue) clamp and, if the result changed,
-// propagate the final value to the rt side; Returns -1 on error.
+// ui struct holds inc_am/def_val/name/is_hidden. The value operations
+//(Increase/Decrease/SetValue/DefValue/SyncValue) clamp and, if the result
+// changed, propagate the final value to the rt side; Returns -1 on error.
 int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
                     const char *set_string_to, unsigned char param_op);
 
@@ -176,10 +184,12 @@ uint32_t param_get_uid(PRM_CONTAIN *param_container, int val_id,
 // already have a val_id for.
 int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid);
 
-// find the val_id whose owner_id matches, -1 if not found. owner_id 0 means
-// "this owner has no id for it" and never matches. ui-only, and a linear
-// scan - do NOT call it from the rt path, cache the val_id instead.
-int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id);
+// find the val_id whose owner_id matches on whichever side rt_params selects,
+// -1 if not found. 0 is a valid owner_id (CLAP's clap_id 0). A linear scan - on
+// the rt path use it only for rare lookups (like CLAP output events), cache
+// the val_id otherwise.
+int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id,
+                        unsigned int rt_params);
 
 // return this param's owner_id (see param_add_param) for whichever side
 // rt_params selects, 0 on error. Opaque to params.c - meaningless without
@@ -214,9 +224,11 @@ PARAM_T param_get_value(PRM_CONTAIN *param_container, int val_id,
 const char *param_get_value_as_string(PRM_CONTAIN *param_container,
                                       int val_id, PARAM_T value);
 
-// check if this param's value changed since param_get_value(..., 1) last
-// read it - rt-only. Used to decide whether an external protocol (a CLAP/LV2
-// event, a JACK transport update) still needs to be told about this param.
+// check if the ui side changed this param's value since param_get_value(...,
+// 1) last read it - rt-only. Used to decide whether an external protocol (a
+// CLAP/LV2 event, a JACK transport update) still needs to be told about this
+// param. Values from the owner itself (param_set_value_rt,
+// Operation_SyncValue) never mark it.
 int param_get_if_changed_rt(PRM_CONTAIN *param_container, int val_id);
 // check if any parameter's rt-side value has changed - see
 // param_get_if_changed_rt.
@@ -303,6 +315,19 @@ uint32_t param_get_category_uid(PRM_CONTAIN *param_container, int val_id);
 // watcher could have seen an earlier state. That costs one no-op resync per
 // container and then settles.
 bool param_container_changed(PRM_CONTAIN *param_container);
+
+// mark a param as changed for param_changed_take without its value, name or
+// flags changing - e.g. the owner reports its value text now reads
+// differently. val_id -1 marks every param. [main-thread] only.
+void param_mark_changed(PRM_CONTAIN *param_container, int val_id);
+
+// write up to cap val_ids of the params whose value, name or flags changed on
+// the ui side (from any source - the ui, the owner, a rescan) since they were
+// last taken, and clear them. Returns how many were written - call again
+// until it returns 0. The presentation counterpart of
+// param_container_changed. [main-thread] only.
+size_t param_changed_take(PRM_CONTAIN *param_container, int *val_ids,
+                          size_t cap);
 
 // cleans the parameter container
 void param_clean_param_container(PRM_CONTAIN *param_container);

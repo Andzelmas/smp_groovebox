@@ -760,31 +760,22 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO *jack_data) {
             pos_ready = 0;
         if (pos_ready == 1) {
             if (state == JackTransportRolling) {
-                // After setting the value, get the value so the parameter
-                // is_changed will be 0 and
+                // param_set_value_rt does not mark these changed, so
                 // app_jack_update_transport_from_params_rt will not create a
-                // new tranport object even though a parameter was not changed
-                // by the ui get the bars
+                // new transport object from them. get the bars
                 param_set_value_rt(jack_data->trk_params,
                                    jack_data->trk_val[TRK_PARAM_BAR], (float)pos.bar);
-                param_get_value(jack_data->trk_params, jack_data->trk_val[TRK_PARAM_BAR],
-                                1);
                 // get the beat
                 param_set_value_rt(jack_data->trk_params,
                                    jack_data->trk_val[TRK_PARAM_BEAT], (float)pos.beat);
-                param_get_value(jack_data->trk_params, jack_data->trk_val[TRK_PARAM_BEAT],
-                                1);
                 // get the tick
                 param_set_value_rt(jack_data->trk_params,
                                    jack_data->trk_val[TRK_PARAM_TICK], (float)pos.tick);
-                param_get_value(jack_data->trk_params, jack_data->trk_val[TRK_PARAM_TICK],
-                                1);
             }
             // get the isPlaying state even if the Jack transport head is not
             // rolling
             param_set_value_rt(jack_data->trk_params, jack_data->trk_val[TRK_PARAM_PLAY],
                                (float)state);
-            param_get_value(jack_data->trk_params, jack_data->trk_val[TRK_PARAM_PLAY], 1);
         }
     }
     return 0;
