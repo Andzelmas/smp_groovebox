@@ -12,8 +12,8 @@
 #define SELECTED_DIST 10 // further away contexts from cx_selected will not be displayed
 #define VIEW_ROWS (SELECTED_DIST * 2 + 1) // hovered row + SELECTED_DIST either side
 
-#define ACTION_LIST_COUNT 5 // maximum possible actions for a context when returning DataAction
-#define ACTION_ARG_COUNT 4 // maximum possible DataArgSpec for a single DataAction
+#define ACTION_LIST_COUNT 8 // maximum possible actions for a context when returning DataAction
+#define ACTION_ARG_COUNT 5 // maximum possible DataArgSpec for a single DataAction
 #define STATES_COUNT 2 // how many states on this program
 #define ACTION_SOURCES_COUNT 3 // contexts whose actions are gathered: current + hovered + root
 #define MAX_ACTION_CANDIDATES (ACTION_LIST_COUNT * ACTION_SOURCES_COUNT)
@@ -933,9 +933,78 @@ static ContextId helper_action_do_direct(UI_LAYER *ui_layer, ContextId context,
     return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
 }
 
-// single PATH arg (ADD_FILE_PATH): cooked-mode text entry. A future UI that
-// wants a real file browser here only needs to replace this function - the
-// dispatch in helper_action_resolve and every other action stay untouched.
+// adjust a value (of a parameter for example) by adjust_value
+// if adjust_value is 0, will ask for user input for the adjust_value
+static ContextId helper_action_do_adjust_value(UI_LAYER *ui_layer, ContextId context,
+                                       DataActionType type, int adjust_value, const DataArgSpec *spec,
+                                       const char *label, char *msg, size_t msg_cap) {
+    int value = adjust_value;
+    if (value == 0) {
+        enterCookedMode();
+        printf("%s: ", spec->label ? spec->label : spec->name);
+        int scan_err = scanf("%d", &value);
+        enterRawModeAgain();
+        if (scan_err <= 0)
+            return CONTEXT_ID_INVALID;
+    }
+
+    DataActionReq req = {.type = type, .adjust_value.step = value};
+    ContextId out_new = CONTEXT_ID_INVALID;
+    DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
+    helper_action_result_msg(result, label, msg, msg_cap);
+    return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
+}
+// adjust value (of a parameter for example), directly. Not through action drilling
+static bool helper_action_do_adjust_value_direct(UI_LAYER* ui_layer, ContextId context, int adjust_value, char* msg, size_t msg_cap){
+    if(!ui_layer)
+        return false;
+    if(!ui_layer_context_valid(ui_layer, context))
+        return false;
+
+    if(adjust_value == 0)
+        return false;
+
+    DataAction actions_out[ACTION_LIST_COUNT];
+    size_t actions = ui_layer_context_actions(ui_layer, context, actions_out,
+                                              ACTION_LIST_COUNT);
+    for (size_t i = 0; i < actions; i++) {
+        DataAction cur_action = actions_out[i];
+        if (cur_action.type == DATA_ACTION_ADJUST_VALUE) {
+            DataArgSpec specs[ACTION_ARG_COUNT];
+            size_t arguments = ui_layer_context_action_args(
+                ui_layer, context, cur_action.type, specs, ACTION_ARG_COUNT);
+            if (arguments != 1)
+                return false;
+            helper_action_do_adjust_value(ui_layer, context, cur_action.type,
+                                          adjust_value, &specs[0],
+                                          cur_action.label, msg, msg_cap);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// set value (of a parameter for example) using user intput
+static ContextId helper_action_do_set_value(UI_LAYER *ui_layer, ContextId context,
+                                       DataActionType type, const DataArgSpec *spec,
+                                       const char *label, char *msg, size_t msg_cap) {
+    double value = 0.0;
+    enterCookedMode();
+    printf("%s: ", spec->label ? spec->label : spec->name);
+    int scan_err = scanf("%lf", &value);
+    enterRawModeAgain();
+    if(scan_err <= 0)
+        return CONTEXT_ID_INVALID;
+
+    DataActionReq req = {.type = type, .set_value.value = value};
+    ContextId out_new = CONTEXT_ID_INVALID;
+    DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
+    helper_action_result_msg(result, label, msg, msg_cap);
+    return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
+}
+
+// single PATH arg (ADD_FILE_PATH): cooked-mode text entry.
 static ContextId helper_action_do_path(UI_LAYER *ui_layer, ContextId context,
                                        DataActionType type, const DataArgSpec *spec,
                                        const char *label, char *msg, size_t msg_cap) {
@@ -1111,6 +1180,16 @@ static bool helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
                                   label, specs, 2);
         helper_list_session_scope(ui_layer, session, scope_from);
         return true;
+    }
+    if (type == DATA_ACTION_ADJUST_VALUE){
+        helper_action_do_adjust_value(ui_layer, context, type, 0, &specs[0],
+                                      label, msg, msg_cap);
+        return false;
+    }
+    if (type == DATA_ACTION_SET_VALUE){
+        helper_action_do_set_value(ui_layer, context, type, &specs[0], label,
+                                   msg, msg_cap);
+        return false;
     }
     if (arg_count == 0) {
         helper_action_do_direct(ui_layer, context, type, label, msg, msg_cap);
@@ -1403,6 +1482,19 @@ int main() {
                 // nothing matched, so candidates/candidate_count are
                 // untouched (still this frame's round-0 set).
                 switch (input) {
+                    // change the parameter value directly with - and +, without
+                    // action drilling
+                case '-':
+                    helper_action_do_adjust_value_direct(
+                        ui_layer, state_current_context_hovered, -1,
+                        action_status_msg, sizeof(action_status_msg));
+                    break;
+                case '+':
+                    helper_action_do_adjust_value_direct(
+                        ui_layer, state_current_context_hovered, 1,
+                        action_status_msg, sizeof(action_status_msg));
+                    break;
+
                 case 'j':
                     helper_nav_context_scroll(
                         ui_layer, state_main, state_main_context_current,
