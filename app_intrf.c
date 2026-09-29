@@ -647,6 +647,15 @@ bool nav_cx_is_hidden(APP_INTRF* app_intrf, ContextId context){
     return data_is_hidden(&cx->data); 
 }
 
+uint64_t nav_cx_group_key(APP_INTRF* app_intrf, ContextId context){
+    if(!app_intrf || context == CONTEXT_ID_NULL)
+        return 0;
+    CX* cx = ht_get(app_intrf->cx_hashtable, context);
+    if(!cx)
+        return 0;
+    return data_group_key(&cx->data);
+}
+
 // ACTIONS - pure pass-throughs: resolve context to its CX, call through to
 // the DataObject. app_intrf knows no specific action, arg or list; see
 // data_actions.h for the contract these all share end to end.

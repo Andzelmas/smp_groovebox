@@ -143,6 +143,8 @@ ContextId ui_layer_context_parent_return(UI_LAYER *ui_layer, ContextId context);
 const char* ui_layer_context_value_as_string(UI_LAYER* ui_layer, ContextId context);
 // is the context hidden (informed by the data layer)
 bool ui_layer_context_is_hidden(UI_LAYER* ui_layer, ContextId context);
+// the list group this context stands for (DataChoice.group_key), 0 for none
+uint64_t ui_layer_context_group_key(UI_LAYER* ui_layer, ContextId context);
 
 // ACTIONS - thin pass-throughs to app_intrf's nav_cx_* (see data_actions.h
 // for the full contract and struct docs, and app_intrf.h for the flow).

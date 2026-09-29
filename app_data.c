@@ -246,21 +246,21 @@ enum {
     SID_TRK,
 };
 
-/* DataListId composition mirrors ContextId. List kinds are static constants
- * (LID_*), not counter-allocated: there is exactly one "LV2 catalogue" list
+/* DataListId composition mirrors ContextId. A namespace is one key space for
+ * DataChoice.value, shared by every list in it. List kinds are static
+ * constants, not counter-allocated: there is exactly one "LV2 catalogue" list
  * etc. for the life of the program. */
 enum {
-    DATA_LIST_NS_CATALOG = 1,
+    DATA_LIST_NS_LV2_CATALOG = 1,
     DATA_LIST_NS_PORTS = 2,
     DATA_LIST_NS_PARAM_CHOICE = 3,
+    DATA_LIST_NS_CLAP_CATALOG = 4,
 };
 #define MAKE_LIST_ID(ns, local)                                                \
     (((DataListId)(ns) << CTXID_NS_SHIFT) | ((DataListId)(local) & CTXID_LOCAL_MASK))
 
-enum {
-    LID_LV2_CATALOG = 1,
-    LID_CLAP_CATALOG,
-};
+#define LIST_LV2_CATALOG MAKE_LIST_ID(DATA_LIST_NS_LV2_CATALOG, 1)
+#define LIST_CLAP_CATALOG MAKE_LIST_ID(DATA_LIST_NS_CLAP_CATALOG, 1)
 
 // single static list id, reused by every enum param's SET_CHOICE arg - the
 // param itself (via list_at's own user_data) disambiguates which one's
@@ -337,7 +337,7 @@ static size_t cx_param_action_list(void *user_data, DataAction *out,
     if (n < cap)
         out[n++] = (DataAction){
             .type = DATA_ACTION_SET_VALUE,
-            .label = "Set value",
+            .label = "Set",
             .tooltip = "Set this parameter to a specific value",
             .enabled = writable,
             .style = DATA_ACTION_STYLE_NORMAL,
@@ -345,7 +345,7 @@ static size_t cx_param_action_list(void *user_data, DataAction *out,
     if (n < cap)
         out[n++] = (DataAction){
             .type = DATA_ACTION_ADJUST_VALUE,
-            .label = "Adjust value",
+            .label = "Adjust",
             .tooltip = "Increase or decrease this parameter by one increment",
             .enabled = writable,
             .style = DATA_ACTION_STYLE_NORMAL,
@@ -419,8 +419,9 @@ static bool cx_param_list_at(void *user_data, DataListId list,
     if (!label)
         return false;
     // the raw integer param value (not a position) - CLAP requires IS_ENUM
-    // to imply IS_STEPPED, so every value in [min,max] is a whole number
-    out->value = (uint64_t)(uint32_t)(int)val;
+    // to imply IS_STEPPED, so every value in [min,max] is a whole number.
+    // Namespaced, so an enum value of 0 is not a 0 choice value
+    out->value = MAKE_ID(DATA_LIST_NS_PARAM_CHOICE, (uint32_t)(int)val);
     out->label = label;
     out->flags = 0;
     return true;
@@ -454,7 +455,10 @@ static DataActionResult cx_param_action_do(void *user_data,
         return DATA_ACTION_OK;
     }
     if (req->type == DATA_ACTION_SET_CHOICE) {
-        int enum_val = (int)(uint32_t)req->add_choice.choice_value;
+        ContextId value = (ContextId)req->add_choice.choice_value;
+        if (CTXID_NS(value) != DATA_LIST_NS_PARAM_CHOICE)
+            return DATA_ACTION_ERR_INVALID; // not a choice from this list
+        int enum_val = (int)(uint32_t)(value & CTXID_LOCAL_MASK);
         if (param_set_value(container, val_id, (PARAM_T)enum_val, NULL,
                             Operation_SetValue) != 0)
             return DATA_ACTION_ERR_DATA;
@@ -708,7 +712,7 @@ static size_t sampler_action_list(void *user_data, DataAction *out,
         return 0;
     out[0] = (DataAction){
         .type = DATA_ACTION_ADD_FILE_PATH,
-        .label = "Add sample",
+        .label = "Add",
         .tooltip = "Load a sample from a file",
         .enabled = true,
         .style = DATA_ACTION_STYLE_NORMAL,
@@ -752,8 +756,10 @@ static DataActionResult sampler_action_do(void *user_data,
     return DATA_ACTION_OK;
 }
 static const DataOps sampler_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
+    .capabilities =
+        DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS | DATA_CAP_GROUP,
     .id = sampler_id,
+    .group_key = sampler_id,
     .child_count = sampler_child_count,
     .child_at = sampler_child_at,
     .name = sampler_name,
@@ -802,8 +808,10 @@ static DataActionResult lv2_plugin_action_do(void *user_data,
 }
 // plug_plugin_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps lv2_plugin_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
+    .capabilities =
+        DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS | DATA_CAP_GROUP,
     .id = lv2_plugin_id,
+    .group_key = lv2_plugin_id,
     .child_count = lv2_plugin_child_count,
     .child_at = lv2_plugin_child_at,
     .name = plug_plugin_name,
@@ -834,21 +842,31 @@ static ContextId lv2_plugins_id(void *user_data) {
     (void)user_data;
     return MAKE_ID(DATA_NS_SINGLETON, SID_LV2_PLUGINS);
 }
-// DATA_CAP_ACTIONS: the lv2 list can add a plugin chosen from the catalogue.
-// One CHOICE arg, list = the catalogue.
+// DATA_CAP_ACTIONS: the lv2 list can add a plugin chosen from the catalogue
+// (one CHOICE arg, list = the catalogue), and rescan that catalogue.
 static size_t lv2_plugins_action_list(void *user_data, DataAction *out,
                                       size_t cap) {
     (void)user_data;
-    if (!out || cap < 1)
+    if (!out)
         return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_ADD_CHOICE,
-        .label = "Add plugin",
-        .tooltip = "Load an LV2 plugin from the catalogue",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_NORMAL,
-    };
-    return 1;
+    size_t n = 0;
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_ADD_CHOICE,
+            .label = "Add",
+            .tooltip = "Load an LV2 plugin from the catalogue",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_REFRESH,
+            .label = "Scan",
+            .tooltip = "Rescan the installed LV2 plugins",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    return n;
 }
 static size_t lv2_plugins_action_args(void *user_data, DataActionType type,
                                       DataArgSpec *out, size_t cap) {
@@ -862,14 +880,14 @@ static size_t lv2_plugins_action_args(void *user_data, DataActionType type,
         .label = "Plugin",
         .kind = DATA_ARG_CHOICE,
         .required = true,
-        .list = MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG),
+        .list = LIST_LV2_CATALOG,
     };
     return 1;
 }
 static size_t lv2_plugins_list_count(void *user_data, DataListId list,
                                      const DataActionReq *partial) {
     (void)partial;
-    if (list != MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG))
+    if (list != LIST_LV2_CATALOG)
         return 0;
     return (size_t)plug_plugin_list_count((PLUG_INFO *)user_data);
 }
@@ -877,14 +895,14 @@ static bool lv2_plugins_list_at(void *user_data, DataListId list,
                                 const DataActionReq *partial, size_t idx,
                                 DataChoice *out) {
     (void)partial;
-    if (list != MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_LV2_CATALOG))
+    if (list != LIST_LV2_CATALOG)
         return false;
     void *item =
         plug_plugin_list_item_get((PLUG_INFO *)user_data, (unsigned int)idx);
     if (!item)
         return false;
-    out->value = MAKE_ID(DATA_LIST_NS_CATALOG,
-                         str_hash_fnv1a64(plug_plugin_list_item_path(item)));
+    out->value =
+        MAKE_ID(DATA_LIST_NS_LV2_CATALOG, plug_plugin_list_item_key(item));
     out->label = plug_plugin_list_item_name(item);
     out->flags = 0;
     return true;
@@ -893,27 +911,19 @@ static DataActionResult lv2_plugins_action_do(void *user_data,
                                               const DataActionReq *req,
                                               ContextId *out_new) {
     PLUG_INFO *plug_data = (PLUG_INFO *)user_data;
-    if (!plug_data || !req || req->type != DATA_ACTION_ADD_CHOICE)
+    if (!plug_data || !req)
+        return DATA_ACTION_ERR_INVALID;
+    if (req->type == DATA_ACTION_REFRESH)
+        return plug_plugin_list_init(plug_data) < 0 ? DATA_ACTION_ERR_DATA
+                                                    : DATA_ACTION_OK;
+    if (req->type != DATA_ACTION_ADD_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
     ContextId value = (ContextId)req->add_choice.choice_value;
-    if (CTXID_NS(value) != DATA_LIST_NS_CATALOG)
+    if (CTXID_NS(value) != DATA_LIST_NS_LV2_CATALOG)
         return DATA_ACTION_ERR_INVALID; // not a choice from this list
-
-    // MAKE_ID only kept the low 56 bits of the hash (see CTXID_LOCAL_MASK) -
-    // mask the freshly computed one the same way before comparing.
-    uint64_t key = value & CTXID_LOCAL_MASK;
-    unsigned int count = plug_plugin_list_count(plug_data);
-    void *found = NULL;
-    for (unsigned int i = 0; i < count; i++) {
-        void *item = plug_plugin_list_item_get(plug_data, i);
-        if (item &&
-            (str_hash_fnv1a64(plug_plugin_list_item_path(item)) & CTXID_LOCAL_MASK) ==
-                key) {
-            found = item;
-            break;
-        }
-    }
+    void *found =
+        plug_plugin_list_item_by_key(plug_data, value & CTXID_LOCAL_MASK);
     if (!found)
         return DATA_ACTION_ERR_STALE; // catalogue changed since the pick
 
@@ -980,8 +990,10 @@ static DataActionResult clap_plugin_action_do(void *user_data,
 }
 // clap_plug_plugin_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps clap_plugin_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
+    .capabilities =
+        DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS | DATA_CAP_GROUP,
     .id = clap_plugin_id,
+    .group_key = clap_plugin_id,
     .child_count = clap_plugin_child_count,
     .child_at = clap_plugin_child_at,
     .name = clap_plug_plugin_name,
@@ -1014,21 +1026,31 @@ static ContextId clap_plugins_id(void *user_data) {
     (void)user_data;
     return MAKE_ID(DATA_NS_SINGLETON, SID_CLAP_PLUGINS);
 }
-// DATA_CAP_ACTIONS: the clap list can add a plugin chosen from the
-// catalogue. One CHOICE arg, list = the catalogue.
+// DATA_CAP_ACTIONS: the clap list can add a plugin chosen from the catalogue
+// (one CHOICE arg, list = the catalogue), and rescan that catalogue.
 static size_t clap_plugins_action_list(void *user_data, DataAction *out,
                                        size_t cap) {
     (void)user_data;
-    if (!out || cap < 1)
+    if (!out)
         return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_ADD_CHOICE,
-        .label = "Add plugin",
-        .tooltip = "Load a CLAP plugin from the catalogue",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_NORMAL,
-    };
-    return 1;
+    size_t n = 0;
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_ADD_CHOICE,
+            .label = "Add",
+            .tooltip = "Load a CLAP plugin from the catalogue",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_REFRESH,
+            .label = "Scan",
+            .tooltip = "Rescan the installed CLAP plugins",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    return n;
 }
 static size_t clap_plugins_action_args(void *user_data, DataActionType type,
                                        DataArgSpec *out, size_t cap) {
@@ -1042,14 +1064,14 @@ static size_t clap_plugins_action_args(void *user_data, DataActionType type,
         .label = "Plugin",
         .kind = DATA_ARG_CHOICE,
         .required = true,
-        .list = MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_CLAP_CATALOG),
+        .list = LIST_CLAP_CATALOG,
     };
     return 1;
 }
 static size_t clap_plugins_list_count(void *user_data, DataListId list,
                                       const DataActionReq *partial) {
     (void)partial;
-    if (list != MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_CLAP_CATALOG))
+    if (list != LIST_CLAP_CATALOG)
         return 0;
     return (size_t)clap_plug_plugin_list_count((CLAP_PLUG_INFO *)user_data);
 }
@@ -1057,14 +1079,14 @@ static bool clap_plugins_list_at(void *user_data, DataListId list,
                                  const DataActionReq *partial, size_t idx,
                                  DataChoice *out) {
     (void)partial;
-    if (list != MAKE_LIST_ID(DATA_LIST_NS_CATALOG, LID_CLAP_CATALOG))
+    if (list != LIST_CLAP_CATALOG)
         return false;
     void *item = clap_plug_plugin_list_item_get((CLAP_PLUG_INFO *)user_data,
                                                 (unsigned int)idx);
     if (!item)
         return false;
-    out->value = MAKE_ID(DATA_LIST_NS_CATALOG,
-                         str_hash_fnv1a64(clap_plug_plugin_list_item_path(item)));
+    out->value =
+        MAKE_ID(DATA_LIST_NS_CLAP_CATALOG, clap_plug_plugin_list_item_key(item));
     out->label = clap_plug_plugin_list_item_name(item);
     out->flags = 0;
     return true;
@@ -1073,26 +1095,19 @@ static DataActionResult clap_plugins_action_do(void *user_data,
                                                const DataActionReq *req,
                                                ContextId *out_new) {
     CLAP_PLUG_INFO *plug_data = (CLAP_PLUG_INFO *)user_data;
-    if (!plug_data || !req || req->type != DATA_ACTION_ADD_CHOICE)
+    if (!plug_data || !req)
+        return DATA_ACTION_ERR_INVALID;
+    if (req->type == DATA_ACTION_REFRESH)
+        return clap_plug_plugin_list_init(plug_data) < 0 ? DATA_ACTION_ERR_DATA
+                                                         : DATA_ACTION_OK;
+    if (req->type != DATA_ACTION_ADD_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
     ContextId value = (ContextId)req->add_choice.choice_value;
-    if (CTXID_NS(value) != DATA_LIST_NS_CATALOG)
+    if (CTXID_NS(value) != DATA_LIST_NS_CLAP_CATALOG)
         return DATA_ACTION_ERR_INVALID; // not a choice from this list
-
-    // MAKE_ID only kept the low 56 bits of the hash (see CTXID_LOCAL_MASK) -
-    // mask the freshly computed one the same way before comparing.
-    uint64_t key = value & CTXID_LOCAL_MASK;
-    unsigned int count = clap_plug_plugin_list_count(plug_data);
-    void *found = NULL;
-    for (unsigned int i = 0; i < count; i++) {
-        void *item = clap_plug_plugin_list_item_get(plug_data, i);
-        if (item && (str_hash_fnv1a64(clap_plug_plugin_list_item_path(item)) &
-                     CTXID_LOCAL_MASK) == key) {
-            found = item;
-            break;
-        }
-    }
+    void *found =
+        clap_plug_plugin_list_item_by_key(plug_data, value & CTXID_LOCAL_MASK);
     if (!found)
         return DATA_ACTION_ERR_STALE; // catalogue changed since the pick
 
@@ -1130,8 +1145,9 @@ static ContextId osc_id(void *user_data) {
 }
 // synth_osc_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps osc_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_GROUP,
     .id = osc_id,
+    .group_key = osc_id,
     .child_count = osc_child_count,
     .child_at = osc_child_at,
     .name = synth_osc_name,
@@ -1236,7 +1252,9 @@ static bool root_connect_source(JACK_INFO *jack_data,
 }
 
 // our own ports group under the object that registered them; anything else
-// has only its jack client to go on
+// has only its jack client to go on. Owners register with (namespace, uid),
+// so MAKE_ID(tag, uid) is the owner's own id - which is why those owners'
+// group_key op is simply their id op
 static uint64_t root_port_group_key(const JackPortInfo *info) {
     if (info->owner_tag == 0)
         return MAKE_ID(DATA_NS_JACK_CLIENT, str_hash_fnv1a64(info->client));

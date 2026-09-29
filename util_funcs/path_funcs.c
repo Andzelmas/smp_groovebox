@@ -3,6 +3,7 @@
 #include <string.h>
 #include <dirent.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "../types.h"
 
 int path_is_directory(const char* path){
@@ -74,4 +75,18 @@ int path_has_dir(const char* path, char** file_ext, uint32_t ext_count, uint32_t
     }
     closedir(dir);
     return found;
+}
+
+int path_expand_home(const char* path, char* out, size_t out_len){
+    if(!path || !out || out_len == 0)return -1;
+    const char* home = "";
+    const char* rest = path;
+    if(path[0] == '~' && (path[1] == '/' || path[1] == '\0')){
+	home = getenv("HOME");
+	if(!home || home[0] == '\0')return -1;
+	rest = path + 1;
+    }
+    int len = snprintf(out, out_len, "%s%s", home, rest);
+    if(len < 0 || (size_t)len >= out_len)return -1;
+    return 0;
 }

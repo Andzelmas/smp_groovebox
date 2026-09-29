@@ -31,6 +31,7 @@ typedef enum {
     DATA_ACTION_SET_VALUE,    // set to an absolute numeric value
     DATA_ACTION_ADJUST_VALUE, // move by a signed step COUNT, not a raw value
     DATA_ACTION_SET_CHOICE,   // set to a value picked from a named list
+    DATA_ACTION_REFRESH,      // refresh the context (for example refresh contexts lists)
 } DataActionType;
 
 typedef enum {
@@ -87,9 +88,10 @@ typedef struct {
                               // partial->connect.source. 0 for non-connect
                               // lists (e.g. the plugin catalogue).
     // which group this row belongs to, for a view that wants to filter by one.
-    // Stable and comparable within this list only - NOT resolvable as a
-    // ContextId. 0 when the list has no grouping, in which case group_label is
-    // NULL too. group_label is borrowed on the same terms as label
+    // Stable and comparable within this list; matches the group an object
+    // declares through DataOps.group_key, if one does. 0 when the list has no
+    // grouping, in which case group_label is NULL too. group_label is borrowed
+    // on the same terms as label
     uint64_t group_key;
     const char *group_label;
 } DataChoice;
@@ -118,6 +120,6 @@ typedef struct {
         struct {
             int step; // signed step count, sign maps to Increase/Decrease
         } adjust_value;
-        // DATA_ACTION_REMOVE: no payload
+        // DATA_ACTION_REMOVE, DATA_ACTION_REFRESH: no payload
     };
 } DataActionReq;

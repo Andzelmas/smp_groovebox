@@ -9,6 +9,7 @@
 // my libraries
 #include "../contexts/context_control.h"
 #include "../types.h"
+#include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
 #include "jack_funcs.h"
 // the maximum number of bars there can be
@@ -32,14 +33,6 @@ enum trkParamId {
 
 static thread_local bool is_audio_thread = false;
 
-
-// a port name and the identity minted for it. Outlives the port list, so a
-// key keeps meaning the same port across rebuilds and across a port that
-// disappears and comes back
-typedef struct _port_ident {
-    char *name;
-    size_t rec; // index into ports, SIZE_MAX when not currently present
-} PORT_IDENT;
 
 // one cached port. conn_first/conn_count index the flat adjacency array
 typedef struct _jack_port_rec {
@@ -115,11 +108,9 @@ typedef struct _jack_info {
     // adjacency for ports, sliced per record by conn_first/conn_count
     size_t *conns;
     size_t conn_total;
-    // every port name seen this session. A record's key is its index here + 1,
-    // so 0 is free to mean "no port"
-    PORT_IDENT *idents;
-    size_t ident_count;
-    size_t ident_max;
+    // every port name seen this session, keyed for the whole session so a key
+    // keeps meaning the same port across rebuilds. The slot is its record index
+    INTERN_TABLE idents;
 } JACK_INFO;
 
 static void port_owner_add(JACK_INFO *jack_data, const char *port_name,
@@ -201,76 +192,6 @@ static uint64_t port_owner_find(JACK_INFO *jack_data, const char *port_name,
     return 0;
 }
 
-// keys are 1-based so that 0 can mean "no port", so this is the only place
-// that turns one back into a slot. NULL when the key names none
-static PORT_IDENT *port_ident_at(JACK_INFO *jack_data, uint64_t key) {
-    if (key == 0 || key > jack_data->ident_count)
-        return NULL;
-    return &jack_data->idents[key - 1];
-}
-
-// key of an already-seen port name, 0 when it has never been seen
-static uint64_t port_ident_find(JACK_INFO *jack_data, const char *port_name) {
-    if (!port_name)
-        return 0;
-    for (size_t i = 0; i < jack_data->ident_count; i++) {
-        if (strcmp(jack_data->idents[i].name, port_name) == 0)
-            return i + 1;
-    }
-    return 0;
-}
-
-// as port_ident_find, but mints an identity for a name seen for the first time
-static uint64_t port_ident_intern(JACK_INFO *jack_data, const char *port_name) {
-    uint64_t key = port_ident_find(jack_data, port_name);
-    if (key)
-        return key;
-    if (jack_data->ident_count == jack_data->ident_max) {
-        size_t new_max = jack_data->ident_max ? jack_data->ident_max * 2 : 32;
-        PORT_IDENT *grown =
-            realloc(jack_data->idents, sizeof(PORT_IDENT) * new_max);
-        if (!grown)
-            return 0;
-        jack_data->idents = grown;
-        jack_data->ident_max = new_max;
-    }
-    char *name_copy = strdup(port_name);
-    if (!name_copy)
-        return 0;
-    jack_data->idents[jack_data->ident_count++] =
-        (PORT_IDENT){.name = name_copy, .rec = SIZE_MAX};
-    return jack_data->ident_count;
-}
-
-// jack keeps the port across a rename, so the identity stays and only its
-// name changes. A new name already interned wins instead - the port called X
-// is the one keyed under X
-static void port_ident_rename(JACK_INFO *jack_data, const char *old_name,
-                              const char *new_name) {
-    if (!old_name || !new_name)
-        return;
-    if (port_ident_find(jack_data, new_name))
-        return;
-    uint64_t key = port_ident_find(jack_data, old_name);
-    PORT_IDENT *ident = port_ident_at(jack_data, key);
-    if (!ident)
-        return;
-    char *name_copy = strdup(new_name);
-    if (!name_copy)
-        return;
-    free(ident->name);
-    ident->name = name_copy;
-}
-
-static void port_idents_clean(JACK_INFO *jack_data) {
-    for (size_t i = 0; i < jack_data->ident_count; i++)
-        free(jack_data->idents[i].name);
-    free(jack_data->idents);
-    jack_data->idents = NULL;
-    jack_data->ident_count = 0;
-    jack_data->ident_max = 0;
-}
-
 // one copy of each client name, shared by all of its ports
 static const char *client_intern(JACK_INFO *jack_data, const char *name,
                                  size_t len) {
@@ -311,8 +232,7 @@ static void ports_cache_clear(JACK_INFO *jack_data) {
     free(jack_data->conns);
     jack_data->conns = NULL;
     jack_data->conn_total = 0;
-    for (size_t i = 0; i < jack_data->ident_count; i++)
-        jack_data->idents[i].rec = SIZE_MAX;
+    intern_detach_all(&jack_data->idents);
 }
 
 static void port_rec_add(JACK_INFO *jack_data, const char *name,
@@ -325,14 +245,13 @@ static void port_rec_add(JACK_INFO *jack_data, const char *name,
         client_intern(jack_data, name, sep ? (size_t)(sep - name) : strlen(name));
     if (!client)
         return;
-    uint64_t key = port_ident_intern(jack_data, name);
-    PORT_IDENT *ident = port_ident_at(jack_data, key);
-    if (!ident)
+    uint64_t key = intern_add(&jack_data->idents, name);
+    if (!key)
         return;
     char *name_copy = strdup(name);
     if (!name_copy)
         return;
-    ident->rec = jack_data->port_count;
+    intern_set_slot(&jack_data->idents, key, jack_data->port_count);
     JACK_PORT_REC *rec = &jack_data->ports[jack_data->port_count++];
     rec->name = name_copy;
     rec->client = client;
@@ -419,10 +338,8 @@ static void ports_rebuild(JACK_INFO *jack_data) {
 
 // index of the cached port with this key, port_count when there is none
 static size_t port_index_by_key(JACK_INFO *jack_data, uint64_t key) {
-    const PORT_IDENT *ident = port_ident_at(jack_data, key);
-    if (!ident || ident->rec >= jack_data->port_count)
-        return jack_data->port_count;
-    return ident->rec;
+    size_t slot = intern_slot(&jack_data->idents, key);
+    return slot < jack_data->port_count ? slot : jack_data->port_count;
 }
 
 // lay an edge list (pairs of record indices) out as the per-record adjacency
@@ -480,8 +397,8 @@ static void connections_rebuild(JACK_INFO *jack_data) {
         if (!peers)
             continue;
         for (size_t c = 0; peers[c]; c++) {
-            size_t j =
-                port_index_by_key(jack_data, port_ident_find(jack_data, peers[c]));
+            size_t j = port_index_by_key(
+                jack_data, intern_find(&jack_data->idents, peers[c]));
             if (j >= jack_data->port_count)
                 continue;
             if (edge_count == edge_max) {
@@ -695,9 +612,7 @@ JACK_INFO *jack_initialize(void *arg, const char *client_name,
     jack_data->client_max = 0;
     jack_data->conns = NULL;
     jack_data->conn_total = 0;
-    jack_data->idents = NULL;
-    jack_data->ident_count = 0;
-    jack_data->ident_max = 0;
+    jack_data->idents = (INTERN_TABLE){0};
     // start dirty so the first sync builds the cache
     atomic_init(&jack_data->ports_changed, true);
     atomic_init(&jack_data->connections_changed, true);
@@ -979,7 +894,7 @@ int app_jack_port_rename(void *client_in, void *port,
     int result = jack_port_rename(jack_data->client, jack_port, new_port_name);
     if (result == 0 && old_name) {
         const char *new_name = jack_port_name(jack_port);
-        port_ident_rename(jack_data, old_name, new_name);
+        intern_rename(&jack_data->idents, old_name, new_name);
         port_owner_rename(jack_data, old_name, new_name);
         atomic_store(&jack_data->ports_changed, true);
     }
@@ -1173,7 +1088,7 @@ void jack_clean_memory(void *jack_data_in) {
 
     context_sub_clean(jack_data->control_data);
     ports_cache_clear(jack_data);
-    port_idents_clean(jack_data);
+    intern_clean(&jack_data->idents);
     port_owners_clean(jack_data);
     free(jack_data);
 }

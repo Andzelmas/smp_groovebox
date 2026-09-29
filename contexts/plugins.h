@@ -24,8 +24,9 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
                      plug_status_t *plug_errors, void *audio_backend,
                      uint64_t owner_tag);
 
-// Creates a list of available plugins on the plug_data. If it already exists
-// free it and create it again
+// Scans the installed plugins and (re)builds the list of them on plug_data.
+// Safe to call again while plugins are loaded. A plugin keeps its key across
+// rebuilds; lilv does not forget an uninstalled one, so it stays listed
 int plug_plugin_list_init(PLUG_INFO *plug_data);
 
 // return how many plugins are in the catalogue built by plug_plugin_list_init
@@ -39,10 +40,12 @@ void *plug_plugin_list_item_get(PLUG_INFO *plug_data, unsigned int idx);
 // Returns NULL on error.
 const char *plug_plugin_list_item_name(void *plug_list_item);
 
-// return the URI of the plugin list item (its stable identity - see
-// plug_load_and_activate). Same lifetime as plug_plugin_list_item_name.
-// Returns NULL on error.
-const char *plug_plugin_list_item_path(void *plug_list_item);
+// key of the plugin list item, the same for the same plugin across
+// plug_plugin_list_init calls. Never 0 for a listed item, 0 on error
+uint64_t plug_plugin_list_item_key(void *plug_list_item);
+
+// the listed item with this key, NULL when the current list has none
+void *plug_plugin_list_item_by_key(PLUG_INFO *plug_data, uint64_t key);
 
 // presets functions --------------------------------------------------
 // get the preset struct for the plugin (right now it is simply a char* of the

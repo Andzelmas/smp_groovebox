@@ -1,29 +1,47 @@
 #include "clap_plugins.h"
 #include "../jack_funcs/jack_funcs.h"
 #include "../types.h"
+#include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/math_funcs.h"
+#include "../util_funcs/path_funcs.h"
 #include "../util_funcs/ring_buffer.h"
-#include "../util_funcs/string_funcs.h"
 #include "../util_funcs/uniform_buffer.h"
+#include "clap_scan.h"
 #include "context_control.h"
 #include <clap/clap.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
 #include <semaphore.h>
+#include <signal.h>
+#include <spawn.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <threads.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "clap_ext/clap_ext_preset_factory.h"
 
 // what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
 
-// the paths that clap plugins can be in
-const char *clap_paths[3] = {"/usr/lib/clap/", "~/.clap/", NULL};
+// the default paths that clap plugins can be in, searched after CLAP_PATH
+static const char *clap_paths[] = {"/usr/lib/clap", "~/.clap", NULL};
+
+// how long the scanner may take over one .clap file before it is killed
+#define CLAP_SCAN_TIMEOUT_MS 10000
+// more than any real listing, so a runaway scanner is cut off
+#define CLAP_SCAN_MAX_OUTPUT (1 << 20)
+
+extern char **environ;
 
 // how many clap plugins can there be in the plugin array
 #define MAX_INSTANCES 5
@@ -48,6 +66,7 @@ typedef struct _plugin_list_item {
     char short_name[MAX_SHORT_NAME_LENGTH];
     // the plugin instance id in the clap plugin descriptor
     int plug_inst_id;
+    uint64_t key;
     CLAP_PLUG_INFO *plug_data;
 } PLUGIN_LIST_ITEM;
 
@@ -59,6 +78,9 @@ typedef struct _plugin_list {
     // current size of the plugin_list array
     unsigned int size_curr;
     PLUGIN_LIST_ITEM *plugin_list;
+    // every descriptor id listed this session, so a key keeps meaning the same
+    // plugin across rebuilds. The slot is its index in plugin_list
+    INTERN_TABLE ids;
 } PLUGIN_LIST;
 
 // struct that has the plugin preset info
@@ -1748,52 +1770,37 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     return plug_data;
 }
 
-// search if another plugin has the same path as the plug->plug_path
-// returns the id of the plugin first found
-static int clap_plug_find_same_path(CLAP_PLUG_INFO *plug_data,
-                                    CLAP_PLUG_PLUG *plug) {
-    if (!plug_data)
-        return -1;
-    if (!plug)
-        return -1;
-
-    for (unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++) {
-        CLAP_PLUG_PLUG cur_plug = plug_data->plugins[plug_num];
-        if (cur_plug.id == plug->id)
-            continue;
-        if (!(cur_plug.plug_entry))
-            continue;
-        if (strcmp(plug->plug_path, cur_plug.plug_path) != 0)
-            continue;
-        return cur_plug.id;
-    }
-
-    return -1;
-}
-
-// create the entry on the plug
-// plug has to have plug_path
-static void clap_plug_entry_create(CLAP_PLUG_INFO *plug_data,
-                                   CLAP_PLUG_PLUG *plug) {
+// opens plug->plug_path and takes its clap entry. dlopen hands back the
+// library already loaded for that file, however the path reaches it - its entry
+// is then shared with the plugins using it and not initialized again. One
+// library reference is held for all of them, released by the last one
+static void clap_plug_entry_open(CLAP_PLUG_INFO *plug_data,
+                                 CLAP_PLUG_PLUG *plug) {
     if (!plug_data)
         return;
     if (!plug)
         return;
-    void *handle;
-    int *iptr;
-
-    handle = dlopen(plug->plug_path, RTLD_LOCAL | RTLD_LAZY);
+    void *handle = dlopen(plug->plug_path, RTLD_LOCAL | RTLD_LAZY);
     if (!handle)
         return;
-
-    iptr = (int *)dlsym(handle, "clap_entry");
-    clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t *)iptr;
+    clap_plugin_entry_t *plug_entry =
+        (clap_plugin_entry_t *)dlsym(handle, "clap_entry");
     if (!plug_entry) {
         dlclose(handle);
         return;
     }
-    bool init_err = plug_entry->init(plug->plug_path);
-    if (!init_err) {
+
+    for (unsigned int plug_num = 0; plug_num < MAX_INSTANCES; plug_num++) {
+        const CLAP_PLUG_PLUG *cur_plug = &plug_data->plugins[plug_num];
+        if (cur_plug->id == plug->id || cur_plug->plug_entry != plug_entry)
+            continue;
+        dlclose(handle);
+        plug->plug_entry = cur_plug->plug_entry;
+        plug->dso_handle = cur_plug->dso_handle;
+        return;
+    }
+
+    if (!plug_entry->init(plug->plug_path)) {
         dlclose(handle);
         return;
     }
@@ -1801,109 +1808,314 @@ static void clap_plug_entry_create(CLAP_PLUG_INFO *plug_data,
     plug->dso_handle = handle;
 }
 
+// adds one row. A descriptor id already listed keeps its first row
+static void clap_plug_list_add(CLAP_PLUG_INFO *plug_data, const char *file_path,
+                               int plug_inst_id, const char *plugin_id,
+                               const char *name) {
+    PLUGIN_LIST *plugin_list = &(plug_data->clap_plugin_list);
+    uint64_t key = intern_add(&plugin_list->ids, plugin_id);
+    if (!key || intern_slot(&plugin_list->ids, key) != INTERN_SLOT_NONE)
+        return;
+    if (plugin_list->size_curr == plugin_list->size_max) {
+        unsigned int new_max_size = plugin_list->size_max * 2;
+        PLUGIN_LIST_ITEM *temp_array = realloc(
+            plugin_list->plugin_list, new_max_size * sizeof(PLUGIN_LIST_ITEM));
+        if (!temp_array)
+            return;
+        plugin_list->size_max = new_max_size;
+        plugin_list->plugin_list = temp_array;
+    }
+    PLUGIN_LIST_ITEM *cur_item =
+        &(plugin_list->plugin_list[plugin_list->size_curr]);
+    snprintf(cur_item->path, MAX_PATH_STRING, "%s", file_path);
+    snprintf(cur_item->short_name, MAX_SHORT_NAME_LENGTH, "%s", name);
+    cur_item->plug_inst_id = plug_inst_id;
+    cur_item->key = key;
+    cur_item->plug_data = plug_data;
+    intern_set_slot(&plugin_list->ids, key, plugin_list->size_curr);
+    plugin_list->size_curr += 1;
+}
+
+// files and directories one list scan has visited, so one reached again
+// through a symlink or an overlapping search path is scanned once
+typedef struct _clap_scan_seen {
+    dev_t dev;
+    ino_t ino;
+} CLAP_SCAN_SEEN;
+
+typedef struct _clap_scan {
+    char scanner[MAX_PATH_STRING]; // path of the CLAP_SCAN_EXE program
+    CLAP_SCAN_SEEN *seen;
+    size_t count;
+    size_t max;
+} CLAP_SCAN;
+
+// false when st's file was visited already
+static bool clap_scan_first_visit(CLAP_SCAN *scan, const struct stat *st) {
+    for (size_t i = 0; i < scan->count; i++) {
+        if (scan->seen[i].dev == st->st_dev && scan->seen[i].ino == st->st_ino)
+            return false;
+    }
+    if (scan->count == scan->max) {
+        size_t new_max = scan->max ? scan->max * 2 : 32;
+        CLAP_SCAN_SEEN *grown =
+            realloc(scan->seen, sizeof(CLAP_SCAN_SEEN) * new_max);
+        if (!grown)
+            return false;
+        scan->seen = grown;
+        scan->max = new_max;
+    }
+    scan->seen[scan->count++] =
+        (CLAP_SCAN_SEEN){.dev = st->st_dev, .ino = st->st_ino};
+    return true;
+}
+
+// the scanner sits next to this program's own binary
+static bool clap_scan_find_scanner(char *out, size_t out_len) {
+    char exe[MAX_PATH_STRING];
+    ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe));
+    if (len <= 0 || (size_t)len >= sizeof(exe))
+        return false;
+    exe[len] = '\0';
+    char *slash = strrchr(exe, '/');
+    if (!slash)
+        return false;
+    *slash = '\0';
+    int path_len = snprintf(out, out_len, "%s/%s", exe, CLAP_SCAN_EXE);
+    if (path_len < 0 || (size_t)path_len >= out_len)
+        return false;
+    return access(out, X_OK) == 0;
+}
+
+static int clap_scan_ms_since(const struct timespec *start) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (int)((now.tv_sec - start->tv_sec) * 1000 +
+                 (now.tv_nsec - start->tv_nsec) / 1000000);
+}
+
+// runs the scanner on file_path and returns everything it printed (NULL when
+// nothing), its length in *out_len. A scanner that hangs is killed at the
+// timeout, keeping what it printed so far
+static char *clap_scan_run(const char *scanner, const char *file_path,
+                           size_t *out_len) {
+    *out_len = 0;
+    int fds[2];
+    if (pipe(fds) != 0)
+        return NULL;
+    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
+    fcntl(fds[1], F_SETFD, FD_CLOEXEC);
+
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null",
+                                     O_RDONLY, 0);
+    posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
+                                     O_WRONLY, 0);
+    // a clean signal state, whatever this process blocks or handles
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+    sigset_t no_signals;
+    sigset_t all_signals;
+    sigemptyset(&no_signals);
+    sigfillset(&all_signals);
+    posix_spawnattr_setsigmask(&attr, &no_signals);
+    posix_spawnattr_setsigdefault(&attr, &all_signals);
+    posix_spawnattr_setflags(&attr,
+                             POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
+    char *const argv[] = {(char *)scanner, (char *)file_path, NULL};
+    pid_t pid;
+    int spawn_err =
+        posix_spawn(&pid, scanner, &actions, &attr, argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attr);
+    close(fds[1]);
+    if (spawn_err != 0) {
+        close(fds[0]);
+        return NULL;
+    }
+
+    char *buf = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+    bool ended = false;
+    struct timespec start;
+    clock_gettime(CLOCK_MONOTONIC, &start);
+    for (;;) {
+        int left_ms = CLAP_SCAN_TIMEOUT_MS - clap_scan_ms_since(&start);
+        struct pollfd pfd = {.fd = fds[0], .events = POLLIN};
+        int ready = left_ms > 0 ? poll(&pfd, 1, left_ms) : 0;
+        if (ready < 0 && errno == EINTR)
+            continue;
+        if (ready <= 0)
+            break;
+        if (len == cap) {
+            size_t new_cap = cap ? cap * 2 : 4096;
+            char *grown =
+                new_cap <= CLAP_SCAN_MAX_OUTPUT ? realloc(buf, new_cap) : NULL;
+            if (!grown)
+                break;
+            buf = grown;
+            cap = new_cap;
+        }
+        ssize_t got = read(fds[0], buf + len, cap - len);
+        if (got < 0 && errno == EINTR)
+            continue;
+        if (got <= 0) {
+            ended = true;
+            break;
+        }
+        len += (size_t)got;
+    }
+    close(fds[0]);
+    if (!ended)
+        kill(pid, SIGKILL);
+    while (waitpid(pid, NULL, 0) < 0 && errno == EINTR)
+        ;
+    *out_len = len;
+    return buf;
+}
+
+// the next '\0' terminated field at *pos, NULL when the output ends first
+static const char *clap_scan_field(const char *buf, size_t len, size_t *pos) {
+    if (!buf || *pos >= len)
+        return NULL;
+    const char *field = buf + *pos;
+    const char *end = memchr(field, '\0', len - *pos);
+    if (!end)
+        return NULL;
+    *pos = (size_t)(end - buf) + 1;
+    return field;
+}
+
+// walks the scanner's output (see clap_scan.h), adding the rows when add is
+// set. false when the output stops before the end mark or is malformed - the
+// rows are then not to be trusted
+static bool clap_scan_parse(CLAP_PLUG_INFO *plug_data, const char *file_path,
+                            const char *buf, size_t len, bool add) {
+    size_t pos = 0;
+    for (;;) {
+        const char *index = clap_scan_field(buf, len, &pos);
+        if (!index)
+            return false;
+        if (index[0] == '\0')
+            return true;
+        const char *plugin_id = clap_scan_field(buf, len, &pos);
+        const char *name = clap_scan_field(buf, len, &pos);
+        if (!plugin_id || !name)
+            return false;
+        char *index_end = NULL;
+        unsigned long plug_inst_id = strtoul(index, &index_end, 10);
+        if (*index_end != '\0' || plug_inst_id > INT32_MAX)
+            return false;
+        if (add)
+            clap_plug_list_add(plug_data, file_path, (int)plug_inst_id,
+                               plugin_id, name);
+    }
+}
+
+// lists one .clap file through the scanner, which loads it in a process of its
+// own: nothing the plugin does while being listed can leak into or crash this
+// one
+static void clap_plug_scan_file(CLAP_PLUG_INFO *plug_data,
+                                const CLAP_SCAN *scan, const char *file_path) {
+    size_t len = 0;
+    char *out = clap_scan_run(scan->scanner, file_path, &len);
+    if (clap_scan_parse(plug_data, file_path, out, len, false))
+        clap_scan_parse(plug_data, file_path, out, len, true);
+    else
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "Could not list the plugins in %s\n", file_path);
+    free(out);
+}
+
+// every .clap file under dir_path, however deep
+static void clap_plug_scan_dir(CLAP_PLUG_INFO *plug_data, CLAP_SCAN *scan,
+                               const char *dir_path) {
+    DIR *d = opendir(dir_path);
+    if (!d)
+        return;
+    size_t dir_len = strlen(dir_path);
+    const char *sep = (dir_len > 0 && dir_path[dir_len - 1] == '/') ? "" : "/";
+    struct dirent *dir = NULL;
+    while ((dir = readdir(d)) != NULL) {
+        if (strcmp(dir->d_name, ".") == 0 || strcmp(dir->d_name, "..") == 0)
+            continue;
+        char entry_path[MAX_PATH_STRING];
+        int path_len = snprintf(entry_path, MAX_PATH_STRING, "%s%s%s",
+                                dir_path, sep, dir->d_name);
+        if (path_len < 0 || path_len >= MAX_PATH_STRING)
+            continue;
+        // follows symlinks, so a linked file or directory counts as its target
+        struct stat st;
+        if (stat(entry_path, &st) != 0)
+            continue;
+        if (S_ISDIR(st.st_mode)) {
+            if (clap_scan_first_visit(scan, &st))
+                clap_plug_scan_dir(plug_data, scan, entry_path);
+            continue;
+        }
+        if (S_ISREG(st.st_mode) &&
+            path_extension_matches(dir->d_name, "clap") == 1 &&
+            clap_scan_first_visit(scan, &st))
+            clap_plug_scan_file(plug_data, scan, entry_path);
+    }
+    closedir(d);
+}
+
+static void clap_plug_scan_root(CLAP_PLUG_INFO *plug_data, CLAP_SCAN *scan,
+                                const char *path) {
+    char dir_path[MAX_PATH_STRING];
+    if (path_expand_home(path, dir_path, sizeof(dir_path)) != 0)
+        return;
+    struct stat st;
+    if (stat(dir_path, &st) != 0 || !S_ISDIR(st.st_mode))
+        return;
+    if (clap_scan_first_visit(scan, &st))
+        clap_plug_scan_dir(plug_data, scan, dir_path);
+}
+
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data) {
     if (!plug_data)
         return -1;
+    // checked first, so a list that cannot be rebuilt is kept
+    CLAP_SCAN scan = {0};
+    if (!clap_scan_find_scanner(scan.scanner, sizeof(scan.scanner))) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "Could not find %s next to this program, clap "
+                             "plugins can not be listed\n",
+                             CLAP_SCAN_EXE);
+        return -1;
+    }
     PLUGIN_LIST *plugin_list = &(plug_data->clap_plugin_list);
     if (plugin_list->plugin_list)
         free(plugin_list->plugin_list);
+    plugin_list->size_curr = 0;
+    plugin_list->size_max = 0;
+    intern_detach_all(&plugin_list->ids);
     plugin_list->plugin_list =
         calloc(PTR_ARRAY_COUNT, sizeof(PLUGIN_LIST_ITEM));
     if (!plugin_list->plugin_list)
         return -1;
-    plugin_list->size_curr = 0;
     plugin_list->size_max = PTR_ARRAY_COUNT;
 
-    DIR *d;
-    struct dirent *dir = NULL;
-    unsigned int iter = 0;
-    const char *clap_path = clap_paths[iter];
-    while (clap_path) {
-        d = opendir(clap_path);
-        if (d) {
-            while ((dir = readdir(d)) != NULL) {
-                if (strcmp(dir->d_name, ".") == 0 ||
-                    strcmp(dir->d_name, "..") == 0)
-                    continue;
-
-                char after_delim[MAX_PATH_STRING];
-                char before_delim[MAX_PATH_STRING];
-
-                if (str_split_string_delim(dir->d_name, ".", before_delim,
-                                           after_delim, MAX_PATH_STRING) == -1)
-                    continue;
-
-                if (strcmp(after_delim, "clap") != 0)
-                    continue;
-
-                // Go through the plugins names in the path and create a
-                // plugin_list_item per valiable name
-                char total_file_path[MAX_PATH_STRING];
-                snprintf(total_file_path, MAX_PATH_STRING, "%s%s", clap_path,
-                         dir->d_name);
-                void *handle;
-                int *iptr;
-
-                handle = dlopen(total_file_path, RTLD_LOCAL | RTLD_LAZY);
-                if (!handle)
-                    continue;
-
-                iptr = (int *)dlsym(handle, "clap_entry");
-                clap_plugin_entry_t *plug_entry = (clap_plugin_entry_t *)iptr;
-                if (!plug_entry) {
-                    dlclose(handle);
-                    continue;
-                }
-                unsigned int init_err = plug_entry->init(total_file_path);
-                if (!init_err) {
-                    dlclose(handle);
-                    continue;
-                }
-
-                const clap_plugin_factory_t *plug_fac =
-                    plug_entry->get_factory(CLAP_PLUGIN_FACTORY_ID);
-                uint32_t plug_count = plug_fac->get_plugin_count(plug_fac);
-
-                for (uint32_t pl_iter = 0; pl_iter < plug_count; pl_iter++) {
-                    const clap_plugin_descriptor_t *plug_desc =
-                        plug_fac->get_plugin_descriptor(plug_fac, pl_iter);
-                    if (!plug_desc)
-                        continue;
-                    if (!(plug_desc->name))
-                        continue;
-
-                    unsigned int cur_list_size = plugin_list->size_curr + 1;
-                    // need to increase the size
-                    if (cur_list_size > plugin_list->size_max) {
-                        unsigned int new_max_size = plugin_list->size_max * 2;
-                        PLUGIN_LIST_ITEM *temp_array =
-                            realloc(plugin_list->plugin_list,
-                                    new_max_size * sizeof(PLUGIN_LIST_ITEM));
-                        if (!temp_array)
-                            continue;
-                        plugin_list->size_max = new_max_size;
-                        plugin_list->plugin_list = temp_array;
-                    }
-                    plugin_list->size_curr = cur_list_size;
-                    unsigned int cur_member = plugin_list->size_curr - 1;
-                    PLUGIN_LIST_ITEM *cur_item =
-                        &(plugin_list->plugin_list[cur_member]);
-                    snprintf(cur_item->path, MAX_PATH_STRING, "%s",
-                             total_file_path);
-                    snprintf(cur_item->short_name, MAX_SHORT_NAME_LENGTH, "%s",
-                             plug_desc->name);
-                    cur_item->plug_data = plug_data;
-                    cur_item->plug_inst_id = pl_iter;
-                }
-
-                plug_entry->deinit();
-                dlclose(handle);
-            }
-            closedir(d);
-        }
-        iter += 1;
-        clap_path = clap_paths[iter];
+    // CLAP_PATH is ':' separated like PATH. Searched first, so a directory the
+    // user named wins a plugin id also installed in a default path
+    const char *env_paths = getenv("CLAP_PATH");
+    char *env_copy = env_paths ? strdup(env_paths) : NULL;
+    if (env_copy) {
+        char *save = NULL;
+        for (char *path = strtok_r(env_copy, ":", &save); path;
+             path = strtok_r(NULL, ":", &save))
+            clap_plug_scan_root(plug_data, &scan, path);
+        free(env_copy);
     }
+    for (unsigned int i = 0; clap_paths[i]; i++)
+        clap_plug_scan_root(plug_data, &scan, clap_paths[i]);
+    free(scan.seen);
 
     return 1;
 }
@@ -1933,11 +2145,22 @@ const char *clap_plug_plugin_list_item_name(void *plugin_item) {
     return plugin_list_item->short_name;
 }
 
-const char *clap_plug_plugin_list_item_path(void *plugin_item) {
+uint64_t clap_plug_plugin_list_item_key(void *plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
     if (!plugin_list_item)
+        return 0;
+    return plugin_list_item->key;
+}
+
+void *clap_plug_plugin_list_item_by_key(CLAP_PLUG_INFO *plug_data,
+                                        uint64_t key) {
+    if (!plug_data)
         return NULL;
-    return plugin_list_item->path;
+    PLUGIN_LIST *list = &plug_data->clap_plugin_list;
+    size_t slot = intern_slot(&list->ids, key);
+    if (slot >= list->size_curr)
+        return NULL;
+    return &list->plugin_list[slot];
 }
 
 // build the display name into plug->name. Called once when the plugin is
@@ -1976,17 +2199,14 @@ uint32_t clap_plug_load_and_activate(void *plugin_item) {
     CLAP_PLUG_PLUG *plug = &(plug_data->plugins[id]);
     // if id is in the possible range, clean the slot just in case its occupied
     clap_plug_plug_stop_and_clean((void *)plug);
+    // assign the identity uid once, when the slot is claimed. Ports are
+    // registered under it as their owner - and plugin code can ask for ports
+    // from as early as init - so it has to exist before anything else runs.
+    // A slot keeps its last uid until this reassigns it
+    plug->uid = ++plug_data->next_plug_uid;
 
     snprintf(plug->plug_path, MAX_PATH_STRING, "%s", plugin_list_item->path);
-    // try to find a plugin with the same entry
-    int nb_plugin = clap_plug_find_same_path(plug_data, plug);
-    if (nb_plugin != -1) {
-        plug->plug_entry = plug_data->plugins[nb_plugin].plug_entry;
-        plug->dso_handle = plug_data->plugins[nb_plugin].dso_handle;
-    } else {
-        // create the plugin entry if a plugin with same path does not exist
-        clap_plug_entry_create(plug_data, plug);
-    }
+    clap_plug_entry_open(plug_data, plug);
     if (!plug->plug_entry) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
@@ -2114,8 +2334,6 @@ uint32_t clap_plug_load_and_activate(void *plugin_item) {
         return 0;
     }
 
-    // assign the identity uid once, at load
-    plug->uid = ++plug_data->next_plug_uid;
     // build the display name once, now that plug->plug_inst and plug->id are
     // set
     clap_plug_set_display_name(plug);
@@ -2570,6 +2788,7 @@ void clap_plug_clean_memory(CLAP_PLUG_INFO *plug_data) {
 
     if (plug_data->clap_plugin_list.plugin_list)
         free(plug_data->clap_plugin_list.plugin_list);
+    intern_clean(&plug_data->clap_plugin_list.ids);
 
     free(plug_data);
 }

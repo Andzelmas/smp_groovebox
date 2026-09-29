@@ -15,7 +15,7 @@
 #define ACTION_LIST_COUNT 5 // maximum possible actions for a context when returning DataAction
 #define ACTION_ARG_COUNT 4 // maximum possible DataArgSpec for a single DataAction
 #define STATES_COUNT 2 // how many states on this program
-#define ACTION_SOURCES_COUNT 2 // contexts whose actions are gathered: current + hovered
+#define ACTION_SOURCES_COUNT 3 // contexts whose actions are gathered: current + hovered + root
 #define MAX_ACTION_CANDIDATES (ACTION_LIST_COUNT * ACTION_SOURCES_COUNT)
 
 // convenient struct to hold info about a retrieved ContextId
@@ -111,11 +111,20 @@ enum { LIST_SESSION_CHOICE, LIST_SESSION_CONNECT };
 enum { CONNECT_PICK_SOURCE, CONNECT_PICK_TARGETS };
 
 // where a list's cursor is, and the row it sits on, so it can follow that row
-// when the list changes under it
+// when the list changes under it. prev/next are the shown rows around it, to
+// find where it was if its row goes away
 typedef struct _list_cursor{
     size_t idx;
     uint64_t value; // 0 until the cursor has landed on a row
+    uint64_t prev;  // 0 when there is none
+    uint64_t next;  // 0 when there is none
 } LIST_CURSOR;
+
+// what narrows a list. The two parts compose
+typedef struct _list_filter{
+    uint64_t group;   // DataChoice.group_key to keep, 0 = every group
+    bool linked_only; // keep only DATA_CHOICE_LINKED rows
+} LIST_FILTER;
 
 // an action whose argument is picked from a live list. The main loop drives it
 // one frame at a time, so the list resyncs between keypresses.
@@ -130,8 +139,18 @@ typedef struct _list_session{
     DataArgSpec specs[2];
     int connect_pick;
     LIST_CURSOR cursors[2]; // one per spec
+    LIST_FILTER filters[2]; // one per spec
     uint64_t source_value;  // CONNECT: the source picked from specs[0]
 } LIST_SESSION;
+
+// one list of a session as a VIEW_SOURCE: shown means the row passes filter
+typedef struct _list_rows{
+    UI_LAYER *ui_layer;
+    ContextId context;
+    DataListId list;
+    const DataActionReq *partial;
+    const LIST_FILTER *filter;
+} LIST_ROWS;
 
 static bool helper_context_info_get( UI_LAYER *ui_layer, ContextId context, CONTEXT_INTRF_INFO *info)
 {
@@ -219,6 +238,43 @@ static bool helper_view_shown(const VIEW_SOURCE *src, size_t idx){
     if(idx >= src->count)
         return false;
     return !src->shown || src->shown(src->user, idx);
+}
+
+// step one shown item away from `from`, wrapping at the ends. src->count when
+// nothing is shown
+static size_t helper_view_step(const VIEW_SOURCE *src, size_t from, bool next){
+    if(src->count == 0)
+        return 0;
+
+    size_t idx = from;
+    for(size_t steps = 0; steps < src->count; steps++){
+        if(next)
+            idx = (idx + 1 >= src->count) ? 0 : idx + 1;
+        else
+            idx = (idx == 0 || idx > src->count) ? src->count - 1 : idx - 1;
+        if(helper_view_shown(src, idx))
+            return idx;
+    }
+
+    return src->count;
+}
+
+// `from` itself when it is shown, else the next shown item after it.
+// src->count when nothing is shown
+static size_t helper_view_nearest(const VIEW_SOURCE *src, size_t from){
+    if(helper_view_shown(src, from))
+        return from;
+    return helper_view_step(src, from, true);
+}
+
+// the last shown item before pos, else the first shown one at or after it.
+// src->count when nothing is shown
+static size_t helper_view_before(const VIEW_SOURCE *src, size_t pos){
+    for(size_t i = pos < src->count ? pos : src->count; i > 0; i--){
+        if(helper_view_shown(src, i - 1))
+            return i - 1;
+    }
+    return helper_view_nearest(src, pos);
 }
 
 // collect up to cap shown items walking away from `from` in one direction (no
@@ -317,33 +373,6 @@ static bool helper_child_visible_at(UI_LAYER* ui_layer, ContextId parent, size_t
     return true;
 }
 
-// step one visible child away from `from`, wrapping at the ends.
-// returns child_count when the parent has no visible child at all
-static size_t helper_child_visible_step(UI_LAYER* ui_layer, ContextId parent, size_t child_count, size_t from, bool next){
-    if(child_count == 0)
-        return 0;
-
-    size_t idx = from;
-    for(size_t steps = 0; steps < child_count; steps++){
-        if(next)
-            idx = (idx + 1 >= child_count) ? 0 : idx + 1;
-        else
-            idx = (idx == 0 || idx > child_count) ? child_count - 1 : idx - 1;
-        if(helper_child_visible_at(ui_layer, parent, idx, NULL))
-            return idx;
-    }
-
-    return child_count;
-}
-
-// `from` itself when it is visible, else the next visible child after it.
-// returns child_count when the parent has no visible child at all
-static size_t helper_child_visible_nearest(UI_LAYER* ui_layer, ContextId parent, size_t child_count, size_t from){
-    if(from < child_count && helper_child_visible_at(ui_layer, parent, from, NULL))
-        return from;
-    return helper_child_visible_step(ui_layer, parent, child_count, from, true);
-}
-
 static bool helper_context_child_shown(void *user, size_t idx){
     CONTEXT_CHILDREN *children = user;
     return helper_child_visible_at(children->ui_layer, children->parent, idx, NULL);
@@ -364,7 +393,9 @@ static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, Conte
     if(!helper_context_info_get(ui_layer, parent, &cx_info))
         return;
 
-    size_t new_idx = helper_child_visible_step(ui_layer, parent, cx_info.child_count, *cur_idx, next);
+    CONTEXT_CHILDREN children = {ui_layer, parent};
+    VIEW_SOURCE source = {cx_info.child_count, helper_context_child_shown, &children};
+    size_t new_idx = helper_view_step(&source, *cur_idx, next);
     if(new_idx >= cx_info.child_count)
         return;
 
@@ -386,8 +417,7 @@ static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, Conte
 // when it does not exist) and point it at a *visible* child: the stored one
 // while it is still there and not hidden, otherwise the nearest visible one.
 // Returns that child's index in the parent child array, or child_count when
-// the parent has no visible child to point at - so callers can tell "nothing
-// to point at" apart from "points at index 0"
+// the parent has no visible child to point at
 static size_t
 helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
                                       ContextId parent, UiPurpose purpose,
@@ -429,7 +459,9 @@ helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
     }
 
     // a hidden row is never drawn, so the purpose must not rest on one
-    size_t visible_idx = helper_child_visible_nearest(ui_layer, parent, parent_info.child_count, stored_idx);
+    CONTEXT_CHILDREN children = {ui_layer, parent};
+    VIEW_SOURCE source = {parent_info.child_count, helper_context_child_shown, &children};
+    size_t visible_idx = helper_view_nearest(&source, stored_idx);
     if(visible_idx < parent_info.child_count && visible_idx != stored_idx){
         ContextId visible_child = ui_layer_context_child_at(ui_layer, parent, visible_idx);
         if(ui_layer_context_valid(ui_layer, visible_child)){
@@ -650,62 +682,202 @@ static size_t helper_list_count(UI_LAYER *ui_layer, ContextId context,
     return count;
 }
 
-// put the cursor back on the row it was on, wherever the list has moved it;
-// the first row when that row is gone
-static void helper_list_cursor_anchor(UI_LAYER *ui_layer, ContextId context,
-                                      DataListId list,
-                                      const DataActionReq *partial,
-                                      LIST_CURSOR *cur) {
+static bool helper_list_row_shown(void *user, size_t idx) {
+    const LIST_ROWS *rows = user;
     DataChoice row;
-    if (cur->value != 0) {
-        if (ui_layer_context_list_at(ui_layer, context, list, partial, cur->idx,
-                                     &row) &&
-            row.value == cur->value)
-            return;
-        for (size_t i = 0;
-             ui_layer_context_list_at(ui_layer, context, list, partial, i, &row);
-             i++) {
-            if (row.value == cur->value) {
-                cur->idx = i;
-                return;
-            }
-        }
+    if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
+                                  rows->partial, idx, &row))
+        return false;
+    if (rows->filter->group != 0 && row.group_key != rows->filter->group)
+        return false;
+    if (rows->filter->linked_only && !(row.flags & DATA_CHOICE_LINKED))
+        return false;
+    return true;
+}
+
+// an unfiltered list skips the predicate - every row list_at returns is shown
+static VIEW_SOURCE helper_list_source(LIST_ROWS *rows) {
+    VIEW_SOURCE src = {helper_list_count(rows->ui_layer, rows->context,
+                                         rows->list, rows->partial),
+                       NULL, rows};
+    if (rows->filter->group != 0 || rows->filter->linked_only)
+        src.shown = helper_list_row_shown;
+    return src;
+}
+
+static uint64_t helper_list_value_at(const LIST_ROWS *rows, size_t idx) {
+    DataChoice row;
+    if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
+                                  rows->partial, idx, &row))
+        return 0;
+    return row.value;
+}
+
+// index of the row holding value, trying hint first. SIZE_MAX when no row does
+static size_t helper_list_find(const LIST_ROWS *rows, uint64_t value,
+                               size_t hint) {
+    if (value == 0)
+        return SIZE_MAX;
+    if (helper_list_value_at(rows, hint) == value)
+        return hint;
+    DataChoice row;
+    for (size_t i = 0;
+         ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
+                                  rows->partial, i, &row);
+         i++) {
+        if (row.value == value)
+            return i;
     }
-    cur->idx = 0;
-    cur->value =
-        ui_layer_context_list_at(ui_layer, context, list, partial, 0, &row)
-            ? row.value
-            : 0;
+    return SIZE_MAX;
 }
 
-static void helper_list_cursor_move(UI_LAYER *ui_layer, ContextId context,
-                                    DataListId list,
-                                    const DataActionReq *partial,
-                                    LIST_CURSOR *cur, bool next) {
-    size_t count = helper_list_count(ui_layer, context, list, partial);
-    if (count == 0)
-        return;
-    if (next)
-        cur->idx = (cur->idx + 1 >= count) ? 0 : cur->idx + 1;
-    else
-        cur->idx = (cur->idx == 0 || cur->idx >= count) ? count - 1
-                                                         : cur->idx - 1;
+// idx must be shown
+static void helper_list_cursor_settle(const LIST_ROWS *rows,
+                                      const VIEW_SOURCE *src, LIST_CURSOR *cur,
+                                      size_t idx) {
+    size_t near;
+    bool more;
+    cur->idx = idx;
+    cur->value = helper_list_value_at(rows, idx);
+    cur->prev = helper_view_collect(src, idx, false, 1, &near, &more)
+                    ? helper_list_value_at(rows, near)
+                    : 0;
+    cur->next = helper_view_collect(src, idx, true, 1, &near, &more)
+                    ? helper_list_value_at(rows, near)
+                    : 0;
+}
+
+// put the cursor back on the row it was on, wherever the list has moved it.
+// A row the filter now hides passes the cursor to the next shown row after it.
+// A row that is gone passes it to the row before where it was, as
+// UI_STALE_PREV_SIBLING does. With nothing shown the cursor is left as it is
+static void helper_list_cursor_anchor(LIST_ROWS *rows, LIST_CURSOR *cur) {
+    VIEW_SOURCE src = helper_list_source(rows);
+    size_t idx;
+    size_t found = helper_list_find(rows, cur->value, cur->idx);
+    if (cur->value == 0) {
+        idx = helper_view_nearest(&src, 0);
+    } else if (found < src.count) {
+        idx = helper_view_nearest(&src, found);
+    } else {
+        // where the gone row would sit now, going by the rows it had around it
+        size_t prev = helper_list_find(rows, cur->prev, cur->idx - 1);
+        size_t next = helper_list_find(rows, cur->next, cur->idx);
+        size_t pos = cur->idx < src.count ? cur->idx : src.count;
+        if (prev < src.count)
+            pos = prev + 1;
+        else if (next < src.count)
+            pos = next;
+        idx = helper_view_before(&src, pos);
+    }
+    if (idx < src.count)
+        helper_list_cursor_settle(rows, &src, cur, idx);
+}
+
+static void helper_list_cursor_move(LIST_ROWS *rows, LIST_CURSOR *cur,
+                                    bool next) {
+    VIEW_SOURCE src = helper_list_source(rows);
+    size_t idx = helper_view_step(&src, cur->idx, next);
+    if (idx < src.count)
+        helper_list_cursor_settle(rows, &src, cur, idx);
+}
+
+// the label of the first row in `group`, NULL when no row is in it
+static const char *helper_list_group_label(const LIST_ROWS *rows,
+                                           uint64_t group) {
     DataChoice row;
-    cur->value = ui_layer_context_list_at(ui_layer, context, list, partial,
-                                          cur->idx, &row)
-                     ? row.value
-                     : 0;
+    for (size_t i = 0; ui_layer_context_list_at(rows->ui_layer, rows->context,
+                                                rows->list, rows->partial, i,
+                                                &row);
+         i++) {
+        if (row.group_key == group)
+            return row.group_label ? row.group_label : "?";
+    }
+    return NULL;
 }
 
-static void helper_list_render(UI_LAYER *ui_layer, ContextId context,
-                               DataListId list, const DataActionReq *partial,
-                               const char *title, const char *status,
-                               size_t cursor_idx) {
-    printf("-- %s (j/k move, l select, h/ESC back) --\n\n",
-           title ? title : "");
+static bool helper_list_group_starts_at(const LIST_ROWS *rows, uint64_t group,
+                                        size_t idx) {
+    DataChoice row;
+    for (size_t i = 0; i < idx && ui_layer_context_list_at(
+                                      rows->ui_layer, rows->context, rows->list,
+                                      rows->partial, i, &row);
+         i++) {
+        if (row.group_key == group)
+            return false;
+    }
+    return true;
+}
 
-    VIEW_SOURCE source = {helper_list_count(ui_layer, context, list, partial),
-                          NULL, NULL};
+// the group after `current` in the order the groups first appear; 0 (every
+// group) after the last one, and when current is not in the list at all
+static uint64_t helper_list_group_next(const LIST_ROWS *rows,
+                                       uint64_t current) {
+    bool passed = current == 0;
+    DataChoice row;
+    for (size_t i = 0; ui_layer_context_list_at(rows->ui_layer, rows->context,
+                                                rows->list, rows->partial, i,
+                                                &row);
+         i++) {
+        uint64_t group = row.group_key;
+        if (group == 0 || !helper_list_group_starts_at(rows, group, i))
+            continue;
+        if (passed)
+            return group;
+        if (group == current)
+            passed = true;
+    }
+    return 0;
+}
+
+// how many groups the list has, counting no further than limit
+static size_t helper_list_group_count(const LIST_ROWS *rows, size_t limit) {
+    size_t count = 0;
+    DataChoice row;
+    for (size_t i = 0; count < limit &&
+                       ui_layer_context_list_at(rows->ui_layer, rows->context,
+                                                rows->list, rows->partial, i,
+                                                &row);
+         i++) {
+        if (row.group_key != 0 &&
+            helper_list_group_starts_at(rows, row.group_key, i))
+            count++;
+    }
+    return count;
+}
+
+// the group of the nearest context, from `from` up through its parents, that
+// declares one appearing in the list; 0 when none does
+static uint64_t helper_list_scope(const LIST_ROWS *rows, ContextId from) {
+    for (ContextId cx = from; ui_layer_context_valid(rows->ui_layer, cx);
+         cx = ui_layer_context_parent_return(rows->ui_layer, cx)) {
+        uint64_t group = ui_layer_context_group_key(rows->ui_layer, cx);
+        if (group != 0 && helper_list_group_label(rows, group))
+            return group;
+    }
+    return 0;
+}
+
+// the list's name, then whatever narrows it: "Connect to (system, connected)"
+static void helper_list_title(const LIST_ROWS *rows, const char *name,
+                              char *out, size_t cap) {
+    const char *group = rows->filter->group
+                            ? helper_list_group_label(rows, rows->filter->group)
+                            : NULL;
+    bool linked = rows->filter->linked_only;
+    if (!group && !linked) {
+        snprintf(out, cap, "%s", name);
+        return;
+    }
+    snprintf(out, cap, "%s (%s%s%s)", name, group ? group : "",
+             group && linked ? ", " : "", linked ? "connected" : "");
+}
+
+static void helper_list_render(LIST_ROWS *rows, const char *header,
+                               const char *status, size_t cursor_idx) {
+    printf("-- %s --\n\n", header);
+
+    VIEW_SOURCE source = helper_list_source(rows);
     LIST_VIEW view;
     helper_view_build(&source, cursor_idx, &view);
     if (view.row_count == 0)
@@ -715,8 +887,8 @@ static void helper_list_render(UI_LAYER *ui_layer, ContextId context,
         printf("-...-\n");
     DataChoice row;
     for (size_t r = 0; r < view.row_count; r++) {
-        if (!ui_layer_context_list_at(ui_layer, context, list, partial,
-                                      view.rows[r], &row))
+        if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
+                                      rows->partial, view.rows[r], &row))
             continue;
         printf("%s%s%s\n", r == view.cursor_row ? ">" : "",
                row.label ? row.label : "?",
@@ -750,7 +922,7 @@ static void helper_action_result_msg(DataActionResult result, const char *label,
     }
 }
 
-// a 0-arg action (REMOVE): nothing to collect, just execute.
+// a 0-arg action (REMOVE, REFRESH): nothing to collect, just execute.
 static ContextId helper_action_do_direct(UI_LAYER *ui_layer, ContextId context,
                                          DataActionType type, const char *label,
                                          char *msg, size_t msg_cap) {
@@ -803,6 +975,17 @@ static void helper_list_session_start(LIST_SESSION *session, int kind,
     session->connect_pick = CONNECT_PICK_SOURCE;
 }
 
+// a session opens on its first list narrowed to the context the user is at,
+// when that context declares a group the list has
+static void helper_list_session_scope(UI_LAYER *ui_layer, LIST_SESSION *session,
+                                      ContextId from) {
+    DataActionReq partial = {.type = session->type};
+    LIST_FILTER none = {0};
+    LIST_ROWS rows = {ui_layer, session->context, session->specs[0].list,
+                      &partial, &none};
+    session->filters[0].group = helper_list_scope(&rows, from);
+}
+
 // one frame of a list session: re-anchor, draw, read a key, act. Returns false
 // once the session is over, with its closing message in msg
 static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
@@ -814,16 +997,29 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
 
     bool picking_targets = session->kind == LIST_SESSION_CONNECT &&
                            session->connect_pick == CONNECT_PICK_TARGETS;
-    const DataArgSpec *spec = &session->specs[picking_targets ? 1 : 0];
-    LIST_CURSOR *cur = &session->cursors[picking_targets ? 1 : 0];
+    size_t which = picking_targets ? 1 : 0;
+    const DataArgSpec *spec = &session->specs[which];
+    LIST_CURSOR *cur = &session->cursors[which];
+    LIST_FILTER *filter = &session->filters[which];
     DataActionReq partial = {.type = session->type};
     if (picking_targets)
         partial.connect.source = session->source_value;
+    LIST_ROWS rows = {ui_layer, session->context, spec->list, &partial, filter};
 
-    helper_list_cursor_anchor(ui_layer, session->context, spec->list, &partial,
-                              cur);
-    helper_list_render(ui_layer, session->context, spec->list, &partial,
-                       spec->label ? spec->label : spec->name, msg, cur->idx);
+    // a group whose rows all went away cannot be narrowed to any more
+    if (filter->group != 0 && !helper_list_group_label(&rows, filter->group))
+        filter->group = 0;
+
+    helper_list_cursor_anchor(&rows, cur);
+
+    char title[128];
+    helper_list_title(&rows, spec->label ? spec->label : spec->name, title,
+                      sizeof(title));
+    char header[192];
+    snprintf(header, sizeof(header),
+             "%s (j/k move, l select, g group%s, h/ESC back)", title,
+             picking_targets ? ", c connected" : "");
+    helper_list_render(&rows, header, msg, cur->idx);
 
     int input = getchar();
     // a result is shown for exactly one frame
@@ -838,13 +1034,25 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return false;
     }
     if (input == 'j' || input == 'k') {
-        helper_list_cursor_move(ui_layer, session->context, spec->list,
-                                &partial, cur, input == 'j');
+        helper_list_cursor_move(&rows, cur, input == 'j');
+        return true;
+    }
+    if (input == 'g') {
+        if (helper_list_group_count(&rows, 2) >= 2)
+            filter->group = helper_list_group_next(&rows, filter->group);
+        return true;
+    }
+    if (input == 'c' && picking_targets) {
+        filter->linked_only = !filter->linked_only;
         return true;
     }
     if (input != 'l')
         return true;
 
+    // with nothing shown the cursor rests on a row the user cannot see
+    VIEW_SOURCE source = helper_list_source(&rows);
+    if (!helper_view_shown(&source, cur->idx))
+        return true;
     DataChoice picked;
     if (!ui_layer_context_list_at(ui_layer, session->context, spec->list,
                                   &partial, cur->idx, &picked))
@@ -875,10 +1083,11 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
 
 // dispatch to the function that knows how to collect that action's arguments.
 // Returns true when that is a list: the session is set up in *session and the
-// main loop drives it from then on
+// main loop drives it from then on. scope_from is where the user is - a list
+// opens narrowed to it when it can be
 static bool helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
-                                  LIST_SESSION *session, char *msg,
-                                  size_t msg_cap) {
+                                  ContextId scope_from, LIST_SESSION *session,
+                                  char *msg, size_t msg_cap) {
     if (!msg || msg_cap == 0)
         return false;
     msg[0] = '\0';
@@ -900,6 +1109,7 @@ static bool helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
         }
         helper_list_session_start(session, LIST_SESSION_CONNECT, context, type,
                                   label, specs, 2);
+        helper_list_session_scope(ui_layer, session, scope_from);
         return true;
     }
     if (arg_count == 0) {
@@ -915,6 +1125,7 @@ static bool helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
     if (arg_count == 1 && specs[0].kind == DATA_ARG_CHOICE) {
         helper_list_session_start(session, LIST_SESSION_CHOICE, context, type,
                                   label, specs, 1);
+        helper_list_session_scope(ui_layer, session, scope_from);
         return true;
     }
 
@@ -933,7 +1144,6 @@ int main() {
     enableRawMode();
     UI_LAYER* ui_layer = ui_layer_init();
 
-    // if ui_layer failed to initialize analyze the error write it and exit
     if (!ui_layer) {
         printf("\nCould not start the ui_layer\n");
         exit(1);
@@ -951,17 +1161,13 @@ int main() {
     // the current context parent, useful when current is stale/deleted
     ContextId state_main_context_current_parent = id_root;
     // which idx in the state_main_context_current children array is the UI_PURPOSE_HOVERED
+    // this will be set to an actual value later - idx 0 can be hidden.
     size_t state_main_hovered_idx = 0;
 
     // this array will contain all of the states
     UI_STATE* states_all[STATES_COUNT] = {state_main, state_root};
 
-    // currently focused state
-    UI_STATE* state_current = state_main;
-    ContextId* state_current_context_current = &state_main_context_current;
-    size_t *state_current_hovered_idx = &state_main_hovered_idx;
-
-    // navigation mode
+    // initial navigation mode
     size_t ui_nav_mode = UI_MODE_STANDARD;
     // action candidates for the current drill round. Only meaningful while
     // ui_nav_mode == UI_MODE_ACTION; UI_MODE_STANDARD rebuilds this fresh
@@ -992,7 +1198,6 @@ int main() {
             }
         }
 
-        // show the state_main info
         // first update the contexts if they are deleted
         if (!ui_layer_context_valid(ui_layer, state_main_context_current)) {
             if (ui_layer_context_valid(ui_layer,
@@ -1052,7 +1257,7 @@ int main() {
                 CONTEXT_INTRF_INFO child_info;
                 if (!helper_context_info_get(ui_layer, child, &child_info))
                     continue;
-                if (row == view.cursor_row && state_current == state_main)
+                if (row == view.cursor_row)
                     printf(">%s", child_info.name);
                 else
                     printf("%s", child_info.name);
@@ -1064,15 +1269,20 @@ int main() {
         }
 
         // --------------------------------------------------
-        // Actions for the state_current
+        // Actions for the state_main
 
         // action candidates: either keep drilling the previous round
         // (revalidating first, in case something acted on disappeared
-        // between rounds) or, in standard mode, rebuild round 0 fresh from
-        // the live current + hovered contexts every frame.
+        // between rounds) or, in standard mode, rebuild round 0 fresh
         ContextId state_current_context_hovered = helper_purpose_get(
-            ui_layer, state_current, *state_current_context_current,
+            ui_layer, state_main, state_main_context_current,
             UI_PURPOSE_HOVERED);
+        // root's actions are offered everywhere, but only once
+        ContextId root_source =
+            (id_root == state_main_context_current ||
+             id_root == state_current_context_hovered)
+                ? CONTEXT_ID_INVALID
+                : id_root;
         bool need_gather = true;
         if (ui_nav_mode == UI_MODE_ACTION) {
             candidate_count = helper_action_candidates_revalidate(
@@ -1085,11 +1295,14 @@ int main() {
         if (need_gather) {
             candidate_count = 0;
             helper_action_candidates_gather(
-                ui_layer, *state_current_context_current, candidates,
+                ui_layer, state_main_context_current, candidates,
                 MAX_ACTION_CANDIDATES, &candidate_count);
             helper_action_candidates_gather(
                 ui_layer, state_current_context_hovered, candidates,
                 MAX_ACTION_CANDIDATES, &candidate_count);
+            helper_action_candidates_gather(ui_layer, root_source, candidates,
+                                            MAX_ACTION_CANDIDATES,
+                                            &candidate_count);
             helper_action_candidates_assign_letters(candidates, candidate_count,
                                                     true);
         }
@@ -1097,29 +1310,34 @@ int main() {
         printf("\n-------------------------------------------------------------"
                "---------------------------------------\n");
 
-        ContextId action_sources[ACTION_SOURCES_COUNT] = {*state_current_context_current,
-                                                           state_current_context_hovered};
+        ContextId action_sources[ACTION_SOURCES_COUNT] = {
+            state_main_context_current, state_current_context_hovered,
+            root_source};
         for (size_t s = 0; s < ACTION_SOURCES_COUNT; s++) {
             ContextId src = action_sources[s];
             CONTEXT_INTRF_INFO src_info;
             if (!helper_context_info_get(ui_layer, src, &src_info))
                 continue;
-            if (helper_action_canditates_has_source(candidates, candidate_count,
+            if (!helper_action_canditates_has_source(candidates, candidate_count,
                                                     src))
-                printf("%s: ", src_info.name);
+                continue;
+            printf("%s: ", src_info.name);
             for (size_t i = 0; i < candidate_count; i++) {
                 if (candidates[i].actions_context != src)
                     continue;
                 if (ui_nav_mode == UI_MODE_ACTION)
                     printf("\e[22m");
+                printf("-");
                 helper_string_print_underline(candidates[i].action.label,
                                               candidates[i].letter);
+                printf("-");
                 if (!candidates[i].action.enabled)
                     printf(" (disabled)");
                 printf(" ");
                 if (ui_nav_mode == UI_MODE_ACTION)
                     printf("\e[2m");
             }
+            printf("| ");
         }
         printf("\n");
         printf("-------------------------------------------------------------"
@@ -1130,6 +1348,11 @@ int main() {
         CONTEXT_INTRF_INFO cx_root_info;
         if(helper_context_info_get(ui_layer, id_root, &cx_root_info)){
             for(size_t i = 0; i < cx_root_info.child_count; i++){
+                // don't show hidden children
+                CONTEXT_CHILDREN chldr = {ui_layer, id_root};
+                VIEW_SOURCE src = {cx_root_info.child_count, helper_context_child_shown, &chldr};
+                if(!helper_view_shown(&src, i))
+                    continue;
                 ContextId root_child =
                     ui_layer_context_child_at(ui_layer, id_root, i);
                 if (ui_layer_context_valid(ui_layer, root_child)) {
@@ -1161,9 +1384,14 @@ int main() {
             size_t matches = helper_action_candidates_filter_matching(
                 candidates, &candidate_count, (char)input);
             if (matches == 1) {
+                ContextId scope_from =
+                    ui_layer_context_valid(ui_layer,
+                                           state_current_context_hovered)
+                        ? state_current_context_hovered
+                        : state_main_context_current;
                 bool listing = helper_action_resolve(
-                    ui_layer, &candidates[0], &list_session, action_status_msg,
-                    sizeof(action_status_msg));
+                    ui_layer, &candidates[0], scope_from, &list_session,
+                    action_status_msg, sizeof(action_status_msg));
                 candidate_count = 0;
                 ui_nav_mode = listing ? UI_MODE_LIST : UI_MODE_STANDARD;
             } else if (matches > 1) {
@@ -1175,28 +1403,24 @@ int main() {
                 // nothing matched, so candidates/candidate_count are
                 // untouched (still this frame's round-0 set).
                 switch (input) {
-                case 'J':
-                    break;
-                case 'K':
-                    break;
                 case 'j':
                     helper_nav_context_scroll(
-                        ui_layer, state_current, *state_current_context_current,
-                        UI_PURPOSE_HOVERED, state_current_hovered_idx, true);
+                        ui_layer, state_main, state_main_context_current,
+                        UI_PURPOSE_HOVERED, &state_main_hovered_idx, true);
                     break;
                 case 'k':
                     helper_nav_context_scroll(
-                        ui_layer, state_current, *state_current_context_current,
-                        UI_PURPOSE_HOVERED, state_current_hovered_idx, false);
+                        ui_layer, state_main, state_main_context_current,
+                        UI_PURPOSE_HOVERED, &state_main_hovered_idx, false);
                     break;
                 case 'l':
-                    helper_nav_context_enter(ui_layer, state_current,
-                                             state_current_context_current,
+                    helper_nav_context_enter(ui_layer, state_main,
+                                             &state_main_context_current,
                                              UI_PURPOSE_HOVERED);
                     break;
                 case 'h':
-                    helper_nav_context_exit(ui_layer, state_current,
-                                            state_current_context_current);
+                    helper_nav_context_exit(ui_layer, state_main,
+                                            &state_main_context_current);
                     break;
                 case 'q':
                     exit = 1;

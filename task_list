@@ -31,8 +31,7 @@ PLAN
 ================================================================================
 1. PLUGIN PRESET BROWSING, with categories.
    Same shape as the existing "Add plugin" catalog list (a DataChoice list
-   over list_count/list_at) but with category rows to drill into. Design is
-   below, under DESIGN FOR (1).
+   over list_count/list_at) but with category rows to drill into.
    The clap module-level half exists already: clap_plug_presets_iterate /
    _name_return / _path_return / _categories_iterate / _clean_preset,
    clap_plug_preset_load_from_path, and the clap_ext_preset_factory
@@ -43,8 +42,7 @@ PLAN
    do with parameter categories (PRM_PARAM_CATEGORY). Same word, different
    mechanism.
 
-2. CLAP + LV2 optimisation / cleanup. Owns the CLAP-vs-spec gaps listed
-   under OPEN below. Fold anything found while doing (1) into it.
+2. CLAP + LV2 optimisation / cleanup.
 
 3. SAVING. Deliberately after (1) and (2): do not design the save format
    until what it must save has stopped moving - presets change what a
@@ -59,8 +57,7 @@ PLAN
 
 4. CX_MOVED + reparenting. DEFERRED - no trigger yet.
    Only buys a non-destructive rename/move IN PLACE, which needs user-
-   authored categories. NOT needed by CLAP rescan: a param changing category
-   is already handled correctly as remove+add (see DECISIONS).
+   authored categories. 
    If built: detection is nearly free from app_intrf_cx_resync's existing
    diff ("in both, different parent"); CxEvent needs no new field (a move
    carries the OLD parent/index, like CX_REMOVED); the hashtable entry does
@@ -68,7 +65,7 @@ PLAN
    order INVERTS to ADD -> MOVE -> REMOVE (additions first so a move's
    destination exists, removals last so survivors are moved out of doomed
    subtrees) - getting that backwards silently frees live nodes. ui_layer
-   cost is ~3 lines: mark the view touched, no pruning (see DECISIONS).
+   cost is ~3 lines: mark the view touched, no pruning.
 
 5. SLOT-TABLE EXTRACTION. DEFERRED - no trigger yet.
    The tribal rules above (1-3) are not enforced anywhere; getting one wrong
@@ -77,100 +74,3 @@ PLAN
    user macros). Not before: the only two growable ones are params and
    categories, both in params.c, and they already disagree on whether removal
    exists - so which behaviour is "general" is not yet knowable.
-
-6. PORTS / PATCHBAY.
-   LANDED: batched CX child reorder; port ownership recorded at registration;
-   port cache in JACK_INFO (records + per-flow/type list ranges + edge set +
-   minted identities, re-keyed on rename); root_connect_* on the cache -
-   direction-agnostic, with list_count, group_key/group_label, key-based
-   linking, and the override_value/override_flags pair on
-   helper_choice_list_step deleted (the edge set updates on a successful
-   toggle, so nothing was left for it to work around).
-   6a landed: list sessions are a UI_MODE_LIST frame driven by main (not
-   UI_MODE_ACTION - that name was already the action-letter drill), so the
-   update cycle runs between keypresses and the port list no longer freezes.
-   The cursor follows its row by DataChoice.value. j/k wrap through
-   list_count, which retired the walk-to-the-end k at the top of a list.
-   6b landed: the window is helper_view_build over a VIEW_SOURCE (count +
-   an optional shown(idx) predicate) and knows nothing about what an item is.
-   The context display and the list session both build through it; checked
-   identical to the old context-only build over 40000 random child lists.
-   Remaining: 6c, then 6e. 6d dropped - see NOT DOING.
-
-   FIRST: only connect/disconnect has been exercised against a live jack
-   server so far (connect fine, disconnect see 6e). Unit tests drive
-   jack_funcs through mocks and still cannot see whether
-   jack_set_port_rename_callback links at all (JACK_OPTIONAL_WEAK_EXPORT),
-   whether the four typed jack_get_ports queries partition as assumed,
-   whether the owner registry catches every port given registration happens
-   before jack_activate, whether group_label's scans resolve (a loaded plugin
-   must show its own name, not the jack client's), or whether connect works
-   end to end against another patchbay. Everything below assumes the cache is
-   right.
-
-   6c. Group scope, group cycling and connected-only for list sessions. All
-       three narrow a list through the one mechanism 6b built: the list's
-       VIEW_SOURCE.shown (today NULL). Predicates compose.
-       CONTRACT. A context can declare the group it stands for in lists:
-       DATA_CAP_GROUP + DataOps.group_key(user_data), 0 = none, with the
-       usual app_intrf/ui_layer pass-through. app_data implements it for LV2
-       and CLAP plugin instances, synth oscillators and the sampler, returning
-       exactly what root_port_group_key gives their ports. Root does NOT
-       implement it. DataChoice.group_key's doc changes from "NOT resolvable
-       as a ContextId" to "matches the group a context declares, if any" -
-       a key is still never turned into a context.
-       SCOPE. Root's actions become a third action source beside current and
-       hovered (not gathered twice when current or hovered already is root),
-       so Connect is reachable from anywhere. When a session starts, walk up
-       from the hovered context: the first context whose declared group
-       appears among the rows of the session's FIRST list scopes that list;
-       none found = unfiltered. For CONNECT that is the source list only - the
-       peers are almost always somewhere else. The rule never mentions ports,
-       root, or how ids are composed. Cost: "Connect" and a param's "Choose"
-       both take `C`, so hovering a param with choices costs one extra drill
-       keypress.
-       CYCLING. `g` steps the active list's filter through all -> each
-       distinct group (by group_label, in list order) -> all, on either list.
-       This is what reaches foreign clients, which no context can scope. The
-       contextual scope is simply where the source list's cycle starts, so
-       cycling to "all" is how scope is dropped - no separate key. Fewer than
-       two groups = `g` does nothing. The group set is rebuilt from the rows
-       when `g` is pressed; if the active group has no rows left (its ports
-       went away mid-session) the filter falls back to all.
-       CONNECTED ONLY. `c` on the peers list toggles a DATA_CHOICE_LINKED
-       predicate, composed with the group filter. The one piece of the dropped
-       6d worth keeping: "what is this port wired to" becomes one keypress
-       instead of scanning the peers for [connected].
-       The title names the active filter, e.g. "Port (Reverb)", "Connect to
-       (system, connected)". Filter state lives per list in the LIST_SESSION,
-       next to the cursors.
-       Two things 6b left for this step, because an unfiltered list never hits
-       them:
-       * helper_view_build draws NOTHING when the cursor sits on an item that
-         is not shown, so the list cursor must always be on a shown row -
-         including right after the filter changes. helper_list_cursor_anchor's
-         gone-row fallback is "row 0", which may itself be filtered out; it
-         has to become "nearest shown row".
-       * helper_list_cursor_move wraps by list_count and never skips anything.
-         It needs the step-over-hidden walk helper_child_visible_step already
-         does for contexts - put that walk (and _nearest) on VIEW_SOURCE, so
-         contexts and lists share it the way they share the window.
-       list_count is the UNFILTERED count, so "is there more beyond the
-       window" must come from the traversal's own walk - do not later
-       optimise it into a count lookup.
-       VERIFY: hovering a plugin, Connect opens on only its ports; at root it
-       opens on all. `g` reaches system/other apps and comes back to all. `c`
-       shows exactly the [connected] peers. Removing the scoped plugin
-       mid-session drops the list back to all. Window markers stay honest
-       under every filter.
-   6e. AFTER 6c: disconnecting sometimes needs `l` pressed twice; connecting
-       has not shown it. Deliberately left until the UI refactor is in -
-       6a changes when sync runs relative to a toggle, which may change or
-       hide the symptom. Unconfirmed leads, in the order to check them:
-       * log what jack_connect/jack_disconnect actually return. A link jack
-         refuses skips the edge-set update, so cache and server disagree and
-         the next press issues the other operation.
-       * a toggle's own notification sets connections_changed, and the next
-         sync re-reads the graph from jack. If jack's view has not caught up
-         at that moment, the rebuild restores the old state and nothing
-         corrects it until the next graph change.

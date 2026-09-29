@@ -53,7 +53,8 @@ int app_jack_port_rename(void* client_in, void* port, const char* new_port_name)
 //register ports on a jack client if its known to the data
 //owner_tag/owner_uid are two numbers the caller uses together to identify what
 //the port belongs to - jack interprets neither, it only hands them back on the
-//port's JackPortInfo. A zero owner_tag means "not recorded"
+//port's JackPortInfo. Both must already be final: the port keeps them for its
+//whole life. A zero owner_tag means "not recorded"
 void* app_jack_create_port_on_client(void* client_in, unsigned int port_type, unsigned int io_type,
 					    const char* port_name, uint64_t owner_tag,
 					    uint64_t owner_uid);

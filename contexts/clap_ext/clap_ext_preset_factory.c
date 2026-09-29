@@ -597,8 +597,10 @@ clap_ext_preset_init(const clap_plugin_entry_t *plug_entry,
             preset_fac->create(preset_fac, &preset_indexer, preset_desc->id);
         if (!preset_discovery)
             continue;
-        if (!preset_discovery->init(preset_discovery))
+        if (!preset_discovery->init(preset_discovery)) {
+            preset_discovery->destroy(preset_discovery);
             continue;
+        }
         // get the metada for each location and fill out the
         // CLAP_EXT_PRESET_SINGLE_LOC->preset_containers
         uint32_t loc_idx = curr_idx_from;

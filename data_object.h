@@ -30,6 +30,8 @@ typedef enum {
     DATA_CAP_VALUE = 1 << 3,
     // is_hidden
     DATA_CAP_HIDDEN = 1 << 4,
+    // group_key
+    DATA_CAP_GROUP = 1 << 5,
 } DataCapabilities;
 
 struct DataOps {
@@ -68,6 +70,11 @@ struct DataOps {
     // DATA_CAP_HIDDEN
     // is this object currently hidden? A property of an already-existing object
     bool (*is_hidden)(void *user_data);
+
+    // DATA_CAP_GROUP
+    // the DataChoice.group_key this object stands for. 0 when it stands for
+    // none
+    uint64_t (*group_key)(void *user_data);
 
     // DATA_CAP_ACTIONS - see data_actions.h for the flow and struct docs.
     // fill *out with up to cap available actions for this object.
@@ -155,6 +162,11 @@ static inline bool data_is_hidden(const DataObject *obj) {
     return obj->ops->is_hidden(obj->user_data);
 }
 
+static inline uint64_t data_group_key(const DataObject *obj) {
+    if (!data_obj_has(obj, DATA_CAP_GROUP) || !obj->ops->group_key)
+        return 0;
+    return obj->ops->group_key(obj->user_data);
+}
 static inline ContextId data_id(const DataObject *obj) {
     if (!data_obj_valid(obj) || !obj->ops->id)
         return CONTEXT_ID_NULL;

@@ -34,6 +34,7 @@
 #include "../util_funcs/jalv/zix/sem.h"
 // for log functions
 #include "../jack_funcs/jack_funcs.h"
+#include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/string_funcs.h"
 // a simple macro to get the max of the two values
@@ -66,8 +67,9 @@ static thread_local bool is_audio_thread =
 
 // plugin list item - from this struct a lv2 plugin can be loaded
 typedef struct _plugin_list_item {
-    char plugin_path[MAX_PATH_STRING];
+    char plugin_path[MAX_PATH_STRING]; // the plugin URI
     char plugin_short_name[MAX_SHORT_NAME_LENGTH];
+    uint64_t key;
     PLUG_INFO *plug_data;
 } PLUGIN_LIST_ITEM;
 
@@ -75,6 +77,9 @@ typedef struct _plugin_list_item {
 typedef struct _plugin_list {
     unsigned int plugin_list_count;
     PLUGIN_LIST_ITEM *plugin_list;
+    // every URI listed this session, so a key keeps meaning the same plugin
+    // across rebuilds. The slot is its index in plugin_list
+    INTERN_TABLE uris;
 } PLUGIN_LIST;
 
 // lilv nodes for more convinient coding, when for ex we need to tell port class
@@ -736,7 +741,6 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_data->plugin_list.plugin_list_count = 0;
     plug_data->plugin_list.plugin_list = NULL;
 
-    lilv_world_load_all(plug_data->lv_world);
     plug_data->symap = symap_new();
     zix_sem_init(&(plug_data->symap_lock), 1);
     plug_init_urids(plug_data->symap, &(plug_data->urids));
@@ -836,8 +840,13 @@ int plug_plugin_list_init(PLUG_INFO *plug_data) {
     PLUGIN_LIST *return_plugin_list = &(plug_data->plugin_list);
     if (return_plugin_list->plugin_list)
         free(return_plugin_list->plugin_list);
+    return_plugin_list->plugin_list = NULL;
     return_plugin_list->plugin_list_count = 0;
+    intern_detach_all(&return_plugin_list->uris);
 
+    // picks up newly installed bundles, the plugins already known keep their
+    // LilvPlugin, so loaded instances are not disturbed
+    lilv_world_load_all(plug_data->lv_world);
     const LilvPlugins *plugins =
         lilv_world_get_all_plugins(plug_data->lv_world);
     if (!plugins)
@@ -851,25 +860,27 @@ int plug_plugin_list_init(PLUG_INFO *plug_data) {
     if (!return_plugin_list->plugin_list)
         return -1;
 
-    int iter = 0;
-    while (!lilv_plugins_is_end(plugins, plug_iter)) {
+    unsigned int count = 0;
+    for (; !lilv_plugins_is_end(plugins, plug_iter);
+         plug_iter = lilv_plugins_next(plugins, plug_iter)) {
         const LilvPlugin *cur_plug = lilv_plugins_get(plugins, plug_iter);
-        const LilvNode *cur_path = lilv_plugin_get_uri(cur_plug);
+        const char *path_string =
+            lilv_node_as_string(lilv_plugin_get_uri(cur_plug));
+        uint64_t key = intern_add(&return_plugin_list->uris, path_string);
+        if (!key)
+            continue;
+        PLUGIN_LIST_ITEM *list_item = &return_plugin_list->plugin_list[count];
         LilvNode *cur_name = lilv_plugin_get_name(cur_plug);
-        const char *path_string = lilv_node_as_string(cur_path);
-        const char *name_string = lilv_node_as_string(cur_name);
-        PLUGIN_LIST_ITEM list_item;
-        snprintf(list_item.plugin_path, MAX_PATH_STRING, "%s", path_string);
-        snprintf(list_item.plugin_short_name, MAX_SHORT_NAME_LENGTH, "%s",
-                 name_string);
+        snprintf(list_item->plugin_path, MAX_PATH_STRING, "%s", path_string);
+        snprintf(list_item->plugin_short_name, MAX_SHORT_NAME_LENGTH, "%s",
+                 cur_name ? lilv_node_as_string(cur_name) : path_string);
         lilv_node_free(cur_name);
-        list_item.plug_data = plug_data;
-        return_plugin_list->plugin_list[iter] = list_item;
-
-        plug_iter = lilv_plugins_next(plugins, plug_iter);
-        iter += 1;
+        list_item->key = key;
+        list_item->plug_data = plug_data;
+        intern_set_slot(&return_plugin_list->uris, key, count);
+        count += 1;
     }
-    return_plugin_list->plugin_list_count = plugins_list_size;
+    return_plugin_list->plugin_list_count = count;
     return 1;
 }
 
@@ -896,11 +907,21 @@ const char *plug_plugin_list_item_name(void *plug_list_item) {
     return cur_plug_list_item->plugin_short_name;
 }
 
-const char *plug_plugin_list_item_path(void *plug_list_item) {
+uint64_t plug_plugin_list_item_key(void *plug_list_item) {
     PLUGIN_LIST_ITEM *cur_plug_list_item = (PLUGIN_LIST_ITEM *)plug_list_item;
     if (!cur_plug_list_item)
+        return 0;
+    return cur_plug_list_item->key;
+}
+
+void *plug_plugin_list_item_by_key(PLUG_INFO *plug_data, uint64_t key) {
+    if (!plug_data)
         return NULL;
-    return cur_plug_list_item->plugin_path;
+    PLUGIN_LIST *list = &plug_data->plugin_list;
+    size_t slot = intern_slot(&list->uris, key);
+    if (slot >= list->plugin_list_count)
+        return NULL;
+    return &list->plugin_list[slot];
 }
 
 void *plug_plugin_presets_iterate(PLUG_INFO *plug_data, unsigned int idx,
@@ -1305,6 +1326,10 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
     // just in case clean the plugin up
     plug_stop_and_remove_plug((void *)plug);
+    // assign the identity uid once, when the slot is claimed. Ports are
+    // registered under it as their owner, so it has to exist before any of
+    // them. A slot keeps its last uid until this reassigns it
+    plug->uid = ++plug_data->next_plug_uid;
 
     plug->plug = plugin;
 
@@ -1491,8 +1516,6 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     lilv_instance_activate(plug->plug_instance);
     plug->plug_instance_activated = 1;
     plug->plug_data = plug_data;
-    // assign the identity uid once, at load
-    plug->uid = ++plug_data->next_plug_uid;
     // build the display name once, now that plug->plug and plug->id are set
     plug_set_display_name(plug);
     // wait for the plugin to start processing
@@ -2120,5 +2143,6 @@ void plug_clean_memory(PLUG_INFO *plug_data) {
     if (plug_data->plugin_list.plugin_list)
         free(plug_data->plugin_list.plugin_list);
     plug_data->plugin_list.plugin_list_count = 0;
+    intern_clean(&plug_data->plugin_list.uris);
     free(plug_data);
 }

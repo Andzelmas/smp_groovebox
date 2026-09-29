@@ -58,8 +58,9 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                clap_plug_status_t *plug_error,
                                void *audio_backend, uint64_t owner_tag);
 
-// initialize the plugin list
-// it contains all the plugins on the system available to the user
+// Scans the clap paths and (re)builds the list of available plugins.
+// Safe to call again while plugins are loaded. A plugin keeps its key across
+// rebuilds
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data);
 
 // return how many plugins are in the catalogue built by
@@ -74,10 +75,14 @@ void *clap_plug_plugin_list_item_get(CLAP_PLUG_INFO *plug_data, unsigned int idx
 // clap_plug_plugin_list_init. Returns NULL on error.
 const char *clap_plug_plugin_list_item_name(void *plugin_item);
 
-// return the path of the plugin list item (its stable identity - see
-// clap_plug_load_and_activate). Same lifetime as
-// clap_plug_plugin_list_item_name. Returns NULL on error.
-const char *clap_plug_plugin_list_item_path(void *plugin_item);
+// key of the plugin list item, the same for the same plugin (descriptor id)
+// across clap_plug_plugin_list_init calls. Never 0 for a listed item, 0 on
+// error
+uint64_t clap_plug_plugin_list_item_key(void *plugin_item);
+
+// the listed item with this key, NULL when the current list has none
+void *clap_plug_plugin_list_item_by_key(CLAP_PLUG_INFO *plug_data,
+                                        uint64_t key);
 
 // initiate and load plugin from the plugin_list_item. On success returns its
 // identity uid (always > 0, matching clap_plug_plugin_uid); on failure
