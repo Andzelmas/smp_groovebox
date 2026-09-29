@@ -1,6 +1,8 @@
 #include "data_actions.h"
 #include "data_object.h"
 #include "ui_layer.h"
+#include <errno.h>
+#include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +19,11 @@
 #define STATES_COUNT 2 // how many states on this program
 #define ACTION_SOURCES_COUNT 3 // contexts whose actions are gathered: current + hovered + root
 #define MAX_ACTION_CANDIDATES (ACTION_LIST_COUNT * ACTION_SOURCES_COUNT)
+// while waiting for a key, pull fresh data from the ui_layer this often (ms)
+#define INPUT_WAIT_TICK_MS 30
+// helper_input_wait result when the screen has to be drawn again - not a key
+// (and not EOF, which is -1)
+#define INPUT_WAIT_REDRAW (-2)
 
 // convenient struct to hold info about a retrieved ContextId
 typedef struct _context_intrf_info{
@@ -51,6 +58,19 @@ typedef struct _context_children{
     UI_LAYER *ui_layer;
     ContextId parent;
 } CONTEXT_CHILDREN;
+
+// the views helper_input_wait keeps in step with the data while no key is
+// pressed
+typedef struct _views_sync{
+    UI_LAYER *ui_layer;
+    UI_STATE **states;
+    size_t states_count;
+    UI_STATE *state_main;
+    // state_main's current context, sent back to root on a REBUILD that left
+    // it invalid
+    ContextId *main_current;
+    ContextId id_root;
+} VIEWS_SYNC;
 
 // one (context, action) pair still reachable this drill round, plus where in
 // its own label the next letter search should resume from if it survives
@@ -94,7 +114,10 @@ static void enterRawModeAgain() {
 enum UiPurpose{
     UI_PURPOSE_HOVERED = 1,
     UI_PURPOSE_SELECTED = 2,
-    UI_PURPOSE_CURRENT = 3
+    UI_PURPOSE_CURRENT = 3,
+    // the rows drawn this frame, so a change to any of them - not only the
+    // hovered one - makes reconcile report the view as changed
+    UI_PURPOSE_SHOWN = 4
 };
 
 // navigation modes
@@ -1055,10 +1078,65 @@ static void helper_list_session_scope(UI_LAYER *ui_layer, LIST_SESSION *session,
     session->filters[0].group = helper_list_scope(&rows, from);
 }
 
+// let each view react to the context events since the last call. Returns true
+// when a view was touched and has to be drawn again
+static bool helper_views_reconcile(const VIEWS_SYNC *sync) {
+    bool redraw = false;
+    for (size_t si = 0; si < sync->states_count; si++) {
+        UiReconcileResult rr =
+            ui_layer_state_reconcile(sync->ui_layer, sync->states[si]);
+        if (rr != UI_RECONCILE_OK)
+            redraw = true;
+        // the view's cursor fell behind, so per-event anchoring was lost -
+        // if the ContextIds this UI uses are not valid anymore, fallback to
+        // the root ContextId
+        if (rr == UI_RECONCILE_REBUILD && sync->states[si] == sync->state_main &&
+            !ui_layer_context_valid(sync->ui_layer, *sync->main_current)) {
+            *sync->main_current = sync->id_root;
+        }
+    }
+    return redraw;
+}
+
+// wait for a key, pulling fresh data every INPUT_WAIT_TICK_MS meanwhile.
+// Returns the key, or INPUT_WAIT_REDRAW as soon as a view shows a change
+static int helper_input_wait(const VIEWS_SYNC *sync) {
+    struct pollfd stdin_poll = {.fd = STDIN_FILENO, .events = POLLIN};
+    while (1) {
+        int ready = poll(&stdin_poll, 1, INPUT_WAIT_TICK_MS);
+        if (ready > 0)
+            return getchar();
+        // poll itself failed - fall back to simply blocking for the key
+        if (ready < 0 && errno != EINTR)
+            return getchar();
+        ui_layer_update_cycle(sync->ui_layer);
+        if (helper_views_reconcile(sync))
+            return INPUT_WAIT_REDRAW;
+    }
+}
+
+// store the rows drawn under (root, UI_PURPOSE_SHOWN) on the state - one entry,
+// refilled every frame
+static void helper_shown_rows_set(UI_LAYER *ui_layer, UI_STATE *state,
+                                  ContextId root, ContextId parent,
+                                  const LIST_VIEW *view) {
+    ui_layer_state_entry_set(state, root, UI_PURPOSE_SHOWN, VIEW_ROWS);
+    UI_TARGET_LIST *targets =
+        ui_layer_nav_target_list_begin(state, root, UI_PURPOSE_SHOWN);
+    if (!targets)
+        return;
+    ui_layer_nav_target_list_clear(targets);
+    for (size_t row = 0; row < view->row_count; row++)
+        ui_layer_nav_target_list_add(
+            targets, ui_layer_context_child_at(ui_layer, parent, view->rows[row]));
+    ui_layer_nav_target_list_end(state);
+}
+
 // one frame of a list session: re-anchor, draw, read a key, act. Returns false
 // once the session is over, with its closing message in msg
 static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
-                                      char *msg, size_t msg_cap) {
+                                      const VIEWS_SYNC *sync, char *msg,
+                                      size_t msg_cap) {
     if (!ui_layer_context_valid(ui_layer, session->context)) {
         snprintf(msg, msg_cap, "%s: no longer available.", session->label);
         return false;
@@ -1090,7 +1168,10 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
              picking_targets ? ", c connected" : "");
     helper_list_render(&rows, header, msg, cur->idx);
 
-    int input = getchar();
+    int input = helper_input_wait(sync);
+    // the data changed - draw the list again, the message stays
+    if (input == INPUT_WAIT_REDRAW)
+        return true;
     // a result is shown for exactly one frame
     msg[0] = '\0';
 
@@ -1221,6 +1302,9 @@ static void helper_program_destroy(UI_LAYER* ui_layer, UI_STATE** states, size_t
 
 int main() {
     enableRawMode();
+    // unbuffered, so a key poll() reports is not already sitting in stdio's
+    // buffer - and a key in that buffer is never missed by poll()
+    setvbuf(stdin, NULL, _IONBF, 0);
     UI_LAYER* ui_layer = ui_layer_init();
 
     if (!ui_layer) {
@@ -1256,6 +1340,10 @@ int main() {
     char action_status_msg[128] = {0};
     // the list being browsed while ui_nav_mode == UI_MODE_LIST
     LIST_SESSION list_session = {0};
+    // what the input wait keeps up to date while no key is pressed
+    const VIEWS_SYNC views_sync = {ui_layer, states_all, STATES_COUNT,
+                                   state_main, &state_main_context_current,
+                                   id_root};
 
     while (1) {
         // erase the terminal
@@ -1265,17 +1353,7 @@ int main() {
         ui_layer_update_cycle(ui_layer);
 
         // let each view react to contexts that appeared / were removed
-        for (size_t si = 0; si < STATES_COUNT; si++) {
-            UiReconcileResult rr =
-                ui_layer_state_reconcile(ui_layer, states_all[si]);
-            // the view's cursor fell behind, so per-event anchoring was lost -
-            // if the ContextIds this UI uses are not valid anymore, fallback to
-            // the root ContextId
-            if (rr == UI_RECONCILE_REBUILD && states_all[si] == state_main &&
-                !ui_layer_context_valid(ui_layer, state_main_context_current)) {
-                state_main_context_current = id_root;
-            }
-        }
+        helper_views_reconcile(&views_sync);
 
         // first update the contexts if they are deleted
         if (!ui_layer_context_valid(ui_layer, state_main_context_current)) {
@@ -1306,7 +1384,7 @@ int main() {
         // above, so it always draws the list as it is now
         if (ui_nav_mode == UI_MODE_LIST) {
             if (!helper_list_session_frame(ui_layer, &list_session,
-                                           action_status_msg,
+                                           &views_sync, action_status_msg,
                                            sizeof(action_status_msg)))
                 ui_nav_mode = UI_MODE_STANDARD;
             continue;
@@ -1327,6 +1405,11 @@ int main() {
                                   helper_context_child_shown, &children};
             LIST_VIEW view;
             helper_view_build(&source, state_main_hovered_idx, &view);
+            // store all the row ContextIds so the ui_layer_state_reconcile
+            // checks these for any changes, not only the
+            // state_main_context_current, root and others
+            helper_shown_rows_set(ui_layer, state_main, id_root,
+                                  state_main_context_current, &view);
 
             if (view.more_before)
                 printf("-...-\n");
@@ -1450,8 +1533,10 @@ int main() {
         if (action_status_msg[0])
             printf("%s\n", action_status_msg);
 
-        // get user inputs
-        int input = getchar();
+        // get user inputs - or draw again when the data changed what is shown
+        int input = helper_input_wait(&views_sync);
+        if (input == INPUT_WAIT_REDRAW)
+            continue;
         unsigned int exit = 0;
 
         if (input == '\e') {
