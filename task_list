@@ -46,10 +46,13 @@ PLAN
     list_count/list_at (0 = top), passed through data_object.h, app_intrf
     and ui_layer. Existing lists ignore it.
 
-1c. util_funcs tree index, shared by LV2 and CLAP: records of (category
-    path, name, identity) -> per level sub-categories first, then presets,
-    both in discovery order, O(1) level_at. Keys minted by two intern
-    tables (category paths, preset identities) that survive a rebuild.
+1c. DONE. util_funcs/tree_index, shared by LV2 and CLAP. The owner walks
+    its own path syntax: tree_index_branch(parent, name) per level, then
+    tree_index_leaf(branch, name, identity), then tree_index_finish. Per
+    level sub-categories first, then presets, both in discovery order,
+    O(1) level_at, empty categories left out. Keys minted by two intern
+    tables that survive tree_index_reset. Leaves numbered in add order, so
+    the module keeps its own per preset data in a parallel array.
 
 1d. LV2: build the index once (lilv_plugin_get_related once, rdfs:label
     from the manifest, load_resource only when the label is missing,
