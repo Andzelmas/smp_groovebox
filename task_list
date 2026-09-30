@@ -30,17 +30,50 @@ Any new CX-backed object should follow this rather than re-deriving it:
 PLAN
 ================================================================================
 1. PLUGIN PRESET BROWSING, with categories.
-   Same shape as the existing "Add plugin" catalog list (a DataChoice list
-   over list_count/list_at) but with category rows to drill into.
-   The clap module-level half exists already: clap_plug_presets_iterate /
-   _name_return / _path_return / _categories_iterate / _clean_preset,
-   clap_plug_preset_load_from_path, and the clap_ext_preset_factory
-   extension. Missing is the DataObject side - a categorised choice list
-   plus a load action.
-   NAMING TRAP: clap_plug_presets_categories_iterate and friends are PRESET
-   categories (a string path from the plugin's preset factory). Nothing to
-   do with parameter categories (PRM_PARAM_CATEGORY). Same word, different
-   mechanism.
+   Presets are a list (list_count/list_at) on the loaded plugin, never CX
+   nodes. Category rows drill in. The old preset functions in plugins.c /
+   clap_plugins.c have no callers - replace them, no twins.
+   NAMING TRAP: preset categories (a path from the preset factory / LV2
+   bank) have nothing to do with parameter categories (PRM_PARAM_CATEGORY).
+   Decided: explicit branch argument; discovery order, no sort pass; one
+   CLAP index per plugin instance.
+
+1a. intern_table: hash index for intern_find (no API change). Presets can
+    be 10k+ names, a linear scan makes a rebuild O(n^2).
+
+1b. Contract: DATA_CHOICE_BRANCH row flag (a category - picking it opens
+    it, never reaches action_do) + explicit uint64_t branch argument on
+    list_count/list_at (0 = top), passed through data_object.h, app_intrf
+    and ui_layer. Existing lists ignore it.
+
+1c. util_funcs tree index, shared by LV2 and CLAP: records of (category
+    path, name, identity) -> per level sub-categories first, then presets,
+    both in discovery order, O(1) level_at. Keys minted by two intern
+    tables (category paths, preset identities) that survive a rebuild.
+
+1d. LV2: build the index once (lilv_plugin_get_related once, rdfs:label
+    from the manifest, load_resource only when the label is missing,
+    pset:bank label as the category). level_count/level_at/load by key/
+    invalidate on the void *plug handle. Symbol -> port table for restore.
+
+1e. CLAP: rewrite clap_ext_preset_factory into one crawl pass (one readdir
+    per dir, d_type) filling a flat record array. Identity = location +
+    load_key. Fix: several presets per container file, NULL location of
+    LOCATION_PLUGIN, uninitialised plugin_id, empty extension = every file,
+    skipped first location of the next provider, try the _COMPAT factory
+    id. clap_plugins.c: index built lazily per instance and cached, same
+    API as LV2, load through the preset-load extension.
+
+1f. app_data.c: DATA_LIST_NS_BRANCH + per module preset namespaces, static
+    LIST_*_PRESETS, SET_CHOICE "Preset" on lv2_plugin_ops/clap_plugin_ops.
+    Always enabled - action_list runs every frame and must never index.
+    Optional REFRESH to rescan.
+
+1g. CLI: LIST_SESSION keeps a stack of {branch key, parent LIST_CURSOR}.
+    l on a category pushes, h/ESC pops and restores the cursor (cancel at
+    the top). LIST_ROWS carries the branch.
+
+    LV2 first (1d, 1f, 1g) proves the contract end to end before 1e.
 
 2. CLAP + LV2 optimisation / cleanup.
 
