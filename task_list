@@ -38,10 +38,10 @@ PLAN
    Decided: explicit branch argument; discovery order, no sort pass; one
    CLAP index per plugin instance.
 
-1a. intern_table: hash index for intern_find (no API change). Presets can
+1a. DONE. intern_table: hash index for intern_find (no API change). Presets can
     be 10k+ names, a linear scan makes a rebuild O(n^2).
 
-1b. Contract: DATA_CHOICE_BRANCH row flag (a category - picking it opens
+1b. DONE. Contract: DATA_CHOICE_BRANCH row flag (a category - picking it opens
     it, never reaches action_do) + explicit uint64_t branch argument on
     list_count/list_at (0 = top), passed through data_object.h, app_intrf
     and ui_layer. Existing lists ignore it.
@@ -74,6 +74,14 @@ PLAN
     the top). LIST_ROWS carries the branch.
 
     LV2 first (1d, 1f, 1g) proves the contract end to end before 1e.
+
+    MEMO, after CLAP presets work: param_find_owner_id is a linear scan and
+    runs on the [audio-thread] for every CLAP output param event
+    (clap_plugins.c, output events loop). Check whether real plugins send a
+    burst of output events on preset load. If so: an owner_id -> val_id
+    index built on [main-thread], read-only on rt, never rebuilt while rt
+    reads it (hash_table.c or a sorted array - not intern_table, the keys
+    are integers).
 
 2. CLAP + LV2 optimisation / cleanup.
 

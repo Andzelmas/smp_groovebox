@@ -819,23 +819,25 @@ size_t ui_layer_context_action_args(UI_LAYER *ui_layer, ContextId context,
 
 size_t ui_layer_context_list_count(UI_LAYER *ui_layer, ContextId context,
                                    DataListId list,
-                                   const DataActionReq *partial)
+                                   const DataActionReq *partial,
+                                   uint64_t branch)
 {
     if (!ui_layer)
         return 0;
 
-    return nav_cx_list_count(ui_layer->app_intrf, context, list, partial);
+    return nav_cx_list_count(ui_layer->app_intrf, context, list, partial,
+                             branch);
 }
 
 bool ui_layer_context_list_at(UI_LAYER *ui_layer, ContextId context,
                               DataListId list, const DataActionReq *partial,
-                              size_t idx, DataChoice *out)
+                              uint64_t branch, size_t idx, DataChoice *out)
 {
     if (!ui_layer)
         return false;
 
-    return nav_cx_list_at(ui_layer->app_intrf, context, list, partial, idx,
-                          out);
+    return nav_cx_list_at(ui_layer->app_intrf, context, list, partial, branch,
+                          idx, out);
 }
 
 DataActionResult ui_layer_context_action_do(UI_LAYER *ui_layer,

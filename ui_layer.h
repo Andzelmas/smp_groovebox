@@ -155,14 +155,15 @@ size_t ui_layer_context_actions(UI_LAYER *ui_layer, ContextId context,
 size_t ui_layer_context_action_args(UI_LAYER *ui_layer, ContextId context,
                                     DataActionType type, DataArgSpec *out,
                                     size_t cap);
-// how many options `list` currently has.
+// how many options `list` currently has at `branch` (0 = top level).
 size_t ui_layer_context_list_count(UI_LAYER *ui_layer, ContextId context,
                                    DataListId list,
-                                   const DataActionReq *partial);
-// fill *out with option idx of `list`.
+                                   const DataActionReq *partial,
+                                   uint64_t branch);
+// fill *out with option idx of `list` at `branch`.
 bool ui_layer_context_list_at(UI_LAYER *ui_layer, ContextId context,
                               DataListId list, const DataActionReq *partial,
-                              size_t idx, DataChoice *out);
+                              uint64_t branch, size_t idx, DataChoice *out);
 // execute an action on context. See nav_cx_action_do (app_intrf.h) for the
 // synchronous-reconcile / out_new contract.
 DataActionResult ui_layer_context_action_do(UI_LAYER *ui_layer,

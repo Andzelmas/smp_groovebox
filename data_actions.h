@@ -11,7 +11,8 @@
 // Flow: nav_cx_actions (menu) -> nav_cx_action_args (per-action DataArgSpec)
 // -> for CHOICE/MULTI_CHOICE args, nav_cx_list_count/nav_cx_list_at (pass the
 // half-filled DataActionReq as `partial` so one arg's list can depend on an
-// earlier arg's value) -> nav_cx_action_do. Every buffer here is caller-owned
+// earlier arg's value, and the `branch` being browsed - see
+// DATA_CHOICE_BRANCH) -> nav_cx_action_do. Every buffer here is caller-owned
 // (stack array or a single struct); nothing in this interface allocates.
 
 // Opaque, namespaced like ContextId (composed with MAKE_LIST_ID in
@@ -78,15 +79,18 @@ typedef struct {
 } DataArgSpec;
 
 #define DATA_CHOICE_LINKED (1u << 0)
+// the row is a category of the list, not an option. Picking it opens it: the
+// caller lists again with this row's value as `branch`. Never an action value
+#define DATA_CHOICE_BRANCH (1u << 1)
 
 // one option for a CHOICE / MULTI_CHOICE arg
 typedef struct {
     uint64_t value;          // MAKE_ID(list_namespace, stable item key) -
                               // never a positional index
     const char *label;       // borrowed, valid while the module's list lives
-    uint32_t flags;          // bit 0 (DATA_CHOICE_LINKED): already linked to
-                              // partial->connect.source. 0 for non-connect
-                              // lists (e.g. the plugin catalogue).
+    uint32_t flags;          // DATA_CHOICE_LINKED: already linked to
+                              // partial->connect.source (connect lists only).
+                              // DATA_CHOICE_BRANCH: a category row.
     // which group this row belongs to, for a view that wants to filter by one.
     // Stable and comparable within this list; matches the group an object
     // declares through DataOps.group_key, if one does. 0 when the list has no

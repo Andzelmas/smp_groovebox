@@ -86,15 +86,17 @@ struct DataOps {
     // returned by action_args - the caller forwards it unchanged). `partial`
     // is the request as filled in so far (earlier args may already carry a
     // value), so a list's content can depend on an earlier arg - e.g. a
-    // CONNECT action's target list is filtered by the chosen source. May
+    // CONNECT action's target list is filtered by the chosen source.
+    // `branch` is which level of the list: 0 for the top, otherwise the value
+    // of one of its DATA_CHOICE_BRANCH rows. An unknown branch is empty. May
     // return 0 to mean "unknown, page with list_at until it returns false"
     // instead of "empty".
     size_t (*list_count)(void *user_data, DataListId list,
-                         const DataActionReq *partial);
-    // fill *out with option idx of `list`. return false (and leave *out
-    // zeroed) if idx is out of range.
+                         const DataActionReq *partial, uint64_t branch);
+    // fill *out with option idx of `list` at `branch`. return false (and
+    // leave *out zeroed) if idx is out of range.
     bool (*list_at)(void *user_data, DataListId list,
-                    const DataActionReq *partial, size_t idx,
+                    const DataActionReq *partial, uint64_t branch, size_t idx,
                     DataChoice *out);
     // execute the action. On success that creates a new object, *out_new is
     // set to its ContextId; otherwise *out_new is left untouched.
@@ -189,15 +191,16 @@ static inline size_t data_action_args(const DataObject *obj,
 }
 
 static inline size_t data_list_count(const DataObject *obj, DataListId list,
-                                     const DataActionReq *partial) {
+                                     const DataActionReq *partial,
+                                     uint64_t branch) {
     if (!data_obj_has(obj, DATA_CAP_ACTIONS) || !obj->ops->list_count)
         return 0;
-    return obj->ops->list_count(obj->user_data, list, partial);
+    return obj->ops->list_count(obj->user_data, list, partial, branch);
 }
 
 static inline bool data_list_at(const DataObject *obj, DataListId list,
-                                const DataActionReq *partial, size_t idx,
-                                DataChoice *out) {
+                                const DataActionReq *partial, uint64_t branch,
+                                size_t idx, DataChoice *out) {
     if (!out)
         return false;
     out->value = 0;
@@ -207,7 +210,7 @@ static inline bool data_list_at(const DataObject *obj, DataListId list,
     out->group_label = NULL;
     if (!data_obj_has(obj, DATA_CAP_ACTIONS) || !obj->ops->list_at)
         return false;
-    return obj->ops->list_at(obj->user_data, list, partial, idx, out);
+    return obj->ops->list_at(obj->user_data, list, partial, branch, idx, out);
 }
 
 static inline DataActionResult data_action_do(const DataObject *obj,

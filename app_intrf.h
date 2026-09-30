@@ -78,6 +78,8 @@ uint64_t nav_cx_group_key(APP_INTRF* app_intrf, ContextId context);
 //                          built so far, so a later arg's list can depend on
 //                          an earlier arg's value (e.g. a CONNECT action's
 //                          target list is filtered by the chosen source).
+//                          `branch` is the level listed: 0 for the top, or
+//                          the value of a DATA_CHOICE_BRANCH row to open it.
 //   nav_cx_action_do    -> execute
 
 // fill *out with up to cap available actions for context.
@@ -91,12 +93,13 @@ size_t nav_cx_action_args(APP_INTRF *app_intrf, ContextId context,
 // how many options `list` currently has. May return 0 to mean "unknown, page
 // with nav_cx_list_at until it returns false" instead of "empty".
 size_t nav_cx_list_count(APP_INTRF *app_intrf, ContextId context,
-                         DataListId list, const DataActionReq *partial);
+                         DataListId list, const DataActionReq *partial,
+                         uint64_t branch);
 
-// fill *out with option idx of `list`. returns false (and leaves *out
-// zeroed) if idx is out of range.
+// fill *out with option idx of `list` at `branch`. returns false (and leaves
+// *out zeroed) if idx is out of range.
 bool nav_cx_list_at(APP_INTRF *app_intrf, ContextId context, DataListId list,
-                    const DataActionReq *partial, size_t idx,
+                    const DataActionReq *partial, uint64_t branch, size_t idx,
                     DataChoice *out);
 
 // execute an action on context. Synchronously reconciles the CX tree and its

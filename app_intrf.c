@@ -680,17 +680,18 @@ size_t nav_cx_action_args(APP_INTRF *app_intrf, ContextId context,
 }
 
 size_t nav_cx_list_count(APP_INTRF *app_intrf, ContextId context,
-                         DataListId list, const DataActionReq *partial) {
+                         DataListId list, const DataActionReq *partial,
+                         uint64_t branch) {
     if (!app_intrf || context == CONTEXT_ID_NULL)
         return 0;
     CX *cx = ht_get(app_intrf->cx_hashtable, context);
     if (!cx)
         return 0;
-    return data_list_count(&cx->data, list, partial);
+    return data_list_count(&cx->data, list, partial, branch);
 }
 
 bool nav_cx_list_at(APP_INTRF *app_intrf, ContextId context, DataListId list,
-                    const DataActionReq *partial, size_t idx,
+                    const DataActionReq *partial, uint64_t branch, size_t idx,
                     DataChoice *out) {
     if (!out)
         return false;
@@ -702,7 +703,7 @@ bool nav_cx_list_at(APP_INTRF *app_intrf, ContextId context, DataListId list,
     CX *cx = ht_get(app_intrf->cx_hashtable, context);
     if (!cx)
         return false;
-    return data_list_at(&cx->data, list, partial, idx, out);
+    return data_list_at(&cx->data, list, partial, branch, idx, out);
 }
 
 DataActionResult nav_cx_action_do(APP_INTRF *app_intrf, ContextId context,

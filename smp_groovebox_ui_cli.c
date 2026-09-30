@@ -172,6 +172,7 @@ typedef struct _list_rows{
     ContextId context;
     DataListId list;
     const DataActionReq *partial;
+    uint64_t branch; // level of the list shown, 0 = top
     const LIST_FILTER *filter;
 } LIST_ROWS;
 
@@ -693,14 +694,15 @@ static void helper_string_print_underline(const char* string, char char_underlin
 
 // list_count may answer 0 for "unknown" rather than "empty" - page with list_at
 // then
-static size_t helper_list_count(UI_LAYER *ui_layer, ContextId context,
-                                DataListId list, const DataActionReq *partial) {
-    size_t count = ui_layer_context_list_count(ui_layer, context, list, partial);
+static size_t helper_list_count(const LIST_ROWS *rows) {
+    size_t count = ui_layer_context_list_count(rows->ui_layer, rows->context,
+                                               rows->list, rows->partial,
+                                               rows->branch);
     if (count > 0)
         return count;
     DataChoice row;
-    while (ui_layer_context_list_at(ui_layer, context, list, partial, count,
-                                    &row))
+    while (ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
+                                    rows->partial, rows->branch, count, &row))
         count++;
     return count;
 }
@@ -709,7 +711,7 @@ static bool helper_list_row_shown(void *user, size_t idx) {
     const LIST_ROWS *rows = user;
     DataChoice row;
     if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                  rows->partial, idx, &row))
+                                  rows->partial, rows->branch, idx, &row))
         return false;
     if (rows->filter->group != 0 && row.group_key != rows->filter->group)
         return false;
@@ -720,9 +722,7 @@ static bool helper_list_row_shown(void *user, size_t idx) {
 
 // an unfiltered list skips the predicate - every row list_at returns is shown
 static VIEW_SOURCE helper_list_source(LIST_ROWS *rows) {
-    VIEW_SOURCE src = {helper_list_count(rows->ui_layer, rows->context,
-                                         rows->list, rows->partial),
-                       NULL, rows};
+    VIEW_SOURCE src = {helper_list_count(rows), NULL, rows};
     if (rows->filter->group != 0 || rows->filter->linked_only)
         src.shown = helper_list_row_shown;
     return src;
@@ -731,7 +731,7 @@ static VIEW_SOURCE helper_list_source(LIST_ROWS *rows) {
 static uint64_t helper_list_value_at(const LIST_ROWS *rows, size_t idx) {
     DataChoice row;
     if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                  rows->partial, idx, &row))
+                                  rows->partial, rows->branch, idx, &row))
         return 0;
     return row.value;
 }
@@ -746,7 +746,7 @@ static size_t helper_list_find(const LIST_ROWS *rows, uint64_t value,
     DataChoice row;
     for (size_t i = 0;
          ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                  rows->partial, i, &row);
+                                  rows->partial, rows->branch, i, &row);
          i++) {
         if (row.value == value)
             return i;
@@ -810,8 +810,8 @@ static const char *helper_list_group_label(const LIST_ROWS *rows,
                                            uint64_t group) {
     DataChoice row;
     for (size_t i = 0; ui_layer_context_list_at(rows->ui_layer, rows->context,
-                                                rows->list, rows->partial, i,
-                                                &row);
+                                                rows->list, rows->partial,
+                                                rows->branch, i, &row);
          i++) {
         if (row.group_key == group)
             return row.group_label ? row.group_label : "?";
@@ -824,7 +824,7 @@ static bool helper_list_group_starts_at(const LIST_ROWS *rows, uint64_t group,
     DataChoice row;
     for (size_t i = 0; i < idx && ui_layer_context_list_at(
                                       rows->ui_layer, rows->context, rows->list,
-                                      rows->partial, i, &row);
+                                      rows->partial, rows->branch, i, &row);
          i++) {
         if (row.group_key == group)
             return false;
@@ -839,8 +839,8 @@ static uint64_t helper_list_group_next(const LIST_ROWS *rows,
     bool passed = current == 0;
     DataChoice row;
     for (size_t i = 0; ui_layer_context_list_at(rows->ui_layer, rows->context,
-                                                rows->list, rows->partial, i,
-                                                &row);
+                                                rows->list, rows->partial,
+                                                rows->branch, i, &row);
          i++) {
         uint64_t group = row.group_key;
         if (group == 0 || !helper_list_group_starts_at(rows, group, i))
@@ -859,8 +859,8 @@ static size_t helper_list_group_count(const LIST_ROWS *rows, size_t limit) {
     DataChoice row;
     for (size_t i = 0; count < limit &&
                        ui_layer_context_list_at(rows->ui_layer, rows->context,
-                                                rows->list, rows->partial, i,
-                                                &row);
+                                                rows->list, rows->partial,
+                                                rows->branch, i, &row);
          i++) {
         if (row.group_key != 0 &&
             helper_list_group_starts_at(rows, row.group_key, i))
@@ -911,7 +911,7 @@ static void helper_list_render(LIST_ROWS *rows, const char *header,
     DataChoice row;
     for (size_t r = 0; r < view.row_count; r++) {
         if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                      rows->partial, view.rows[r], &row))
+                                      rows->partial, rows->branch, view.rows[r], &row))
             continue;
         printf("%s%s%s\n", r == view.cursor_row ? ">" : "",
                row.label ? row.label : "?",
@@ -1074,7 +1074,7 @@ static void helper_list_session_scope(UI_LAYER *ui_layer, LIST_SESSION *session,
     DataActionReq partial = {.type = session->type};
     LIST_FILTER none = {0};
     LIST_ROWS rows = {ui_layer, session->context, session->specs[0].list,
-                      &partial, &none};
+                      &partial, 0, &none};
     session->filters[0].group = helper_list_scope(&rows, from);
 }
 
@@ -1151,7 +1151,8 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
     DataActionReq partial = {.type = session->type};
     if (picking_targets)
         partial.connect.source = session->source_value;
-    LIST_ROWS rows = {ui_layer, session->context, spec->list, &partial, filter};
+    LIST_ROWS rows = {ui_layer, session->context, spec->list, &partial, 0,
+                      filter};
 
     // a group whose rows all went away cannot be narrowed to any more
     if (filter->group != 0 && !helper_list_group_label(&rows, filter->group))
@@ -1205,7 +1206,10 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return true;
     DataChoice picked;
     if (!ui_layer_context_list_at(ui_layer, session->context, spec->list,
-                                  &partial, cur->idx, &picked))
+                                  &partial, rows.branch, cur->idx, &picked))
+        return true;
+    // a category row is never an action value. Nothing opens one yet
+    if (picked.flags & DATA_CHOICE_BRANCH)
         return true;
 
     if (session->kind == LIST_SESSION_CONNECT && !picking_targets) {

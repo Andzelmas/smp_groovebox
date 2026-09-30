@@ -394,10 +394,12 @@ static size_t cx_param_action_args(void *user_data, DataActionType type,
     }
     return 0;
 }
+// flat list: any branch but the top level is unknown, so empty
 static size_t cx_param_list_count(void *user_data, DataListId list,
-                                  const DataActionReq *partial) {
+                                  const DataActionReq *partial,
+                                  uint64_t branch) {
     (void)partial;
-    if (list != LIST_PARAM_CHOICES)
+    if (list != LIST_PARAM_CHOICES || branch != 0)
         return 0;
     PRM_CONTAIN *container;
     int val_id;
@@ -410,10 +412,10 @@ static size_t cx_param_list_count(void *user_data, DataListId list,
     return (size_t)(max - min) + 1;
 }
 static bool cx_param_list_at(void *user_data, DataListId list,
-                             const DataActionReq *partial, size_t idx,
-                             DataChoice *out) {
+                             const DataActionReq *partial, uint64_t branch,
+                             size_t idx, DataChoice *out) {
     (void)partial;
-    if (list != LIST_PARAM_CHOICES)
+    if (list != LIST_PARAM_CHOICES || branch != 0)
         return false;
     PRM_CONTAIN *container;
     int val_id;
@@ -894,17 +896,18 @@ static size_t lv2_plugins_action_args(void *user_data, DataActionType type,
     return 1;
 }
 static size_t lv2_plugins_list_count(void *user_data, DataListId list,
-                                     const DataActionReq *partial) {
+                                     const DataActionReq *partial,
+                                     uint64_t branch) {
     (void)partial;
-    if (list != LIST_LV2_CATALOG)
+    if (list != LIST_LV2_CATALOG || branch != 0)
         return 0;
     return (size_t)plug_plugin_list_count((PLUG_INFO *)user_data);
 }
 static bool lv2_plugins_list_at(void *user_data, DataListId list,
-                                const DataActionReq *partial, size_t idx,
-                                DataChoice *out) {
+                                const DataActionReq *partial, uint64_t branch,
+                                size_t idx, DataChoice *out) {
     (void)partial;
-    if (list != LIST_LV2_CATALOG)
+    if (list != LIST_LV2_CATALOG || branch != 0)
         return false;
     void *item =
         plug_plugin_list_item_get((PLUG_INFO *)user_data, (unsigned int)idx);
@@ -1078,17 +1081,18 @@ static size_t clap_plugins_action_args(void *user_data, DataActionType type,
     return 1;
 }
 static size_t clap_plugins_list_count(void *user_data, DataListId list,
-                                      const DataActionReq *partial) {
+                                      const DataActionReq *partial,
+                                      uint64_t branch) {
     (void)partial;
-    if (list != LIST_CLAP_CATALOG)
+    if (list != LIST_CLAP_CATALOG || branch != 0)
         return 0;
     return (size_t)clap_plug_plugin_list_count((CLAP_PLUG_INFO *)user_data);
 }
 static bool clap_plugins_list_at(void *user_data, DataListId list,
-                                 const DataActionReq *partial, size_t idx,
-                                 DataChoice *out) {
+                                 const DataActionReq *partial, uint64_t branch,
+                                 size_t idx, DataChoice *out) {
     (void)partial;
-    if (list != LIST_CLAP_CATALOG)
+    if (list != LIST_CLAP_CATALOG || branch != 0)
         return false;
     void *item = clap_plug_plugin_list_item_get((CLAP_PLUG_INFO *)user_data,
                                                 (unsigned int)idx);
@@ -1366,10 +1370,11 @@ static size_t root_connect_action_args(void *user_data, DataActionType type,
 }
 
 static size_t root_connect_list_count(void *user_data, DataListId list,
-                                      const DataActionReq *partial) {
+                                      const DataActionReq *partial,
+                                      uint64_t branch) {
     APP_INFO *app_data = (APP_INFO *)user_data;
     JACK_INFO *jack_data = app_data ? app_data->trk_jack : NULL;
-    if (!jack_data)
+    if (!jack_data || branch != 0)
         return 0;
 
     if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_ANY))
@@ -1386,11 +1391,11 @@ static size_t root_connect_list_count(void *user_data, DataListId list,
 }
 
 static bool root_connect_list_at(void *user_data, DataListId list,
-                        const DataActionReq *partial, size_t idx,
-                        DataChoice *out) {
+                        const DataActionReq *partial, uint64_t branch,
+                        size_t idx, DataChoice *out) {
     APP_INFO *app_data = (APP_INFO *)user_data;
     JACK_INFO *jack_data = app_data ? app_data->trk_jack : NULL;
-    if (!jack_data)
+    if (!jack_data || branch != 0)
         return false;
 
     JackPortInfo info;
