@@ -1,5 +1,4 @@
 #pragma once
-#include "intern_table.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -12,37 +11,18 @@
 // Keys are minted per name (see intern_table) and survive tree_index_reset,
 // so a rebuilt tree hands out the same key for the same branch or leaf. Keys
 // start at 1, branch key 0 is the top level.
-// A zeroed TREE_INDEX is a valid empty index.
+// Every function takes a NULL tree as an empty one.
 
-typedef struct _tree_index {
-    struct _tree_node *branches; // in the order they were added
-    size_t branch_count;
-    size_t branch_max;
-    struct _tree_node *leaves; // in the order they were added
-    size_t leaf_count;
-    size_t leaf_max;
-    // every branch and leaf name, NUL separated
-    char *names;
-    size_t names_len;
-    size_t names_max;
-    // "<parent key>\x1f<name>" per branch, slot = its index in branches
-    INTERN_TABLE branch_keys;
-    // the owner's identity per leaf, slot = its index in leaves
-    INTERN_TABLE leaf_keys;
-    char *scratch; // for building a branch_keys name
-    size_t scratch_max;
-    // laid out by tree_index_finish
-    struct _tree_level *levels; // [0] the top level, [i + 1] branches[i]
-    size_t *branch_order;       // each level's sub-branches, contiguous
-    size_t *leaf_order;         // each level's leaves, contiguous
-    bool finished;
-} TREE_INDEX;
+typedef struct _tree_index TREE_INDEX;
 
 typedef struct {
     bool is_branch;
     uint64_t key;
     const char *name; // owned by the index, valid until it is changed
 } TREE_ROW;
+
+// a new empty index, NULL on allocation failure
+TREE_INDEX *tree_index_new(void);
 
 // find-or-add the branch `name` under `parent` (0 = top level) and return its
 // key. 0 for an empty name, a parent not in the index, or on allocation
@@ -69,10 +49,10 @@ bool tree_index_level_at(const TREE_INDEX *tree, uint64_t branch, size_t idx,
                          TREE_ROW *out);
 
 // the identity the leaf with this key was added with, NULL when it is not in
-// the index. Owned by the index, valid until it is cleaned
+// the index. Owned by the index, valid until it is freed
 const char *tree_index_leaf_identity(const TREE_INDEX *tree, uint64_t key);
 
 // empty the index for a rebuild, the keys stay
 void tree_index_reset(TREE_INDEX *tree);
 
-void tree_index_clean(TREE_INDEX *tree);
+void tree_index_free(TREE_INDEX *tree);

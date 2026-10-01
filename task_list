@@ -46,7 +46,8 @@ PLAN
     list_count/list_at (0 = top), passed through data_object.h, app_intrf
     and ui_layer. Existing lists ignore it.
 
-1c. DONE. util_funcs/tree_index, shared by LV2 and CLAP. The owner walks
+1c. DONE. util_funcs/tree_index, shared by LV2 and CLAP. Opaque:
+    tree_index_new/free, every function takes NULL as empty. The owner walks
     its own path syntax: tree_index_branch(parent, name) per level, then
     tree_index_leaf(branch, name, identity), then tree_index_finish. Per
     level sub-categories first, then presets, both in discovery order,
@@ -89,9 +90,11 @@ PLAN
     clap_plug_params_sync_values instead. Control port params of plugins
     with opaque state (JUCE, Pianoteq) cannot follow - LV2 gives no way.
 
-1g. CLI: LIST_SESSION keeps a stack of {branch key, parent LIST_CURSOR}.
-    l on a category pushes, h/ESC pops and restores the cursor (cancel at
-    the top). LIST_ROWS carries the branch.
+1g. DONE. CLI: LIST_SESSION keeps a stack per spec of LIST_LEVEL {branch,
+    parent LIST_CURSOR, label copy}, LIST_DEPTH_MAX 16. l on a category
+    pushes, h/ESC pops and restores the cursor (cancel at the top).
+    Category rows end in "/", the title shows the path ("Preset / Bank").
+    A new CONNECT source empties the target list's stack.
 
     LV2 first (1d, 1f, 1g) proves the contract end to end before 1e.
 
@@ -104,6 +107,24 @@ PLAN
     are integers).
 
 2. CLAP + LV2 optimisation / cleanup.
+    CLAP - needs critical extensions implemented, that will touch other parts of the code too.
+    Latency, posix_fd_support, timer_support, optional wakefd. Others that plugins like Surge requests.
+
+2a. CLAP GUI GROUNDWORK (Linux). Plugins borrow the host's [main-thread] loop.
+   The CLI scanf/fgets prompts block it and would freeze plugin GUIs.
+
+2b. posix-fd-support: register/modify/unregister_fd fill a per plugin fd
+    table; clap_read_rt_to_ui_messages polls it (timeout 0) and calls on_fd.
+    on_fd may unregister - mark dead, sweep after. Drop fds on destroy.
+
+2c. timer-support: register/unregister_timer fill a per plugin {id, period,
+    next_due} table (CLOCK_MONOTONIC); due timers get on_timer in
+    clap_read_rt_to_ui_messages. Resolution = the UI's tick.
+
+2d. Optional wake fd: ui_layer_wake_fd() (-1 = none) - an epoll fd holding
+    the plugin fds, a timerfd per timer and a periodic rt->ui timerfd.
+    Readable -> call ui_layer_update_cycle, never read it. A UI may ignore it
+    and just tick.
 
 3a. PRESET SAVING for LV2 and CLAP plugins - save one plugin's current
     state as a preset of that plugin, loadable through the preset list.
@@ -117,6 +138,7 @@ PLAN
     saves the state extension's blob to its own preset file and lists it
     alongside the plugin's presets (e.g. a user category), loads it back
     through the state extension.
+
 3. SAVING (the song file). Deliberately after (1) and (2): do not design
    the save format until what it must save has stopped moving - presets
    change what a plugin's restorable state even is, and the cleanup may
@@ -148,18 +170,3 @@ PLAN
    categories, both in params.c, and they already disagree on whether removal
    exists - so which behaviour is "general" is not yet knowable.
 
-6. CLAP GUI GROUNDWORK (Linux). Plugins borrow the host's [main-thread] loop.
-   The CLI scanf/fgets prompts block it and would freeze plugin GUIs.
-
-6a. posix-fd-support: register/modify/unregister_fd fill a per plugin fd
-    table; clap_read_rt_to_ui_messages polls it (timeout 0) and calls on_fd.
-    on_fd may unregister - mark dead, sweep after. Drop fds on destroy.
-
-6b. timer-support: register/unregister_timer fill a per plugin {id, period,
-    next_due} table (CLOCK_MONOTONIC); due timers get on_timer in
-    clap_read_rt_to_ui_messages. Resolution = the UI's tick.
-
-6c. Optional wake fd: ui_layer_wake_fd() (-1 = none) - an epoll fd holding
-    the plugin fds, a timerfd per timer and a periodic rt->ui timerfd.
-    Readable -> call ui_layer_update_cycle, never read it. A UI may ignore it
-    and just tick.

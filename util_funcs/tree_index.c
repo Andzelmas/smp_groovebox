@@ -1,4 +1,5 @@
 #include "tree_index.h"
+#include "intern_table.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,35 @@ typedef struct _tree_level {
     size_t first_leaf; // in leaf_order
     size_t leaf_count;
 } TREE_LEVEL;
+
+// zeroed is a valid empty index
+struct _tree_index {
+    TREE_NODE *branches; // in the order they were added
+    size_t branch_count;
+    size_t branch_max;
+    TREE_NODE *leaves; // in the order they were added
+    size_t leaf_count;
+    size_t leaf_max;
+    // every branch and leaf name, NUL separated
+    char *names;
+    size_t names_len;
+    size_t names_max;
+    // "<parent key>\x1f<name>" per branch, slot = its index in branches
+    INTERN_TABLE branch_keys;
+    // the owner's identity per leaf, slot = its index in leaves
+    INTERN_TABLE leaf_keys;
+    char *scratch; // for building a branch_keys name
+    size_t scratch_max;
+    // laid out by tree_index_finish
+    TREE_LEVEL *levels;   // [0] the top level, [i + 1] branches[i]
+    size_t *branch_order; // each level's sub-branches, contiguous
+    size_t *leaf_order;   // each level's leaves, contiguous
+    bool finished;
+};
+
+TREE_INDEX *tree_index_new(void) {
+    return calloc(1, sizeof(TREE_INDEX));
+}
 
 // level index of a branch key, false when it is not in the index
 static bool tree_level_index(const TREE_INDEX *tree, uint64_t branch,
@@ -248,7 +278,7 @@ void tree_index_reset(TREE_INDEX *tree) {
     tree->finished = false;
 }
 
-void tree_index_clean(TREE_INDEX *tree) {
+void tree_index_free(TREE_INDEX *tree) {
     if (!tree)
         return;
     free(tree->branches);
@@ -260,5 +290,5 @@ void tree_index_clean(TREE_INDEX *tree) {
     free(tree->leaf_order);
     intern_clean(&tree->branch_keys);
     intern_clean(&tree->leaf_keys);
-    *tree = (TREE_INDEX){0};
+    free(tree);
 }

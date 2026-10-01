@@ -287,7 +287,7 @@ typedef struct _plug_plug {
     LilvState *preset;
     // the preset list, built on first browse (see plug_presets_get). A
     // preset's identity is its URI
-    TREE_INDEX presets;
+    TREE_INDEX *presets;
     bool presets_built;
     // port symbol -> index in ports, for restoring a preset's port values
     INTERN_TABLE port_symbols;
@@ -362,7 +362,7 @@ static int plug_sys_send_msg(void *user_data, const char *msg) {
 
 // empty the preset list, the keys stay
 static void plug_presets_clear(PLUG_PLUG *plug) {
-    tree_index_reset(&plug->presets);
+    tree_index_reset(plug->presets);
     plug->presets_built = false;
 }
 
@@ -383,7 +383,8 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
         cur_plug->preset = NULL;
     }
     plug_presets_clear(cur_plug);
-    tree_index_clean(&cur_plug->presets);
+    tree_index_free(cur_plug->presets);
+    cur_plug->presets = NULL;
     intern_clean(&cur_plug->port_symbols);
     free(cur_plug->property_params);
     cur_plug->property_params = NULL;
@@ -985,7 +986,7 @@ static void plug_presets_add(PLUG_PLUG *plug, const LilvNode *preset) {
         LilvNode *bank_label =
             lilv_world_get(world, bank, nodes->rdfs_label, NULL);
         bank_key = tree_index_branch(
-            &plug->presets, 0,
+            plug->presets, 0,
             lilv_node_as_string(bank_label ? bank_label : bank));
         lilv_node_free(bank_label);
         lilv_node_free(bank);
@@ -994,7 +995,7 @@ static void plug_presets_add(PLUG_PLUG *plug, const LilvNode *preset) {
     const char *name = label ? lilv_node_as_string(label) : NULL;
     if (!name || name[0] == '\0')
         name = plug_preset_uri_tail(uri);
-    tree_index_leaf(&plug->presets, bank_key, name, uri);
+    tree_index_leaf(plug->presets, bank_key, name, uri);
     lilv_node_free(label);
     // the names are copied, the file is not needed until the preset is loaded
     if (loaded)
@@ -1013,16 +1014,22 @@ static void plug_presets_build(PLUG_PLUG *plug) {
         }
         lilv_nodes_free(presets);
     }
-    tree_index_finish(&plug->presets);
+    tree_index_finish(plug->presets);
 }
 
-// the preset list, read the first time it is asked for
+// the preset list, read the first time it is asked for. NULL (no presets)
+// when the index cannot be allocated - the next browse tries again
 static TREE_INDEX *plug_presets_get(PLUG_PLUG *plug) {
     if (!plug || !plug->plug || !plug->plug_data)
         return NULL;
+    if (!plug->presets) {
+        plug->presets = tree_index_new();
+        if (!plug->presets)
+            return NULL;
+    }
     if (!plug->presets_built)
         plug_presets_build(plug);
-    return &plug->presets;
+    return plug->presets;
 }
 
 size_t plug_plugin_presets_level_count(void *plug, uint64_t branch) {
@@ -1079,7 +1086,7 @@ int plug_plugin_preset_load(void *plug, uint64_t key) {
     PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
     if (!cur_plug || !cur_plug->plug_instance || !cur_plug->plug_data)
         return -1;
-    const char *preset_uri = tree_index_leaf_identity(&cur_plug->presets, key);
+    const char *preset_uri = tree_index_leaf_identity(cur_plug->presets, key);
     if (!preset_uri)
         return -2;
     PLUG_INFO *plug_data = cur_plug->plug_data;

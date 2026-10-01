@@ -149,21 +149,39 @@ typedef struct _list_filter{
     bool linked_only; // keep only DATA_CHOICE_LINKED rows
 } LIST_FILTER;
 
+// how many categories deep a list can be opened
+#define LIST_DEPTH_MAX 16
+// how many list args one session browses (CONNECT: source, targets)
+#define LIST_MAX_ARG_SPECS 2
+
+// one opened category of a list (a DATA_CHOICE_BRANCH row): its value is the
+// branch listed, parent_cursor is the level above's, given back on close
+typedef struct _list_level{
+    uint64_t branch;
+    LIST_CURSOR parent_cursor;
+    char label[64]; // copied - a row's label is borrowed
+} LIST_LEVEL;
+
 // an action whose argument is picked from a live list. The main loop drives it
 // one frame at a time, so the list resyncs between keypresses.
 // CHOICE browses specs[0] and runs the action per pick, staying open.
 // CONNECT picks a source from specs[0], then toggles links to rows of
-// specs[1]; h/ESC there steps back to the source list
+// specs[1]; h/ESC there steps back to the source list.
+// l on a category row opens it, h/ESC closes it again first
 typedef struct _list_session{
     int kind;
     ContextId context;
     DataActionType type;
     const char *label; // the action's label, static in the data layer
-    DataArgSpec specs[2];
+    DataArgSpec specs[LIST_MAX_ARG_SPECS];
     int connect_pick;
-    LIST_CURSOR cursors[2]; // one per spec
-    LIST_FILTER filters[2]; // one per spec
-    uint64_t source_value;  // CONNECT: the source picked from specs[0]
+    // one per spec, of its innermost opened level
+    LIST_CURSOR cursors[LIST_MAX_ARG_SPECS];
+    LIST_FILTER filters[LIST_MAX_ARG_SPECS]; // one per spec
+    uint64_t source_value; // CONNECT: the source picked from specs[0]
+    // opened categories, one stack per spec
+    LIST_LEVEL levels[LIST_MAX_ARG_SPECS][LIST_DEPTH_MAX];
+    size_t depth[LIST_MAX_ARG_SPECS];
 } LIST_SESSION;
 
 // one list of a session as a VIEW_SOURCE: shown means the row passes filter
@@ -913,8 +931,9 @@ static void helper_list_render(LIST_ROWS *rows, const char *header,
         if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
                                       rows->partial, rows->branch, view.rows[r], &row))
             continue;
-        printf("%s%s%s\n", r == view.cursor_row ? ">" : "",
+        printf("%s%s%s%s\n", r == view.cursor_row ? ">" : "",
                row.label ? row.label : "?",
+               (row.flags & DATA_CHOICE_BRANCH) ? "/" : "",
                (row.flags & DATA_CHOICE_LINKED) ? " [connected]" : "");
     }
     if (view.more_after)
@@ -1062,7 +1081,7 @@ static void helper_list_session_start(LIST_SESSION *session, int kind,
     session->context = context;
     session->type = type;
     session->label = label;
-    for (size_t i = 0; i < spec_count && i < 2; i++)
+    for (size_t i = 0; i < spec_count && i < LIST_MAX_ARG_SPECS; i++)
         session->specs[i] = specs[i];
     session->connect_pick = CONNECT_PICK_SOURCE;
 }
@@ -1076,6 +1095,48 @@ static void helper_list_session_scope(UI_LAYER *ui_layer, LIST_SESSION *session,
     LIST_ROWS rows = {ui_layer, session->context, session->specs[0].list,
                       &partial, 0, &none};
     session->filters[0].group = helper_list_scope(&rows, from);
+}
+
+// the branch a spec's list shows, 0 = its top level
+static uint64_t helper_list_branch(const LIST_SESSION *session, size_t which) {
+    size_t depth = session->depth[which];
+    return depth ? session->levels[which][depth - 1].branch : 0;
+}
+
+// open a category row of a spec's list. false when already LIST_DEPTH_MAX deep
+static bool helper_list_open(LIST_SESSION *session, size_t which,
+                             const DataChoice *row) {
+    if (session->depth[which] == LIST_DEPTH_MAX)
+        return false;
+    LIST_LEVEL *level = &session->levels[which][session->depth[which]++];
+    level->branch = row->value;
+    level->parent_cursor = session->cursors[which];
+    snprintf(level->label, sizeof(level->label), "%s",
+             row->label ? row->label : "?");
+    session->cursors[which] = (LIST_CURSOR){0};
+    return true;
+}
+
+// close the innermost opened category, the cursor goes back onto its row.
+// false at the top level
+static bool helper_list_close(LIST_SESSION *session, size_t which) {
+    if (session->depth[which] == 0)
+        return false;
+    session->depth[which]--;
+    session->cursors[which] =
+        session->levels[which][session->depth[which]].parent_cursor;
+    return true;
+}
+
+// the list's name, then every category opened in it: "Preset / Bank"
+static void helper_list_path(const LIST_SESSION *session, size_t which,
+                             char *out, size_t cap) {
+    const DataArgSpec *spec = &session->specs[which];
+    size_t len = (size_t)snprintf(out, cap, "%s",
+                                  spec->label ? spec->label : spec->name);
+    for (size_t i = 0; i < session->depth[which] && len < cap; i++)
+        len += (size_t)snprintf(out + len, cap - len, " / %s",
+                                session->levels[which][i].label);
 }
 
 // let each view react to the context events since the last call. Returns true
@@ -1151,8 +1212,8 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
     DataActionReq partial = {.type = session->type};
     if (picking_targets)
         partial.connect.source = session->source_value;
-    LIST_ROWS rows = {ui_layer, session->context, spec->list, &partial, 0,
-                      filter};
+    LIST_ROWS rows = {ui_layer, session->context, spec->list, &partial,
+                      helper_list_branch(session, which), filter};
 
     // a group whose rows all went away cannot be narrowed to any more
     if (filter->group != 0 && !helper_list_group_label(&rows, filter->group))
@@ -1160,10 +1221,11 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
 
     helper_list_cursor_anchor(&rows, cur);
 
-    char title[128];
-    helper_list_title(&rows, spec->label ? spec->label : spec->name, title,
-                      sizeof(title));
-    char header[192];
+    char path[128];
+    helper_list_path(session, which, path, sizeof(path));
+    char title[192];
+    helper_list_title(&rows, path, title, sizeof(title));
+    char header[256];
     snprintf(header, sizeof(header),
              "%s (j/k move, l select, g group%s, h/ESC back)", title,
              picking_targets ? ", c connected" : "");
@@ -1177,6 +1239,8 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
     msg[0] = '\0';
 
     if (input == '\e' || input == 'h') {
+        if (helper_list_close(session, which))
+            return true;
         if (picking_targets) {
             session->connect_pick = CONNECT_PICK_SOURCE;
             return true;
@@ -1208,14 +1272,20 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
     if (!ui_layer_context_list_at(ui_layer, session->context, spec->list,
                                   &partial, rows.branch, cur->idx, &picked))
         return true;
-    // a category row is never an action value. Nothing opens one yet
-    if (picked.flags & DATA_CHOICE_BRANCH)
+    // a category row is opened, it is never an action value
+    if (picked.flags & DATA_CHOICE_BRANCH) {
+        if (!helper_list_open(session, which, &picked))
+            snprintf(msg, msg_cap, "%s: categories nested too deep.",
+                     session->label);
         return true;
+    }
 
     if (session->kind == LIST_SESSION_CONNECT && !picking_targets) {
         session->source_value = picked.value;
         session->connect_pick = CONNECT_PICK_TARGETS;
+        // a new source has its own target list
         session->cursors[1] = (LIST_CURSOR){0};
+        session->depth[1] = 0;
         return true;
     }
 
@@ -1533,6 +1603,7 @@ int main() {
         }
 
         // system messages
+        printf("\nNavigate with h,j,k,l. Change param values with -/+\n");
         printf("\nMessages:\n");
         if (action_status_msg[0])
             printf("%s\n", action_status_msg);
