@@ -117,6 +117,11 @@ void intern_rename(INTERN_TABLE *table, const char *old_name,
     intern_index_fill(table);
 }
 
+const char *intern_name(const INTERN_TABLE *table, uint64_t key) {
+    const INTERN_ENTRY *entry = intern_entry_at(table, key);
+    return entry ? entry->name : NULL;
+}
+
 size_t intern_slot(const INTERN_TABLE *table, uint64_t key) {
     const INTERN_ENTRY *entry = intern_entry_at(table, key);
     return entry ? entry->slot : INTERN_SLOT_NONE;

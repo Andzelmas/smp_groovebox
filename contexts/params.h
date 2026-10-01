@@ -158,9 +158,14 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params);
 // result actually changed, sends that final value across to the ui side. Does
 // not mark the param changed, so the owner is not sent its own value back.
 // Returns -1 on error, including a full rt_to_ui queue - the rt side still
-// has the value then, but the ui side misses it.
+// has the value then, and param_rt_resend sends it later.
 int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
                        PARAM_T set_to);
+
+// [audio-thread] send the values a full rt_to_ui queue refused, once there is
+// room. Call once per cycle from an owner that cannot ask its source for the
+// values again - CLAP asks the plugin instead (clap_plug_params_sync_values)
+void param_rt_resend(PRM_CONTAIN *param_container);
 
 // ui-side value/property setter. param_op is a paramOperType (above) to
 // apply - unlike the rt side, every operation is meaningful here, since the

@@ -41,6 +41,8 @@ typedef struct _params_param_rt {
     //- borrowed, params.c never touches it. rt-only: nothing on the ui side
     // has ever needed a param's cookie.
     void *cookie;
+    // val never reached the ui side (full rt_to_ui queue), see param_rt_resend
+    bool resend;
 } PRM_PARAM_RT;
 
 // ui-side parameter - everything the ui thread needs to present and edit a
@@ -114,6 +116,8 @@ typedef struct _params_container {
     uint32_t generation_polled;
     // any ui param has changed set - lets param_changed_take skip the scan
     bool any_changed;
+    // any rt param has resend set - rt only, lets param_rt_resend skip the scan
+    bool rt_resend;
     // interned categories - own malloc each, outer array realloc'd (see
     // PRM_PARAM_CATEGORY). Never removed individually, so num_categories only
     // grows and every index below it is alive.
@@ -155,6 +159,7 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     param_container->generation = 0;
     param_container->generation_polled = 0;
     param_container->any_changed = false;
+    param_container->rt_resend = false;
     param_container->categories = NULL;
     param_container->num_categories = 0;
     param_container->user_data.user_data = NULL;
@@ -265,6 +270,7 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     new_rt_param->uid = uid;
     new_rt_param->owner_id = owner_id;
     new_rt_param->cookie = cookie;
+    new_rt_param->resend = false;
 
     new_ui_param->val = val;
     new_ui_param->min_val = min;
@@ -383,6 +389,22 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
     }
 }
 
+// send an rt param's value to the ui side. A full queue marks it for
+// param_rt_resend instead. false when it did not fit
+static bool param_rt_send(PRM_CONTAIN *param_container, int val_id,
+                          PRM_PARAM_RT *cur_param) {
+    PARAM_RING_DATA_BIT send_bit;
+    send_bit.val_id = val_id;
+    send_bit.uid = cur_param->uid;
+    send_bit.param_value = cur_param->val;
+    send_bit.from_owner = false;
+    cur_param->resend = ring_buffer_write(param_container->param_rt_to_ui,
+                                          &send_bit, sizeof(send_bit)) != 1;
+    if (cur_param->resend)
+        param_container->rt_resend = true;
+    return !cur_param->resend;
+}
+
 int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
                        PARAM_T set_to) {
     if (!param_container)
@@ -401,17 +423,25 @@ int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
     cur_param->val = new_val;
     // only send the change to the other side if the value actually changed.
     // val_changed stays as is - this value came from the owner
-    if (new_val != prev_val) {
-        PARAM_RING_DATA_BIT send_bit;
-        send_bit.val_id = val_id;
-        send_bit.uid = cur_param->uid;
-        send_bit.param_value = new_val;
-        send_bit.from_owner = false;
-        if (ring_buffer_write(param_container->param_rt_to_ui, &send_bit,
-                              sizeof(send_bit)) != 1)
-            return -1;
-    }
+    if (new_val != prev_val &&
+        !param_rt_send(param_container, val_id, cur_param))
+        return -1;
     return 0;
+}
+
+void param_rt_resend(PRM_CONTAIN *param_container) {
+    if (!param_container || !param_container->rt_resend)
+        return;
+    // a send that does not fit sets it again
+    param_container->rt_resend = false;
+    for (unsigned int i = 0; i < param_container->num_of_params_rt; i++) {
+        PRM_PARAM_RT *cur_param = param_container->rt_params[i];
+        if (!cur_param || !cur_param->resend)
+            continue;
+        // still full - the rest wait for the next call
+        if (!param_rt_send(param_container, (int)i, cur_param))
+            return;
+    }
 }
 
 int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,

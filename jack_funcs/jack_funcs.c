@@ -778,6 +778,7 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO *jack_data) {
                                (float)state);
         }
     }
+    param_rt_resend(jack_data->trk_params);
     return 0;
 }
 

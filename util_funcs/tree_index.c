@@ -230,10 +230,11 @@ bool tree_index_level_at(const TREE_INDEX *tree, uint64_t branch, size_t idx,
     return true;
 }
 
-size_t tree_index_leaf_find(const TREE_INDEX *tree, uint64_t key) {
-    if (!tree)
-        return SIZE_MAX;
-    return intern_slot(&tree->leaf_keys, key);
+const char *tree_index_leaf_identity(const TREE_INDEX *tree, uint64_t key) {
+    // a key from an earlier build, not added again, is not in the index
+    if (!tree || intern_slot(&tree->leaf_keys, key) == INTERN_SLOT_NONE)
+        return NULL;
+    return intern_name(&tree->leaf_keys, key);
 }
 
 void tree_index_reset(TREE_INDEX *tree) {

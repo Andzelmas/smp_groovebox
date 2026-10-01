@@ -1,5 +1,6 @@
 #pragma once
 #include "../structs.h"
+#include "../util_funcs/tree_index.h"
 #include "params.h"
 #include <stdbool.h>
 #include <stdlib.h>
@@ -26,7 +27,8 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
 
 // Scans the installed plugins and (re)builds the list of them on plug_data.
 // Safe to call again while plugins are loaded. A plugin keeps its key across
-// rebuilds; lilv does not forget an uninstalled one, so it stays listed
+// rebuilds; lilv does not forget an uninstalled one, so it stays listed.
+// Loaded plugins read their presets again on the next browse
 int plug_plugin_list_init(PLUG_INFO *plug_data);
 
 // return how many plugins are in the catalogue built by plug_plugin_list_init
@@ -47,27 +49,19 @@ uint64_t plug_plugin_list_item_key(void *plug_list_item);
 // the listed item with this key, NULL when the current list has none
 void *plug_plugin_list_item_by_key(PLUG_INFO *plug_data, uint64_t key);
 
-// presets functions --------------------------------------------------
-// get the preset struct for the plugin (right now it is simply a char* of the
-// path)
-void *plug_plugin_presets_iterate(PLUG_INFO *plug_data, unsigned int idx,
-                                  uint32_t iter);
+// presets --------------------------------------------------
+// A loaded plugin's presets, browsed one level at a time: banks first, then
+// the presets outside any bank. branch is 0 for the top level, or a bank row's
+// key. Built the first time it is browsed and kept until
+// plug_plugin_list_init or the plugin is removed. A row's name is valid until
+// then too.
+size_t plug_plugin_presets_level_count(void *plug, uint64_t branch);
+bool plug_plugin_presets_level_at(void *plug, uint64_t branch, size_t idx,
+                                  TREE_ROW *out);
 
-// clean the preset struct
-void plug_plugin_preset_clean(PLUG_INFO *plug_data, void *preset_info);
-
-// get the short name of the preset (for now it is simply the path of the file)
-int plug_plugin_preset_short_name(PLUG_INFO *plug_data, void *preset_info,
-                                  char *return_name, uint32_t name_len);
-
-// get the path of the preset, when this is fed to the plug_load_preset the
-// preset will be loaded
-int plug_plugin_preset_path(PLUG_INFO *plug_data, void *preset_info,
-                            char *return_path, uint32_t path_len);
-
-// load a plugin preset
-int plug_load_preset(PLUG_INFO *plug_data, unsigned int plug_id,
-                     const char *preset_name);
+// load the preset with this key (a preset row's key). 0 on success, -1 when
+// it failed to load, -2 when no preset has this key
+int plug_plugin_preset_load(void *plug, uint64_t key);
 //--------------------------------------------------
 
 // read the main-thread audio-thread comm messages and launch apropriate

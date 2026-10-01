@@ -264,6 +264,9 @@ enum {
     DATA_LIST_NS_PORTS = 2,
     DATA_LIST_NS_PARAM_CHOICE = 3,
     DATA_LIST_NS_CLAP_CATALOG = 4,
+    // the category rows (DATA_CHOICE_BRANCH) of every list
+    DATA_LIST_NS_BRANCH = 5,
+    DATA_LIST_NS_LV2_PRESET = 6,
 };
 #define MAKE_LIST_ID(ns, local)                                                \
     (((DataListId)(ns) << CTXID_NS_SHIFT) | ((DataListId)(local) & CTXID_LOCAL_MASK))
@@ -284,6 +287,27 @@ enum {
     LID_PORTS_ANY = 1,
     LID_PORTS_PEERS,
 };
+
+// every loaded lv2 plugin's preset list - the plugin in user_data picks whose
+#define LIST_LV2_PRESETS MAKE_LIST_ID(DATA_LIST_NS_LV2_PRESET, 1)
+
+// a module's branch key from a list's branch argument: 0 is the top level, a
+// category row's value loses its namespace. false for anything else
+static bool list_branch_key(uint64_t branch, uint64_t *out) {
+    *out = branch & CTXID_LOCAL_MASK;
+    return branch == 0 ||
+           (CTXID_NS(branch) == DATA_LIST_NS_BRANCH && *out != 0);
+}
+
+// a tree_index row as a choice: category rows in DATA_LIST_NS_BRANCH, the
+// rest in leaf_ns
+static void list_choice_from_tree_row(const TREE_ROW *row, unsigned int leaf_ns,
+                                      DataChoice *out) {
+    out->value =
+        MAKE_ID(row->is_branch ? DATA_LIST_NS_BRANCH : leaf_ns, row->key);
+    out->label = row->name;
+    out->flags = row->is_branch ? DATA_CHOICE_BRANCH : 0;
+}
 
 // one parameter, from any owner. user_data is the opaque handle from
 // param_get_handle.
@@ -789,33 +813,89 @@ static bool lv2_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
 static ContextId lv2_plugin_id(void *user_data) {
     return MAKE_ID(DATA_NS_LV2_PLUG, plug_plugin_uid(user_data));
 }
-// DATA_CAP_ACTIONS: a loaded lv2 plugin can only be removed. No args, no
-// lists - action_args/list_count/list_at stay unset.
+// DATA_CAP_ACTIONS: a loaded lv2 plugin can be removed, and can load a preset
+// picked from its preset list (banks as category rows).
 static size_t lv2_plugin_action_list(void *user_data, DataAction *out,
                                      size_t cap) {
     (void)user_data;
-    if (!out || cap < 1)
+    if (!out)
         return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_REMOVE,
-        .label = "Remove",
-        .tooltip = "Remove this plugin",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_DANGEROUS,
+    size_t n = 0;
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_REMOVE,
+            .label = "Remove",
+            .tooltip = "Remove this plugin",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_DANGEROUS,
+        };
+    // always enabled: this runs every frame, and asking whether there are
+    // presets would read them
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_SET_CHOICE,
+            .label = "Preset",
+            .tooltip = "Load one of this plugin's presets",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    return n;
+}
+static size_t lv2_plugin_action_args(void *user_data, DataActionType type,
+                                     DataArgSpec *out, size_t cap) {
+    (void)user_data;
+    if (type != DATA_ACTION_SET_CHOICE || !out || cap < 1)
+        return 0;
+    out[0] = (DataArgSpec){
+        .name = "preset",
+        .label = "Preset",
+        .kind = DATA_ARG_CHOICE,
+        .required = true,
+        .list = LIST_LV2_PRESETS,
     };
     return 1;
+}
+static size_t lv2_plugin_list_count(void *user_data, DataListId list,
+                                    const DataActionReq *partial,
+                                    uint64_t branch) {
+    (void)partial;
+    uint64_t key;
+    if (list != LIST_LV2_PRESETS || !list_branch_key(branch, &key))
+        return 0;
+    return plug_plugin_presets_level_count(user_data, key);
+}
+static bool lv2_plugin_list_at(void *user_data, DataListId list,
+                               const DataActionReq *partial, uint64_t branch,
+                               size_t idx, DataChoice *out) {
+    (void)partial;
+    uint64_t key;
+    TREE_ROW row;
+    if (list != LIST_LV2_PRESETS || !list_branch_key(branch, &key) ||
+        !plug_plugin_presets_level_at(user_data, key, idx, &row))
+        return false;
+    list_choice_from_tree_row(&row, DATA_LIST_NS_LV2_PRESET, out);
+    return true;
 }
 static DataActionResult lv2_plugin_action_do(void *user_data,
                                              const DataActionReq *req,
                                              ContextId *out_new) {
-    (void)out_new; // REMOVE creates nothing
-    if (!req || req->type != DATA_ACTION_REMOVE)
+    (void)out_new; // neither action creates anything
+    if (!req || !user_data)
         return DATA_ACTION_ERR_INVALID;
-    if (!user_data)
+    if (req->type == DATA_ACTION_REMOVE)
+        return plug_stop_and_remove_plug(user_data) != 0 ? DATA_ACTION_ERR_DATA
+                                                         : DATA_ACTION_OK;
+    if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
-    if (plug_stop_and_remove_plug(user_data) != 0)
-        return DATA_ACTION_ERR_DATA;
-    return DATA_ACTION_OK;
+
+    ContextId value = (ContextId)req->add_choice.choice_value;
+    // also refuses a category row's value
+    if (CTXID_NS(value) != DATA_LIST_NS_LV2_PRESET)
+        return DATA_ACTION_ERR_INVALID;
+    int loaded = plug_plugin_preset_load(user_data, value & CTXID_LOCAL_MASK);
+    if (loaded == -2)
+        return DATA_ACTION_ERR_STALE; // the preset list changed since the pick
+    return loaded == 0 ? DATA_ACTION_OK : DATA_ACTION_ERR_DATA;
 }
 // plug_plugin_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps lv2_plugin_ops = {
@@ -827,6 +907,9 @@ static const DataOps lv2_plugin_ops = {
     .child_at = lv2_plugin_child_at,
     .name = plug_plugin_name,
     .action_list = lv2_plugin_action_list,
+    .action_args = lv2_plugin_action_args,
+    .list_count = lv2_plugin_list_count,
+    .list_at = lv2_plugin_list_at,
     .action_do = lv2_plugin_action_do,
 };
 

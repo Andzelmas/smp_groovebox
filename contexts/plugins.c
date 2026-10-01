@@ -236,6 +236,12 @@ typedef struct _plug_control {
     bool is_readable;
 } PLUG_CONTROL;
 
+// one property control's param, see PLUG_PLUG.property_params
+typedef struct _plug_property_param {
+    LV2_URID urid;
+    int val_id;
+} PLUG_PROPERTY_PARAM;
+
 typedef struct _plug_plug {
     // is the plugin processing, if is_processing == 0, it will be skipped in
     // the process function, touch only on [audio-thread]
@@ -279,6 +285,16 @@ typedef struct _plug_plug {
     PLUG_URIDS *urids;
     // the current preset
     LilvState *preset;
+    // the preset list, built on first browse (see plug_presets_get). A
+    // preset's identity is its URI
+    TREE_INDEX presets;
+    bool presets_built;
+    // port symbol -> index in ports, for restoring a preset's port values
+    INTERN_TABLE port_symbols;
+    // property URID -> param, sorted by URID. Built at load, read by the
+    // [audio-thread] for the plugin's patch:Set and patch:Put messages
+    PLUG_PROPERTY_PARAM *property_params;
+    uint32_t num_property_params;
     // do we need to update, after a preset loading for example
     bool request_update;
     // atom forge for types and general convenience
@@ -344,6 +360,12 @@ static int plug_sys_send_msg(void *user_data, const char *msg) {
     return 0;
 }
 
+// empty the preset list, the keys stay
+static void plug_presets_clear(PLUG_PLUG *plug) {
+    tree_index_reset(&plug->presets);
+    plug->presets_built = false;
+}
+
 static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     if (!plug_data)
         return -1;
@@ -360,6 +382,12 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
         lilv_state_free(cur_plug->preset);
         cur_plug->preset = NULL;
     }
+    plug_presets_clear(cur_plug);
+    tree_index_clean(&cur_plug->presets);
+    intern_clean(&cur_plug->port_symbols);
+    free(cur_plug->property_params);
+    cur_plug->property_params = NULL;
+    cur_plug->num_property_params = 0;
     // free instance
     if (cur_plug->plug_instance) {
         LilvInstance *cur_instance = cur_plug->plug_instance;
@@ -847,6 +875,9 @@ int plug_plugin_list_init(PLUG_INFO *plug_data) {
     // picks up newly installed bundles, the plugins already known keep their
     // LilvPlugin, so loaded instances are not disturbed
     lilv_world_load_all(plug_data->lv_world);
+    // a new bundle can hold presets for a loaded plugin
+    for (int i = 0; i < MAX_INSTANCES; i++)
+        plug_presets_clear(&plug_data->plugins[i]);
     const LilvPlugins *plugins =
         lilv_world_get_all_plugins(plug_data->lv_world);
     if (!plugins)
@@ -924,208 +955,178 @@ void *plug_plugin_list_item_by_key(PLUG_INFO *plug_data, uint64_t key) {
     return &list->plugin_list[slot];
 }
 
-void *plug_plugin_presets_iterate(PLUG_INFO *plug_data, unsigned int idx,
-                                  uint32_t iter) {
-    if (!plug_data)
-        return NULL;
-    if (idx >= MAX_INSTANCES)
-        return NULL;
-    PLUG_PLUG *plug = &(plug_data->plugins[idx]);
-    if (!plug->plug)
-        return NULL;
+// name for a preset without an rdfs:label: the last part of its URI
+static const char *plug_preset_uri_tail(const char *uri) {
+    const char *tail = uri;
+    for (const char *c = uri; *c; c++)
+        if ((*c == '/' || *c == '#') && c[1])
+            tail = c + 1;
+    return tail;
+}
+
+// add one preset to the preset list. Its own file is only read when the
+// manifest gives it no rdfs:label, so a pset:bank that is only in that file is
+// only seen then
+static void plug_presets_add(PLUG_PLUG *plug, const LilvNode *preset) {
+    LilvWorld *world = plug->plug_data->lv_world;
+    PLUG_NODES *nodes = &plug->plug_data->nodes;
+    const char *uri = lilv_node_as_uri(preset);
+    if (!uri)
+        return;
+    LilvNode *label = lilv_world_get(world, preset, nodes->rdfs_label, NULL);
+    bool loaded = false;
+    if (!label) {
+        loaded = lilv_world_load_resource(world, preset) > 0;
+        label = lilv_world_get(world, preset, nodes->rdfs_label, NULL);
+    }
+    uint64_t bank_key = 0;
+    LilvNode *bank = lilv_world_get(world, preset, nodes->pset_bank, NULL);
+    if (bank) {
+        LilvNode *bank_label =
+            lilv_world_get(world, bank, nodes->rdfs_label, NULL);
+        bank_key = tree_index_branch(
+            &plug->presets, 0,
+            lilv_node_as_string(bank_label ? bank_label : bank));
+        lilv_node_free(bank_label);
+        lilv_node_free(bank);
+    }
+    // some plugins declare an empty label
+    const char *name = label ? lilv_node_as_string(label) : NULL;
+    if (!name || name[0] == '\0')
+        name = plug_preset_uri_tail(uri);
+    tree_index_leaf(&plug->presets, bank_key, name, uri);
+    lilv_node_free(label);
+    // the names are copied, the file is not needed until the preset is loaded
+    if (loaded)
+        lilv_world_unload_resource(world, preset);
+}
+
+static void plug_presets_build(PLUG_PLUG *plug) {
+    plug_presets_clear(plug);
+    // also when there are none, so they are not looked for on every browse
+    plug->presets_built = true;
     LilvNodes *presets =
-        lilv_plugin_get_related(plug->plug, plug_data->nodes.pset_Preset);
-    if (!presets)
+        lilv_plugin_get_related(plug->plug, plug->plug_data->nodes.pset_Preset);
+    if (presets) {
+        LILV_FOREACH(nodes, i, presets) {
+            plug_presets_add(plug, lilv_nodes_get(presets, i));
+        }
+        lilv_nodes_free(presets);
+    }
+    tree_index_finish(&plug->presets);
+}
+
+// the preset list, read the first time it is asked for
+static TREE_INDEX *plug_presets_get(PLUG_PLUG *plug) {
+    if (!plug || !plug->plug || !plug->plug_data)
         return NULL;
-    LilvIter *preset_iter = lilv_nodes_begin(presets);
-
-    void *ret_struct = NULL;
-    unsigned int loc_iter = 0;
-    while (!lilv_nodes_is_end(presets, preset_iter)) {
-        if (iter != loc_iter) {
-            loc_iter += 1;
-            preset_iter = lilv_nodes_next(presets, preset_iter);
-            continue;
-        }
-        const LilvNode *cur_node = lilv_nodes_get(presets, preset_iter);
-        const char *cur_name = lilv_node_as_string(cur_node);
-        if (cur_name) {
-            char *save_name =
-                (char *)malloc(sizeof(char) * (strlen(cur_name) + 1));
-            if (save_name) {
-                strcpy(save_name, cur_name);
-                ret_struct = (void *)save_name;
-            }
-        }
-        break;
-    }
-    lilv_nodes_free(presets);
-    return ret_struct;
-}
-void plug_plugin_preset_clean(PLUG_INFO *plug_data, void *preset_info) {
-    if (!plug_data)
-        return;
-    if (!preset_info)
-        return;
-
-    char *cur_preset = (char *)preset_info;
-    if (!cur_preset)
-        return;
-    free(cur_preset);
+    if (!plug->presets_built)
+        plug_presets_build(plug);
+    return &plug->presets;
 }
 
-int plug_plugin_preset_short_name(PLUG_INFO *plug_data, void *preset_info,
-                                  char *return_name, uint32_t name_len) {
-    if (!plug_data)
-        return -1;
-    if (!preset_info)
-        return -1;
-    char *cur_preset = (char *)preset_info;
-    if (!cur_preset)
-        return -1;
-    if (!return_name)
-        return -1;
-    char *only_file_name = str_return_file_from_path(cur_preset);
-    if (!only_file_name) {
-        snprintf(return_name, name_len, "%s", cur_preset);
-    }
-    if (only_file_name) {
-        snprintf(return_name, name_len, "%s", only_file_name);
-        free(only_file_name);
-    }
-    return 0;
+size_t plug_plugin_presets_level_count(void *plug, uint64_t branch) {
+    return tree_index_level_count(plug_presets_get(plug), branch);
 }
-int plug_plugin_preset_path(PLUG_INFO *plug_data, void *preset_info,
-                            char *path_name, uint32_t path_len) {
-    if (!plug_data)
-        return -1;
-    if (!preset_info)
-        return -1;
-    char *cur_preset = (char *)preset_info;
-    if (!cur_preset)
-        return -1;
-    if (!path_name)
-        return -1;
 
-    snprintf(path_name, path_len, "%s", cur_preset);
-    return 0;
+bool plug_plugin_presets_level_at(void *plug, uint64_t branch, size_t idx,
+                                  TREE_ROW *out) {
+    return tree_index_level_at(plug_presets_get(plug), branch, idx, out);
 }
 
 static PLUG_PORT *plug_find_port_by_name(PLUG_PLUG *plug, const char *name) {
-    if (!plug)
+    if (!plug || !name)
         return NULL;
-    if (!name)
+    size_t slot = intern_slot(&plug->port_symbols,
+                              intern_find(&plug->port_symbols, name));
+    if (slot >= plug->num_ports)
         return NULL;
-    for (uint32_t i = 0; i < plug->num_ports; ++i) {
-        PLUG_PORT *const cur_port = &(plug->ports[i]);
-        if (!cur_port)
-            continue;
-        const LilvNode *port_name =
-            lilv_port_get_symbol(plug->plug, cur_port->lilv_port);
-        if (strcmp(lilv_node_as_string(port_name), name) == 0) {
-            return cur_port;
-        }
-    }
-    return NULL;
+    return &plug->ports[slot];
+}
+
+// a numeric LV2 value as a float, false for any other type. rt safe
+static bool plug_value_as_float(const PLUG_PLUG *plug, const void *value,
+                                uint32_t size, uint32_t type, float *out) {
+    const LV2_Atom_Forge *forge = &plug->forge;
+    if (type == forge->Float && size >= sizeof(float))
+        *out = *(const float *)value;
+    else if (type == forge->Double && size >= sizeof(double))
+        *out = (float)*(const double *)value;
+    else if (type == forge->Int && size >= sizeof(int32_t))
+        *out = (float)*(const int32_t *)value;
+    else if (type == forge->Long && size >= sizeof(int64_t))
+        *out = (float)*(const int64_t *)value;
+    else if (type == forge->Bool && size >= sizeof(int32_t))
+        *out = *(const int32_t *)value ? 1.0f : 0.0f;
+    else
+        return false;
+    return true;
 }
 
 static void plug_set_value_direct(const char *port_symbol, void *data,
                                   const void *value, uint32_t size,
                                   uint32_t type) {
-    (void)size;
     PLUG_PLUG *plug = (PLUG_PLUG *)data;
     if (!plug)
         return;
     PLUG_PORT *port = plug_find_port_by_name(plug, port_symbol);
-    if (!port)
-        return;
-    float fvalue = 0.0f;
-    if (type == plug->forge.Float) {
-        fvalue = *(const float *)value;
-    } else if (type == plug->forge.Double) {
-        fvalue = *(const double *)value;
-    } else if (type == plug->forge.Int) {
-        fvalue = *(const int32_t *)value;
-    } else if (type == plug->forge.Long) {
-        fvalue = *(const int64_t *)value;
-    } else {
-        return;
-    }
-
-    port->control = fvalue;
+    float fvalue;
+    if (port && plug_value_as_float(plug, value, size, type, &fvalue))
+        port->control = fvalue;
 }
 
-int plug_load_preset(PLUG_INFO *plug_data, unsigned int plug_id,
-                     const char *preset_name) {
-    if (!plug_data)
+int plug_plugin_preset_load(void *plug, uint64_t key) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug || !cur_plug->plug_instance || !cur_plug->plug_data)
         return -1;
-    if (!preset_name)
-        return -1;
-    if (plug_id >= MAX_INSTANCES)
-        return -1;
-    PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
-    context_sub_wait_for_stop(plug_data->control_data, (void *)plug);
+    const char *preset_uri = tree_index_leaf_identity(&cur_plug->presets, key);
+    if (!preset_uri)
+        return -2;
+    PLUG_INFO *plug_data = cur_plug->plug_data;
+    LilvWorld *world = plug_data->lv_world;
 
-    if (!plug->plug_instance)
+    // read the preset before pausing the plugin, so the pause only covers the
+    // restore
+    LilvNode *uri = lilv_new_uri(world, preset_uri);
+    if (!uri)
         return -1;
-    if (plug->preset) {
-        const LilvNode *old_preset = lilv_state_get_uri(plug->preset);
-        if (old_preset) {
-            lilv_world_unload_resource(plug_data->lv_world, old_preset);
-        }
-        lilv_state_free(plug->preset);
-        plug->preset = NULL;
-    }
-    LilvNode *new_preset = lilv_new_uri(plug_data->lv_world, preset_name);
-    int load_err = lilv_world_load_resource(plug_data->lv_world, new_preset);
-    if (load_err < 0) {
-        if (new_preset)
-            free(new_preset);
+    LilvState *state = NULL;
+    if (lilv_world_load_resource(world, uri) >= 0)
+        state = lilv_state_new_from_world(world, &(cur_plug->map), uri);
+    if (!state) {
+        lilv_world_unload_resource(world, uri);
+        lilv_node_free(uri);
         return -1;
     }
-    plug->preset = lilv_state_new_from_world(plug_data->lv_world, &(plug->map),
-                                             new_preset);
+    lilv_node_free(uri);
 
-    // TODO we could check here if the plugin allows safe_restore, if yes we
-    // would not need to pause the rt process.
-    // TODO not used at all, check the bug a bit further down
-    /*
-    const LV2_Feature *state_features[9] = {
-        &(plug->features.map_feature),
-        &(plug->features.unmap_feature),
-        &(plug->features.make_path_feature),
-        &(plug->features.state_sched_feature),
-        &(plug->features.safe_restore_feature),
-        &(plug->features.log_feature),
-        &(plug->features.options_feature),
-        NULL};
-        */
-
-    // TODO here depending if the plug has safe_restore or does not we send
-    // different set port values functions one sets the values directly (if
-    // there is no safe_restore, and the rt process is paused), the other uses
-    // circle buffers and is the general function to set values on the plugin
-    // TODO for some reason plugin preset loading crashes when sending features
-    // to the livl_state_restore to find out which feature is not loaded
-    // correctly and crashes
-    lilv_state_restore(plug->preset, plug->plug_instance, plug_set_value_direct,
-                       plug, 0, NULL);
+    context_sub_wait_for_stop(plug_data->control_data, (void *)cur_plug);
+    // TODO a plugin with safe_restore would not need the pause
+    // TODO features are not passed - restoring crashed with them, which one is
+    // to blame is not found yet
+    lilv_state_restore(state, cur_plug->plug_instance, plug_set_value_direct,
+                       cur_plug, 0, NULL);
     // the preset set the control ports directly - sync the params to them,
     // as values the plugin already has, so they are not sent back
-    for (uint32_t i = 0; i < plug->num_ports; i++) {
-        PLUG_PORT *const cur_port = &(plug->ports[i]);
+    for (uint32_t i = 0; i < cur_plug->num_ports; i++) {
+        PLUG_PORT *const cur_port = &(cur_plug->ports[i]);
         if (cur_port->type != PORT_TYPE_CONTROL || cur_port->param_index < 0)
             continue;
-        param_set_value(plug->plug_params, cur_port->param_index,
+        param_set_value(cur_plug->plug_params, cur_port->param_index,
                         (PARAM_T)cur_port->control, NULL, Operation_SyncValue);
     }
+    cur_plug->request_update = true;
+    context_sub_wait_for_start(plug_data->control_data, (void *)cur_plug);
 
-    if (new_preset)
-        lilv_node_free(new_preset);
-    plug->request_update = true;
-    // launch the plugin again
-    context_sub_wait_for_start(plug_data->control_data, (void *)plug);
-    return 1;
+    // the current preset's data stays loaded in the world while it is current
+    if (cur_plug->preset) {
+        const LilvNode *old_uri = lilv_state_get_uri(cur_plug->preset);
+        if (old_uri && !lilv_node_equals(old_uri, lilv_state_get_uri(state)))
+            lilv_world_unload_resource(world, old_uri);
+        lilv_state_free(cur_plug->preset);
+    }
+    cur_plug->preset = state;
+    return 0;
 }
 
 int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data) {
@@ -1297,6 +1298,79 @@ static void plug_create_properties(PLUG_INFO *plug_data, PLUG_PLUG *plug,
     lilv_nodes_free(properties);
     lilv_node_free(patch_readable);
     lilv_node_free(patch_writable);
+}
+
+static int plug_property_param_cmp(const void *a, const void *b) {
+    LV2_URID ua = ((const PLUG_PROPERTY_PARAM *)a)->urid;
+    LV2_URID ub = ((const PLUG_PROPERTY_PARAM *)b)->urid;
+    return (ua > ub) - (ua < ub);
+}
+
+// build property_params from the property controls, whose index is their
+// val_id. 0 on success
+static int plug_property_params_build(PLUG_PLUG *plug) {
+    uint32_t count = 0;
+    for (unsigned int i = 0; i < plug->num_controls; i++)
+        if (plug->controls[i] && plug->controls[i]->type == PROPERTY)
+            count++;
+    if (count == 0)
+        return 0;
+    plug->property_params = malloc(count * sizeof(PLUG_PROPERTY_PARAM));
+    if (!plug->property_params)
+        return -1;
+    for (unsigned int i = 0; i < plug->num_controls; i++) {
+        PLUG_CONTROL *control = plug->controls[i];
+        if (!control || control->type != PROPERTY)
+            continue;
+        plug->property_params[plug->num_property_params++] =
+            (PLUG_PROPERTY_PARAM){.urid = control->property, .val_id = (int)i};
+    }
+    qsort(plug->property_params, count, sizeof(PLUG_PROPERTY_PARAM),
+          plug_property_param_cmp);
+    return 0;
+}
+
+// [audio-thread] the plugin says one of its properties has a new value
+static void plug_property_changed_rt(PLUG_PLUG *plug, LV2_URID property,
+                                     const LV2_Atom *value) {
+    PLUG_PROPERTY_PARAM want = {.urid = property};
+    const PLUG_PROPERTY_PARAM *found =
+        bsearch(&want, plug->property_params, plug->num_property_params,
+                sizeof(PLUG_PROPERTY_PARAM), plug_property_param_cmp);
+    float fvalue;
+    if (!found || !plug_value_as_float(plug, LV2_ATOM_BODY_CONST(value),
+                                       value->size, value->type, &fvalue))
+        return;
+    // a value a full queue refuses is sent by param_rt_resend
+    param_set_value_rt(plug->plug_params, found->val_id, (PARAM_T)fvalue);
+}
+
+// [audio-thread] an object from the plugin's output. patch:Set carries one
+// property's new value, patch:Put several - it is how a plugin answers
+// patch:Get
+static void plug_patch_message_rt(PLUG_PLUG *plug,
+                                  const LV2_Atom_Object_Body *body,
+                                  uint32_t size) {
+    const PLUG_URIDS *urids = plug->urids;
+    if (body->otype == urids->patch_Set) {
+        const LV2_Atom *property = NULL;
+        const LV2_Atom *value = NULL;
+        lv2_atom_object_body_get(size, body, urids->patch_property, &property,
+                                 urids->patch_value, &value, 0);
+        if (property && value && property->type == plug->forge.URID)
+            plug_property_changed_rt(
+                plug, ((const LV2_Atom_URID *)property)->body, value);
+        return;
+    }
+    if (body->otype == urids->patch_Put) {
+        const LV2_Atom *put_body = NULL;
+        lv2_atom_object_body_get(size, body, urids->patch_body, &put_body, 0);
+        if (!put_body || put_body->type != plug->forge.Object)
+            return;
+        LV2_ATOM_OBJECT_FOREACH((const LV2_Atom_Object *)put_body, prop) {
+            plug_property_changed_rt(plug, prop->key, &prop->value);
+        }
+    }
 }
 
 uint32_t plug_load_and_activate(void *plugin_item) {
@@ -1513,6 +1587,10 @@ uint32_t plug_load_and_activate(void *plugin_item) {
         // params are not wired into any UI at this stage)
 
         plug->plug_params = plug_params;
+        if (plug_property_params_build(plug) != 0) {
+            plug_stop_and_remove_plug((void *)plug);
+            return 0;
+        }
     }
 
     plug->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
@@ -1717,6 +1795,9 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         cur_port->port_type_urid = 0;
         const LilvNode *sym =
             lilv_port_get_symbol(plug->plug, cur_port->lilv_port);
+        uint64_t sym_key =
+            intern_add(&plug->port_symbols, lilv_node_as_string(sym));
+        intern_set_slot(&plug->port_symbols, sym_key, i);
         const unsigned int optional =
             lilv_port_has_property(plug->plug, cur_port->lilv_port,
                                    plug_data->nodes.lv2_connectionOptional);
@@ -2108,20 +2189,16 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                     if (buf && type == plug_data->urids.midi_MidiEvent) {
                         app_jack_midi_events_write_rt(buf, frames, data, size);
                     }
-                    if (type == plug_data->urids.atom_Object) {
-                        // TODO could catch property changes (not control ports)
-                        // when preset is applied or similar BUT its difficult
-                        // to untangle what different plugins send, some (like
-                        // Pianoteq) dont send this info at all SO not worth the
-                        // effort, though without sending the new parameter
-                        // values to the ui when a preset is loaded the
-                        // parameters will stay the same, though audibly the
-                        // plugin will change (if it has properties and not only
-                        // control ports)
-                    }
+                    // property values the plugin changed itself (a preset, its
+                    // own gui). A plugin with control port params has no way
+                    // to tell the host about such changes
+                    if (type == plug_data->urids.atom_Object &&
+                        size >= sizeof(LV2_Atom_Object_Body))
+                        plug_patch_message_rt(plug, data, size);
                 }
             }
         }
+        param_rt_resend(plug->plug_params);
     }
 }
 

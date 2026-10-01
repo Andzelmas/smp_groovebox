@@ -51,26 +51,43 @@ PLAN
     tree_index_leaf(branch, name, identity), then tree_index_finish. Per
     level sub-categories first, then presets, both in discovery order,
     O(1) level_at, empty categories left out. Keys minted by two intern
-    tables that survive tree_index_reset. Leaves numbered in add order, so
-    the module keeps its own per preset data in a parallel array.
+    tables that survive tree_index_reset. tree_index_leaf_identity gives
+    the identity back - it is all a module keeps per preset (no parallel
+    arrays; add per preset data only if a real need appears).
 
-1d. LV2: build the index once (lilv_plugin_get_related once, rdfs:label
-    from the manifest, load_resource only when the label is missing,
-    pset:bank label as the category). level_count/level_at/load by key/
-    invalidate on the void *plug handle. Symbol -> port table for restore.
+1d. DONE. LV2: build the index once (lilv_plugin_get_related once,
+    rdfs:label from the manifest, load_resource only when the label is
+    missing, pset:bank label as the category). level_count/level_at/load by
+    key/invalidate on the void *plug handle. Symbol -> port table for
+    restore. Known limit: a pset:bank only inside a preset's own file is
+    seen only when that file had to be read for the label.
 
 1e. CLAP: rewrite clap_ext_preset_factory into one crawl pass (one readdir
-    per dir, d_type) filling a flat record array. Identity = location +
-    load_key. Fix: several presets per container file, NULL location of
+    per dir, d_type) adding each preset straight to the tree index.
+    Identity = location + "\x1f" + load_key: the load splits at the FIRST
+    \x1f (a load_key can hold anything), an empty location means
+    LOCATION_PLUGIN. Fix: several presets per container file, NULL location of
     LOCATION_PLUGIN, uninitialised plugin_id, empty extension = every file,
     skipped first location of the next provider, try the _COMPAT factory
     id. clap_plugins.c: index built lazily per instance and cached, same
     API as LV2, load through the preset-load extension.
 
-1f. app_data.c: DATA_LIST_NS_BRANCH + per module preset namespaces, static
-    LIST_*_PRESETS, SET_CHOICE "Preset" on lv2_plugin_ops/clap_plugin_ops.
-    Always enabled - action_list runs every frame and must never index.
-    Optional REFRESH to rescan.
+1f. DONE (LV2). app_data.c: DATA_LIST_NS_BRANCH (category rows of any
+    list) + DATA_LIST_NS_LV2_PRESET, static LIST_LV2_PRESETS, SET_CHOICE
+    "Preset" on lv2_plugin_ops. Always enabled - action_list runs every
+    frame and must never index. Helpers list_branch_key /
+    list_choice_from_tree_row are shared with CLAP. No per plugin rescan
+    action for LV2: new preset bundles only enter the lilv world through
+    the catalogue Scan (plug_plugin_list_init), which now also makes every
+    loaded plugin read its presets again. The CLAP half (namespace, list,
+    action) lands with 1e.
+    Also DONE: LV2 property params follow the plugin - patch:Set and
+    patch:Put (the answer to patch:Get) on its output update them (property
+    URID -> val_id table, bsearch on rt). param_rt_resend (params.c) sends
+    the values a full rt_to_ui queue refused; LV2 plugins and the JACK
+    transport call it per cycle, CLAP recovers with
+    clap_plug_params_sync_values instead. Control port params of plugins
+    with opaque state (JUCE, Pianoteq) cannot follow - LV2 gives no way.
 
 1g. CLI: LIST_SESSION keeps a stack of {branch key, parent LIST_CURSOR}.
     l on a category pushes, h/ESC pops and restores the cursor (cancel at
@@ -88,10 +105,22 @@ PLAN
 
 2. CLAP + LV2 optimisation / cleanup.
 
-3. SAVING. Deliberately after (1) and (2): do not design the save format
-   until what it must save has stopped moving - presets change what a
-   plugin's restorable state even is, and the cleanup may change the param/
-   state surface.
+3a. PRESET SAVING for LV2 and CLAP plugins - save one plugin's current
+    state as a preset of that plugin, loadable through the preset list.
+    Not step 3: a preset is one plugin's sound, reused across songs; step 3
+    is the song file.
+    LV2: lilv_state_new_from_instance + lilv_state_save into a ~/.lv2
+    bundle, then load that bundle into the world and re-read the plugin's
+    preset list so it shows at once. Also the only way to get presets for
+    plugins that expose none over LV2 (Pianoteq keeps its own .fxp files).
+    CLAP: no standard "save into the plugin's preset folder" - the host
+    saves the state extension's blob to its own preset file and lists it
+    alongside the plugin's presets (e.g. a user category), loads it back
+    through the state extension.
+3. SAVING (the song file). Deliberately after (1) and (2): do not design
+   the save format until what it must save has stopped moving - presets
+   change what a plugin's restorable state even is, and the cleanup may
+   change the param/state surface.
    NEVER serialise a params.c uid or a ContextId: the uid counter restarts
    at 0 every launch, so uid 7 is a different param next run. Save DOMAIN
    identity - plugin URI, the plugin's own param id (owner_id), sample path,
@@ -118,3 +147,19 @@ PLAN
    user macros). Not before: the only two growable ones are params and
    categories, both in params.c, and they already disagree on whether removal
    exists - so which behaviour is "general" is not yet knowable.
+
+6. CLAP GUI GROUNDWORK (Linux). Plugins borrow the host's [main-thread] loop.
+   The CLI scanf/fgets prompts block it and would freeze plugin GUIs.
+
+6a. posix-fd-support: register/modify/unregister_fd fill a per plugin fd
+    table; clap_read_rt_to_ui_messages polls it (timeout 0) and calls on_fd.
+    on_fd may unregister - mark dead, sweep after. Drop fds on destroy.
+
+6b. timer-support: register/unregister_timer fill a per plugin {id, period,
+    next_due} table (CLOCK_MONOTONIC); due timers get on_timer in
+    clap_read_rt_to_ui_messages. Resolution = the UI's tick.
+
+6c. Optional wake fd: ui_layer_wake_fd() (-1 = none) - an epoll fd holding
+    the plugin fds, a timerfd per timer and a periodic rt->ui timerfd.
+    Readable -> call ui_layer_update_cycle, never read it. A UI may ignore it
+    and just tick.

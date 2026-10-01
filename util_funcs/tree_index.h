@@ -51,10 +51,9 @@ uint64_t tree_index_branch(TREE_INDEX *tree, uint64_t parent,
                            const char *name);
 
 // add a leaf under `branch` (0 = top level). identity is the owner's unique
-// name for it. Returns its key, 0 when it was not added: identity already
-// added, branch not in the index, or allocation failure. Added leaves are
-// numbered from 0 in add order, so the owner can keep its own per leaf data
-// in a parallel array
+// name for it - whatever it needs to find the item again, see
+// tree_index_leaf_identity. Returns its key, 0 when it was not added: identity
+// already added, branch not in the index, or allocation failure
 uint64_t tree_index_leaf(TREE_INDEX *tree, uint64_t branch, const char *name,
                          const char *identity);
 
@@ -69,8 +68,9 @@ size_t tree_index_level_count(const TREE_INDEX *tree, uint64_t branch);
 bool tree_index_level_at(const TREE_INDEX *tree, uint64_t branch, size_t idx,
                          TREE_ROW *out);
 
-// number of the leaf with this key, SIZE_MAX when it is not in the index
-size_t tree_index_leaf_find(const TREE_INDEX *tree, uint64_t key);
+// the identity the leaf with this key was added with, NULL when it is not in
+// the index. Owned by the index, valid until it is cleaned
+const char *tree_index_leaf_identity(const TREE_INDEX *tree, uint64_t key);
 
 // empty the index for a rebuild, the keys stay
 void tree_index_reset(TREE_INDEX *tree);

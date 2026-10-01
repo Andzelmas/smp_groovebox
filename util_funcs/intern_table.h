@@ -39,6 +39,10 @@ uint64_t intern_add(INTERN_TABLE *table, const char *name);
 void intern_rename(INTERN_TABLE *table, const char *old_name,
                    const char *new_name);
 
+// the name a key stands for, NULL when the key is unknown. Owned by the table,
+// valid until that key is renamed or the table is cleaned
+const char *intern_name(const INTERN_TABLE *table, uint64_t key);
+
 // INTERN_SLOT_NONE when the key is unknown or not present
 size_t intern_slot(const INTERN_TABLE *table, uint64_t key);
 void intern_set_slot(INTERN_TABLE *table, uint64_t key, size_t slot);

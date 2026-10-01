@@ -89,7 +89,7 @@ struct termios raw_termios;
 
 // reserved letters for navigation. Only enforced while picking round-0
 // letters (see helper_action_candidates_assign_letters) 
-static char reserved_letters[] = {'J','K','j','k','h','l','q', '\0'};
+static char reserved_letters[] = {'-','+','j','k','h','l','q', '\0'};
 
 static void disableRawMode() {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
