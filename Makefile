@@ -34,8 +34,13 @@ PI_DIR = ~/Audio/Source/smp_groovebox/
 
 create_smp_sampler: make_dir clap_scanner
 	$(CC) -Wall -Wextra -Wshadow -g -x c -o $(FILE) $(UI_DEFAULT) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
+build_release: make_dir clap_scanner
+	$(CC) -Wall -Wextra -Wshadow -O2 -g -x c -o $(FILE) $(UI_DEFAULT) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
+#thread sanitizer can not be combined with address sanitizer, so two targets
 build_sanitize: make_dir clap_scanner
-	$(CC) -g -fsanitize=thread -x c -o $(FILE) $(UI_CLI) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
+	$(CC) -Wall -Wextra -Wshadow -O1 -g -fno-omit-frame-pointer -fsanitize=thread,undefined -x c -o $(FILE) $(UI_CLI) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
+build_asan: make_dir clap_scanner
+	$(CC) -Wall -Wextra -Wshadow -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -x c -o $(FILE) $(UI_CLI) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
 clap_scanner: make_dir
 	$(CC) -Wall -Wextra -Wshadow -g -o $(SCAN_FILE) $(SCAN_C) $(INCDIR)
 run:
@@ -50,8 +55,12 @@ make_dir:
 .PHONY: rsync_src
 pi_build: rsync_src
 	ssh pi_daw make -C $(PI_DIR)
+pi_build_release: rsync_src
+	ssh pi_daw make build_release -C $(PI_DIR)
 pi_build_sanitize: rsync_src
 	ssh pi_daw make build_sanitize -C $(PI_DIR)
+pi_build_asan: rsync_src
+	ssh pi_daw make build_asan -C $(PI_DIR)
 pi_goto_build:
 	ssh pi_daw -t "cd $(PI_DIR)/build/ ; bash --login"
 pi_run:

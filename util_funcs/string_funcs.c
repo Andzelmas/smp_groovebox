@@ -141,39 +141,6 @@ clean:
     return ret_val;
 }
 
-char *str_return_dir_without_file(const char *full_path) {
-    char *ret_string = NULL;
-    if (!full_path)
-        return NULL;
-
-    char temp_string[strlen(full_path) + 1];
-    strcpy(temp_string, full_path);
-    char *last;
-    last = strtok(temp_string, "/");
-    int ret_len = 0;
-    if (last) {
-        ret_string = realloc(ret_string, sizeof(char) * (strlen(last) + 2));
-        sprintf(ret_string, "%s", last);
-        ret_len = strlen(ret_string);
-        last = strtok(NULL, "/");
-    }
-    while (last) {
-        if (strchr(last, '.') != NULL)
-            goto next;
-        ret_string =
-            realloc(ret_string, sizeof(char) * (ret_len + strlen(last) + 2));
-        if (!ret_string)
-            return NULL;
-        strcat(ret_string, "/");
-        strcat(ret_string, last);
-        ret_len = strlen(ret_string);
-    next:
-        last = strtok(NULL, "/");
-    }
-
-    return ret_string;
-}
-
 char *str_return_file_from_path(const char *full_path) {
     if (!full_path)
         return NULL;
@@ -197,40 +164,6 @@ char *str_return_file_from_path(const char *full_path) {
         if (!ret_string)
             return NULL;
         strcpy(ret_string, last);
-    }
-
-    return ret_string;
-}
-
-char *str_return_dir_without_start(const char *full_path) {
-    char *ret_string = NULL;
-    if (!full_path)
-        return NULL;
-    char temp_string[strlen(full_path) + 1];
-    strcpy(temp_string, full_path);
-    char *last;
-    last = strtok(temp_string, "/");
-    int ret_len = 0;
-    if (!last)
-        return NULL;
-    if (last) {
-        last = strtok(NULL, "/");
-        if (!last)
-            return NULL;
-        ret_string = realloc(ret_string, sizeof(char) * (strlen(last) + 2));
-        sprintf(ret_string, "%s", last);
-        ret_len = strlen(ret_string);
-        last = strtok(NULL, "/");
-    }
-    while (last) {
-        ret_string =
-            realloc(ret_string, sizeof(char) * (ret_len + strlen(last) + 2));
-        if (!ret_string)
-            return NULL;
-        strcat(ret_string, "/");
-        strcat(ret_string, last);
-        ret_len = strlen(ret_string);
-        last = strtok(NULL, "/");
     }
 
     return ret_string;

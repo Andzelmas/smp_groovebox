@@ -29,18 +29,392 @@ Any new CX-backed object should follow this rather than re-deriving it:
 ================================================================================
 PLAN
 ================================================================================
-    MEMO, after CLAP presets work: param_find_owner_id is a linear scan and
-    runs on the [audio-thread] for every CLAP output param event
-    (clap_plugins.c, output events loop). Check whether real plugins send a
-    burst of output events on preset load. If so: an owner_id -> val_id
-    index built on [main-thread], read-only on rt, never rebuilt while rt
-    reads it (hash_table.c or a sorted array - not intern_table, the keys
-    are integers).
-
 2. CLAP + LV2 optimisation / cleanup.
     LV2 - check what needs to be optimized, clear outstanding bugs.
     CLAP - needs critical extensions implemented, that will touch other parts of the code too.
-    Latency, then 2a - 2d. Others that plugins like Surge requests.
+    ORDER: 2M (MIDI buffers) -> 2G (internal graph + backend split) ->
+    2T (internal transport) -> 2L (latency) -> 2a - 2d. Others that
+    plugins like Surge requests.
+
+    MODULES after 2M + 2G + 2T - each knows only what is listed:
+    - util_funcs/uniform_buffer.c/.h (exists): nothing.
+    - util_funcs/midi_buf.c/.h: uniform_buffer.
+    - engine/graph.c/.h: midi_buf.
+    - engine/transport.c/.h: nothing.
+    - audio_backend.h, implemented by jack_funcs.c and picked at compile
+      time (Makefile, no runtime switch): JACK, graph (registers its
+      endpoint nodes), transport (sync). Used only by app_data.
+    - contexts: graph, midi_buf, transport, params - never the backend.
+
+2M. MIDI EVENT BUFFERS - one time-ordered event buffer per MIDI port:
+    plain MIDI 1.0 messages + frame. Before 2G: graph MIDI ports are
+    MIDI_BUFs from the start, and it fixes today's bugs on its own.
+    Raw MIDI, not CLAP events, internally: JACK, LV2, CLAP's MIDI dialect,
+    sampler and synth all speak it; CLAP note events only at the CLAP
+    boundary.
+    Today (JACK_MIDI_CONT: type/pitch/vel arrays, scanned per frame):
+    - synth keeps only the LAST event per frame - chords lose notes.
+    - note-on velocity 0 (= note-off, many keyboards) starts a silent
+      synth voice, the note hangs.
+    - LV2 writes buf_size bytes from a 3 byte array - sysex reads past it.
+    - app_jack_return_notes_vels_rt reads buffer[1..2] whatever the size -
+      1 byte messages (clock, active sensing) read garbage.
+    - CLAP drops everything but notes (empty branches), even in the MIDI
+      dialect; several note ports are appended, not sorted by time.
+    - sampler/synth scan every event for every frame: frames x events.
+    - every context includes jack_funcs.h just for MIDI.
+
+M1. util_funcs/midi_buf.c/.h, no JACK. MIDI rules on top of
+    uniform_buffer - not a second byte arena (UB_EVENT already holds the
+    CLAP event lists). One UB_EVENT per port, fixed capacity (e.g. 4 KiB),
+    allocated on [main-thread]. An item is {uint32 frame, bytes}, the byte
+    count = ub_item_get_size - 4 - sysex fits, no special case. Items are
+    not padded (padding would change ub_item_get_size), so frame is
+    read/written with memcpy - alignment safe, a plain load on x86/ARM64.
+    API: new/free [main-thread]; clear(b, nframes), push(b, frame, data,
+    size) -> false when full, iter/next, merge(dst, srcs, n) (stable k-way
+    by frame - the graph's MIDI "summing") on rt.
+    Rules, only at push: frames never go back (an earlier one is moved to
+    the last frame - a note-off is never lost); frame >= nframes or a size
+    that does not fit the status byte -> dropped; note-on vel 0 ->
+    note-off; drops/overflow counted in an atomic, [main-thread] logs it.
+    Same frame keeps push order (retrigger: off then on).
+    Decoders static inline in midi_buf.h (type/channel/is_note_on/expected
+    size...) - push needs them too, so no separate midi_msg.h; no status
+    byte checks by hand anywhere else.
+    uniform_buffer fixes first: ub_list_reset memsets the whole arena and
+    both index arrays every reset - O(capacity) per port per cycle, CLAP's
+    event lists too; resetting items/current_size is enough.
+    ub_item_get_size returns -1 as uint32_t on error, its comment says 0.
+
+M2. JACK adapters, the only jack_midi_* users: app_jack_midi_in_rt(port,
+    nframes, MIDI_BUF *) and app_jack_midi_out_rt(port, nframes, const
+    MIDI_BUF *). JACK_MIDI_CONT, app_jack_init/reset/clean_midi_cont,
+    app_jack_return_notes_vels_rt, app_jack_midi_clear_buffer_rt and
+    app_jack_midi_events_write_rt go - replaced, no twins. Each context
+    owns a MIDI_BUF per MIDI port until 2G moves them into graph ports.
+
+M3. Consumers render in segments - per event: render [pos, ev.frame),
+    handle ev, pos = ev.frame; then render [pos, nframes). Events +
+    frames instead of frames x events, chords work.
+    - sampler: per sample, segments around its note-ons.
+    - synth: per osc, segments; vel 0 already a note-off (M1).
+    - CLAP clap_input_events_prepare: note ports merged by frame (fixes
+      the order); MIDI dialect -> every message raw (CLAP_EVENT_MIDI,
+      sysex CLAP_EVENT_MIDI_SYSEX); CLAP dialect -> notes as
+      NOTE_ON/NOTE_OFF, the rest raw. Params at frame 0 stay first.
+    - LV2: events copied into the evbuf with their real size; MIDI out
+      pushed into the out MIDI_BUF, then app_jack_midi_out_rt.
+    DONE WHEN: a chord from a sequencer plays every note on the synth; a
+    keyboard sending note-on vel 0 releases notes; CC and pitch bend
+    reach a CLAP synth in the MIDI dialect; sysex into an LV2 plugin
+    passes ASan/valgrind; a sampler retrigger on the same frame works.
+
+2G. INTERNAL GRAPH - the app routes its own ports, JACK only at the edges.
+    Exposed to JACK: master_out L/R, master_in L/R, 1-2 MIDI in, 1 MIDI
+    out. Every other port is internal, connected by the app.
+    Why: latency (2L) - processing order from the connections (no hidden
+    period), a delay per connection (dry + wet splits align), a small and
+    fast JACK latency callback; no reliance on how pipewire-jack handles
+    own -> own connections; routing saved with domain identity; dozens
+    fewer JACK/PipeWire ports; the backend becomes swappable.
+    Lost: per plugin JACK ports for other programs (G10 brings an opt-in
+    back), internal routing invisible to qjackctl/Helvum/jack_lsp.
+    ORDER: after 2M; before 2T, 2L (except L1b/L1c - needed either way)
+    and 3 (SAVING) - it changes what the routing state is.
+    Facts it builds on:
+    - contexts reach ports only through app_jack_* with an opaque handle:
+      create_port_on_client, get_buffer_rt, unregister_port, port_rename;
+      MIDI (after 2M) only as MIDI_BUFs. The graph can sit behind the same
+      calls.
+    - the UI never sees JACK: routing is root_ops' CONNECT action over the
+      DATA_LIST_NS_PORTS lists in app_data (group_key = owner).
+    - trk_audio_process_rt calls each context once for all its owners, in
+      a fixed order; master is master_in -> memcpy -> master_out.
+    - every synth osc has its own MIDI in + outs (the metronome osc only
+      outs), so one node per osc is natural.
+    - smp_init, plug_init, clap_plug_init and synth_init get trk_jack as
+      their backend, and all four contexts include jack_funcs.h.
+
+G1. Per owner process functions, behaviour unchanged. Split the loop
+    bodies: clap_process_data_rt / plug_process_data_rt -> one plugin,
+    synth_process_rt -> one osc (the metronome osc a source node), the
+    sampler one, master one. trk_audio_process_rt calls them in today's
+    order. The per context ui_to_rt message reading stays at cycle start.
+    Each returns whether it wrote its outputs this cycle (G5).
+    Runnable alone - the graph later only changes who calls them.
+
+G2. Graph module (engine/graph.c/.h, knows no backend). [main-thread]
+    owns the graph, [audio-thread] only sees a compiled plan (G4).
+    Node = owner (tag, uid) + process fn + user_data + latency L.
+    Port = heap record that never moves: node, type (audio/midi), flow,
+    name, buffer (audio) or MIDI_BUF (midi), key. Keys minted like the
+    JACK cache's - stable for the session, never saved (3: save domain
+    identity).
+    Edge = out port -> in port, same type.
+    API: node add/remove, port create/remove/rename, connect/disconnect,
+    and the list queries app_data uses today (count/at/by_key,
+    connection_at, connected) - shaped like the JackPortInfo accessors so
+    root_ops changes little. A generation counter for "graph changed".
+
+G3. Cycles: connect refuses an edge that closes a loop
+    (DATA_ACTION_ERR_INVALID; the peers list can leave such ports out).
+    A deliberate feedback edge (1 cycle late) can come later.
+
+G4. Process plan. After any graph change [main-thread] builds an
+    immutable plan: nodes in topological order (Kahn), per input port its
+    source buffers. Handed over by atomic pointer swap; [audio-thread]
+    stores the plan generation it runs at cycle start (ack), [main-thread]
+    frees the old plan - and buffers of removed ports - only once the ack
+    passed it. The old plan can still sum a removed node's output, so
+    stopping the owner is not enough.
+
+G5. Buffers and summing, done by the plan before each node runs.
+    Audio: each output port owns a max_buffer_size buffer. Input with no
+    source -> shared silence, one source -> that buffer (zero copy,
+    read-only to the consumer - LV2 connects it directly, CLAP copies),
+    2+ -> summed into the input's own buffer.
+    MIDI: one source -> that MIDI_BUF, 2+ -> midi_buf_merge.
+    A node that did not write its outputs this cycle (stopped, sleeping,
+    error) gets them zeroed / emptied by the plan - else downstream sums
+    stale data every cycle (covers the CLAP sleeping branch too).
+    Buffers are sized by the max buffer size - G8 reallocates.
+
+G6. MIDI ports on the graph: the context-owned MIDI_BUFs from 2M move
+    into the graph ports. Contexts get them through a typed accessor
+    (graph_port_midi_rt) - audio and MIDI never share one void* getter.
+
+G7. JACK at the edges = the backend. audio_backend.h, implemented by
+    jack_funcs.c, picked at compile time: start the process callback and
+    thread, sample rate, buffer size + their change callbacks (G8),
+    exposed ports (buffers, MIDI through app_jack_midi_in_rt/out_rt), the
+    foreign ports an exposed port can link to (optional - a backend
+    without other programs returns none), latency of the exposed ports
+    (2L L1e). Transport stays in jack_funcs until 2T.
+    Exposed ports are graph endpoint nodes the backend registers: "in"
+    (audio pointers / MIDI into MIDI_BUFs at cycle start) and "out"
+    (summed graph inputs written to the backend buffers at the end).
+    master becomes a node summing its inputs into master_out; the memcpy
+    goes. trk_audio_process_rt: read messages (as now) -> run the plan.
+    Contexts get the graph handle at init instead of trk_jack and stop
+    including jack_funcs.h - the synth metronome and LV2 transport calls
+    (app_jack_return_transport_rt) are the last users until 2T.
+
+G8. Sample rate / buffer size changes. Today sample_rate_change only
+    stores the value (its own TODO: not [thread-safe]) and there is no
+    buffer size callback, so plugins are never re-activated: their
+    latency (often depends on both) goes stale, and so do the CLAP min/max
+    buffer sizes given at clap_plug_init. The backend's change callbacks
+    hand the new values to [main-thread] via atomics; the graph
+    reallocates its buffers (new plan), every activated CLAP plugin
+    restarts with them, LV2 gets the rate at instantiate - a rate change
+    means re-instantiating, state carried over. Sampler/synth take the
+    new rate. 2L's latency is re-read through those restarts.
+
+G9. Routing UI. root_ops CONNECT lists graph ports, plus for an exposed
+    port the foreign JACK ports it can link to. action_do: two graph ports
+    -> graph connect/disconnect; exposed <-> foreign -> JACK as now.
+    group_key/group_label stay owner based, DATA_NS_JACK_CLIENT stays for
+    foreign ports. "Ports changed" event from the graph generation
+    counter, the same path app_jack_ports_sync feeds today.
+
+G10. Later, opt-in: a small pool of aux JACK outs/ins or a per node
+     "direct out" - more endpoint nodes. An external insert (aux out ->
+     other program -> aux in) costs a 1 cycle round trip - report it.
+
+    MIGRATION, each step runnable: G1 -> G2-G5 (unused until the next
+    step) -> contexts create graph ports (rename the app_jack_* port calls
+    at the call sites, DSP code untouched) + G6 + G7 -> G8 -> G9 -> remove
+    the own-port JACK code (port_owners, own ports in the cache). G10
+    later.
+
+2T. INTERNAL TRANSPORT - the app's own clock; JACK transport only an
+    optional sync source. After 2G (the backend is behind audio_backend.h
+    by then, contexts get engine handles, not the backend), before 2L
+    (L2d's toggle sits with these params) and before 3 (tempo and time
+    signature are song state).
+    Facts it builds on:
+    - tempo, bar, beat, tick, play, BPB, beat type are jack_funcs'
+      trk_params (TRK_PARAM_*), read by app_data's trk_ops through
+      app_jack_trk_param_container. The app is always JACK timebase
+      master (jack_set_timebase_callback(client, 0, timebbt_callback_rt));
+      app_jack_update_transport_from_params_rt turns param edits into
+      transport requests.
+    - consumers: the synth metronome and LV2 time:Position atoms through
+      app_jack_return_transport_rt (8 out-params); CLAP gets
+      clap_process.transport = NULL.
+
+T1. engine/transport.c/.h, no JACK. Owns tempo, time signature, play
+    state and position (frames; bar/beat/tick derived), advanced once at
+    cycle start on [audio-thread]. The trk params container moves here -
+    same params, so the UI does not change; trk_ops reads it from
+    transport. rt read: one snapshot struct (transport_get_rt) instead of
+    the out-param list - change the call sites, no twin.
+
+T2. Sync, an optional part of the backend (audio_backend.h): off /
+    follow (another program is timebase master: position and tempo read
+    each cycle) / lead (today's behaviour: timebbt_callback_rt fills
+    JACK's position from the internal transport). A setting picks one.
+    Start, stop and locate from the UI go through the transport; the
+    backend forwards them to JACK when synced.
+
+T3. Consumers: synth metronome, LV2 time:Position, and CLAP gets a real
+    clap_event_transport (tempo, beats/seconds timeline, bar start and
+    number, time signature, playing) - NULL today.
+    With T1-T3 jack_funcs holds no app state; another backend only
+    implements audio_backend.h.
+    DONE WHEN: the metronome and a tempo-synced LV2 and CLAP plugin follow
+    the internal tempo with sync off, follow another JACK program with
+    "follow", and lead it with "lead".
+
+2L. LATENCY - CLAP latency extension + LV2 latency port, on the internal
+    graph (2G). Level 1 reports it to JACK on the exposed ports, Level 2
+    compensates it with a delay per graph edge.
+    Facts it builds on:
+    - lilv_plugin_get_latency_port_index covers both lv2:reportsLatency and
+      the lv2:latency designation.
+    - PipeWire (docs.pipewire.org page_latency + pipewire-jack 1.6.9
+      source): PipeWire itself propagates each port's Latency along every
+      link, merging several links as min of mins / max of maxes - JACK's
+      [min,max], min != max = ambiguous. Only an async link adds anything
+      (1 quantum, node.async, off for us). A link can never carry a delay:
+      realigning means a delay node (filter-chain builtin "delay"), which
+      nothing inserts automatically. Without a latency callback every
+      output = combined range of all inputs, nothing added.
+    - pipewire-jack runs the latency callback on its thread loop (jack2:
+      notification thread) - neither main nor audio - after
+      jack_recompute_total_latencies() (only queues, returns at once) and
+      whenever PipeWire changes an own port's Latency.
+    - SKIPPED CYCLE: jack.locked-process defaults to true
+      (/usr/share/pipewire/jack.conf). Every non-RT callback runs holding
+      rt_lock; the process callback only trylocks it and is skipped for
+      that cycle while a callback runs.
+    - With every port in JACK (before 2G) this needed a walk of own ports
+      inside the callback, rank edges for the fixed process order, and
+      output-only delays that cannot align a split path (dry + wet). 2G
+      removes all three; that plan was dropped.
+
+    LEVEL 1 - report latency
+
+L1a. Node latency: graph_node_latency_set(node, frames) [main-thread]
+     marks the plan dirty; the next plan build (G4) uses it.
+
+L1b. CLAP (clap_plugins.c).
+     CLAP_PLUG_REQ_LATENCY bit; uint32_t latency on CLAP_PLUG_PLUG
+     [main-thread].
+     clap_host_latency_t ext_latency on CLAP_PLUG_INFO, set in
+     clap_plug_init next to ext_thread_check, branch in
+     clap_plug_get_extension.
+     changed(): if (!is_main_thread) return; then set the bit.
+     clap_plug_latency_update(plug): CLAP_EXT_LATENCY->get(), 0 when the
+     plugin lacks it; if different store it + graph_node_latency_set.
+     Called in clap_plug_activate_start_processing right after activate()
+     succeeds - covers load, restart and process requests.
+     clap_plug_requests_process: REQ_LATENCY on an activated plugin with no
+     RESTART in the same batch -> update again (lenient: some plugins call
+     changed() while active, against the spec). Not activated -> nothing,
+     the next activate reads it.
+     clap_plug_plug_clean: latency = 0 (the node goes with the plugin).
+
+L1c. LV2 (plugins.c).
+     Port setup (the "ignores the latency port" TODO): latency_port =
+     lilv_plugin_get_latency_port_index, -1 when !lilv_plugin_has_latency.
+     The lv2_reportsLatency node is then unneeded.
+     [audio-thread] after plug_run_rt: store the port's control value in
+     atomic_uint latency_rt.
+     [main-thread] plug_read_rt_to_ui_messages: changed -> setter.
+     Valid only after the first run() - 0 until then, one rebuild follows.
+
+L1d. The walk, on [main-thread] at plan build, over the graph - no JACK
+     calls. Nodes in the plan's order. Capture: node in = range over its
+     CONNECTED inputs, audio AND midi (an instrument's path starts at its
+     note port); outputs = in + L (+ L2 edge delays). Playback mirrored.
+     UNCONNECTED PORTS do not join the min/max; none connected -> [0,0].
+     pipewire-jack's default combine counts every port, an unconnected one
+     as 0: audio in 256, an unconnected midi in, L = 64 -> output [64,320]
+     instead of [320,320], a false "ambiguous". Same with an unconnected R
+     channel or sidechain.
+     Kept in the plan: the arrival per port (feeds L2 and L3) and, per
+     exposed out, the internal path range from each exposed in plus the
+     range of paths with no exposed in (playback mirrored) - all the
+     callback needs.
+
+L1e. JACK latency callback, exposed ports only. jack_set_latency_callback
+     in the backend init, before activate. Per exposed port: the foreign
+     peers' ranges (jack_port_get_connections - get_all_connections is not
+     allowed in callbacks) + the L1d path ranges -> combine ->
+     jack_port_set_latency_range. Nothing else - SKIPPED CYCLE. The table
+     is handed over by atomic swap, or a mutex [main-thread] holds only
+     briefly and never across a JACK call.
+     LOOP: master_out -> other program -> master_in (G10 external insert)
+     puts our own output into the foreign range - it grows every round.
+     Cap it and log, never loop forever.
+     Recompute: a plan build that changes the table calls
+     jack_recompute_total_latencies() on [main-thread]. Never from the
+     latency or the process callback.
+
+L1f. Optional: read-only latency on CLAP/LV2 plugin rows - a getter per
+     context, app_data adapts it.
+
+     L1 DONE WHEN: a plugin with known latency (e.g. an LSP limiter with
+     lookahead - CLAP and LV2) on the way to master shows up on master_out
+     (jack_lsp -l from jack-example-tools, not installed - or log
+     jack_port_get_latency_range on [main-thread]); a lookahead change
+     updates it after the restart; removing the plugin removes it.
+
+    LEVEL 2 - compensate, a delay per graph edge
+
+     Scope: only the latency the app adds; foreign capture/playback
+     latency counts as 0, so a synth is never delayed to match the sound
+     card input. Global toggle, off by default.
+     Every edge is app-owned, so a split that meets again (sampler ->
+     master + sampler -> limiter -> master) is just two edges with
+     different delays - what output delays on JACK ports could not do.
+     MIDI edges are not delayed. A MIDI-driven instrument that has to line
+     up with other audio gets the delay on its audio edges downstream.
+     Delaying a MIDI edge (events held into later cycles with shifted
+     frames) is needed only when MIDI streams with different latency merge
+     into one input, or MIDI goes out to external gear that has to line up
+     - later, own step, if a real need appears.
+     Sequenced notes are better sent EARLY than delayed: an external
+     sequencer that reads playback latency (Ardour) already does it once
+     L1 reports our MIDI inputs; an internal sequencer later can use the
+     L1d playback values as per-instrument look-ahead.
+
+L2a. Solve, in the plan build after L1d: per node T = max arrival over
+     its incoming AUDIO edges, across all its input ports (L/R and
+     sidechains align per node, not per port); each such edge gets delay
+     T - arrival. Node output arrival = max(T, MIDI arrivals) + L. Exposed
+     inputs arrive at 0. A delay over COMP_MAX (e.g. 1 << 15 frames) is
+     clamped and logged via context_sub_send_msg.
+
+L2b. Delay lines per edge, owned by the plan, allocated at plan build on
+     [main-thread], only for delays > 0. G5's summing reads the source
+     through the edge's line - a single source input with a delay loses
+     its zero copy.
+     An edge whose delay did not change keeps its line (and the audio in
+     it) across plan swaps; a changed one starts cleared (a click is fine
+     for v1). Lines are fed every cycle, G5's zeroing included, so delayed
+     tails drain and nothing stale waits for a restarted node.
+
+L2c. The L1d walk counts the edge delays, so the exposed ports report the
+     compensated latency.
+
+L2d. Toggle: TRK_PARAM_PDC with the transport params (2T). Off -> every
+     delay = 0, plan rebuilt.
+
+     L2 DONE WHEN: an impulse through sampler -> master_in and through
+     sampler -> limiter -> master_in lands on the same sample at
+     master_out (two different sources likewise); master_out reports the
+     longest path; toggle off restores the old behaviour.
+
+L3. clap_audio_buffer_t.latency - the "nothing is done with the latency
+    property" TODOs in clap_prepare_input_ports /
+    clap_prepare_output_ports. Host -> plugin: latency from/to the audio
+    interface for that port. Not the latency extension. Fill from the L1d
+    per port results (capture for inputs, playback for outputs) + the
+    exposed ports' foreign ranges, cached for [audio-thread] - no jack
+    calls on rt.
 
 2a. CLAP GUI GROUNDWORK (Linux). Plugins borrow the host's [main-thread] loop.
    The CLI scanf/fgets prompts block it and would freeze plugin GUIs.
@@ -79,6 +453,10 @@ PLAN
    at 0 every launch, so uid 7 is a different param next run. Save DOMAIN
    identity - plugin URI, the plugin's own param id (owner_id), sample path,
    port name. Every owner now supplies a real owner_id;
+   After 2G and 2T it also saves: routing as graph edges, each end = (the
+   owner's domain identity, port name) - never a graph port key (session
+   only, like uids); transport settings (tempo, time signature, sync
+   mode, the 2L compensation toggle).
 
 4. CX_MOVED + reparenting. DEFERRED - no trigger yet.
    Only buys a non-destructive rename/move IN PLACE, which needs user-

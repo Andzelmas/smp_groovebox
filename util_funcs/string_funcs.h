@@ -40,14 +40,8 @@ float str_find_value_to_float(const char *attrib_names[],
                               const char *attrib_values[],
                               const char *find_name, int attrib_size);
 
-// from a full path get only the full dir path without the file
-char *str_return_dir_without_file(const char *full_path);
-
 // from a full path get only the file name
 char *str_return_file_from_path(const char *full_path);
-
-// remove the starting path from the full_path
-char *str_return_dir_without_start(const char *full_path);
 
 // return a string before and after the delimeter
 // return_char_sizes is the sizes of the before_delim and after_delim strings
