@@ -103,12 +103,46 @@ M3. Consumers render in segments - per event: render [pos, ev.frame),
       the order); MIDI dialect -> every message raw (CLAP_EVENT_MIDI,
       sysex CLAP_EVENT_MIDI_SYSEX); CLAP dialect -> notes as
       NOTE_ON/NOTE_OFF, the rest raw. Params at frame 0 stay first.
+      Dialect picked from supported_dialects (the preferred one if it is
+      CLAP or MIDI) - today a port preferring MIDI2 gets nothing.
     - LV2: events copied into the evbuf with their real size; MIDI out
       pushed into the out MIDI_BUF, then app_jack_midi_out_rt.
     DONE WHEN: a chord from a sequencer plays every note on the synth; a
     keyboard sending note-on vel 0 releases notes; CC and pitch bend
     reach a CLAP synth in the MIDI dialect; sysex into an LV2 plugin
     passes ASan/valgrind; a sampler retrigger on the same frame works.
+
+M4. CLAP note OUTPUT - not handled at all today: clap_output_events_read
+    only applies param events; the output note ports exist as JACK MIDI
+    out ports (clap_plug_note_ports_create) but nothing writes to them.
+    Needed to test the new MIDI path end to end - a CLAP note effect (arp,
+    chord generator) feeding the synth, an LV2 instrument, JACK MIDI out.
+    Each output event goes by port_index (out of range -> dropped) into
+    that output note port's MIDI_BUF:
+    - NOTE_ON -> 0x9n, velocity round(v * 127) clamped to 1..127 (0 would
+      be a note-off); NOTE_OFF -> 0x8n; NOTE_CHOKE -> note-off. key or
+      channel -1 (wildcard, off/choke only) -> CC 123 All Notes Off on
+      that channel, all 16 when the channel is -1. note_id has no MIDI
+      equivalent.
+    - MIDI -> its bytes (size from the status byte, M1 decoders);
+      MIDI_SYSEX -> buffer/size copied in.
+    - NOTE_END (voice ended, plugin -> host), NOTE_EXPRESSION, MIDI2 ->
+      dropped for now. Stop advertising CLAP_NOTE_DIALECT_MIDI2 in
+      clap_plug_ext_note_ports_supported_dialects until both directions
+      handle it.
+    - param events keep going through clap_output_events_params_apply.
+    Each out MIDI_BUF is cleared every cycle, then
+    app_jack_midi_out_rt per port - also when the plugin is sleeping or
+    errored (the sleeping branch skips the outputs today): an out port
+    nobody clears can repeat its last events. After 2G: the graph port
+    (G6), G5 empties it for a node that did not run.
+    The out event list is EVENT_LIST_SIZE 2048 bytes / 50 items, shared
+    with param output (the TODO at its ub_init) - a chord or arp burst
+    plus param changes can fill it, try_push fails and the plugin loses
+    events. Size it for notes; count failed pushes like M1's drops.
+    DONE WHEN: a CLAP note effect's output drives the synth and an LV2
+    instrument; its notes, CC and sysex show in pw-mididump on the JACK
+    MIDI out; every note of a chord arrives.
 
 2G. INTERNAL GRAPH - the app routes its own ports, JACK only at the edges.
     Exposed to JACK: master_out L/R, master_in L/R, 1-2 MIDI in, 1 MIDI
