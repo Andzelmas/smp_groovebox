@@ -4,6 +4,7 @@
 #include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/math_funcs.h"
+#include "../util_funcs/midi_buf.h"
 #include "../util_funcs/path_funcs.h"
 #include "../util_funcs/ring_buffer.h"
 #include "../util_funcs/uniform_buffer.h"
@@ -125,7 +126,7 @@ typedef struct _clap_plug_note_port {
     clap_id *ids;
     uint32_t *supported_dialects;
     uint32_t *preferred_dialects;
-    JACK_MIDI_CONT *midi_cont;
+    MIDI_BUF **midi_bufs; // the events of each port this cycle
 } CLAP_PLUG_NOTE_PORT;
 
 // the single clap plugin struct
@@ -562,15 +563,16 @@ static int clap_plug_note_ports_destroy(CLAP_PLUG_INFO *plug_data,
             free(note_port->supported_dialects);
         note_port->supported_dialects = NULL;
     }
+    if (note_port->midi_bufs) {
+        for (uint32_t i = 0; i < note_port->ports_count; i++)
+            midi_buf_free(note_port->midi_bufs[i]);
+        free(note_port->midi_bufs);
+    }
+    note_port->midi_bufs = NULL;
     note_port->ports_count = 0;
     if (note_port->sys_ports)
         free(note_port->sys_ports);
     note_port->sys_ports = NULL;
-    if (note_port->midi_cont) {
-        app_jack_clean_midi_cont(note_port->midi_cont);
-        free(note_port->midi_cont);
-        note_port->midi_cont = NULL;
-    }
     return 0;
 }
 
@@ -604,16 +606,24 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO *plug_data, int id,
     if (input_ports)
         note_port = &(plug->input_note_ports);
 
-    note_port->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
     note_port->sys_ports = calloc(clap_ports_count, sizeof(void *));
     note_port->ports_count = clap_ports_count;
     note_port->ids = calloc(clap_ports_count, sizeof(clap_id));
     note_port->supported_dialects = calloc(clap_ports_count, sizeof(uint32_t));
     note_port->preferred_dialects = calloc(clap_ports_count, sizeof(uint32_t));
+    note_port->midi_bufs = calloc(clap_ports_count, sizeof(MIDI_BUF *));
     if (!note_port->sys_ports || !note_port->ids ||
-        !note_port->supported_dialects || !note_port->preferred_dialects) {
+        !note_port->supported_dialects || !note_port->preferred_dialects ||
+        !note_port->midi_bufs) {
         clap_plug_note_ports_destroy(plug_data, note_port);
         return -1;
+    }
+    for (uint32_t i = 0; i < clap_ports_count; i++) {
+        note_port->midi_bufs[i] = midi_buf_new(MIDI_PORT_BUF_SIZE);
+        if (!note_port->midi_bufs[i]) {
+            clap_plug_note_ports_destroy(plug_data, note_port);
+            return -1;
+        }
     }
 
     for (uint32_t i = 0; i < clap_ports_count; i++) {
@@ -1606,6 +1616,18 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data) {
     return 0;
 }
 
+// [main-thread]
+static void clap_plug_note_ports_drops_log(CLAP_PLUG_PLUG *plug,
+                                           CLAP_PLUG_NOTE_PORT *note_ports) {
+    for (uint32_t i = 0; note_ports->midi_bufs && i < note_ports->ports_count;
+         i++) {
+        uint32_t dropped = midi_buf_dropped_take(note_ports->midi_bufs[i]);
+        if (dropped > 0)
+            log_append_logfile("%s note port %u: %u MIDI events dropped\n",
+                               plug->name, i, dropped);
+    }
+}
+
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
     if (!plug_data)
         return -1;
@@ -1618,6 +1640,9 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
         if (!cur_plug->plug_inst)
             continue;
         param_msgs_process(cur_plug->plug_params, 0);
+        clap_plug_note_ports_drops_log(cur_plug, &(cur_plug->input_note_ports));
+        clap_plug_note_ports_drops_log(cur_plug,
+                                       &(cur_plug->output_note_ports));
         clap_plug_requests_process(cur_plug);
         // host side flush - send the param changes to a plugin that is not
         // activated, since it gets no process() calls
@@ -2636,91 +2661,52 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
          port_num++) {
         if (!(note_ports->sys_ports[port_num]))
             continue;
-        app_jack_midi_cont_reset(note_ports->midi_cont);
-        void *midi_buffer =
-            app_jack_get_buffer_rt(note_ports->sys_ports[port_num], nframes);
-        if (!midi_buffer)
-            continue;
-        app_jack_return_notes_vels_rt(midi_buffer, note_ports->midi_cont);
+        MIDI_BUF *midi_in = note_ports->midi_bufs[port_num];
+        app_jack_midi_in_rt(note_ports->sys_ports[port_num], nframes, midi_in);
         uint32_t note_dialect = note_ports->preferred_dialects[port_num];
+        int16_t port_index = (int16_t)port_num;
         // write the midi1 messages, depending on the preferred dialect of the
         // note port
-        for (uint32_t midi_num = 0;
-             midi_num < note_ports->midi_cont->num_events; midi_num++) {
+        MIDI_BUF_ITER it = midi_buf_iter(midi_in);
+        MIDI_EVENT ev;
+        while (midi_buf_next(&it, &ev)) {
             if (not_quiet == 0)
                 not_quiet = 1;
+            // TODO the other messages are dropped (task_list M3)
+            if (!midi_is_note_on(ev.data) && !midi_is_note_off(ev.data))
+                continue;
             clap_event_header_t clap_head;
-            clap_head.time = note_ports->midi_cont->nframe_nums[midi_num];
+            clap_head.time = ev.frame;
             clap_head.flags = CLAP_EVENT_IS_LIVE;
             clap_head.space_id = CLAP_CORE_EVENT_SPACE_ID;
 
-            int32_t note_id = -1;
-            int16_t port_index = (int16_t)port_num;
-            int16_t channel = 0;
-            int16_t key = 0;
-            double velocity = 0;
-
-            MIDI_DATA_T type = note_ports->midi_cont->types[midi_num];
-            // Handle note off and on events
-            if ((type & 0xf0) == 0x80 || (type & 0xf0) == 0x90) {
-                if ((note_dialect & CLAP_NOTE_DIALECT_CLAP) ==
-                    CLAP_NOTE_DIALECT_CLAP) {
-                    clap_head.type = CLAP_EVENT_NOTE_OFF;
-                    if ((type & 0xf0) == 0x90)
-                        clap_head.type = CLAP_EVENT_NOTE_ON;
-                    clap_head.size = sizeof(clap_event_note_t);
-                    channel = (int16_t)(type & 0x0f);
-                    key =
-                        (int16_t)note_ports->midi_cont->note_pitches[midi_num];
-                    velocity = (double)fit_range(
-                        127, 0, 1, 0,
-                        (SAMPLE_T)note_ports->midi_cont->vel_trig[midi_num]);
-
-                    clap_event_note_t clap_note;
-                    clap_note.channel = channel;
-                    clap_note.header = clap_head;
-                    clap_note.key = key;
-                    clap_note.note_id = note_id;
-                    clap_note.port_index = port_index;
-                    clap_note.velocity = velocity;
-                    ub_push(ub_in, (void *)&(clap_note),
-                            (uint32_t)sizeof(clap_note));
-                    continue;
-                }
-                if ((note_dialect & CLAP_NOTE_DIALECT_MIDI) ==
-                    CLAP_NOTE_DIALECT_MIDI) {
-                    clap_head.type = CLAP_EVENT_MIDI;
-                    clap_head.size = sizeof(clap_event_midi_t);
-                    clap_event_midi_t clap_midi;
-                    clap_midi.data[0] = (uint8_t)type;
-                    clap_midi.data[1] =
-                        (uint8_t)note_ports->midi_cont->note_pitches[midi_num];
-                    clap_midi.data[2] =
-                        (uint8_t)note_ports->midi_cont->vel_trig[midi_num];
-                    clap_midi.header = clap_head;
-                    clap_midi.port_index = port_index;
-                    ub_push(ub_in, (void *)&(clap_midi),
-                            (uint32_t)sizeof(clap_midi));
-                    continue;
-                }
+            if ((note_dialect & CLAP_NOTE_DIALECT_CLAP) ==
+                CLAP_NOTE_DIALECT_CLAP) {
+                clap_head.type = midi_is_note_on(ev.data) ? CLAP_EVENT_NOTE_ON
+                                                          : CLAP_EVENT_NOTE_OFF;
+                clap_head.size = sizeof(clap_event_note_t);
+                clap_event_note_t clap_note;
+                clap_note.channel = (int16_t)midi_channel(ev.data);
+                clap_note.header = clap_head;
+                clap_note.key = (int16_t)ev.data[1];
+                clap_note.note_id = -1;
+                clap_note.port_index = port_index;
+                clap_note.velocity =
+                    (double)fit_range(127, 0, 1, 0, (SAMPLE_T)ev.data[2]);
+                ub_push(ub_in, (void *)&(clap_note),
+                        (uint32_t)sizeof(clap_note));
+                continue;
             }
-            // Handle Polyphonic aftertouch events
-            if ((type & 0xf0) == 0xA0) {
-            }
-            // Control mode change events
-            if ((type & 0xf0) == 0xB0) {
-            }
-            // Handle program change events
-            if ((type & 0xf0) == 0xC0) {
-            }
-            // Handle Channel aftertouch events
-            if ((type & 0xf0) == 0xD0) {
-            }
-            // Handle pitch bend change events
-            if ((type & 0xf0) == 0xE0) {
-            }
-            // Handle system events (Timing clock, start, continue etc.)
-            if ((type & 0xf0) == 0xF0) {
+            if ((note_dialect & CLAP_NOTE_DIALECT_MIDI) ==
+                CLAP_NOTE_DIALECT_MIDI) {
+                clap_head.type = CLAP_EVENT_MIDI;
+                clap_head.size = sizeof(clap_event_midi_t);
+                clap_event_midi_t clap_midi;
+                memcpy(clap_midi.data, ev.data, sizeof(clap_midi.data));
+                clap_midi.header = clap_head;
+                clap_midi.port_index = port_index;
+                ub_push(ub_in, (void *)&(clap_midi),
+                        (uint32_t)sizeof(clap_midi));
             }
         }
     }

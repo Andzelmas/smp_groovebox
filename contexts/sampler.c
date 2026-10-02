@@ -5,6 +5,7 @@
 //my libraries
 #include "../util_funcs/wav_funcs.h"
 #include "../util_funcs/math_funcs.h"
+#include "../util_funcs/midi_buf.h"
 #include "sampler.h"
 #include "../util_funcs/log_funcs.h"
 #include "../jack_funcs/jack_funcs.h"
@@ -84,6 +85,8 @@ typedef struct _smp_port{
     const char* port_name;
     //the ptr to the port itself;
     void* sys_port;
+    //the events of a midi port this cycle, NULL for audio ports
+    MIDI_BUF* midi_buf;
 }SMP_PORT;
 //the drum sampler main struct that holds the samples and other data
 //Only realtime thread directly modifies and reads the SMP_SMP, non realtime thread can remove it or add
@@ -105,8 +108,6 @@ typedef struct _smp_info{
     //name the sampler's ports are registered under
     uint64_t owner_tag;
     uint64_t owner_uid;
-    //the midi container that has the note pitches etc.
-    JACK_MIDI_CONT* midi_cont;
     //control_data struct to control sys messages between [audio-thread] and [main-thread] (stop processing sample, start processing sample and etc.)
     CXCONTROL* control_data;
     //did the samples array change (a sample was added or removed)
@@ -158,6 +159,13 @@ int smp_read_ui_to_rt_messages(SMP_INFO* smp_data){
 int smp_read_rt_to_ui_messages(SMP_INFO* smp_data){
     if(!smp_data)return -1;
     context_sub_process_ui(smp_data->control_data);
+
+    for(unsigned int i = 0; i < smp_data->num_ports; i++){
+	SMP_PORT* port = &(smp_data->ports[i]);
+	uint32_t dropped = midi_buf_dropped_take(port->midi_buf);
+	if(dropped > 0)
+	    log_append_logfile("%s: %u MIDI events dropped\n", port->port_name, dropped);
+    }
 
     //read the param rt_to_ui messages and set the parameter values
     for(unsigned int i = 0; i < MAX_SAMPLES; i++){
@@ -218,7 +226,6 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 	return NULL;
     }
 
-    smp_data->midi_cont = NULL;
     smp_data->buffer_size = buffer_size;
     smp_data->samplerate = samplerate;
     //init the ports
@@ -271,10 +278,14 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
      smp_data->audio_backend = audio_backend;
      smp_data->owner_tag = owner_tag;
      smp_data->owner_uid = owner_uid;
-     smp_data->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
-     if(!smp_data->midi_cont){
-	 smp_clean_memory(smp_data);
-	 return NULL;
+     for(unsigned int i = 0; i < smp_data->num_ports; i++){
+	 SMP_PORT* port = &(smp_data->ports[i]);
+	 if(port->port_type != PORT_TYPE_MIDI)continue;
+	 port->midi_buf = midi_buf_new(MIDI_PORT_BUF_SIZE);
+	 if(!port->midi_buf){
+	     smp_clean_memory(smp_data);
+	     return NULL;
+	 }
      }
      
      smp_activate_backend_ports(smp_data);
@@ -404,18 +415,14 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
     SMP_PORT* midi_port = &(smp_data->ports[0]);
     SMP_PORT* out_L_port = &(smp_data->ports[1]);
     SMP_PORT* out_R_port = &(smp_data->ports[2]);    
-    void* midi_buffer = app_jack_get_buffer_rt(midi_port->sys_port , nframes);
     SAMPLE_T* out_L = app_jack_get_buffer_rt(out_L_port->sys_port, nframes);
     SAMPLE_T* out_R = app_jack_get_buffer_rt(out_R_port->sys_port, nframes);
-    if(!midi_buffer || !out_L || !out_R)return -1;
+    if(!out_L || !out_R)return -1;
     memset(out_L, '\0', sizeof(SAMPLE_T)*nframes);
     memset(out_R, '\0', sizeof(SAMPLE_T)*nframes); 
 
-    if(!smp_data->midi_cont)return -1;
-    //get the notes
-    app_jack_midi_cont_reset(smp_data->midi_cont);
-    app_jack_return_notes_vels_rt(midi_buffer, smp_data->midi_cont);
-    JACK_MIDI_CONT* midi_cont = smp_data->midi_cont;
+    MIDI_BUF* midi_in = midi_port->midi_buf;
+    app_jack_midi_in_rt(midi_port->sys_port, nframes, midi_in);
     //go through each sample
     for(unsigned int iter = 0; iter < MAX_SAMPLES; iter++){
 	SMP_SMP* cur_smp = &(smp_data->samples[iter]);
@@ -428,21 +435,16 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
 	//get the note parameter from the current samples rt_param array
 	unsigned char cur_note = (unsigned char)param_get_value(
 	    cur_smp->params, cur_smp->val_id[SMP_PARAM_NOTE], 1);
-	//go through the frames
-	//TODO really do not like that goes through each frame, but not sure how to find the
-	//midi event differently
+	//the events are in frame order, so they are walked along with the frames
+	MIDI_BUF_ITER it = midi_buf_iter(midi_in);
+	MIDI_EVENT ev;
+	bool has_ev = midi_buf_next(&it, &ev);
 	for(unsigned int cur_frame = 0; cur_frame < nframes; cur_frame++){
-	    //find if there is a note of a sample in the notes
+	    //velocity of this sample's note-on on this frame
 	    unsigned char this_vel = 0;
-	    for(unsigned int i = 0; i<midi_cont->num_events; i++){
-		//if the note is played not on this time slice skip it
-		if(midi_cont->nframe_nums[i] != cur_frame)continue;
-		//we are only looking for note on
-		if((midi_cont->types[i] & 0xf0) != 0x90)continue;
-		if(midi_cont->note_pitches[i] == cur_note){
-		    this_vel = midi_cont->vel_trig[i];
-		    break;
-		}
+	    for(; has_ev && ev.frame == cur_frame; has_ev = midi_buf_next(&it, &ev)){
+		if(midi_is_note_on(ev.data) && ev.data[1] == cur_note)
+		    this_vel = ev.data[2];
 	    }
 	    if(this_vel>0){
 		//play this sample if the midi trigger is more than 0
@@ -556,16 +558,11 @@ int smp_clean_memory(SMP_INFO *smp_data){
 	    if(port->sys_port){
 		app_jack_unregister_port(smp_data->audio_backend, port->sys_port);
 	    }
+	    midi_buf_free(port->midi_buf);
 	}
 	free(smp_data->ports);
     }
     smp_data->ports = NULL;
-    //remove the midi_container
-    if(smp_data->midi_cont){
-	app_jack_clean_midi_cont(smp_data->midi_cont);
-	free(smp_data->midi_cont);
-    }
-    smp_data->midi_cont = NULL;
 
     context_sub_clean(smp_data->control_data);
     free(smp_data);

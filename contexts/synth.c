@@ -2,6 +2,7 @@
 #include "../jack_funcs/jack_funcs.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/math_funcs.h"
+#include "../util_funcs/midi_buf.h"
 #include "../util_funcs/osc_wavelookup.h"
 #include "context_control.h"
 #include <math.h>
@@ -149,6 +150,8 @@ typedef struct _synth_port {
     char *port_name;
     // the system port for the audio system (for ex jack)
     void *sys_port;
+    // the events of a midi port this cycle, NULL for audio ports
+    MIDI_BUF *midi_buf;
 } SYNTH_PORT;
 
 typedef struct _synth_data {
@@ -182,8 +185,6 @@ typedef struct _synth_data {
     SYNTH_OSC *osc_array;
     // how many oscilators we have
     size_t num_osc;
-    // midi container that holds the notes, velocities etc.
-    JACK_MIDI_CONT *midi_cont;
     // this is the audio backend object to send to the audio functions
     void *audio_backend;
     // paired with an oscillator's uid when registering its ports
@@ -225,6 +226,13 @@ int synth_read_rt_to_ui_messages(SYNTH_DATA *synth_data) {
     // read the param rt_to_ui messages and set the parameter values
     for (unsigned int i = 0; i < MAX_OSCS; i++) {
         SYNTH_OSC *osc = &(synth_data->osc_array[i]);
+        for (unsigned int j = 0; j < osc->num_ports; j++) {
+            SYNTH_PORT *port = &(osc->ports[j]);
+            uint32_t dropped = midi_buf_dropped_take(port->midi_buf);
+            if (dropped > 0)
+                log_append_logfile("%s: %u MIDI events dropped\n",
+                                   port->port_name, dropped);
+        }
         if (!osc->params)
             continue;
         param_msgs_process(osc->params, 0);
@@ -299,6 +307,7 @@ static int synth_clean_ports(SYNTH_DATA *synth_data, SYNTH_PORT **osc_ports,
             app_jack_unregister_port(synth_data->audio_backend,
                                      cur_port->sys_port);
         }
+        midi_buf_free(cur_port->midi_buf);
     }
     free(*osc_ports);
 
@@ -330,7 +339,6 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
     synth_data->sqr_osc = NULL;
     synth_data->triang_osc = NULL;
     synth_data->sin_osc = NULL;
-    synth_data->midi_cont = NULL;
     synth_data->audio_backend = audio_backend;
     synth_data->owner_tag = owner_tag;
     synth_data->semi_to_freq_table = NULL;
@@ -387,13 +395,6 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
         if (cur_amp == 0)
             cur_exp = 0.0;
         math_range_table_enter_value(synth_data->amp_to_exp, i, cur_exp);
-    }
-
-    // init the midi container
-    synth_data->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
-    if (!synth_data->midi_cont) {
-        synth_clean_memory(synth_data);
-        return NULL;
     }
 
     // init the wavetable objects
@@ -490,6 +491,11 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
                 }
                 snprintf(cur_port->port_name, name_len, "%s|%s|midi_in",
                          cx_name, cur_osc->name);
+                cur_port->midi_buf = midi_buf_new(MIDI_PORT_BUF_SIZE);
+                if (!cur_port->midi_buf) {
+                    synth_clean_memory(synth_data);
+                    return NULL;
+                }
             }
             if (j == 1) {
                 cur_port->port_flow = PORT_FLOW_OUTPUT;
@@ -1094,33 +1100,18 @@ int synth_process_rt(SYNTH_DATA *synth_data, NFRAMES_T nframes) {
         if (i >= synth_data->num_osc)
             continue;
         SYNTH_OSC *cur_osc = &(synth_data->osc_array[i]);
-        // get the notes to the midi container
-        app_jack_midi_cont_reset(synth_data->midi_cont);
         SYNTH_PORT *midi_port = &(cur_osc->ports[0]);
-        void *midi_buffer =
-            app_jack_get_buffer_rt(midi_port->sys_port, nframes);
-        app_jack_return_notes_vels_rt(midi_buffer, synth_data->midi_cont);
-        for (unsigned int cur_frame = 0; cur_frame < nframes; cur_frame++) {
-            MIDI_DATA_T this_vel = 0;
-            MIDI_DATA_T this_type = 0;
-            MIDI_DATA_T this_pitch = 0;
-            for (unsigned int ev = 0; ev < synth_data->midi_cont->num_events;
-                 ev++) {
-                if (synth_data->midi_cont->nframe_nums[ev] != cur_frame)
-                    continue;
-                this_vel = synth_data->midi_cont->vel_trig[ev];
-                this_type = synth_data->midi_cont->types[ev];
-                this_pitch = synth_data->midi_cont->note_pitches[ev];
-            }
-            // note on event
-            if ((this_type & 0xf0) == 0x90) {
-                synth_play_osc_rt(cur_osc, this_vel, this_pitch,
-                                  (cur_frame + this_vel + (i * 988)));
-            }
-            // note off event
-            if ((this_type & 0xf0) == 0x80) {
-                synth_stop_osc_rt(cur_osc, this_vel, this_pitch, 0);
-            }
+        app_jack_midi_in_rt(midi_port->sys_port, nframes, midi_port->midi_buf);
+        // TODO every event acts at the cycle start, render in segments
+        // between the events (task_list M3)
+        MIDI_BUF_ITER it = midi_buf_iter(midi_port->midi_buf);
+        MIDI_EVENT ev;
+        while (midi_buf_next(&it, &ev)) {
+            if (midi_is_note_on(ev.data))
+                synth_play_osc_rt(cur_osc, ev.data[2], ev.data[1],
+                                  (ev.frame + ev.data[2] + (i * 988)));
+            else if (midi_is_note_off(ev.data))
+                synth_stop_osc_rt(cur_osc, ev.data[2], ev.data[1], 0);
         }
 
         // now process the voices of this oscilator
@@ -1213,10 +1204,6 @@ static int synth_clean_osc(SYNTH_DATA *synth_data, SYNTH_OSC *synth_osc) {
 int synth_clean_memory(SYNTH_DATA *synth_data) {
     if (!synth_data)
         return -1;
-    if (synth_data->midi_cont) {
-        app_jack_clean_midi_cont(synth_data->midi_cont);
-        free(synth_data->midi_cont);
-    }
     if (synth_data->osc_array) {
         for (unsigned int i = 0; i < synth_data->num_osc; i++) {
             synth_clean_osc(synth_data, &(synth_data->osc_array[i]));

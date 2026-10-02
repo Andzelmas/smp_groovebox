@@ -25,8 +25,9 @@
 // not overwhelm it.
 #define RT_CYCLES 25
 
-// how many midi events there can be in the jack midi container struct
-#define MAX_MIDI_CONT_ITEMS 50
+// bytes of MIDI one port holds per cycle (MIDI_BUF capacity), a 3 byte message
+// takes 8
+#define MIDI_PORT_BUF_SIZE 4096
 
 // max length for unique ids that use char* (for example the clap unique
 // id for plugins)

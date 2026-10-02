@@ -36,6 +36,7 @@
 #include "../jack_funcs/jack_funcs.h"
 #include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
+#include "../util_funcs/midi_buf.h"
 #include "../util_funcs/string_funcs.h"
 // a simple macro to get the max of the two values
 #ifndef MAX
@@ -178,6 +179,7 @@ typedef struct _plug_port {
     enum FlowType flow;        ///< Data flow direction
     void *sys_port;            ///< For audio/MIDI ports, otherwise NULL
     PLUG_EVBUF *evbuf;         ///< For MIDI ports, otherwise NULL
+    MIDI_BUF *midi_buf;        ///< For midi:MidiEvent ports, otherwise NULL
     void *widget;              ///< Control widget, if applicable
     size_t buf_size;           ///< Custom buffer size, or 0
     uint32_t index;            ///< Port index
@@ -261,8 +263,6 @@ typedef struct _plug_plug {
     // display name, owned by this struct, built once at load by
     // plug_load_and_activate() and handed out by plug_plugin_name()
     char name[PLUG_PLUGIN_NAME_MAX];
-    // audio backend midi container
-    JACK_MIDI_CONT *midi_cont;
     // array of available ports for the plugin
     PLUG_PORT *ports;
     // how many ports do we have on plugin
@@ -421,6 +421,7 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
             if (cur_port)
                 if (cur_port->evbuf)
                     free(cur_port->evbuf);
+            midi_buf_free(cur_port->midi_buf);
         }
     }
     if (cur_plug->ports)
@@ -434,13 +435,6 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     if (cur_plug->feature_list)
         free(cur_plug->feature_list);
     cur_plug->feature_list = NULL;
-
-    // clean the midi container
-    if (cur_plug->midi_cont) {
-        app_jack_clean_midi_cont(cur_plug->midi_cont);
-        free(cur_plug->midi_cont);
-        cur_plug->midi_cont = NULL;
-    }
 
     // clean the controls
     if (cur_plug->plug_params)
@@ -784,7 +778,6 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     for (int i = 0; i < MAX_INSTANCES; i++) {
         PLUG_PLUG *plug = &(plug_data->plugins[i]);
         plug->is_processing = 0;
-        plug->midi_cont = NULL;
         plug->plug = NULL;
         plug->plug_instance = NULL;
         plug->plug_instance_activated = 0;
@@ -1173,6 +1166,16 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
         if (!cur_plug->plug_instance)
             continue;
         param_msgs_process(cur_plug->plug_params, 0);
+        for (uint32_t j = 0; cur_plug->ports && j < cur_plug->num_ports; j++) {
+            PLUG_PORT *port = &(cur_plug->ports[j]);
+            uint32_t dropped = midi_buf_dropped_take(port->midi_buf);
+            if (dropped > 0)
+                log_append_logfile(
+                    "%s %s: %u MIDI events dropped\n", cur_plug->name,
+                    lilv_node_as_string(
+                        lilv_port_get_symbol(cur_plug->plug, port->lilv_port)),
+                    dropped);
+        }
     }
     return 0;
 }
@@ -1600,12 +1603,6 @@ uint32_t plug_load_and_activate(void *plugin_item) {
         }
     }
 
-    plug->midi_cont = app_jack_init_midi_cont(MAX_MIDI_CONT_ITEMS);
-    if (!plug->midi_cont) {
-        plug_stop_and_remove_plug((void *)plug);
-        return 0;
-    }
-
     // activate the plugin instance
     lilv_instance_activate(plug->plug_instance);
     plug->plug_instance_activated = 1;
@@ -1793,6 +1790,7 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         cur_port->lilv_port = lilv_plugin_get_port_by_index(plug->plug, i);
         cur_port->sys_port = NULL;
         cur_port->evbuf = NULL;
+        cur_port->midi_buf = NULL;
         cur_port->buf_size = 0;
         cur_port->index = i;
         cur_port->param_index = -1;
@@ -1875,6 +1873,11 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
                 cur_port->sys_port = app_jack_create_port_on_client(
                     plug_data->audio_backend, PORT_TYPE_MIDI, port_io,
                     full_port_name, plug_data->owner_tag, plug->uid);
+                cur_port->midi_buf = midi_buf_new(MIDI_PORT_BUF_SIZE);
+                if (!cur_port->midi_buf) {
+                    free(default_values);
+                    return -1;
+                }
             }
             // ready the evbuf for the events
             //--------------------
@@ -1974,7 +1977,6 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
             void *a_buffer = NULL;
             if (cur_port->sys_port) {
                 a_buffer = app_jack_get_buffer_rt(cur_port->sys_port, nframes);
-                app_jack_midi_cont_reset(plug->midi_cont);
             }
             if (cur_port->type == PORT_TYPE_AUDIO) {
                 lilv_instance_connect_port(plug->plug_instance, i, a_buffer);
@@ -1998,23 +2000,6 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                         lv2_atom_forge_deref(&plug->forge, frame.ref);
                     plug_evbuf_write(&iter_buf, 0, 0, get->type, get->size,
                                      LV2_ATOM_BODY_CONST(get));
-                }
-                // add midi event to the buffer
-                if (a_buffer) {
-                    app_jack_return_notes_vels_rt(a_buffer, plug->midi_cont);
-                    // go through the returned audio backend midi event and
-                    // write to the evbuf
-                    for (uint32_t ev = 0; ev < plug->midi_cont->num_events;
-                         ev++) {
-                        const unsigned char midi_msg[3] = {
-                            plug->midi_cont->types[ev],
-                            plug->midi_cont->note_pitches[ev],
-                            plug->midi_cont->vel_trig[ev]};
-                        plug_evbuf_write(
-                            &iter_buf, plug->midi_cont->nframe_nums[ev], 0,
-                            cur_port->port_type_urid,
-                            plug->midi_cont->buf_size[ev], midi_msg);
-                    }
                 }
                 // send plugin the transport information
                 int32_t cur_bar = 0;
@@ -2147,6 +2132,23 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
             }
         }
 
+        //----------------------------------------------------------------------------------------------------
+        // midi last, a sequence is time ordered and the atoms above are all at
+        // frame 0
+        for (uint32_t i = 0; i < plug->num_ports; i++) {
+            PLUG_PORT *const cur_port = &(plug->ports[i]);
+            if (cur_port->flow != PORT_FLOW_INPUT || !cur_port->midi_buf)
+                continue;
+            app_jack_midi_in_rt(cur_port->sys_port, nframes,
+                                cur_port->midi_buf);
+            PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_end(cur_port->evbuf);
+            MIDI_BUF_ITER it = midi_buf_iter(cur_port->midi_buf);
+            MIDI_EVENT ev;
+            while (midi_buf_next(&it, &ev))
+                plug_evbuf_write(&iter_buf, ev.frame, 0,
+                                 cur_port->port_type_urid, ev.size, ev.data);
+        }
+
         plug->request_update = false;
         //----------------------------------------------------------------------------------------------------
         // now run the plugin for nframes
@@ -2175,13 +2177,7 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                 }
             }
             if (cur_port->type == PORT_TYPE_EVENT) {
-                void *buf = NULL;
-                if (cur_port->sys_port) {
-                    // clean the buffer
-                    buf = app_jack_get_buffer_rt(cur_port->sys_port, nframes);
-                    app_jack_midi_clear_buffer_rt(buf);
-                }
-                // write from sys_port out to the audio client midi out
+                midi_buf_clear(cur_port->midi_buf, nframes);
                 for (PLUG_EVBUF_ITERATOR iter_buf =
                          plug_evbuf_begin(cur_port->evbuf);
                      plug_evbuf_is_valid(iter_buf);
@@ -2193,9 +2189,9 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                     void *data = NULL;
                     plug_evbuf_get(iter_buf, &frames, &subframes, &type, &size,
                                    &data);
-                    if (buf && type == plug_data->urids.midi_MidiEvent) {
-                        app_jack_midi_events_write_rt(buf, frames, data, size);
-                    }
+                    if (cur_port->midi_buf &&
+                        type == plug_data->urids.midi_MidiEvent)
+                        midi_buf_push(cur_port->midi_buf, frames, data, size);
                     // property values the plugin changed itself (a preset, its
                     // own gui). A plugin with control port params has no way
                     // to tell the host about such changes
@@ -2203,6 +2199,9 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
                         size >= sizeof(LV2_Atom_Object_Body))
                         plug_patch_message_rt(plug, data, size);
                 }
+                if (cur_port->midi_buf)
+                    app_jack_midi_out_rt(cur_port->sys_port, nframes,
+                                         cur_port->midi_buf);
             }
         }
         param_rt_resend(plug->plug_params);

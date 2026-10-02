@@ -1,30 +1,10 @@
 #pragma once
 #include <jack/jack.h>
-#include <jack/midiport.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include "../structs.h"
 #include "../contexts/params.h"
-//struct to keep midi events info
-//its in the definition because its more convenient to access the members of this struct
-typedef struct _jack_midi_cont{
-    //buffer to store the note pitches
-    MIDI_DATA_T* note_pitches;
-    //buffer to store the velocities that triggered the note
-    MIDI_DATA_T* vel_trig;
-    //the types of the midi events
-    MIDI_DATA_T* types;
-    //when the events happened
-    NFRAMES_T* nframe_nums;
-    //number of bytes of data in the midi event buffer (that holds the note pitches etc.)
-    size_t* buf_size;
-    //the number of events that occured
-    NFRAMES_T num_events;
-    //the index of the event that should be written to in the buffer
-    NFRAMES_T w_pos;
-    //the total size of each of the arrays on this struct
-    unsigned int array_size;
-}JACK_MIDI_CONT;
+#include "../util_funcs/midi_buf.h"
 
 //jack main struct
 typedef struct _jack_info JACK_INFO;
@@ -42,12 +22,6 @@ int app_jack_read_ui_to_rt_messages(JACK_INFO* jack_data);
 //update parameters, log messages from rt thread
 int app_jack_read_rt_to_ui_messages(JACK_INFO* jack_data);
 
-//clean the midi container
-void app_jack_clean_midi_cont(JACK_MIDI_CONT* midi_cont);
-//initate the midi container where velocities, note pitches etc will be stored
-JACK_MIDI_CONT* app_jack_init_midi_cont(unsigned int array_size);
-//reset all the arrays of the midi container to 0
-void app_jack_midi_cont_reset(JACK_MIDI_CONT* midi_cont);
 //rename the port on client
 int app_jack_port_rename(void* client_in, void* port, const char* new_port_name);
 //register ports on a jack client if its known to the data
@@ -118,13 +92,10 @@ int app_jack_return_buffer_size(JACK_INFO* jack_data);
 int app_jack_activate(JACK_INFO *jack_data);
 //get buffer from a jack port 
 void* app_jack_get_buffer_rt(void* port, jack_nframes_t nframes);
-//clear the buffer of midi out buffer
-void app_jack_midi_clear_buffer_rt(void* buffer);
-//write to the midi out buffer
-int app_jack_midi_events_write_rt(void* buffer, jack_nframes_t time, const jack_midi_data_t* data,
-				  size_t data_size);
-//return three arrays for the midi_in, notes played, velocities and the times for each in nframe
-void app_jack_return_notes_vels_rt(void* midi_in, JACK_MIDI_CONT* midi_cont);
+//clear buf for nframes and fill it with the events of the midi in port
+void app_jack_midi_in_rt(void* port, jack_nframes_t nframes, MIDI_BUF* buf);
+//replace the events of the midi out port with the events of buf
+void app_jack_midi_out_rt(void* port, jack_nframes_t nframes, const MIDI_BUF* buf);
 
 //return the size allowed for the port name
 int app_jack_port_name_size();

@@ -38,7 +38,7 @@ PLAN
 
     MODULES after 2M + 2G + 2T - each knows only what is listed:
     - util_funcs/uniform_buffer.c/.h (exists): nothing.
-    - util_funcs/midi_buf.c/.h: uniform_buffer.
+    - util_funcs/midi_buf.c/.h (exists, M1): uniform_buffer.
     - engine/graph.c/.h: midi_buf.
     - engine/transport.c/.h: nothing.
     - audio_backend.h, implemented by jack_funcs.c and picked at compile
@@ -52,79 +52,115 @@ PLAN
     Raw MIDI, not CLAP events, internally: JACK, LV2, CLAP's MIDI dialect,
     sampler and synth all speak it; CLAP note events only at the CLAP
     boundary.
-    Today (JACK_MIDI_CONT: type/pitch/vel arrays, scanned per frame):
-    - synth keeps only the LAST event per frame - chords lose notes.
-    - note-on velocity 0 (= note-off, many keyboards) starts a silent
-      synth voice, the note hangs.
-    - LV2 writes buf_size bytes from a 3 byte array - sysex reads past it.
-    - app_jack_return_notes_vels_rt reads buffer[1..2] whatever the size -
-      1 byte messages (clock, active sensing) read garbage.
-    - CLAP drops everything but notes (empty branches), even in the MIDI
-      dialect; several note ports are appended, not sorted by time.
-    - sampler/synth scan every event for every frame: frames x events.
-    - every context includes jack_funcs.h just for MIDI.
+    Bugs of the old JACK_MIDI_CONT path (type/pitch/vel arrays, scanned
+    per frame), status:
+    - synth kept only the LAST event per frame, chords lost notes - fixed
+      (M2).
+    - note-on velocity 0 started a silent synth voice, the note hung -
+      fixed (M1, push rule).
+    - LV2 wrote buf_size bytes from a 3 byte array - fixed (M2).
+    - buffer[1..2] read whatever the size, 1 byte messages read garbage -
+      fixed (M1/M2, sizes kept, decoders take valid messages).
+    - sampler/synth scanned every event for every frame - fixed (M2).
+    - CLAP drops everything but notes, even in the MIDI dialect; several
+      note ports are appended, not sorted by time - open (M3).
+    - synth events all act at cycle start - open (M3).
+    - every context includes jack_funcs.h - open (G7).
 
-M1. util_funcs/midi_buf.c/.h, no JACK. MIDI rules on top of
-    uniform_buffer - not a second byte arena (UB_EVENT already holds the
-    CLAP event lists). One UB_EVENT per port, fixed capacity (e.g. 4 KiB),
-    allocated on [main-thread]. An item is {uint32 frame, bytes}, the byte
-    count = ub_item_get_size - 4 - sysex fits, no special case. Written in
-    place through ub_push_reserve (no scratch copy for sysex).
-    API: new/free [main-thread]; clear(b, nframes), push(b, frame, data,
-    size) -> false when full, iter/next, merge(dst, srcs, n) (stable k-way
-    by frame - the graph's MIDI "summing") on rt.
-    Rules, only at push: frames never go back (an earlier one is moved to
-    the last frame - a note-off is never lost); frame >= nframes or a size
-    that does not fit the status byte -> dropped; note-on vel 0 ->
-    note-off; drops/overflow counted in an atomic, [main-thread] logs it.
-    Same frame keeps push order (retrigger: off then on).
-    Decoders static inline in midi_buf.h (type/channel/is_note_on/expected
-    size...) - push needs them too, so no separate midi_msg.h; no status
-    byte checks by hand anywhere else.
-    Release velocity of a converted note-on vel 0 = 64 (the spec's value
-    for devices without release velocity). merge takes at most
-    MIDI_BUF_MERGE_MAX sources, the rest count as drops.
-    uniform_buffer fixes first (its only other user: CLAP event lists):
-    ub_list_reset memsets the whole arena and both index arrays every
-    reset - O(capacity) per port per cycle, CLAP's event lists too;
-    resetting items/current_size is enough once ub_push takes its offset
-    from current_size (today it reads item_addr[0] for the first item -
-    stale without the memset).
-    ub_push_reserve(ub, size) -> the new item's address to fill; ub_push =
-    reserve + memcpy. Items start UB_ALIGN (8) aligned - sizes are stored
-    apart, so ub_item_get_size stays exact. Fixes CLAP events misaligned
-    after an odd-sized one (clap_event_midi2_t is 36 bytes).
-    ub_item_get_size returns -1 as uint32_t on error, its comment says 0.
-    Size 0 pushes refused (today one blocks every later push).
+M1. DONE. util_funcs/midi_buf.c/.h, knows only uniform_buffer. Item
+    {uint32 frame, bytes}, written in place via ub_push_reserve, byte
+    count = ub_item_get_size - 4.
+    API: new(capacity bytes)/free/dropped_take [main-thread]; clear(b,
+    nframes), push, iter/next, merge(dst, srcs, n) [audio-thread].
+    Push rules: frames never go back (moved up to the last one); frame >=
+    nframes or a size not fitting the status byte -> dropped; note-on vel
+    0 -> note-off vel 64 (the spec's value for devices without release
+    velocity); same frame keeps push order; drops counted in an atomic.
+    merge: stable k-way by frame, at most MIDI_BUF_MERGE_MAX (16) sources,
+    the rest count as drops. Sysex lenient: F0 + at least 1 byte, F7 not
+    checked.
+    Decoders static inline in midi_buf.h: midi_expected_size,
+    midi_msg_valid, midi_type, midi_channel, midi_is_note_on/off - no
+    status byte checks by hand elsewhere.
+    uniform_buffer (other user: CLAP event lists, every call site checked):
+    ub_list_reset O(1) - push takes its offset from current_size, not the
+    stale item_addr[0]; ub_push_reserve added, ub_push = reserve + memcpy;
+    items start UB_ALIGN (8) aligned, sizes stored apart so
+    ub_item_get_size stays exact - also fixes CLAP events misaligned after
+    an odd-sized one (clap_event_midi2_t is 36 bytes); ub_item_get_size
+    returns 0 on error; size 0 pushes refused (one used to block every
+    later push).
+    Tested: scratch unit test under ASan/UBSan and valgrind.
 
-M2. JACK adapters, the only jack_midi_* users: app_jack_midi_in_rt(port,
-    nframes, MIDI_BUF *) and app_jack_midi_out_rt(port, nframes, const
-    MIDI_BUF *). JACK_MIDI_CONT, app_jack_init/reset/clean_midi_cont,
-    app_jack_return_notes_vels_rt, app_jack_midi_clear_buffer_rt and
-    app_jack_midi_events_write_rt go - replaced, no twins. Each context
-    owns a MIDI_BUF per MIDI port until 2G moves them into graph ports.
+M2. DONE. JACK adapters, the only jack_midi_* users:
+    app_jack_midi_in_rt(port, nframes, MIDI_BUF *) clears buf and pushes
+    the port's events; app_jack_midi_out_rt(port, nframes, const MIDI_BUF
+    *) clears the JACK buffer and writes buf - what JACK refuses it counts
+    itself (jack_midi_get_lost_event_count). JACK_MIDI_CONT and its five
+    functions removed, no twins.
+    A MIDI_BUF per MIDI port until 2G moves them into graph ports:
+    SMP_PORT, SYNTH_PORT, PLUG_PORT (midi:MidiEvent ports),
+    CLAP_PLUG_NOTE_PORT.midi_bufs (in and out - out unused until M4).
+    MIDI_PORT_BUF_SIZE (types.h, 4096) replaces MAX_MIDI_CONT_ITEMS. Each
+    *_read_rt_to_ui_messages logs its ports' drops.
+    Consumers ported the way an ordered buffer reads - frame accurate
+    rendering stays M3:
+    - sampler: the iterator walks along its frame loop.
+    - synth: every event in order, then the whole cycle rendered.
+    - LV2: MIDI with its real size, written after the frame 0 atoms
+      (patch:Get, time:Position, patch:Set) - they were appended after
+      MIDI at later frames, an out of order sequence. MIDI out through
+      the port's MIDI_BUF.
+    - CLAP: notes converted as before, the rest still dropped (M3).
+    Tested in the app (ASan, pipewire-jack, a scratch JACK client): a
+    chord plays every note on a synth osc, Odin2 (LV2) and Surge XT
+    (CLAP); note-on vel 0 releases; invalid messages and overflow (700
+    CCs -> 188) dropped and logged; 300 byte sysex into LV2 clean. LV2
+    MIDI out untested - no installed LV2 plugin has a MIDI out port.
+    Notes:
+    - clap_plug_note_ports_destroy dereferences sys_ports when it is NULL
+      if that calloc fails. Was already there.
+    - A stopped plugin's JACK MIDI out port is never cleared. M4 covers it
+      for CLAP; the same applies to LV2, G5 fixes both.
 
-M3. Consumers render in segments - per event: render [pos, ev.frame),
-    handle ev, pos = ev.frame; then render [pos, nframes). Events +
-    frames instead of frames x events, chords work.
-    - sampler: per sample, segments around its note-ons.
-    - synth: per osc, segments; vel 0 already a note-off (M1).
-    - CLAP clap_input_events_prepare: note ports merged by frame (fixes
-      the order); MIDI dialect -> every message raw (CLAP_EVENT_MIDI,
-      sysex CLAP_EVENT_MIDI_SYSEX); CLAP dialect -> notes as
-      NOTE_ON/NOTE_OFF, the rest raw. Params at frame 0 stay first.
+M3. Frame accurate events - M2 already handles every event in order
+    (chords, vel 0, frames + events); what is left is that the synth
+    applies them all at the cycle start, and CLAP's messages.
+    Segments per event: render [pos, ev.frame), handle ev, pos = ev.frame;
+    then render [pos, nframes).
+    - synth: synth_process_osc_voices(synth_data, osc, start, end)
+      renders the voices into the osc buffers for one segment - signature
+      changed, no twin. The buffer clear and the copy to the out ports
+      move to synth_process_rt, once per cycle. The metronome is one
+      segment (its trigger is at frame 0).
+    - sampler: already frame accurate (M2 walks the events along the
+      frame loop). Left: render per segment instead of per frame - a
+      speedup only, optional.
+    - CLAP clap_input_events_prepare: note ports in time order - a k-way
+      walk that keeps each event's port index. midi_buf_merge loses the
+      source, so midi_buf gets a merge iterator (next yields the event +
+      its source index) and midi_buf_merge becomes a loop over it - one
+      k-way implementation. Params at frame 0 stay first.
+      MIDI dialect -> every message raw: CLAP_EVENT_MIDI (data[3], a
+      shorter message zero padded), sysex CLAP_EVENT_MIDI_SYSEX pointing
+      into the port's MIDI_BUF (valid through process(), cleared next
+      cycle). CLAP dialect -> notes as NOTE_ON/NOTE_OFF, the rest raw when
+      the port also supports MIDI, else dropped.
       Dialect picked from supported_dialects (the preferred one if it is
       CLAP or MIDI) - today a port preferring MIDI2 gets nothing.
-    - LV2: events copied into the evbuf with their real size; MIDI out
-      pushed into the out MIDI_BUF, then app_jack_midi_out_rt.
-    DONE WHEN: a chord from a sequencer plays every note on the synth; a
-    keyboard sending note-on vel 0 releases notes; CC and pitch bend
-    reach a CLAP synth in the MIDI dialect; sysex into an LV2 plugin
-    passes ASan/valgrind; a sampler retrigger on the same frame works.
+    - LV2: done in M2.
+    DONE WHEN: two notes at different frames of one cycle start at their
+    own frames on the synth; a retrigger (off then on, same frame)
+    restarts the note on the synth and the sampler; CC, pitch bend and
+    sysex reach a CLAP synth in the MIDI dialect (Surge XT supports both
+    dialects); events of two note ports arrive in time order.
+    Already passed in M2: chords on every consumer, note-on vel 0
+    releases, sysex into an LV2 plugin under ASan.
 
 M4. CLAP note OUTPUT - not handled at all today: clap_output_events_read
     only applies param events; the output note ports exist as JACK MIDI
-    out ports (clap_plug_note_ports_create) but nothing writes to them.
+    out ports (clap_plug_note_ports_create), each with a MIDI_BUF since
+    M2, but nothing writes to them.
     Needed to test the new MIDI path end to end - a CLAP note effect (arp,
     chord generator) feeding the synth, an LV2 instrument, JACK MIDI out.
     Each output event goes by port_index (out of range -> dropped) into
@@ -134,8 +170,8 @@ M4. CLAP note OUTPUT - not handled at all today: clap_output_events_read
       channel -1 (wildcard, off/choke only) -> CC 123 All Notes Off on
       that channel, all 16 when the channel is -1. note_id has no MIDI
       equivalent.
-    - MIDI -> its bytes (size from the status byte, M1 decoders);
-      MIDI_SYSEX -> buffer/size copied in.
+    - MIDI -> its bytes, size = midi_expected_size(data[0]) (0: sysex or
+      a data byte -> dropped); MIDI_SYSEX -> buffer/size copied in.
     - NOTE_END (voice ended, plugin -> host), NOTE_EXPRESSION, MIDI2 ->
       dropped for now. Stop advertising CLAP_NOTE_DIALECT_MIDI2 in
       clap_plug_ext_note_ports_supported_dialects until both directions
@@ -144,15 +180,17 @@ M4. CLAP note OUTPUT - not handled at all today: clap_output_events_read
     Each out MIDI_BUF is cleared every cycle, then
     app_jack_midi_out_rt per port - also when the plugin is sleeping or
     errored (the sleeping branch skips the outputs today): an out port
-    nobody clears can repeat its last events. After 2G: the graph port
-    (G6), G5 empties it for a node that did not run.
+    nobody clears can repeat its last events. LV2 has the same gap
+    (plug_process_data_rt skips a plugin with is_processing == 0) - cheap
+    to fix here too. After 2G: the graph port (G6), G5 empties it for a
+    node that did not run.
     The out event list is EVENT_LIST_SIZE 2048 bytes / 50 items, shared
     with param output (the TODO at its ub_init) - a chord or arp burst
     plus param changes can fill it, try_push fails and the plugin loses
     events. Size it for notes; count failed pushes like M1's drops.
-    DONE WHEN: a CLAP note effect's output drives the synth and an LV2
-    instrument; its notes, CC and sysex show in pw-mididump on the JACK
-    MIDI out; every note of a chord arrives.
+    DONE WHEN: a CLAP note effect's output (Stochas is installed) drives
+    the synth and an LV2 instrument; its notes, CC and sysex show in
+    pw-mididump on the JACK MIDI out; every note of a chord arrives.
 
 2G. INTERNAL GRAPH - the app routes its own ports, JACK only at the edges.
     Exposed to JACK: master_out L/R, master_in L/R, 1-2 MIDI in, 1 MIDI
@@ -169,7 +207,8 @@ M4. CLAP note OUTPUT - not handled at all today: clap_output_events_read
     Facts it builds on:
     - contexts reach ports only through app_jack_* with an opaque handle:
       create_port_on_client, get_buffer_rt, unregister_port, port_rename;
-      MIDI (after 2M) only as MIDI_BUFs. The graph can sit behind the same
+      MIDI only through app_jack_midi_in_rt/out_rt into the MIDI_BUFs
+      each context owns per port (M2). The graph can sit behind the same
       calls.
     - the UI never sees JACK: routing is root_ops' CONNECT action over the
       DATA_LIST_NS_PORTS lists in app_data (group_key = owner).
@@ -204,6 +243,8 @@ G2. Graph module (engine/graph.c/.h, knows no backend). [main-thread]
 G3. Cycles: connect refuses an edge that closes a loop
     (DATA_ACTION_ERR_INVALID; the peers list can leave such ports out).
     A deliberate feedback edge (1 cycle late) can come later.
+    Also refused: a MIDI edge past MIDI_BUF_MERGE_MAX (16) sources into
+    one input - midi_buf_merge would count the extra sources as drops.
 
 G4. Process plan. After any graph change [main-thread] builds an
     immutable plan: nodes in topological order (Kahn), per input port its
@@ -218,15 +259,20 @@ G5. Buffers and summing, done by the plan before each node runs.
     source -> shared silence, one source -> that buffer (zero copy,
     read-only to the consumer - LV2 connects it directly, CLAP copies),
     2+ -> summed into the input's own buffer.
-    MIDI: one source -> that MIDI_BUF, 2+ -> midi_buf_merge.
+    MIDI: one source -> that MIDI_BUF, 2+ -> the input's own MIDI_BUF,
+    cleared for nframes, then midi_buf_merge.
     A node that did not write its outputs this cycle (stopped, sleeping,
     error) gets them zeroed / emptied by the plan - else downstream sums
     stale data every cycle (covers the CLAP sleeping branch too).
     Buffers are sized by the max buffer size - G8 reallocates.
 
-G6. MIDI ports on the graph: the context-owned MIDI_BUFs from 2M move
-    into the graph ports. Contexts get them through a typed accessor
-    (graph_port_midi_rt) - audio and MIDI never share one void* getter.
+G6. MIDI ports on the graph: the context-owned MIDI_BUFs from M2
+    (SMP_PORT/SYNTH_PORT/PLUG_PORT.midi_buf, CLAP_PLUG_NOTE_PORT.
+    midi_bufs) move into the graph ports. Contexts get them through a
+    typed accessor (graph_port_midi_rt) - audio and MIDI never share one
+    void* getter. The contexts' app_jack_midi_in_rt/out_rt calls go (the
+    backend's endpoint nodes do that, G7), and so does their drop logging
+    - the graph logs its ports' drops on [main-thread].
 
 G7. JACK at the edges = the backend. audio_backend.h, implemented by
     jack_funcs.c, picked at compile time: start the process callback and

@@ -1,3 +1,4 @@
+#include <jack/midiport.h>
 #include <jack/types.h>
 #include <math.h>
 #include <stdatomic.h>
@@ -786,81 +787,6 @@ int app_jack_read_rt_to_ui_messages(JACK_INFO *jack_data) {
     return 0;
 }
 
-void app_jack_clean_midi_cont(JACK_MIDI_CONT *midi_cont) {
-    if (midi_cont->buf_size)
-        free(midi_cont->buf_size);
-    if (midi_cont->nframe_nums)
-        free(midi_cont->nframe_nums);
-    if (midi_cont->note_pitches)
-        free(midi_cont->note_pitches);
-    if (midi_cont->types)
-        free(midi_cont->types);
-    if (midi_cont->vel_trig)
-        free(midi_cont->vel_trig);
-}
-
-JACK_MIDI_CONT *app_jack_init_midi_cont(unsigned int array_size) {
-    JACK_MIDI_CONT *ret_midi_cont = NULL;
-    ret_midi_cont = malloc(sizeof(JACK_MIDI_CONT));
-    if (!ret_midi_cont)
-        return NULL;
-    ret_midi_cont->array_size = array_size;
-    ret_midi_cont->num_events = 0;
-    ret_midi_cont->w_pos = 0;
-    ret_midi_cont->buf_size = NULL;
-    ret_midi_cont->nframe_nums = NULL;
-    ret_midi_cont->note_pitches = NULL;
-    ret_midi_cont->types = NULL;
-    ret_midi_cont->vel_trig = NULL;
-
-    ret_midi_cont->buf_size = calloc(array_size, sizeof(size_t));
-    if (!ret_midi_cont->buf_size) {
-        app_jack_clean_midi_cont(ret_midi_cont);
-        free(ret_midi_cont);
-        return NULL;
-    }
-    ret_midi_cont->nframe_nums = calloc(array_size, sizeof(NFRAMES_T));
-    if (!ret_midi_cont->nframe_nums) {
-        app_jack_clean_midi_cont(ret_midi_cont);
-        free(ret_midi_cont);
-        return NULL;
-    }
-    ret_midi_cont->note_pitches = calloc(array_size, sizeof(MIDI_DATA_T));
-    if (!ret_midi_cont->note_pitches) {
-        app_jack_clean_midi_cont(ret_midi_cont);
-        free(ret_midi_cont);
-        return NULL;
-    }
-    ret_midi_cont->types = calloc(array_size, sizeof(MIDI_DATA_T));
-    if (!ret_midi_cont->types) {
-        app_jack_clean_midi_cont(ret_midi_cont);
-        free(ret_midi_cont);
-        return NULL;
-    }
-    ret_midi_cont->vel_trig = calloc(array_size, sizeof(MIDI_DATA_T));
-    if (!ret_midi_cont->vel_trig) {
-        app_jack_clean_midi_cont(ret_midi_cont);
-        free(ret_midi_cont);
-        return NULL;
-    }
-    return ret_midi_cont;
-}
-
-void app_jack_midi_cont_reset(JACK_MIDI_CONT *midi_cont) {
-    if (!midi_cont)
-        return;
-    unsigned int size = midi_cont->array_size;
-    if (size <= 0)
-        return;
-    midi_cont->num_events = 0;
-    midi_cont->w_pos = 0;
-    memset(midi_cont->buf_size, 0, size * sizeof(size_t));
-    memset(midi_cont->nframe_nums, 0, size * sizeof(NFRAMES_T));
-    memset(midi_cont->note_pitches, 0, size * sizeof(MIDI_DATA_T));
-    memset(midi_cont->types, 0, size * sizeof(MIDI_DATA_T));
-    memset(midi_cont->vel_trig, 0, size * sizeof(MIDI_DATA_T));
-}
-
 int app_jack_port_rename(void *client_in, void *port,
                          const char *new_port_name) {
     if (!new_port_name)
@@ -952,52 +878,32 @@ void *app_jack_get_buffer_rt(void *port, jack_nframes_t nframes) {
     return out;
 }
 
-void app_jack_midi_clear_buffer_rt(void *buffer) {
-    if (buffer) {
-        jack_midi_clear_buffer(buffer);
+void app_jack_midi_in_rt(void *port, jack_nframes_t nframes, MIDI_BUF *buf) {
+    midi_buf_clear(buf, nframes);
+    void *jack_buf = app_jack_get_buffer_rt(port, nframes);
+    if (!jack_buf)
+        return;
+    uint32_t count = jack_midi_get_event_count(jack_buf);
+    for (uint32_t i = 0; i < count; i++) {
+        jack_midi_event_t ev;
+        if (jack_midi_event_get(&ev, jack_buf, i) != 0)
+            continue;
+        midi_buf_push(buf, ev.time, ev.buffer, (uint32_t)ev.size);
     }
 }
 
-int app_jack_midi_events_write_rt(void *buffer, jack_nframes_t time,
-                                  const jack_midi_data_t *data,
-                                  size_t data_size) {
-    int return_val = -1;
-    if (buffer) {
-        return_val = jack_midi_event_write(buffer, time, data, data_size);
-    }
-    return return_val;
-}
-
-void app_jack_return_notes_vels_rt(void *midi_in, JACK_MIDI_CONT *midi_cont) {
-    if (midi_in == NULL)
+void app_jack_midi_out_rt(void *port, jack_nframes_t nframes,
+                          const MIDI_BUF *buf) {
+    void *jack_buf = app_jack_get_buffer_rt(port, nframes);
+    if (!jack_buf)
         return;
-    int event_count = 0;
-    event_count = jack_midi_get_event_count(midi_in);
-    if (event_count <= 0)
-        return;
-    midi_cont->num_events = event_count;
-    if ((midi_cont->num_events + midi_cont->w_pos) > midi_cont->array_size)
-        midi_cont->num_events = (midi_cont->array_size - midi_cont->w_pos);
-    // go through all the midi events
-    for (unsigned int en = 0; en < midi_cont->num_events; en++) {
-        jack_midi_event_t in_event;
-        if (jack_midi_event_get(&in_event, midi_in, en) != 0)
-            return;
-
-        // if the note is correct set the vel_trig array of this note index to
-        // the midi event velocity
-        if (midi_cont->vel_trig != NULL)
-            midi_cont->vel_trig[midi_cont->w_pos] = in_event.buffer[2];
-        if (midi_cont->note_pitches != NULL)
-            midi_cont->note_pitches[midi_cont->w_pos] = in_event.buffer[1];
-        if (midi_cont->nframe_nums != NULL)
-            midi_cont->nframe_nums[midi_cont->w_pos] = in_event.time;
-        if (midi_cont->types != NULL)
-            midi_cont->types[midi_cont->w_pos] = in_event.buffer[0];
-        if (midi_cont->buf_size != NULL)
-            midi_cont->buf_size[midi_cont->w_pos] = in_event.size;
-        midi_cont->w_pos += 1;
-    }
+    jack_midi_clear_buffer(jack_buf);
+    MIDI_BUF_ITER it = midi_buf_iter(buf);
+    MIDI_EVENT ev;
+    // events a full jack buffer refuses are counted by jack itself
+    // (jack_midi_get_lost_event_count)
+    while (midi_buf_next(&it, &ev))
+        jack_midi_event_write(jack_buf, ev.frame, ev.data, ev.size);
 }
 
 // jack_connect wants the output first, so the pair is ordered here. Two ports
