@@ -96,13 +96,15 @@ HashTable *ht_create(size_t capacity)
     if (capacity == 0){
         capacity = HT_INITIAL_CAPACITY;
     }
-    // if capacity is not power of two, make it or use the HT_INITIAL_CAPACITY
+    // if capacity is not power of two, round it up or use the HT_INITIAL_CAPACITY
     else{
         if(is_power_of_two(capacity) == false){
             size_t new_capacity = 0;
-            capacity = HT_INITIAL_CAPACITY;
             if(next_power_of_two(capacity, &new_capacity) == true){
                 capacity = new_capacity;
+            }
+            else{
+                capacity = HT_INITIAL_CAPACITY;
             }
         }
     }

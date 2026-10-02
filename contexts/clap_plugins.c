@@ -71,7 +71,8 @@ enum {
     CLAP_PLUG_REQ_PROCESS = 1U << 2,
     CLAP_PLUG_REQ_FLUSH = 1U << 3,
     // not a plugin request - set by the host when the ui side missed values
-    // from the plugin, so they are read again from the plugin
+    // from the plugin or after a preset load, so they are read again from
+    // the plugin
     CLAP_PLUG_REQ_SYNC_VALUES = 1U << 4,
 };
 
@@ -2158,9 +2159,13 @@ int clap_plug_preset_load(void *plug, uint64_t key) {
     const char *identity = tree_index_leaf_identity(cur_plug->presets, key);
     if (!identity)
         return -2;
-    // the plugin reports the new param values itself (params rescan or
-    // events), like any change it makes
-    return clap_ext_preset_load(cur_plug->plug_inst, identity) ? 0 : -1;
+    if (!clap_ext_preset_load(cur_plug->plug_inst, identity))
+        return -1;
+    // not every plugin reports the new values (rescan or events) - u-he does
+    // not after the first load. Harmless when the plugin loads async (Surge),
+    // it rescans later itself
+    atomic_fetch_or(&cur_plug->requests, CLAP_PLUG_REQ_SYNC_VALUES);
+    return 0;
 }
 
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data) {

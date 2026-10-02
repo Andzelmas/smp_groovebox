@@ -20,7 +20,7 @@ typedef struct {
  * Create a hash table.
  *
  * If capacity is 0, HT_INITIAL_CAPACITY is used.
- * MUST BE POWER OF TWO
+ * Otherwise it is rounded up to a power of two.
  *
  * Returns NULL on allocation failure.
  */
