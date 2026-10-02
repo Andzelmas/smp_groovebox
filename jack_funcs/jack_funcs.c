@@ -65,9 +65,8 @@ typedef struct _jack_info {
     // also play, stop etc.
     PRM_CONTAIN *trk_params;
     // val_ids of the transport params, captured from param_add_param at init.
-    // The [audio-thread] transport code indexes params constantly and must not
-    // look anything up to do it - param_find_owner_id is a linear scan and has
-    // no business in the audio callback - so resolve the mapping once, here.
+    // The [audio-thread] transport code indexes params constantly, so resolve
+    // the mapping once, here, instead of a param_find_owner_id per access.
     // indexed by trkParamId, so TRK_PARAM_NONE's slot is unused
     int trk_val[TRK_PARAM_COUNT];
     // rt tick var, that goes from 0 to RT_CYCLES, rt thread will send info to

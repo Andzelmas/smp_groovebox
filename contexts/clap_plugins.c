@@ -778,7 +778,7 @@ clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
 
         int existing_val_id =
             plug->plug_params
-                ? param_find_owner_id(plug->plug_params, param_info.id, 0)
+                ? param_find_owner_id(plug->plug_params, param_info.id)
                 : -1;
         // a survivor keeps the uid it already has; a genuinely new param goes
         // in as 0 and params.c mints one.
@@ -959,8 +959,7 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
             clap_param_info_t param_info;
             if (!clap_params->get_info(plug->plug_inst, clap_idx, &param_info))
                 continue;
-            int val_id =
-                param_find_owner_id(plug->plug_params, param_info.id, 0);
+            int val_id = param_find_owner_id(plug->plug_params, param_info.id);
             if (val_id == -1)
                 continue;
             param_set_value(plug->plug_params, val_id, 0.0, param_info.name,
@@ -1473,8 +1472,7 @@ static int clap_output_events_params_apply(CLAP_PLUG_PLUG *plug,
             continue;
         const clap_event_param_value_t *param_ev =
             (const clap_event_param_value_t *)head;
-        int val_id =
-            param_find_owner_id(plug->plug_params, param_ev->param_id, 1);
+        int val_id = param_find_owner_id(plug->plug_params, param_ev->param_id);
         if (val_id == -1)
             continue;
         // the ui side missed this value (full queue) - read all the values

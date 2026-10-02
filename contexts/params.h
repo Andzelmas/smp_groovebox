@@ -189,12 +189,11 @@ uint32_t param_get_uid(PRM_CONTAIN *param_container, int val_id,
 // already have a val_id for.
 int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid);
 
-// find the val_id whose owner_id matches on whichever side rt_params selects,
-// -1 if not found. 0 is a valid owner_id (CLAP's clap_id 0). A linear scan - on
-// the rt path use it only for rare lookups (like CLAP output events), cache
-// the val_id otherwise.
-int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id,
-                        unsigned int rt_params);
+// find the val_id whose owner_id matches, -1 if not found. The lowest val_id
+// if several share it. 0 is a valid owner_id (CLAP's clap_id 0). A binary
+// search, safe on either side - the val_id is the same on both. On the rt path
+// still cache the val_id for params read every cycle.
+int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id);
 
 // return this param's owner_id (see param_add_param) for whichever side
 // rt_params selects, 0 on error. Opaque to params.c - meaningless without

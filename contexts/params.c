@@ -92,6 +92,12 @@ typedef struct _param_category {
     char name[MAX_CATEGORY_SEGMENT];
 } PRM_PARAM_CATEGORY;
 
+// one entry of the container's owner_id -> val_id index
+typedef struct _param_owner_entry {
+    uint32_t owner_id;
+    int val_id;
+} PRM_OWNER_ENTRY;
+
 typedef struct _params_container {
     // the parameter arrays - each element is its OWN malloc'd PRM_PARAM_RT/UI.
     // That's deliberate: param_add_param grows these OUTER arrays with
@@ -123,6 +129,14 @@ typedef struct _params_container {
     // grows and every index below it is alive.
     PRM_PARAM_CATEGORY **categories;
     unsigned int num_categories;
+    // every alive param as owner_id -> val_id, sorted by owner_id then val_id
+    // for param_find_owner_id's binary search. One index for both sides - a
+    // param's owner_id and val_id are the same on both and never change.
+    // Changes only where rt_params does (param_add_param, params_container_
+    // resync), so the rt side reads it under the same rule.
+    PRM_OWNER_ENTRY *owner_index;
+    unsigned int owner_index_count;
+    unsigned int owner_index_max;
     // scratch buffer param_get_value_as_string formats into and returns a
     // pointer to - valid only until the next param_get_value_as_string call
     // on this container (any val_id)
@@ -145,6 +159,68 @@ static void param_ui_mark_changed(PRM_CONTAIN *param_container,
     param_container->any_changed = true;
 }
 
+// position of the first owner index entry not below (owner_id, val_id)
+static unsigned int param_owner_index_lower(const PRM_CONTAIN *param_container,
+                                            uint32_t owner_id, int val_id) {
+    unsigned int low = 0;
+    unsigned int high = param_container->owner_index_count;
+    while (low < high) {
+        unsigned int mid = low + (high - low) / 2;
+        const PRM_OWNER_ENTRY *entry = &param_container->owner_index[mid];
+        if (entry->owner_id < owner_id ||
+            (entry->owner_id == owner_id && entry->val_id < val_id))
+            low = mid + 1;
+        else
+            high = mid;
+    }
+    return low;
+}
+
+// room for one more owner index entry, so the insert itself cannot fail.
+// false on allocation failure
+static bool param_owner_index_reserve(PRM_CONTAIN *param_container) {
+    if (param_container->owner_index_count < param_container->owner_index_max)
+        return true;
+    unsigned int new_max = param_container->owner_index_max
+                               ? param_container->owner_index_max * 2
+                               : 32;
+    PRM_OWNER_ENTRY *grown = realloc(param_container->owner_index,
+                                     new_max * sizeof(PRM_OWNER_ENTRY));
+    if (!grown)
+        return false;
+    param_container->owner_index = grown;
+    param_container->owner_index_max = new_max;
+    return true;
+}
+
+// needs param_owner_index_reserve first
+static void param_owner_index_insert(PRM_CONTAIN *param_container,
+                                     uint32_t owner_id, int val_id) {
+    unsigned int pos =
+        param_owner_index_lower(param_container, owner_id, val_id);
+    PRM_OWNER_ENTRY *index = param_container->owner_index;
+    memmove(&index[pos + 1], &index[pos],
+            (param_container->owner_index_count - pos) *
+                sizeof(PRM_OWNER_ENTRY));
+    index[pos] = (PRM_OWNER_ENTRY){.owner_id = owner_id, .val_id = val_id};
+    param_container->owner_index_count++;
+}
+
+static void param_owner_index_remove(PRM_CONTAIN *param_container,
+                                     uint32_t owner_id, int val_id) {
+    unsigned int pos =
+        param_owner_index_lower(param_container, owner_id, val_id);
+    if (pos >= param_container->owner_index_count)
+        return;
+    PRM_OWNER_ENTRY *index = param_container->owner_index;
+    if (index[pos].owner_id != owner_id || index[pos].val_id != val_id)
+        return;
+    param_container->owner_index_count--;
+    memmove(&index[pos], &index[pos + 1],
+            (param_container->owner_index_count - pos) *
+                sizeof(PRM_OWNER_ENTRY));
+}
+
 PRM_CONTAIN *
 params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     PRM_CONTAIN *param_container = (PRM_CONTAIN *)malloc(sizeof(PRM_CONTAIN));
@@ -162,6 +238,9 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     param_container->rt_resend = false;
     param_container->categories = NULL;
     param_container->num_categories = 0;
+    param_container->owner_index = NULL;
+    param_container->owner_index_count = 0;
+    param_container->owner_index_max = 0;
     param_container->user_data.user_data = NULL;
     param_container->user_data.build_value = NULL;
     param_container->user_data.val_to_string = NULL;
@@ -220,6 +299,11 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
         free(new_rt_param);
         return -1;
     }
+    if (!param_owner_index_reserve(param_container)) {
+        free(new_rt_param);
+        free(new_ui_param);
+        return -1;
+    }
 
     // reuse a freed slot before growing; ui_params is NULL at the same
     // index, so checking rt_params alone is enough
@@ -262,6 +346,7 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
 
     param_container->rt_params[idx] = new_rt_param;
     param_container->ui_params[idx] = new_ui_param;
+    param_owner_index_insert(param_container, owner_id, (int)idx);
 
     new_rt_param->val = val;
     new_rt_param->min_val = min;
@@ -315,6 +400,9 @@ void params_container_resync(PRM_CONTAIN *param_container,
         }
         if (still_present)
             continue;
+        param_owner_index_remove(param_container,
+                                 param_container->rt_params[val_id]->owner_id,
+                                 (int)val_id);
         free(param_container->rt_params[val_id]);
         param_container->rt_params[val_id] = NULL;
         free(param_container->ui_params[val_id]);
@@ -592,26 +680,15 @@ int param_find_uid(PRM_CONTAIN *param_container, uint32_t uid) {
     return -1;
 }
 
-int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id,
-                        unsigned int rt_params) {
+int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id) {
     if (!param_container)
         return -1;
-    if (rt_params) {
-        for (unsigned int i = 0; i < param_container->num_of_params_rt; i++) {
-            if (!param_container->rt_params[i])
-                continue;
-            if (param_container->rt_params[i]->owner_id == owner_id)
-                return (int)i;
-        }
+    // val_ids are never negative, so -1 lands on owner_id's lowest val_id
+    unsigned int pos = param_owner_index_lower(param_container, owner_id, -1);
+    if (pos >= param_container->owner_index_count ||
+        param_container->owner_index[pos].owner_id != owner_id)
         return -1;
-    }
-    for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
-        if (!param_container->ui_params[i])
-            continue;
-        if (param_container->ui_params[i]->owner_id == owner_id)
-            return (int)i;
-    }
-    return -1;
+    return param_container->owner_index[pos].val_id;
 }
 
 PARAM_T param_get_increment(PRM_CONTAIN *param_container, int val_id) {
@@ -1009,6 +1086,7 @@ void param_clean_param_container(PRM_CONTAIN *param_container) {
                 free(param_container->categories[i]);
         free(param_container->categories);
     }
+    free(param_container->owner_index);
 
     free(param_container);
 }
