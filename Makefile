@@ -24,7 +24,7 @@ CLAP_EXT_C = contexts/clap_ext/clap_ext_preset_load.c
 #the clap scanner's sources - plugin code that runs out of the app's process
 SCAN_C = contexts/clap_scan.c contexts/clap_ext/clap_ext_preset_factory.c
 #util functions
-UTIL_FUNCS = util_funcs/wav_funcs.c util_funcs/math_funcs.c util_funcs/string_funcs.c util_funcs/ring_buffer.c util_funcs/log_funcs.c util_funcs/osc_wavelookup.c util_funcs/uniform_buffer.c util_funcs/path_funcs.c util_funcs/hash_table.c util_funcs/intern_table.c util_funcs/tree_index.c
+UTIL_FUNCS = util_funcs/wav_funcs.c util_funcs/math_funcs.c util_funcs/string_funcs.c util_funcs/ring_buffer.c util_funcs/log_funcs.c util_funcs/osc_wavelookup.c util_funcs/uniform_buffer.c util_funcs/midi_buf.c util_funcs/path_funcs.c util_funcs/hash_table.c util_funcs/intern_table.c util_funcs/tree_index.c
 #additional sources
 SRC = $(UTIL_FUNCS) contexts/sampler.c contexts/plugins.c contexts/clap_plugins.c contexts/context_control.c jack_funcs/jack_funcs.c app_data.c app_intrf.c ui_layer.c contexts/params.c contexts/synth.c $(JALV_C) $(CLAP_EXT_C)
 

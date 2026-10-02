@@ -68,9 +68,8 @@ M1. util_funcs/midi_buf.c/.h, no JACK. MIDI rules on top of
     uniform_buffer - not a second byte arena (UB_EVENT already holds the
     CLAP event lists). One UB_EVENT per port, fixed capacity (e.g. 4 KiB),
     allocated on [main-thread]. An item is {uint32 frame, bytes}, the byte
-    count = ub_item_get_size - 4 - sysex fits, no special case. Items are
-    not padded (padding would change ub_item_get_size), so frame is
-    read/written with memcpy - alignment safe, a plain load on x86/ARM64.
+    count = ub_item_get_size - 4 - sysex fits, no special case. Written in
+    place through ub_push_reserve (no scratch copy for sysex).
     API: new/free [main-thread]; clear(b, nframes), push(b, frame, data,
     size) -> false when full, iter/next, merge(dst, srcs, n) (stable k-way
     by frame - the graph's MIDI "summing") on rt.
@@ -82,10 +81,21 @@ M1. util_funcs/midi_buf.c/.h, no JACK. MIDI rules on top of
     Decoders static inline in midi_buf.h (type/channel/is_note_on/expected
     size...) - push needs them too, so no separate midi_msg.h; no status
     byte checks by hand anywhere else.
-    uniform_buffer fixes first: ub_list_reset memsets the whole arena and
-    both index arrays every reset - O(capacity) per port per cycle, CLAP's
-    event lists too; resetting items/current_size is enough.
+    Release velocity of a converted note-on vel 0 = 64 (the spec's value
+    for devices without release velocity). merge takes at most
+    MIDI_BUF_MERGE_MAX sources, the rest count as drops.
+    uniform_buffer fixes first (its only other user: CLAP event lists):
+    ub_list_reset memsets the whole arena and both index arrays every
+    reset - O(capacity) per port per cycle, CLAP's event lists too;
+    resetting items/current_size is enough once ub_push takes its offset
+    from current_size (today it reads item_addr[0] for the first item -
+    stale without the memset).
+    ub_push_reserve(ub, size) -> the new item's address to fill; ub_push =
+    reserve + memcpy. Items start UB_ALIGN (8) aligned - sizes are stored
+    apart, so ub_item_get_size stays exact. Fixes CLAP events misaligned
+    after an odd-sized one (clap_event_midi2_t is 36 bytes).
     ub_item_get_size returns -1 as uint32_t on error, its comment says 0.
+    Size 0 pushes refused (today one blocks every later push).
 
 M2. JACK adapters, the only jack_midi_* users: app_jack_midi_in_rt(port,
     nframes, MIDI_BUF *) and app_jack_midi_out_rt(port, nframes, const

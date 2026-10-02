@@ -4,14 +4,13 @@
 #include <string.h>
 
 typedef struct _ub_event{
-    void* event_list; //the user data - a chunk of memory allocated for user items, that can be different sizes
+    unsigned char* event_list; //the user data - a chunk of memory allocated for user items, that can be different sizes
     uint32_t total_size; //total size of the event_list in bytes
     uint32_t total_items; //total number of items in the event_list that can be filled
-    uint32_t current_size; //what is the size of the event_list right now
+    uint32_t current_size; //end of the last item from the event_list start
     uint32_t items; //how many items there are currently;
-    //offset of each item from the event_list start (items end address from the start of the event_list)
-    uint32_t* item_addr;
-    uint32_t* item_sizes; //size of each element in the event_list
+    uint32_t* item_addr; //offset of each item from the event_list start, UB_ALIGN aligned
+    uint32_t* item_sizes; //size of each element in the event_list, without the alignment padding
 }UB_EVENT;
 
 void ub_clean(UB_EVENT* ub_ev){
@@ -44,36 +43,38 @@ UB_EVENT* ub_init(uint32_t total_size, uint32_t num_of_items){
 	ub_clean(ub_ev);
 	return NULL;
     }
-    
+
     return ub_ev;
 }
 
-int ub_push(UB_EVENT* ub_ev, const void* const source, uint32_t source_size){
-    if(!ub_ev)return -1;
-    if(!source)return -1;
-    if((ub_ev->current_size + source_size) > ub_ev->total_size)return -1;
-    if((ub_ev->items + 1) > ub_ev->total_items)return -1;
-    
-    uint32_t last_idx = 0;
-    if(ub_ev->items > 0)last_idx = ub_ev->items - 1;
+void* ub_push_reserve(UB_EVENT* ub_ev, uint32_t size){
+    if(!ub_ev)return NULL;
+    if(size == 0)return NULL;
+    if(ub_ev->items >= ub_ev->total_items)return NULL;
 
-    uint32_t offset = ub_ev->item_addr[last_idx];
-    if(offset == 0 && ub_ev->items > 0)return -1;
+    //64 bit so neither the rounding nor the sum can wrap
+    uint64_t offset = ((uint64_t)ub_ev->current_size + UB_ALIGN - 1) & ~(uint64_t)(UB_ALIGN - 1);
+    if(offset + size > ub_ev->total_size)return NULL;
 
-    uint32_t idx = 0;
-    if(ub_ev->items > 0)idx = last_idx + 1;
-
-    memcpy(ub_ev->event_list + offset, source, source_size);
-    ub_ev->item_sizes[idx] = source_size;
-    ub_ev->current_size += source_size;
-    ub_ev->item_addr[idx] = ub_ev->current_size;
+    uint32_t idx = ub_ev->items;
+    ub_ev->item_addr[idx] = (uint32_t)offset;
+    ub_ev->item_sizes[idx] = size;
+    ub_ev->current_size = (uint32_t)offset + size;
     ub_ev->items += 1;
-    return 0; 
+    return ub_ev->event_list + offset;
+}
+
+int ub_push(UB_EVENT* ub_ev, const void* const source, uint32_t source_size){
+    if(!source)return -1;
+    void* item = ub_push_reserve(ub_ev, source_size);
+    if(!item)return -1;
+    memcpy(item, source, source_size);
+    return 0;
 }
 
 uint32_t ub_item_get_size(UB_EVENT* ub_ev, uint32_t idx){
-    if(!ub_ev)return -1;
-    if(idx >= ub_ev->items)return -1;
+    if(!ub_ev)return 0;
+    if(idx >= ub_ev->items)return 0;
 
     return ub_ev->item_sizes[idx];
 }
@@ -87,23 +88,12 @@ void* ub_item_get(UB_EVENT* ub_ev, uint32_t idx){
     if(!ub_ev)return NULL;
     if(idx >= ub_ev->items)return NULL;
 
-    uint32_t offset = 0;
-    uint32_t item_size = ub_ev->item_sizes[idx];
-    if(item_size == 0)return NULL;
-    uint32_t item_end_addr = ub_ev->item_addr[idx];
-    if(item_end_addr == 0)return NULL;
-
-    offset = item_end_addr - item_size;
-    
-    return ub_ev->event_list + offset;
+    return ub_ev->event_list + ub_ev->item_addr[idx];
 }
 
 void ub_list_reset(UB_EVENT* ub_ev){
     if(!ub_ev)return;
 
-    memset(ub_ev->event_list, 0, ub_ev->total_size);
-    memset(ub_ev->item_addr, 0, sizeof(uint32_t) * ub_ev->total_items);
-    memset(ub_ev->item_sizes, 0, sizeof(uint32_t) * ub_ev->total_items);
     ub_ev->current_size = 0;
     ub_ev->items = 0;
 }
