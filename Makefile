@@ -20,7 +20,9 @@ LIBS = -lm -ljack -lsndfile -ljson-c -llilv-0
 JALV_C = util_funcs/jalv/symap.c util_funcs/jalv/worker.c util_funcs/jalv/zix/allocator.c util_funcs/jalv/zix/allocator.h util_funcs/jalv/zix/attributes.h util_funcs/jalv/zix/ring.c
 
 #clap additional extension code
-CLAP_EXT_C = contexts/clap_ext/clap_ext_preset_factory.c
+CLAP_EXT_C = contexts/clap_ext/clap_ext_preset_load.c
+#the clap scanner's sources - plugin code that runs out of the app's process
+SCAN_C = contexts/clap_scan.c contexts/clap_ext/clap_ext_preset_factory.c
 #util functions
 UTIL_FUNCS = util_funcs/wav_funcs.c util_funcs/math_funcs.c util_funcs/string_funcs.c util_funcs/ring_buffer.c util_funcs/log_funcs.c util_funcs/osc_wavelookup.c util_funcs/uniform_buffer.c util_funcs/path_funcs.c util_funcs/hash_table.c util_funcs/intern_table.c util_funcs/tree_index.c
 #additional sources
@@ -35,7 +37,7 @@ create_smp_sampler: make_dir clap_scanner
 build_sanitize: make_dir clap_scanner
 	$(CC) -g -fsanitize=thread -x c -o $(FILE) $(UI_CLI) $(SRC) $(INCDIR) $(LIBDIRS) $(LIBS)
 clap_scanner: make_dir
-	$(CC) -Wall -Wextra -Wshadow -g -o $(SCAN_FILE) contexts/clap_scan.c $(INCDIR)
+	$(CC) -Wall -Wextra -Wshadow -g -o $(SCAN_FILE) $(SCAN_C) $(INCDIR)
 run:
 	(cd build && ./smp_sampler)
 run_valgrind:

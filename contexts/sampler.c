@@ -34,8 +34,6 @@ enum smpParamId {
     SMP_PARAM_COUNT
 };
 
-static thread_local bool is_audio_thread = false;
-
 typedef struct _smp_smp{
     //the note id, used to link to the cx struct (slot index, reused)
     int id;
@@ -145,8 +143,6 @@ static int smp_stop_process(void* user_data){
 }
 
 int smp_read_ui_to_rt_messages(SMP_INFO* smp_data){
-    //false on [main-thread] but has to be true on [audio-thread]
-    is_audio_thread = true;
     if(!smp_data)return -1;
     context_sub_process_rt(smp_data->control_data);
     

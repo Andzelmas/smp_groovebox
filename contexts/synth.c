@@ -10,8 +10,6 @@
 #include <string.h>
 #include <threads.h>
 
-static thread_local bool is_audio_thread = false;
-
 // max voices that can play simultaniously
 #define MAX_SYNTH_VOICES 8
 // how many oscillators there should be
@@ -203,10 +201,6 @@ static int synth_sys_msg(void *user_data, const char *msg) {
 }
 
 int synth_read_ui_to_rt_messages(SYNTH_DATA *synth_data) {
-    // this is a local thread var its false on [main-thread] and true on
-    // [audio-thread]
-    is_audio_thread = true;
-
     if (!synth_data)
         return -1;
     // process the sys messages, right now only need for send messages, so on

@@ -31,9 +31,6 @@ enum trkParamId {
     TRK_PARAM_COUNT
 };
 
-static thread_local bool is_audio_thread = false;
-
-
 // one cached port. conn_first/conn_count index the flat adjacency array
 typedef struct _jack_port_rec {
     char *name;
@@ -722,10 +719,6 @@ PRM_CONTAIN *app_jack_trk_param_container(void *jack_data_handle) {
 }
 
 int app_jack_read_ui_to_rt_messages(JACK_INFO *jack_data) {
-    // set the is_audio_thread to true so its false on [main-thread] and true on
-    // [audio-thread]
-    is_audio_thread = true;
-
     if (!jack_data)
         return -1;
     // update the rt_tick

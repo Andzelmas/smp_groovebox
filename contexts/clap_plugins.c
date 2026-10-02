@@ -28,7 +28,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "clap_ext/clap_ext_preset_factory.h"
+#include "clap_ext/clap_ext_preset_load.h"
 
 // what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
@@ -40,6 +40,9 @@ static const char *clap_paths[] = {"/usr/lib/clap", "~/.clap", NULL};
 #define CLAP_SCAN_TIMEOUT_MS 10000
 // more than any real listing, so a runaway scanner is cut off
 #define CLAP_SCAN_MAX_OUTPUT (1 << 20)
+// the same two for indexing a plugin's presets - a big library takes a while
+#define CLAP_SCAN_PRESETS_TIMEOUT_MS 60000
+#define CLAP_SCAN_PRESETS_MAX_OUTPUT (32 << 20)
 
 extern char **environ;
 
@@ -97,14 +100,6 @@ typedef struct _plugin_list {
     // plugin across rebuilds. The slot is its index in plugin_list
     INTERN_TABLE ids;
 } PLUGIN_LIST;
-
-// struct that has the plugin preset info
-typedef struct _clap_plug_preset_info {
-    char short_name[MAX_SHORT_NAME_LENGTH]; // the short name, without any
-                                            // extensions or path symbols
-    char full_path[MAX_PATH_STRING];  // the full path of the plugin preset
-    char categories[MAX_PATH_STRING]; // the categories path, separated by /
-} CLAP_PLUG_PRESET_INFO;
 
 // sys port struct, that holds info about the port and a backend audio client
 // port equivalent
@@ -178,11 +173,10 @@ typedef struct _clap_plug_plug {
     // input output event streams
     clap_input_events_t input_events;
     clap_output_events_t output_events;
-    // preset factory struct for the plugin internal preset system (extension
-    // preset-factory) this can be NULL, if the plugin has a preset-factory this
-    // will be created when clap_plug_presets_iterate or
-    // clap_plug_preset_load_from_path function is called
-    CLAP_EXT_PRESET_FACTORY *preset_fac;
+    // the preset list from the plugin's preset-discovery factory, built on
+    // first browse (see clap_plug_presets_get)
+    TREE_INDEX *presets;
+    bool presets_built;
     // CLAP_PLUG_REQ_* bits, set from any thread
     atomic_uint requests;
 } CLAP_PLUG_PLUG;
@@ -946,9 +940,6 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
     if ((flags & CLAP_PARAM_RESCAN_VALUES) == CLAP_PARAM_RESCAN_VALUES)
         clap_plug_params_sync_values(plug);
     if ((flags & CLAP_PARAM_RESCAN_TEXT) == CLAP_PARAM_RESCAN_TEXT) {
-        context_sub_send_msg(
-            plug_data->control_data, (void *)plug_data, is_audio_thread,
-            "Plugin %s requested CLAP_PARAM_RESCAN_TEXT\n", plug->plug_path);
         // the value texts are read from the plugin when drawn, so only tell the
         // ui side that every param may now read differently
         param_mark_changed(plug->plug_params, -1);
@@ -1177,6 +1168,7 @@ static bool clap_plug_ext_events_try_push(const struct clap_output_events *list,
     return true;
 }
 
+// a from_location() call failed, [main-thread]
 static void clap_ext_preset_load_on_error(const clap_host_t *host,
                                           uint32_t location_kind,
                                           const char *location,
@@ -1184,11 +1176,10 @@ static void clap_ext_preset_load_on_error(const clap_host_t *host,
                                           int32_t os_error, const char *msg) {
     (void)host;
     (void)location_kind;
-    (void)location;
-    (void)load_key;
     (void)os_error;
-    (void)msg;
-    return;
+    log_append_logfile("preset %s %s did not load: %s\n",
+                       location ? location : "(in plugin)",
+                       load_key ? load_key : "", msg ? msg : "");
 }
 
 static void clap_ext_preset_load_on_load(const clap_host_t *host,
@@ -1254,8 +1245,9 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     // clean the parameters
     clap_plug_params_destroy(plug_data, plug->id);
     // remove presets
-    clap_ext_preset_clean(plug->preset_fac);
-    plug->preset_fac = NULL;
+    tree_index_free(plug->presets);
+    plug->presets = NULL;
+    plug->presets_built = false;
 
     plug->plug_inst_id = -1;
     plug_data->plugins_dirty = true;
@@ -1336,7 +1328,8 @@ static const void *clap_plug_get_extension(const clap_host_t *host,
     if (strcmp(ex_id, CLAP_EXT_PARAMS) == 0) {
         return &(plug_data->ext_params);
     }
-    if (strcmp(ex_id, CLAP_EXT_PRESET_LOAD) == 0) {
+    if (strcmp(ex_id, CLAP_EXT_PRESET_LOAD) == 0 ||
+        strcmp(ex_id, CLAP_EXT_PRESET_LOAD_COMPAT) == 0) {
         return &(plug_data->ext_preset_load);
     }
     // if there is no extension implemented that the plugin needs send the name
@@ -1635,175 +1628,6 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
     return 0;
 }
 
-void clap_plug_presets_clean_preset(CLAP_PLUG_INFO *plug_data,
-                                    void *preset_info) {
-    if (!plug_data)
-        return;
-    if (!preset_info)
-        return;
-    CLAP_PLUG_PRESET_INFO *cur_preset = (CLAP_PLUG_PRESET_INFO *)preset_info;
-    if (!cur_preset)
-        return;
-
-    free(cur_preset);
-}
-
-int clap_plug_presets_name_return(CLAP_PLUG_INFO *plug_data, void *preset_info,
-                                  char *name, uint32_t name_len) {
-    if (!plug_data)
-        return -1;
-    if (!preset_info)
-        return -1;
-    CLAP_PLUG_PRESET_INFO *cur_preset = (CLAP_PLUG_PRESET_INFO *)preset_info;
-    if (!cur_preset)
-        return -1;
-    snprintf(name, name_len, "%s", cur_preset->short_name);
-    return 0;
-}
-
-int clap_plug_presets_path_return(CLAP_PLUG_INFO *plug_data, void *preset_info,
-                                  char *path, uint32_t path_len) {
-    if (!plug_data)
-        return -1;
-    if (!preset_info)
-        return -1;
-    CLAP_PLUG_PRESET_INFO *cur_preset = (CLAP_PLUG_PRESET_INFO *)preset_info;
-    if (!cur_preset)
-        return -1;
-    snprintf(path, path_len, "%s", cur_preset->full_path);
-    return 0;
-}
-
-int clap_plug_presets_categories_iterate(CLAP_PLUG_INFO *plug_data,
-                                         void *preset_info, char *category,
-                                         uint32_t category_len, uint32_t idx) {
-    if (!plug_data)
-        return -1;
-    if (!preset_info)
-        return -1;
-    CLAP_PLUG_PRESET_INFO *cur_preset = (CLAP_PLUG_PRESET_INFO *)preset_info;
-    if (!cur_preset)
-        return -1;
-    uint32_t str_len = strlen(cur_preset->categories) + 1;
-    char *ret_string = (char *)malloc(sizeof(char) * str_len);
-    if (!ret_string)
-        return -1;
-    char *cur_category = NULL;
-    snprintf(ret_string, str_len, "%s", cur_preset->categories);
-    cur_category = strtok(ret_string, "/");
-    if (!cur_category && idx == 0) {
-        snprintf(category, category_len, "%s", cur_preset->categories);
-        free(ret_string);
-        return 0;
-    }
-    if (!cur_category && idx > 0) {
-        free(ret_string);
-        return -1;
-    }
-
-    uint32_t cur_iter = 0;
-    while (cur_category) {
-        if (cur_iter == idx) {
-            snprintf(category, category_len, "%s", cur_category);
-            free(ret_string);
-            return 0;
-        }
-        cur_category = strtok(NULL, "/");
-        cur_iter += 1;
-    }
-    free(ret_string);
-    return -1;
-}
-
-void *clap_plug_presets_iterate(CLAP_PLUG_INFO *plug_data,
-                                unsigned int plug_idx, uint32_t iter) {
-    if (!plug_data)
-        return NULL;
-    if (plug_idx >= MAX_INSTANCES)
-        return NULL;
-    CLAP_PLUG_PLUG *cur_plug = &(plug_data->plugins[plug_idx]);
-    if (!cur_plug->plug_inst)
-        return NULL;
-    // if this is the first iteration, create the preset factory struct, if the
-    // preset-factory extension is available for the plugin
-    if (iter == 0) {
-        // create the preset-factory struct first, if the preset-factory does
-        // not exist on the plugin this will be NULL first clean the current
-        // clap_ext preset struct
-        clap_ext_preset_clean(cur_plug->preset_fac);
-        CLAP_EXT_PRESET_USER_FUNCS preset_user_funcs;
-        preset_user_funcs.ext_preset_send_msg = clap_sys_msg;
-        preset_user_funcs.user_data = (void *)plug_data;
-        cur_plug->preset_fac = clap_ext_preset_init(
-            cur_plug->plug_entry, cur_plug->clap_host_info, preset_user_funcs);
-    }
-    // if the preset-factory extension exists iterate through the presets
-    if (cur_plug->preset_fac) {
-        CLAP_PLUG_PRESET_INFO *preset_info =
-            (CLAP_PLUG_PRESET_INFO *)malloc(sizeof(CLAP_PLUG_PRESET_INFO));
-        if (!preset_info)
-            return NULL;
-        int err = clap_ext_preset_info_return(
-            cur_plug->preset_fac, cur_plug->plugin_id, iter, NULL, NULL, NULL,
-            0, preset_info->short_name, MAX_SHORT_NAME_LENGTH,
-            preset_info->full_path, MAX_PATH_STRING, preset_info->categories,
-            MAX_PATH_STRING);
-        if (err == 1)
-            return (void *)preset_info;
-        clap_plug_presets_clean_preset(plug_data, (void *)preset_info);
-    }
-    // TODO return presets from the state extension
-    return NULL;
-}
-
-int clap_plug_preset_load_from_path(CLAP_PLUG_INFO *plug_data, int plug_id,
-                                    const char *preset_path) {
-    if (!plug_data)
-        return -1;
-    if (plug_id >= MAX_INSTANCES)
-        return -1;
-    CLAP_PLUG_PLUG *cur_plug = &(plug_data->plugins[plug_id]);
-    if (!cur_plug->plug_inst)
-        return -1;
-
-    if (!cur_plug->preset_fac) {
-        // if the preset-factory struct does not exist try to create it, since
-        // preset_path can be fed here from a save file for example
-        CLAP_EXT_PRESET_USER_FUNCS preset_user_funcs;
-        preset_user_funcs.ext_preset_send_msg = clap_sys_msg;
-        preset_user_funcs.user_data = (void *)plug_data;
-        cur_plug->preset_fac = clap_ext_preset_init(
-            cur_plug->plug_entry, cur_plug->clap_host_info, preset_user_funcs);
-    }
-    // first check if the preset_path is in the preset-factory
-    if (cur_plug->preset_fac) {
-        uint32_t loc_kind = 0;
-        char load_key[MAX_PATH_STRING];
-        char location[MAX_PATH_STRING];
-        int err = clap_ext_preset_info_return(
-            cur_plug->preset_fac, cur_plug->plugin_id, 0, preset_path,
-            &loc_kind, load_key, MAX_PATH_STRING, NULL, 0, location,
-            MAX_PATH_STRING, NULL, 0);
-        if (err == 1) {
-            const clap_plugin_preset_load_t *preset_ext =
-                cur_plug->plug_inst->get_extension(cur_plug->plug_inst,
-                                                   CLAP_EXT_PRESET_LOAD);
-            if (preset_ext) {
-                bool loaded = preset_ext->from_location(
-                    cur_plug->plug_inst, loc_kind, location, load_key);
-                if (loaded) {
-                    return 1;
-                }
-            }
-        }
-    }
-
-    // TODO if the preset_path is not in the preset-factory check if its a
-    // preset in the save extension
-
-    return 0;
-}
-
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error,
@@ -1894,7 +1718,8 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->plug_inst_id = -1;
         plug->plug_inst_processing = 0;
         plug->plug_params = NULL;
-        plug->preset_fac = NULL;
+        plug->presets = NULL;
+        plug->presets_built = false;
         atomic_init(&plug->requests, 0U);
     }
 
@@ -2025,11 +1850,12 @@ static int clap_scan_ms_since(const struct timespec *start) {
                  (now.tv_nsec - start->tv_nsec) / 1000000);
 }
 
-// runs the scanner on file_path and returns everything it printed (NULL when
-// nothing), its length in *out_len. A scanner that hangs is killed at the
-// timeout, keeping what it printed so far
-static char *clap_scan_run(const char *scanner, const char *file_path,
-                           size_t *out_len) {
+// runs the scanner with argv (argv[0] is its path) and returns everything it
+// printed (NULL when nothing), its length in *out_len. A scanner that hangs is
+// killed after timeout_ms, keeping what it printed so far. Output past
+// max_output is cut off
+static char *clap_scan_run(char *const argv[], int timeout_ms,
+                           size_t max_output, size_t *out_len) {
     *out_len = 0;
     int fds[2];
     if (pipe(fds) != 0)
@@ -2055,10 +1881,9 @@ static char *clap_scan_run(const char *scanner, const char *file_path,
     posix_spawnattr_setsigdefault(&attr, &all_signals);
     posix_spawnattr_setflags(&attr,
                              POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF);
-    char *const argv[] = {(char *)scanner, (char *)file_path, NULL};
     pid_t pid;
     int spawn_err =
-        posix_spawn(&pid, scanner, &actions, &attr, argv, environ);
+        posix_spawn(&pid, argv[0], &actions, &attr, argv, environ);
     posix_spawn_file_actions_destroy(&actions);
     posix_spawnattr_destroy(&attr);
     close(fds[1]);
@@ -2074,7 +1899,7 @@ static char *clap_scan_run(const char *scanner, const char *file_path,
     struct timespec start;
     clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
-        int left_ms = CLAP_SCAN_TIMEOUT_MS - clap_scan_ms_since(&start);
+        int left_ms = timeout_ms - clap_scan_ms_since(&start);
         struct pollfd pfd = {.fd = fds[0], .events = POLLIN};
         int ready = left_ms > 0 ? poll(&pfd, 1, left_ms) : 0;
         if (ready < 0 && errno == EINTR)
@@ -2084,7 +1909,7 @@ static char *clap_scan_run(const char *scanner, const char *file_path,
         if (len == cap) {
             size_t new_cap = cap ? cap * 2 : 4096;
             char *grown =
-                new_cap <= CLAP_SCAN_MAX_OUTPUT ? realloc(buf, new_cap) : NULL;
+                new_cap <= max_output ? realloc(buf, new_cap) : NULL;
             if (!grown)
                 break;
             buf = grown;
@@ -2152,7 +1977,9 @@ static bool clap_scan_parse(CLAP_PLUG_INFO *plug_data, const char *file_path,
 static void clap_plug_scan_file(CLAP_PLUG_INFO *plug_data,
                                 const CLAP_SCAN *scan, const char *file_path) {
     size_t len = 0;
-    char *out = clap_scan_run(scan->scanner, file_path, &len);
+    char *const argv[] = {(char *)scan->scanner, (char *)file_path, NULL};
+    char *out = clap_scan_run(argv, CLAP_SCAN_TIMEOUT_MS, CLAP_SCAN_MAX_OUTPUT,
+                              &len);
     if (clap_scan_parse(plug_data, file_path, out, len, false))
         clap_scan_parse(plug_data, file_path, out, len, true);
     else
@@ -2208,9 +2035,140 @@ static void clap_plug_scan_root(CLAP_PLUG_INFO *plug_data, CLAP_SCAN *scan,
         clap_plug_scan_dir(plug_data, scan, dir_path);
 }
 
+// empty the preset list, the keys stay
+static void clap_plug_presets_clear(CLAP_PLUG_PLUG *plug) {
+    tree_index_reset(plug->presets);
+    plug->presets_built = false;
+}
+
+// the identity of the preset at location / load_key into *buf, grown as
+// needed. false when it cannot grow
+static bool clap_scan_preset_identity(char **buf, size_t *cap,
+                                      const char *location,
+                                      const char *load_key) {
+    size_t need = clap_ext_preset_identity(NULL, 0, location, load_key) + 1;
+    if (need > *cap) {
+        char *grown = realloc(*buf, need);
+        if (!grown)
+            return false;
+        *buf = grown;
+        *cap = need;
+    }
+    clap_ext_preset_identity(*buf, *cap, location, load_key);
+    return true;
+}
+
+// adds the scanner's preset records (see clap_scan.h) to tree, in the order
+// they came. false when the output stops before the end mark or is malformed
+// - the presets read until then are kept
+static bool clap_scan_presets_parse(TREE_INDEX *tree, const char *buf,
+                                    size_t len) {
+    size_t pos = 0;
+    char *identity = NULL;
+    size_t identity_cap = 0;
+    bool complete = false;
+    for (;;) {
+        const char *field = clap_scan_field(buf, len, &pos);
+        if (!field || field[0] == '\0') {
+            complete = field != NULL;
+            break;
+        }
+        char *depth_end = NULL;
+        unsigned long depth = strtoul(field, &depth_end, 10);
+        if (*depth_end != '\0')
+            break;
+        // the category path, one branch per segment
+        uint64_t branch = 0;
+        bool placed = true;
+        for (unsigned long d = 0; d < depth && field; d++) {
+            field = clap_scan_field(buf, len, &pos);
+            if (field && placed) {
+                branch = tree_index_branch(tree, branch, field);
+                placed = branch != 0;
+            }
+        }
+        const char *name = field ? clap_scan_field(buf, len, &pos) : NULL;
+        const char *location = name ? clap_scan_field(buf, len, &pos) : NULL;
+        const char *load_key =
+            location ? clap_scan_field(buf, len, &pos) : NULL;
+        if (!load_key)
+            break;
+        if (placed && clap_scan_preset_identity(&identity, &identity_cap,
+                                                location, load_key))
+            tree_index_leaf(tree, branch, name, identity);
+    }
+    free(identity);
+    return complete;
+}
+
+// fills the preset list through the scanner, which runs the plugin's
+// preset-discovery factory in a process of its own: no instance of the plugin
+// lives there and nothing the plugin does while indexing can reach this one
+static void clap_plug_presets_scan(CLAP_PLUG_PLUG *plug) {
+    CLAP_PLUG_INFO *plug_data = plug->plug_data;
+    char scanner[MAX_PATH_STRING];
+    if (!clap_scan_find_scanner(scanner, sizeof(scanner)))
+        return;
+    char *const argv[] = {scanner, (char *)CLAP_SCAN_PRESETS_ARG,
+                          plug->plug_path, plug->plugin_id, NULL};
+    size_t len = 0;
+    char *out = clap_scan_run(argv, CLAP_SCAN_PRESETS_TIMEOUT_MS,
+                              CLAP_SCAN_PRESETS_MAX_OUTPUT, &len);
+    if (!clap_scan_presets_parse(plug->presets, out, len))
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "Not every preset of %s could be listed\n",
+                             plug->name);
+    free(out);
+}
+
+// the preset list, read the first time it is asked for. NULL (no presets)
+// when the index cannot be allocated - the next browse tries again
+static TREE_INDEX *clap_plug_presets_get(CLAP_PLUG_PLUG *plug) {
+    if (!plug || !plug->plug_inst || !plug->plug_data)
+        return NULL;
+    if (!plug->presets) {
+        plug->presets = tree_index_new();
+        if (!plug->presets)
+            return NULL;
+    }
+    if (!plug->presets_built) {
+        // also when there are none, so they are not looked for on every browse
+        plug->presets_built = true;
+        tree_index_reset(plug->presets);
+        clap_plug_presets_scan(plug);
+        tree_index_finish(plug->presets);
+    }
+    return plug->presets;
+}
+
+size_t clap_plug_presets_level_count(void *plug, uint64_t branch) {
+    return tree_index_level_count(clap_plug_presets_get(plug), branch);
+}
+
+bool clap_plug_presets_level_at(void *plug, uint64_t branch, size_t idx,
+                                TREE_ROW *out) {
+    return tree_index_level_at(clap_plug_presets_get(plug), branch, idx, out);
+}
+
+int clap_plug_preset_load(void *plug, uint64_t key) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug || !cur_plug->plug_inst)
+        return -1;
+    const char *identity = tree_index_leaf_identity(cur_plug->presets, key);
+    if (!identity)
+        return -2;
+    // the plugin reports the new param values itself (params rescan or
+    // events), like any change it makes
+    return clap_ext_preset_load(cur_plug->plug_inst, identity) ? 0 : -1;
+}
+
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data) {
     if (!plug_data)
         return -1;
+    // a rescan is also how new preset files of a loaded plugin show up
+    for (int i = 0; i < MAX_INSTANCES; i++)
+        clap_plug_presets_clear(&plug_data->plugins[i]);
     // checked first, so a list that cannot be rebuilt is kept
     CLAP_SCAN scan = {0};
     if (!clap_scan_find_scanner(scan.scanner, sizeof(scan.scanner))) {

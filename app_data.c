@@ -17,7 +17,6 @@
 #include "util_funcs/math_funcs.h"
 #include "util_funcs/ring_buffer.h"
 #include <threads.h>
-static thread_local bool is_audio_thread = false;
 
 // starting size of the data event queue, it grows when a cycle produces more
 // (a CLAP text rescan changes every param of the plugin at once)
@@ -137,7 +136,6 @@ static int app_sys_msg(void *user_data, const char *msg) {
 
 // read ring buffers sent from ui to rt thread
 static int app_read_rt_messages(APP_INFO *app_data) {
-    is_audio_thread = true;
     if (!app_data)
         return -1;
     // first read the app_data messages
@@ -264,9 +262,9 @@ enum {
     DATA_LIST_NS_PORTS = 2,
     DATA_LIST_NS_PARAM_CHOICE = 3,
     DATA_LIST_NS_CLAP_CATALOG = 4,
-    // the category rows (DATA_CHOICE_BRANCH) of every list
-    DATA_LIST_NS_BRANCH = 5,
+    DATA_LIST_NS_BRANCH = 5, // the category rows (DATA_CHOICE_BRANCH) of every list
     DATA_LIST_NS_LV2_PRESET = 6,
+    DATA_LIST_NS_CLAP_PRESET = 7,
 };
 #define MAKE_LIST_ID(ns, local)                                                \
     (((DataListId)(ns) << CTXID_NS_SHIFT) | ((DataListId)(local) & CTXID_LOCAL_MASK))
@@ -275,8 +273,7 @@ enum {
 #define LIST_CLAP_CATALOG MAKE_LIST_ID(DATA_LIST_NS_CLAP_CATALOG, 1)
 
 // single static list id, reused by every enum param's SET_CHOICE arg - the
-// param itself (via list_at's own user_data) disambiguates which one's
-// range to walk, not this id.
+// param itself (via list_at's own user_data) chooses the container
 #define LIST_PARAM_CHOICES MAKE_LIST_ID(DATA_LIST_NS_PARAM_CHOICE, 1)
 
 // local part for the DATA_LIST_NS_PORTS namespace. Both are plain static
@@ -288,26 +285,9 @@ enum {
     LID_PORTS_PEERS,
 };
 
-// every loaded lv2 plugin's preset list - the plugin in user_data picks whose
+// every loaded plugin's preset list - the plugin in user_data picks whose
 #define LIST_LV2_PRESETS MAKE_LIST_ID(DATA_LIST_NS_LV2_PRESET, 1)
-
-// a module's branch key from a list's branch argument: 0 is the top level, a
-// category row's value loses its namespace. false for anything else
-static bool list_branch_key(uint64_t branch, uint64_t *out) {
-    *out = branch & CTXID_LOCAL_MASK;
-    return branch == 0 ||
-           (CTXID_NS(branch) == DATA_LIST_NS_BRANCH && *out != 0);
-}
-
-// a tree_index row as a choice: category rows in DATA_LIST_NS_BRANCH, the
-// rest in leaf_ns
-static void list_choice_from_tree_row(const TREE_ROW *row, unsigned int leaf_ns,
-                                      DataChoice *out) {
-    out->value =
-        MAKE_ID(row->is_branch ? DATA_LIST_NS_BRANCH : leaf_ns, row->key);
-    out->label = row->name;
-    out->flags = row->is_branch ? DATA_CHOICE_BRANCH : 0;
-}
+#define LIST_CLAP_PRESETS MAKE_LIST_ID(DATA_LIST_NS_CLAP_PRESET, 1)
 
 // one parameter, from any owner. user_data is the opaque handle from
 // param_get_handle.
@@ -803,6 +783,71 @@ static const DataOps sampler_ops = {
     .action_do = sampler_action_do,
 };
 
+// a module's branch key from a list's branch argument: 0 is the top level, a
+// category row's value loses its namespace. Returns true only for branches.
+static bool list_branch_key(uint64_t branch, uint64_t *out) {
+    *out = branch & CTXID_LOCAL_MASK;
+    return branch == 0 ||
+           (CTXID_NS(branch) == DATA_LIST_NS_BRANCH && *out != 0);
+}
+
+// a tree_index row as a choice: category rows in DATA_LIST_NS_BRANCH, the
+// rest in leaf_ns
+static void list_choice_from_tree_row(const TREE_ROW *row, unsigned int leaf_ns,
+                                      DataChoice *out) {
+    out->value =
+        MAKE_ID(row->is_branch ? DATA_LIST_NS_BRANCH : leaf_ns, row->key);
+    out->label = row->name;
+    out->flags = row->is_branch ? DATA_CHOICE_BRANCH : 0;
+}
+
+// a loaded plugin's (lv2 or clap) action menu: Remove, and Preset - loading
+// one picked from its preset list. 
+static size_t plugin_action_list(DataAction *out, size_t cap) {
+    if (!out)
+        return 0;
+    size_t n = 0;
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_REMOVE,
+            .label = "Remove",
+            .tooltip = "Remove this plugin",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_DANGEROUS,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_SET_CHOICE,
+            .label = "Preset",
+            .tooltip = "Load one of this plugin's presets",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    return n;
+}
+
+// the Preset action's one arg, picked from the plugin's preset list
+static size_t plugin_preset_args(DataActionType type, DataListId list,
+                                 DataArgSpec *out, size_t cap) {
+    if (type != DATA_ACTION_SET_CHOICE || !out || cap < 1)
+        return 0;
+    out[0] = (DataArgSpec){
+        .name = "preset",
+        .label = "Preset",
+        .kind = DATA_ARG_CHOICE,
+        .required = true,
+        .list = list,
+    };
+    return 1;
+}
+
+// a module's preset load result: 0 loaded, -2 no preset has the key any more
+static DataActionResult plugin_preset_loaded(int loaded) {
+    if (loaded == -2)
+        return DATA_ACTION_ERR_STALE; // the preset list changed since the pick
+    return loaded == 0 ? DATA_ACTION_OK : DATA_ACTION_ERR_DATA;
+}
+
 // single loaded lv2 plugin. user_data is the PLUG_PLUG* from plug_plugin_return.
 static size_t lv2_plugin_child_count(void *user_data) {
     return cx_param_level_count(plug_plugin_param_container(user_data), 0);
@@ -818,42 +863,12 @@ static ContextId lv2_plugin_id(void *user_data) {
 static size_t lv2_plugin_action_list(void *user_data, DataAction *out,
                                      size_t cap) {
     (void)user_data;
-    if (!out)
-        return 0;
-    size_t n = 0;
-    if (n < cap)
-        out[n++] = (DataAction){
-            .type = DATA_ACTION_REMOVE,
-            .label = "Remove",
-            .tooltip = "Remove this plugin",
-            .enabled = true,
-            .style = DATA_ACTION_STYLE_DANGEROUS,
-        };
-    // always enabled: this runs every frame, and asking whether there are
-    // presets would read them
-    if (n < cap)
-        out[n++] = (DataAction){
-            .type = DATA_ACTION_SET_CHOICE,
-            .label = "Preset",
-            .tooltip = "Load one of this plugin's presets",
-            .enabled = true,
-            .style = DATA_ACTION_STYLE_NORMAL,
-        };
-    return n;
+    return plugin_action_list(out, cap);
 }
 static size_t lv2_plugin_action_args(void *user_data, DataActionType type,
                                      DataArgSpec *out, size_t cap) {
     (void)user_data;
-    if (type != DATA_ACTION_SET_CHOICE || !out || cap < 1)
-        return 0;
-    out[0] = (DataArgSpec){
-        .name = "preset",
-        .label = "Preset",
-        .kind = DATA_ARG_CHOICE,
-        .required = true,
-        .list = LIST_LV2_PRESETS,
-    };
-    return 1;
+    return plugin_preset_args(type, LIST_LV2_PRESETS, out, cap);
 }
 static size_t lv2_plugin_list_count(void *user_data, DataListId list,
                                     const DataActionReq *partial,
@@ -892,10 +907,8 @@ static DataActionResult lv2_plugin_action_do(void *user_data,
     // also refuses a category row's value
     if (CTXID_NS(value) != DATA_LIST_NS_LV2_PRESET)
         return DATA_ACTION_ERR_INVALID;
-    int loaded = plug_plugin_preset_load(user_data, value & CTXID_LOCAL_MASK);
-    if (loaded == -2)
-        return DATA_ACTION_ERR_STALE; // the preset list changed since the pick
-    return loaded == 0 ? DATA_ACTION_OK : DATA_ACTION_ERR_DATA;
+    return plugin_preset_loaded(
+        plug_plugin_preset_load(user_data, value & CTXID_LOCAL_MASK));
 }
 // plug_plugin_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps lv2_plugin_ops = {
@@ -1055,33 +1068,59 @@ static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
 static ContextId clap_plugin_id(void *user_data) {
     return MAKE_ID(DATA_NS_CLAP_PLUG, clap_plug_plugin_uid(user_data));
 }
-// DATA_CAP_ACTIONS: a loaded clap plugin can only be removed. No args, no
-// lists - action_args/list_count/list_at stay unset.
+// DATA_CAP_ACTIONS: a loaded clap plugin can be removed, and can load a preset
+// picked from its preset list (locations and their sub directories as
+// category rows).
 static size_t clap_plugin_action_list(void *user_data, DataAction *out,
                                       size_t cap) {
     (void)user_data;
-    if (!out || cap < 1)
+    return plugin_action_list(out, cap);
+}
+static size_t clap_plugin_action_args(void *user_data, DataActionType type,
+                                      DataArgSpec *out, size_t cap) {
+    (void)user_data;
+    return plugin_preset_args(type, LIST_CLAP_PRESETS, out, cap);
+}
+static size_t clap_plugin_list_count(void *user_data, DataListId list,
+                                     const DataActionReq *partial,
+                                     uint64_t branch) {
+    (void)partial;
+    uint64_t key;
+    if (list != LIST_CLAP_PRESETS || !list_branch_key(branch, &key))
         return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_REMOVE,
-        .label = "Remove",
-        .tooltip = "Remove this plugin",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_DANGEROUS,
-    };
-    return 1;
+    return clap_plug_presets_level_count(user_data, key);
+}
+static bool clap_plugin_list_at(void *user_data, DataListId list,
+                                const DataActionReq *partial, uint64_t branch,
+                                size_t idx, DataChoice *out) {
+    (void)partial;
+    uint64_t key;
+    TREE_ROW row;
+    if (list != LIST_CLAP_PRESETS || !list_branch_key(branch, &key) ||
+        !clap_plug_presets_level_at(user_data, key, idx, &row))
+        return false;
+    list_choice_from_tree_row(&row, DATA_LIST_NS_CLAP_PRESET, out);
+    return true;
 }
 static DataActionResult clap_plugin_action_do(void *user_data,
                                               const DataActionReq *req,
                                               ContextId *out_new) {
-    (void)out_new; // REMOVE creates nothing
-    if (!req || req->type != DATA_ACTION_REMOVE)
+    (void)out_new; // neither action creates anything
+    if (!req || !user_data)
         return DATA_ACTION_ERR_INVALID;
-    if (!user_data)
+    if (req->type == DATA_ACTION_REMOVE)
+        return clap_plug_plug_stop_and_clean(user_data) != 0
+                   ? DATA_ACTION_ERR_DATA
+                   : DATA_ACTION_OK;
+    if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
-    if (clap_plug_plug_stop_and_clean(user_data) != 0)
-        return DATA_ACTION_ERR_DATA;
-    return DATA_ACTION_OK;
+
+    ContextId value = (ContextId)req->add_choice.choice_value;
+    // also refuses a category row's value
+    if (CTXID_NS(value) != DATA_LIST_NS_CLAP_PRESET)
+        return DATA_ACTION_ERR_INVALID;
+    return plugin_preset_loaded(
+        clap_plug_preset_load(user_data, value & CTXID_LOCAL_MASK));
 }
 // clap_plug_plugin_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps clap_plugin_ops = {
@@ -1093,6 +1132,9 @@ static const DataOps clap_plugin_ops = {
     .child_at = clap_plugin_child_at,
     .name = clap_plug_plugin_name,
     .action_list = clap_plugin_action_list,
+    .action_args = clap_plugin_action_args,
+    .list_count = clap_plugin_list_count,
+    .list_at = clap_plugin_list_at,
     .action_do = clap_plugin_action_do,
 };
 

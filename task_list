@@ -29,75 +29,6 @@ Any new CX-backed object should follow this rather than re-deriving it:
 ================================================================================
 PLAN
 ================================================================================
-1. PLUGIN PRESET BROWSING, with categories.
-   Presets are a list (list_count/list_at) on the loaded plugin, never CX
-   nodes. Category rows drill in. The old preset functions in plugins.c /
-   clap_plugins.c have no callers - replace them, no twins.
-   NAMING TRAP: preset categories (a path from the preset factory / LV2
-   bank) have nothing to do with parameter categories (PRM_PARAM_CATEGORY).
-   Decided: explicit branch argument; discovery order, no sort pass; one
-   CLAP index per plugin instance.
-
-1a. DONE. intern_table: hash index for intern_find (no API change). Presets can
-    be 10k+ names, a linear scan makes a rebuild O(n^2).
-
-1b. DONE. Contract: DATA_CHOICE_BRANCH row flag (a category - picking it opens
-    it, never reaches action_do) + explicit uint64_t branch argument on
-    list_count/list_at (0 = top), passed through data_object.h, app_intrf
-    and ui_layer. Existing lists ignore it.
-
-1c. DONE. util_funcs/tree_index, shared by LV2 and CLAP. Opaque:
-    tree_index_new/free, every function takes NULL as empty. The owner walks
-    its own path syntax: tree_index_branch(parent, name) per level, then
-    tree_index_leaf(branch, name, identity), then tree_index_finish. Per
-    level sub-categories first, then presets, both in discovery order,
-    O(1) level_at, empty categories left out. Keys minted by two intern
-    tables that survive tree_index_reset. tree_index_leaf_identity gives
-    the identity back - it is all a module keeps per preset (no parallel
-    arrays; add per preset data only if a real need appears).
-
-1d. DONE. LV2: build the index once (lilv_plugin_get_related once,
-    rdfs:label from the manifest, load_resource only when the label is
-    missing, pset:bank label as the category). level_count/level_at/load by
-    key/invalidate on the void *plug handle. Symbol -> port table for
-    restore. Known limit: a pset:bank only inside a preset's own file is
-    seen only when that file had to be read for the label.
-
-1e. CLAP: rewrite clap_ext_preset_factory into one crawl pass (one readdir
-    per dir, d_type) adding each preset straight to the tree index.
-    Identity = location + "\x1f" + load_key: the load splits at the FIRST
-    \x1f (a load_key can hold anything), an empty location means
-    LOCATION_PLUGIN. Fix: several presets per container file, NULL location of
-    LOCATION_PLUGIN, uninitialised plugin_id, empty extension = every file,
-    skipped first location of the next provider, try the _COMPAT factory
-    id. clap_plugins.c: index built lazily per instance and cached, same
-    API as LV2, load through the preset-load extension.
-
-1f. DONE (LV2). app_data.c: DATA_LIST_NS_BRANCH (category rows of any
-    list) + DATA_LIST_NS_LV2_PRESET, static LIST_LV2_PRESETS, SET_CHOICE
-    "Preset" on lv2_plugin_ops. Always enabled - action_list runs every
-    frame and must never index. Helpers list_branch_key /
-    list_choice_from_tree_row are shared with CLAP. No per plugin rescan
-    action for LV2: new preset bundles only enter the lilv world through
-    the catalogue Scan (plug_plugin_list_init), which now also makes every
-    loaded plugin read its presets again. The CLAP half (namespace, list,
-    action) lands with 1e.
-    Also DONE: LV2 property params follow the plugin - patch:Set and
-    patch:Put (the answer to patch:Get) on its output update them (property
-    URID -> val_id table, bsearch on rt). param_rt_resend (params.c) sends
-    the values a full rt_to_ui queue refused; LV2 plugins and the JACK
-    transport call it per cycle, CLAP recovers with
-    clap_plug_params_sync_values instead. Control port params of plugins
-    with opaque state (JUCE, Pianoteq) cannot follow - LV2 gives no way.
-
-1g. DONE. CLI: LIST_SESSION keeps a stack per spec of LIST_LEVEL {branch,
-    parent LIST_CURSOR, label copy}, LIST_DEPTH_MAX 16. l on a category
-    pushes, h/ESC pops and restores the cursor (cancel at the top).
-    Category rows end in "/", the title shows the path ("Preset / Bank").
-    A new CONNECT source empties the target list's stack.
-
-    LV2 first (1d, 1f, 1g) proves the contract end to end before 1e.
-
     MEMO, after CLAP presets work: param_find_owner_id is a linear scan and
     runs on the [audio-thread] for every CLAP output param event
     (clap_plugins.c, output events loop). Check whether real plugins send a
@@ -107,8 +38,9 @@ PLAN
     are integers).
 
 2. CLAP + LV2 optimisation / cleanup.
+    LV2 - check what needs to be optimized, clear outstanding bugs.
     CLAP - needs critical extensions implemented, that will touch other parts of the code too.
-    Latency, posix_fd_support, timer_support, optional wakefd. Others that plugins like Surge requests.
+    Latency, then 2a - 2d. Others that plugins like Surge requests.
 
 2a. CLAP GUI GROUNDWORK (Linux). Plugins borrow the host's [main-thread] loop.
    The CLI scanf/fgets prompts block it and would freeze plugin GUIs.
@@ -146,9 +78,7 @@ PLAN
    NEVER serialise a params.c uid or a ContextId: the uid counter restarts
    at 0 every launch, so uid 7 is a different param next run. Save DOMAIN
    identity - plugin URI, the plugin's own param id (owner_id), sample path,
-   port name. Every owner now supplies a real owner_id; LV2's is the control
-   index and must be mapped to plug->controls[owner_id - 1]->symbol before
-   writing, never persisted as the index.
+   port name. Every owner now supplies a real owner_id;
 
 4. CX_MOVED + reparenting. DEFERRED - no trigger yet.
    Only buys a non-destructive rename/move IN PLACE, which needs user-
@@ -161,12 +91,3 @@ PLAN
    destination exists, removals last so survivors are moved out of doomed
    subtrees) - getting that backwards silently frees live nodes. ui_layer
    cost is ~3 lines: mark the view touched, no pruning.
-
-5. SLOT-TABLE EXTRACTION. DEFERRED - no trigger yet.
-   The tribal rules above (1-3) are not enforced anywhere; getting one wrong
-   is a silent use-after-free. Extract into util_funcs/ when a THIRD growable
-   identity-bearing entity appears (a pattern/clip list, a modulation matrix,
-   user macros). Not before: the only two growable ones are params and
-   categories, both in params.c, and they already disagree on whether removal
-   exists - so which behaviour is "general" is not yet knowable.
-

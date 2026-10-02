@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include "../structs.h"
+#include "../util_funcs/tree_index.h"
 #include "params.h"
 
 enum ClapPlugStatus {
@@ -22,34 +23,21 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data);
 // whole process to stop.
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data);
 
-// iterate through the presets and return the preset struct, that can be used to
-// return the preset short name, path, categories user has to call
-// clap_plug_presets_clean_preset function after done with the struct
-void *clap_plug_presets_iterate(CLAP_PLUG_INFO *plug_data,
-                                unsigned int plug_idx, uint32_t iter);
+// presets --------------------------------------------------
+// A loaded plugin's presets from its preset-discovery factory, browsed one
+// level at a time: categories first (a location, then its sub directories),
+// then presets. branch is 0 for the top level, or a category row's key. Built
+// the first time it is browsed and kept until clap_plug_plugin_list_init or
+// the plugin is removed. A row's name is valid until then too.
+size_t clap_plug_presets_level_count(void *plug, uint64_t branch);
+bool clap_plug_presets_level_at(void *plug, uint64_t branch, size_t idx,
+                                TREE_ROW *out);
 
-// return the short name of the preset
-int clap_plug_presets_name_return(CLAP_PLUG_INFO *plug_data, void *preset_info,
-                                  char *name, uint32_t name_len);
-
-// return the full path of the preset
-int clap_plug_presets_path_return(CLAP_PLUG_INFO *plug_data, void *preset_info,
-                                  char *path, uint32_t path_len);
-
-// return the category in the preset_info struct. Categories is a string,
-// separated by "/", if idx is too big will return -1
-int clap_plug_presets_categories_iterate(CLAP_PLUG_INFO *plug_data,
-                                         void *preset_info, char *category,
-                                         uint32_t category_len, uint32_t idx);
-
-// clean the preset_info struct returned from the clap_plug_presets_iterate
-// function
-void clap_plug_presets_clean_preset(CLAP_PLUG_INFO *plug_data,
-                                    void *preset_info);
-
-// look for and load if found a preset from the full_path
-int clap_plug_preset_load_from_path(CLAP_PLUG_INFO *plug_data, int plug_id,
-                                    const char *preset_path);
+// load the preset with this key (a preset row's key) through the plugin's
+// preset-load extension. 0 on success, -1 when it failed to load, -2 when no
+// preset has this key
+int clap_plug_preset_load(void *plug, uint64_t key);
+//--------------------------------------------------
 
 // initiate the main plugin data struct. owner_tag is what the caller pairs
 // with a plugin's uid to name the owner of that plugin's ports
@@ -60,7 +48,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
 
 // Scans the clap paths and (re)builds the list of available plugins.
 // Safe to call again while plugins are loaded. A plugin keeps its key across
-// rebuilds
+// rebuilds. Loaded plugins read their presets again on the next browse
 int clap_plug_plugin_list_init(CLAP_PLUG_INFO *plug_data);
 
 // return how many plugins are in the catalogue built by
