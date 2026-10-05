@@ -103,9 +103,14 @@ void plug_set_block_length(PLUG_INFO *plug_data, uint32_t block_length);
 // function sent here returns 0 on success
 int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug);
 
-// connect the ports, run the plugins instances for nframes, and update the
-// output ports, use on [audio-thread]
-void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes);
+// the slot-th plugin slot, loaded or not; NULL past the last slot.
+// [audio-thread] safe, for the per-plugin process loop
+void *plug_plugin_slot(PLUG_INFO *plug_data, unsigned int slot);
+
+// connect the ports, run one plugin (a plug_plugin_slot handle) for nframes
+// and update its output ports, on [audio-thread]. true if it wrote its
+// outputs this cycle (false: stopped)
+bool plug_plugin_process_rt(void *plug, NFRAMES_T nframes);
 
 // stop processing the plugin and remove it.
 // plugin will be stopped on [audio-thread], if there is no [audio-thread] this

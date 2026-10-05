@@ -31,9 +31,9 @@ int smp_activate_backend_ports(SMP_INFO* smp_data);
 //on success returns the new sample's identity uid (always > 0, matching
 //smp_sample_uid); on failure returns 0.
 uint32_t smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id);
-//process the samples and return summed audio buffer
-//uses one callback to get_buffer from the sys_ports and another to get_notes from the midi sys_port
-int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes);
+//process the sampler (smp_data is a SMP_INFO*, the sampler is one owner) into
+//its summed outs, on the [audio-thread]. true if it wrote its outputs
+bool smp_process_rt(void* smp_data, NFRAMES_T nframes);
 //copy to new malloced string and return the file path of the sample
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id);
 //return the idx-th loaded sample (walking occupied slots in order), NULL past

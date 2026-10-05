@@ -411,13 +411,15 @@ static void smp_sum_channel_buffers_rt(SMP_SMP* cur_smp, SAMPLE_T* out_L, SAMPLE
     }    
 }
 
-int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
+bool smp_process_rt(void* smp_data_ptr, NFRAMES_T nframes){
+    SMP_INFO* smp_data = (SMP_INFO*)smp_data_ptr;
+    if(!smp_data)return false;
     SMP_PORT* midi_port = &(smp_data->ports[0]);
     SMP_PORT* out_L_port = &(smp_data->ports[1]);
     SMP_PORT* out_R_port = &(smp_data->ports[2]);    
     SAMPLE_T* out_L = app_jack_get_buffer_rt(out_L_port->sys_port, nframes);
     SAMPLE_T* out_R = app_jack_get_buffer_rt(out_R_port->sys_port, nframes);
-    if(!out_L || !out_R)return -1;
+    if(!out_L || !out_R)return false;
     memset(out_L, '\0', sizeof(SAMPLE_T)*nframes);
     memset(out_R, '\0', sizeof(SAMPLE_T)*nframes); 
 
@@ -475,7 +477,7 @@ int smp_sample_process_rt(SMP_INFO* smp_data, uint32_t nframes){
 	}
     }
     
-    return 0;
+    return true;
 }
 
 char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){

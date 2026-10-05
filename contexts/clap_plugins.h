@@ -97,8 +97,13 @@ bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data);
 // return this plugin instance's own param container, NULL on error/none yet
 PRM_CONTAIN *clap_plug_plugin_param_container(void *plug);
 
-// process the clap plugins, must be called on the [audio-thread]
-void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes);
+// the slot-th plugin slot, loaded or not; NULL past the last slot.
+// [audio-thread] safe, for the per-plugin process loop
+void *clap_plug_plugin_slot(CLAP_PLUG_INFO *plug_data, unsigned int slot);
+
+// process one plugin (a clap_plug_plugin_slot handle) on the [audio-thread].
+// true if it wrote its outputs this cycle (false: stopped, sleeping, error)
+bool clap_plug_plugin_process_rt(void *plug, NFRAMES_T nframes);
 
 // remove the clap plugin
 int clap_plug_plug_stop_and_clean(void *plug);

@@ -914,7 +914,7 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
 }
 
 // copy the osc buffers to its audio out ports
-static void synth_osc_write_outs_rt(SYNTH_OSC *osc, NFRAMES_T nframes) {
+static bool synth_osc_write_outs_rt(SYNTH_OSC *osc, NFRAMES_T nframes) {
     // the metronome osc has no midi in port
     SYNTH_PORT *l_Port = NULL;
     SYNTH_PORT *r_Port = NULL;
@@ -929,9 +929,10 @@ static void synth_osc_write_outs_rt(SYNTH_OSC *osc, NFRAMES_T nframes) {
     SAMPLE_T *out_L = app_jack_get_buffer_rt(l_Port->sys_port, nframes);
     SAMPLE_T *out_R = app_jack_get_buffer_rt(r_Port->sys_port, nframes);
     if (!out_L || !out_R)
-        return;
+        return false;
     memcpy(out_L, osc->buffer_L, sizeof(SAMPLE_T) * nframes);
     memcpy(out_R, osc->buffer_R, sizeof(SAMPLE_T) * nframes);
+    return true;
 }
 
 // this function finds a voice to play, does not produce any sound though
@@ -1077,8 +1078,8 @@ static int synth_metronome_process_rt(SYNTH_DATA *synth_data,
 }
 
 // render up to each MIDI event, then apply it - every event acts at its frame
-static void synth_osc_process_rt(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
-                                 NFRAMES_T nframes) {
+static void synth_osc_midi_process_rt(SYNTH_DATA *synth_data,
+                                      SYNTH_OSC *osc, NFRAMES_T nframes) {
     SYNTH_PORT *midi_port = &(osc->ports[0]);
     app_jack_midi_in_rt(midi_port->sys_port, nframes, midi_port->midi_buf);
     NFRAMES_T pos = 0;
@@ -1099,32 +1100,25 @@ static void synth_osc_process_rt(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
     synth_process_osc_voices(synth_data, osc, pos, nframes);
 }
 
-int synth_process_rt(SYNTH_DATA *synth_data, NFRAMES_T nframes) {
-    if (!synth_data)
-        return -1;
-    if (!synth_data->audio_backend)
-        return -1;
-    if (!synth_data->osc_array)
-        return -1;
-    if (synth_data->num_osc == 0)
-        return -1;
+bool synth_osc_process_rt(void *osc_ptr, NFRAMES_T nframes) {
+    SYNTH_OSC *osc = (SYNTH_OSC *)osc_ptr;
+    if (!osc)
+        return false;
+    SYNTH_DATA *synth_data = osc->synth_data;
+    if (!synth_data || !synth_data->audio_backend)
+        return false;
 
-    for (unsigned int i = 0; i < synth_data->num_osc; i++) {
-        SYNTH_OSC *cur_osc = &(synth_data->osc_array[i]);
-        memset(cur_osc->buffer_L, '\0', sizeof(SAMPLE_T) * nframes);
-        memset(cur_osc->buffer_R, '\0', sizeof(SAMPLE_T) * nframes);
-        synth_osc_params_read_rt(cur_osc);
-        // osc 0 is the metronome, if there is one
-        if (i == 0 && synth_data->with_metronome == 1)
-            synth_metronome_process_rt(synth_data, cur_osc, nframes);
-        else
-            synth_osc_process_rt(synth_data, cur_osc, nframes);
-        // TODO the highest value or average of the buffers could go to a
-        // read-only param, to show for example Osc volume levels
-        synth_osc_write_outs_rt(cur_osc, nframes);
-    }
-
-    return 0;
+    memset(osc->buffer_L, '\0', sizeof(SAMPLE_T) * nframes);
+    memset(osc->buffer_R, '\0', sizeof(SAMPLE_T) * nframes);
+    synth_osc_params_read_rt(osc);
+    // osc 0 is the metronome, if there is one
+    if (osc->id == 0 && synth_data->with_metronome == 1)
+        synth_metronome_process_rt(synth_data, osc, nframes);
+    else
+        synth_osc_midi_process_rt(synth_data, osc, nframes);
+    // TODO the highest value or average of the buffers could go to a
+    // read-only param, to show for example Osc volume levels
+    return synth_osc_write_outs_rt(osc, nframes);
 }
 
 void *synth_osc_return(SYNTH_DATA *synth_data, unsigned int osc_num) {

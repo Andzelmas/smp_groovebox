@@ -2932,108 +2932,115 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
     return not_quiet;
 }
 
-void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes) {
-    if (!plug_data)
-        return;
-    for (int id = 0; id < MAX_INSTANCES; id++) {
-        CLAP_PLUG_PLUG *plug = &(plug_data->plugins[id]);
-        // do nothing if the plugin is completely stopped
-        if (plug->plug_inst_processing == 0)
-            continue;
+void *clap_plug_plugin_slot(CLAP_PLUG_INFO *plug_data, unsigned int slot) {
+    if (!plug_data || slot >= MAX_INSTANCES)
+        return NULL;
+    return (void *)&(plug_data->plugins[slot]);
+}
 
-        clap_process_t _process = {0};
-        _process.steady_time = -1;
-        _process.frames_count = nframes;
-        _process.transport = NULL;
+bool clap_plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)plug_ptr;
+    if (!plug)
+        return false;
+    // do nothing if the plugin is completely stopped
+    if (plug->plug_inst_processing == 0)
+        return false;
+    CLAP_PLUG_INFO *plug_data = plug->plug_data;
 
-        // copy sys input audio buffers to clap input audio buffers
-        int in_audio_not_quiet =
-            clap_prepare_input_ports(plug_data, &(plug->input_ports), nframes);
-        _process.audio_inputs = NULL;
-        _process.audio_inputs_count = 0;
-        if (in_audio_not_quiet != -1) {
-            _process.audio_inputs_count = plug->input_ports.ports_count;
-            _process.audio_inputs = plug->input_ports.audio_ports;
-        }
+    clap_process_t _process = {0};
+    _process.steady_time = -1;
+    _process.frames_count = nframes;
+    _process.transport = NULL;
 
-        _process.audio_outputs = plug->output_ports.audio_ports;
-        _process.audio_outputs_count = plug->output_ports.ports_count;
+    // copy sys input audio buffers to clap input audio buffers
+    int in_audio_not_quiet =
+        clap_prepare_input_ports(plug_data, &(plug->input_ports), nframes);
+    _process.audio_inputs = NULL;
+    _process.audio_inputs_count = 0;
+    if (in_audio_not_quiet != -1) {
+        _process.audio_inputs_count = plug->input_ports.ports_count;
+        _process.audio_inputs = plug->input_ports.audio_ports;
+    }
 
-        // write messages from midi, parameters and similar to the input events
-        int in_event_not_quiet =
-            clap_input_events_prepare(plug_data, nframes, plug);
-        _process.in_events = &(plug->input_events);
+    _process.audio_outputs = plug->output_ports.audio_ports;
+    _process.audio_outputs_count = plug->output_ports.ports_count;
 
-        // reset the output event array and the note outs the plugin pushes to
-        ub_list_reset(plug->out_list);
-        clap_note_outs_clear(&(plug->output_note_ports), nframes);
-        _process.out_events = &(plug->output_events);
+    // write messages from midi, parameters and similar to the input events
+    int in_event_not_quiet =
+        clap_input_events_prepare(plug_data, nframes, plug);
+    _process.in_events = &(plug->input_events);
 
-        // the plugin is sleeping, check if it needs to wake up
+    // reset the output event array and the note outs the plugin pushes to
+    ub_list_reset(plug->out_list);
+    clap_note_outs_clear(&(plug->output_note_ports), nframes);
+    _process.out_events = &(plug->output_events);
+
+    // the plugin is sleeping, check if it needs to wake up
+    if (plug->plug_inst_processing == 2) {
+        // if audio or event input was not quiet from the system ports start
+        // the plugin and continue the process
+        if ((in_audio_not_quiet != 0 || in_event_not_quiet != 0) &&
+            plug->plug_inst->start_processing(plug->plug_inst))
+            plug->plug_inst_processing = 1;
         if (plug->plug_inst_processing == 2) {
-            // if audio or event input was not quiet from the system ports start
-            // the plugin and continue the process
-            if ((in_audio_not_quiet != 0 || in_event_not_quiet != 0) &&
-                plug->plug_inst->start_processing(plug->plug_inst))
-                plug->plug_inst_processing = 1;
-            if (plug->plug_inst_processing == 2) {
-                clap_note_outs_write(&(plug->output_note_ports), nframes);
-                continue;
-            }
+            clap_note_outs_write(&(plug->output_note_ports), nframes);
+            return false;
         }
+    }
 
-        clap_process_status clap_status =
-            plug->plug_inst->process(plug->plug_inst, &_process);
+    clap_process_status clap_status =
+        plug->plug_inst->process(plug->plug_inst, &_process);
 
-        if (clap_status == CLAP_PROCESS_ERROR) {
-            // process failed so fill the system output with zeroes and do
-            // nothing with output events
-            clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
-                                      true);
-            clap_note_outs_clear(&(plug->output_note_ports), nframes);
-            context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                                 is_audio_thread,
-                                 "ERROR Processing discard buffer\n");
-        }
-        if (clap_status == CLAP_PROCESS_CONTINUE) {
-            clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
-                                      false);
-            clap_output_events_read(plug_data, plug);
-        }
-        if (clap_status == CLAP_PROCESS_CONTINUE_IF_NOT_QUIET) {
-            int not_quiet_audio = clap_prepare_output_ports(
-                plug_data, &(plug->output_ports), nframes, false);
-            int not_quiet_events =
-                clap_output_events_read(plug_data, plug);
-            context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                                 is_audio_thread, "Process if NOT_QUIET\n");
-            // process successful but outputs are quiet send this plugin to
-            // sleep
-            if (not_quiet_audio == 0 && not_quiet_events == 0) {
-                plug->plug_inst->stop_processing(plug->plug_inst);
-                plug->plug_inst_processing = 2;
-            }
-        }
-        if (clap_status == CLAP_PROCESS_TAIL) {
-            context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                                 is_audio_thread, "Process if TAIL\n");
-            clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
-                                      false);
-            clap_output_events_read(plug_data, plug);
-            // TODO implement tail extension
-        }
-        if (clap_status == CLAP_PROCESS_SLEEP) {
-            context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                                 is_audio_thread, "SLEEP for now\n");
-            clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
-                                      false);
-            clap_output_events_read(plug_data, plug);
-            // no need to process further so plugin goes to sleep
+    if (clap_status == CLAP_PROCESS_ERROR) {
+        // process failed so fill the system output with zeroes and do
+        // nothing with output events
+        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
+                                  true);
+        clap_note_outs_clear(&(plug->output_note_ports), nframes);
+        clap_note_outs_write(&(plug->output_note_ports), nframes);
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             is_audio_thread,
+                             "ERROR Processing discard buffer\n");
+        return false;
+    }
+    if (clap_status == CLAP_PROCESS_CONTINUE) {
+        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
+                                  false);
+        clap_output_events_read(plug_data, plug);
+    }
+    if (clap_status == CLAP_PROCESS_CONTINUE_IF_NOT_QUIET) {
+        int not_quiet_audio = clap_prepare_output_ports(
+            plug_data, &(plug->output_ports), nframes, false);
+        int not_quiet_events = clap_output_events_read(plug_data, plug);
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             is_audio_thread, "Process if NOT_QUIET\n");
+        // process successful but outputs are quiet send this plugin to
+        // sleep
+        if (not_quiet_audio == 0 && not_quiet_events == 0) {
             plug->plug_inst->stop_processing(plug->plug_inst);
             plug->plug_inst_processing = 2;
         }
-        clap_note_outs_write(&(plug->output_note_ports), nframes);
     }
+    if (clap_status == CLAP_PROCESS_TAIL) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             is_audio_thread, "Process if TAIL\n");
+        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
+                                  false);
+        clap_output_events_read(plug_data, plug);
+        // TODO implement tail extension
+    }
+    if (clap_status == CLAP_PROCESS_SLEEP) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             is_audio_thread, "SLEEP for now\n");
+        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
+                                  false);
+        clap_output_events_read(plug_data, plug);
+        // no need to process further so plugin goes to sleep
+        plug->plug_inst->stop_processing(plug->plug_inst);
+        plug->plug_inst_processing = 2;
+    }
+    clap_note_outs_write(&(plug->output_note_ports), nframes);
+    return true;
 }
 
 void clap_plug_clean_memory(CLAP_PLUG_INFO *plug_data) {

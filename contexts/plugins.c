@@ -1983,260 +1983,259 @@ int plug_stop_and_remove_plug(void *plug) {
     return plug_remove_plug(cur_plug->plug_data, cur_plug->id);
 }
 
-void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
-    if (!plug_data) {
-        return;
-    }
-    for (int id = 0; id < MAX_INSTANCES; id++) {
-        PLUG_PLUG *plug = &(plug_data->plugins[id]);
-        // do nothing if the plugin is stopped
-        if (plug->is_processing == 0)
-            continue;
-        if (!plug->plug)
-            continue;
-        if (!plug->ports)
-            continue;
+void *plug_plugin_slot(PLUG_INFO *plug_data, unsigned int slot) {
+    if (!plug_data || slot >= MAX_INSTANCES)
+        return NULL;
+    return (void *)&(plug_data->plugins[slot]);
+}
 
-        //----------------------------------------------------------------------------------------------------
-        // first connect the ports for processing
-        for (uint32_t i = 0; i < plug->num_ports; i++) {
-            PLUG_PORT *const cur_port = &(plug->ports[i]);
-            // if there is a sys_port get the buffer from it
-            void *a_buffer = NULL;
-            if (cur_port->sys_port) {
-                a_buffer = app_jack_get_buffer_rt(cur_port->sys_port, nframes);
-            }
-            if (cur_port->type == PORT_TYPE_AUDIO) {
-                lilv_instance_connect_port(plug->plug_instance, i, a_buffer);
-            }
-            if (cur_port->type == PORT_TYPE_CV) {
-                lilv_instance_connect_port(plug->plug_instance, i, a_buffer);
-            }
-            if (cur_port->type == PORT_TYPE_EVENT &&
-                cur_port->flow == PORT_FLOW_INPUT) {
-                // clean the evbuf
-                plug_evbuf_reset(cur_port->evbuf, 1);
-                PLUG_EVBUF_ITERATOR iter_buf =
-                    plug_evbuf_begin(cur_port->evbuf);
-                if (plug->request_update) {
-                    LV2_Atom_Forge_Frame frame;
-                    uint8_t buf[MSG_BUFFER_SIZE];
-                    lv2_atom_forge_set_buffer(&plug->forge, buf, sizeof(buf));
-                    lv2_atom_forge_object(&plug->forge, &frame, 0,
-                                          plug_data->urids.patch_Get);
-                    const LV2_Atom *get =
-                        lv2_atom_forge_deref(&plug->forge, frame.ref);
-                    plug_evbuf_write(&iter_buf, 0, 0, get->type, get->size,
-                                     LV2_ATOM_BODY_CONST(get));
-                }
-                // send plugin the transport information
-                int32_t cur_bar = 0;
-                int32_t cur_beat = 0;
-                int32_t cur_tick = 0;
-                SAMPLE_T ticks_per_beat = 0;
-                jack_nframes_t total_frames = 0;
-                float bpm = plug_data->bpm;
-                float beat_type = 0;
-                float beats_per_bar = 0;
-                int tr_playing = app_jack_return_transport_rt(
-                    plug_data->audio_backend, &cur_bar, &cur_beat, &cur_tick,
-                    &ticks_per_beat, &total_frames, &bpm, &beat_type,
-                    &beats_per_bar);
-                if (tr_playing != -1) {
-                    unsigned int pos_change = 0;
-                    pos_change = (tr_playing != (int)plug_data->isPlaying ||
-                                  total_frames != plug_data->posFrame ||
-                                  bpm != plug_data->bpm);
-                    if (pos_change) {
-                        // if transport position changed from the last time
-                        // write an atom into the input event port for the
-                        // plugin
-                        uint8_t pos_buf[256];
-                        LV2_Atom *lv2_pos = (LV2_Atom *)pos_buf;
-                        LV2_Atom_Forge *forge = &plug->forge;
-                        lv2_atom_forge_set_buffer(forge, pos_buf,
-                                                  sizeof(pos_buf));
-                        LV2_Atom_Forge_Frame frame;
-                        lv2_atom_forge_object(forge, &frame, 0,
-                                              plug->urids->time_Position);
-                        lv2_atom_forge_key(forge, plug->urids->time_frame);
-                        lv2_atom_forge_long(forge, total_frames);
-                        lv2_atom_forge_key(forge, plug->urids->time_speed);
-                        lv2_atom_forge_float(forge, tr_playing ? 1.0 : 0.0);
-                        lv2_atom_forge_key(forge, plug->urids->time_barBeat);
-                        lv2_atom_forge_float(
-                            forge, cur_beat - 1 + (cur_tick / ticks_per_beat));
-                        lv2_atom_forge_key(forge, plug->urids->time_bar);
-                        lv2_atom_forge_long(forge, cur_bar - 1);
-                        lv2_atom_forge_key(forge, plug->urids->time_beatUnit);
-                        lv2_atom_forge_int(forge, beat_type);
-                        lv2_atom_forge_key(forge,
-                                           plug->urids->time_beatsPerBar);
-                        lv2_atom_forge_float(forge, beats_per_bar);
-                        lv2_atom_forge_key(forge,
-                                           plug->urids->time_beatsPerMinute);
-                        lv2_atom_forge_float(forge, bpm);
-                        // write the atom to the atom input port
-                        plug_evbuf_write(&iter_buf, 0, 0, lv2_pos->type,
-                                         lv2_pos->size, LV2_ATOM_BODY(lv2_pos));
-                    }
-                    // update the plug_data transports for next cycle comparison
-                    plug_data->posFrame =
-                        tr_playing ? total_frames + nframes : total_frames;
-                    plug_data->bpm = bpm;
-                    plug_data->isPlaying = tr_playing;
-                }
-            }
-            if (cur_port->type == PORT_TYPE_EVENT &&
-                cur_port->flow == PORT_FLOW_OUTPUT) {
-                plug_evbuf_reset(cur_port->evbuf, 0);
-            }
+bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
+    PLUG_PLUG *plug = (PLUG_PLUG *)plug_ptr;
+    if (!plug)
+        return false;
+    // do nothing if the plugin is stopped
+    if (plug->is_processing == 0)
+        return false;
+    if (!plug->plug)
+        return false;
+    if (!plug->ports)
+        return false;
+    PLUG_INFO *plug_data = plug->plug_data;
+
+    //----------------------------------------------------------------------------------------------------
+    // first connect the ports for processing
+    for (uint32_t i = 0; i < plug->num_ports; i++) {
+        PLUG_PORT *const cur_port = &(plug->ports[i]);
+        // if there is a sys_port get the buffer from it
+        void *a_buffer = NULL;
+        if (cur_port->sys_port) {
+            a_buffer = app_jack_get_buffer_rt(cur_port->sys_port, nframes);
         }
-        //----------------------------------------------------------------------------------------------------
-        // go through controls and either set them direclty if its control port
-        // parameter or send them to the event port as atoms if its a property
-        // port
-        for (unsigned int ctrl_iter = 0; ctrl_iter < plug->num_controls;
-             ctrl_iter++) {
-            int param_changed =
-                param_get_if_changed_rt(plug->plug_params, ctrl_iter);
-            if (param_changed != 1)
-                continue;
-            PLUG_CONTROL *cur_control = plug->controls[ctrl_iter];
-            if (!cur_control)
-                continue;
-            if (!(cur_control->is_writable))
-                continue;
-            PARAM_T param_value =
-                param_get_value(plug->plug_params, ctrl_iter, 1);
-
-            if (cur_control->type == PORT) {
-                uint32_t port_index = cur_control->index;
-                if (port_index < plug->num_ports) {
-                    PLUG_PORT *const control_port = &(plug->ports[port_index]);
-                    if (!control_port)
-                        continue;
-                    control_port->control = param_value;
-                }
+        if (cur_port->type == PORT_TYPE_AUDIO) {
+            lilv_instance_connect_port(plug->plug_instance, i, a_buffer);
+        }
+        if (cur_port->type == PORT_TYPE_CV) {
+            lilv_instance_connect_port(plug->plug_instance, i, a_buffer);
+        }
+        if (cur_port->type == PORT_TYPE_EVENT &&
+            cur_port->flow == PORT_FLOW_INPUT) {
+            // clean the evbuf
+            plug_evbuf_reset(cur_port->evbuf, 1);
+            PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_begin(cur_port->evbuf);
+            if (plug->request_update) {
+                LV2_Atom_Forge_Frame frame;
+                uint8_t buf[MSG_BUFFER_SIZE];
+                lv2_atom_forge_set_buffer(&plug->forge, buf, sizeof(buf));
+                lv2_atom_forge_object(&plug->forge, &frame, 0,
+                                      plug_data->urids.patch_Get);
+                const LV2_Atom *get =
+                    lv2_atom_forge_deref(&plug->forge, frame.ref);
+                plug_evbuf_write(&iter_buf, 0, 0, get->type, get->size,
+                                 LV2_ATOM_BODY_CONST(get));
             }
-
-            if (cur_control->type == PROPERTY) {
-                if (plug->control_in < (int)plug->num_ports &&
-                    plug->control_in != -1 && plug->controls) {
-                    PLUG_PORT *const control_port =
-                        &(plug->ports[plug->control_in]);
-                    if (!control_port)
-                        continue;
-                    PLUG_EVBUF_ITERATOR iter_buf =
-                        plug_evbuf_begin(control_port->evbuf);
-                    if (plug_evbuf_get_size(control_port->evbuf) <= 0) {
-                        plug_evbuf_reset(control_port->evbuf, 1);
-                    } else {
-                        iter_buf = plug_evbuf_end(control_port->evbuf);
-                    }
-                    if (!plug_evbuf_is_valid(iter_buf) &&
-                        plug_evbuf_get_size(control_port->evbuf) > 0)
-                        continue;
-
-                    // send the value to the event port as atom
-                    // Dont copy the forge, only use address here - so the forge
-                    // should only be used in rt thread or when rt thread is
-                    // paused (when initializing a plugin or preset etc.)
-                    LV2_Atom_Forge *forge = &(plug->forge);
+            // send plugin the transport information
+            int32_t cur_bar = 0;
+            int32_t cur_beat = 0;
+            int32_t cur_tick = 0;
+            SAMPLE_T ticks_per_beat = 0;
+            jack_nframes_t total_frames = 0;
+            float bpm = plug_data->bpm;
+            float beat_type = 0;
+            float beats_per_bar = 0;
+            int tr_playing = app_jack_return_transport_rt(
+                plug_data->audio_backend, &cur_bar, &cur_beat, &cur_tick,
+                &ticks_per_beat, &total_frames, &bpm, &beat_type,
+                &beats_per_bar);
+            if (tr_playing != -1) {
+                unsigned int pos_change = 0;
+                pos_change = (tr_playing != (int)plug_data->isPlaying ||
+                              total_frames != plug_data->posFrame ||
+                              bpm != plug_data->bpm);
+                if (pos_change) {
+                    // if transport position changed from the last time
+                    // write an atom into the input event port for the
+                    // plugin
+                    uint8_t pos_buf[256];
+                    LV2_Atom *lv2_pos = (LV2_Atom *)pos_buf;
+                    LV2_Atom_Forge *forge = &plug->forge;
+                    lv2_atom_forge_set_buffer(forge, pos_buf, sizeof(pos_buf));
                     LV2_Atom_Forge_Frame frame;
-                    uint8_t buf[MSG_BUFFER_SIZE];
-                    lv2_atom_forge_set_buffer(forge, buf, sizeof(buf));
                     lv2_atom_forge_object(forge, &frame, 0,
-                                          plug_data->urids.patch_Set);
-                    lv2_atom_forge_key(forge, plug_data->urids.patch_property);
-                    lv2_atom_forge_urid(forge, cur_control->property);
-                    lv2_atom_forge_key(forge, plug_data->urids.patch_value);
-                    lv2_atom_forge_float(forge, param_value);
-                    lv2_atom_forge_pop(forge, &frame);
-                    const LV2_Atom *const atom = (const LV2_Atom *)buf;
-                    plug_evbuf_write(&iter_buf, 0, 0, atom->type, atom->size,
-                                     LV2_ATOM_BODY_CONST(atom));
+                                          plug->urids->time_Position);
+                    lv2_atom_forge_key(forge, plug->urids->time_frame);
+                    lv2_atom_forge_long(forge, total_frames);
+                    lv2_atom_forge_key(forge, plug->urids->time_speed);
+                    lv2_atom_forge_float(forge, tr_playing ? 1.0 : 0.0);
+                    lv2_atom_forge_key(forge, plug->urids->time_barBeat);
+                    lv2_atom_forge_float(
+                        forge, cur_beat - 1 + (cur_tick / ticks_per_beat));
+                    lv2_atom_forge_key(forge, plug->urids->time_bar);
+                    lv2_atom_forge_long(forge, cur_bar - 1);
+                    lv2_atom_forge_key(forge, plug->urids->time_beatUnit);
+                    lv2_atom_forge_int(forge, beat_type);
+                    lv2_atom_forge_key(forge, plug->urids->time_beatsPerBar);
+                    lv2_atom_forge_float(forge, beats_per_bar);
+                    lv2_atom_forge_key(forge, plug->urids->time_beatsPerMinute);
+                    lv2_atom_forge_float(forge, bpm);
+                    // write the atom to the atom input port
+                    plug_evbuf_write(&iter_buf, 0, 0, lv2_pos->type,
+                                     lv2_pos->size, LV2_ATOM_BODY(lv2_pos));
                 }
+                // update the plug_data transports for next cycle comparison
+                plug_data->posFrame =
+                    tr_playing ? total_frames + nframes : total_frames;
+                plug_data->bpm = bpm;
+                plug_data->isPlaying = tr_playing;
             }
         }
-
-        //----------------------------------------------------------------------------------------------------
-        // midi last, a sequence is time ordered and the atoms above are all at
-        // frame 0
-        for (uint32_t i = 0; i < plug->num_ports; i++) {
-            PLUG_PORT *const cur_port = &(plug->ports[i]);
-            if (cur_port->flow != PORT_FLOW_INPUT || !cur_port->midi_buf)
-                continue;
-            app_jack_midi_in_rt(cur_port->sys_port, nframes,
-                                cur_port->midi_buf);
-            PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_end(cur_port->evbuf);
-            MIDI_BUF_ITER it = midi_buf_iter(cur_port->midi_buf);
-            MIDI_EVENT ev;
-            while (midi_buf_next(&it, &ev)) {
-                if (plug_evbuf_write(&iter_buf, ev.frame, 0,
-                                     cur_port->port_type_urid, ev.size,
-                                     ev.data) != 0)
-                    atomic_fetch_add(&cur_port->seq_dropped, 1U);
-            }
+        if (cur_port->type == PORT_TYPE_EVENT &&
+            cur_port->flow == PORT_FLOW_OUTPUT) {
+            plug_evbuf_reset(cur_port->evbuf, 0);
         }
-
-        plug->request_update = false;
-        //----------------------------------------------------------------------------------------------------
-        // now run the plugin for nframes
-        plug_run_rt(plug, nframes);
-
-        //----------------------------------------------------------------------------------------------------
-        // now update the output ports and any output controls (ui)
-        for (uint32_t i = 0; i < plug->num_ports; i++) {
-            PLUG_PORT *const cur_port = &(plug->ports[i]);
-            if (cur_port->flow != PORT_FLOW_OUTPUT)
-                continue;
-            if (cur_port->type == PORT_TYPE_AUDIO) {
-            }
-            if (cur_port->type == PORT_TYPE_CV) {
-            }
-            // update the output parameters (these should be sent to ui for
-            // display)
-            if (cur_port->type == PORT_TYPE_CONTROL) {
-                // set param but not too often to not swamp the rt_to_ui ring
-                // buffer. it does not matter that the [audio-thread] parameter
-                // will be set at the same speed, since it output parameter
-                if (plug_data->rt_tick == 0) {
-                    // set the val on param container
-                    param_set_value_rt(plug->plug_params, cur_port->param_index,
-                                       cur_port->control);
-                }
-            }
-            if (cur_port->type == PORT_TYPE_EVENT) {
-                midi_buf_clear(cur_port->midi_buf, nframes);
-                for (PLUG_EVBUF_ITERATOR iter_buf =
-                         plug_evbuf_begin(cur_port->evbuf);
-                     plug_evbuf_is_valid(iter_buf);
-                     iter_buf = plug_evbuf_next(iter_buf)) {
-                    uint32_t frames = 0;
-                    uint32_t subframes = 0;
-                    LV2_URID type = 0;
-                    uint32_t size = 0;
-                    void *data = NULL;
-                    plug_evbuf_get(iter_buf, &frames, &subframes, &type, &size,
-                                   &data);
-                    if (cur_port->midi_buf &&
-                        type == plug_data->urids.midi_MidiEvent)
-                        midi_buf_push(cur_port->midi_buf, frames, data, size);
-                    // property values the plugin changed itself (a preset, its
-                    // own gui). A plugin with control port params has no way
-                    // to tell the host about such changes
-                    if (type == plug_data->urids.atom_Object &&
-                        size >= sizeof(LV2_Atom_Object_Body))
-                        plug_patch_message_rt(plug, data, size);
-                }
-                if (cur_port->midi_buf)
-                    app_jack_midi_out_rt(cur_port->sys_port, nframes,
-                                         cur_port->midi_buf);
-            }
-        }
-        param_rt_resend(plug->plug_params);
     }
+    //----------------------------------------------------------------------------------------------------
+    // go through controls and either set them direclty if its control port
+    // parameter or send them to the event port as atoms if its a property
+    // port
+    for (unsigned int ctrl_iter = 0; ctrl_iter < plug->num_controls;
+         ctrl_iter++) {
+        int param_changed =
+            param_get_if_changed_rt(plug->plug_params, ctrl_iter);
+        if (param_changed != 1)
+            continue;
+        PLUG_CONTROL *cur_control = plug->controls[ctrl_iter];
+        if (!cur_control)
+            continue;
+        if (!(cur_control->is_writable))
+            continue;
+        PARAM_T param_value = param_get_value(plug->plug_params, ctrl_iter, 1);
+
+        if (cur_control->type == PORT) {
+            uint32_t port_index = cur_control->index;
+            if (port_index < plug->num_ports) {
+                PLUG_PORT *const control_port = &(plug->ports[port_index]);
+                if (!control_port)
+                    continue;
+                control_port->control = param_value;
+            }
+        }
+
+        if (cur_control->type == PROPERTY) {
+            if (plug->control_in < (int)plug->num_ports &&
+                plug->control_in != -1 && plug->controls) {
+                PLUG_PORT *const control_port =
+                    &(plug->ports[plug->control_in]);
+                if (!control_port)
+                    continue;
+                PLUG_EVBUF_ITERATOR iter_buf =
+                    plug_evbuf_begin(control_port->evbuf);
+                if (plug_evbuf_get_size(control_port->evbuf) <= 0) {
+                    plug_evbuf_reset(control_port->evbuf, 1);
+                } else {
+                    iter_buf = plug_evbuf_end(control_port->evbuf);
+                }
+                if (!plug_evbuf_is_valid(iter_buf) &&
+                    plug_evbuf_get_size(control_port->evbuf) > 0)
+                    continue;
+
+                // send the value to the event port as atom
+                // Dont copy the forge, only use address here - so the forge
+                // should only be used in rt thread or when rt thread is
+                // paused (when initializing a plugin or preset etc.)
+                LV2_Atom_Forge *forge = &(plug->forge);
+                LV2_Atom_Forge_Frame frame;
+                uint8_t buf[MSG_BUFFER_SIZE];
+                lv2_atom_forge_set_buffer(forge, buf, sizeof(buf));
+                lv2_atom_forge_object(forge, &frame, 0,
+                                      plug_data->urids.patch_Set);
+                lv2_atom_forge_key(forge, plug_data->urids.patch_property);
+                lv2_atom_forge_urid(forge, cur_control->property);
+                lv2_atom_forge_key(forge, plug_data->urids.patch_value);
+                lv2_atom_forge_float(forge, param_value);
+                lv2_atom_forge_pop(forge, &frame);
+                const LV2_Atom *const atom = (const LV2_Atom *)buf;
+                plug_evbuf_write(&iter_buf, 0, 0, atom->type, atom->size,
+                                 LV2_ATOM_BODY_CONST(atom));
+            }
+        }
+    }
+
+    //----------------------------------------------------------------------------------------------------
+    // midi last, a sequence is time ordered and the atoms above are all at
+    // frame 0
+    for (uint32_t i = 0; i < plug->num_ports; i++) {
+        PLUG_PORT *const cur_port = &(plug->ports[i]);
+        if (cur_port->flow != PORT_FLOW_INPUT || !cur_port->midi_buf)
+            continue;
+        app_jack_midi_in_rt(cur_port->sys_port, nframes, cur_port->midi_buf);
+        PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_end(cur_port->evbuf);
+        MIDI_BUF_ITER it = midi_buf_iter(cur_port->midi_buf);
+        MIDI_EVENT ev;
+        while (midi_buf_next(&it, &ev)) {
+            if (plug_evbuf_write(&iter_buf, ev.frame, 0,
+                                 cur_port->port_type_urid, ev.size,
+                                 ev.data) != 0)
+                atomic_fetch_add(&cur_port->seq_dropped, 1U);
+        }
+    }
+
+    plug->request_update = false;
+    //----------------------------------------------------------------------------------------------------
+    // now run the plugin for nframes
+    plug_run_rt(plug, nframes);
+
+    //----------------------------------------------------------------------------------------------------
+    // now update the output ports and any output controls (ui)
+    for (uint32_t i = 0; i < plug->num_ports; i++) {
+        PLUG_PORT *const cur_port = &(plug->ports[i]);
+        if (cur_port->flow != PORT_FLOW_OUTPUT)
+            continue;
+        if (cur_port->type == PORT_TYPE_AUDIO) {
+        }
+        if (cur_port->type == PORT_TYPE_CV) {
+        }
+        // update the output parameters (these should be sent to ui for
+        // display)
+        if (cur_port->type == PORT_TYPE_CONTROL) {
+            // set param but not too often to not swamp the rt_to_ui ring
+            // buffer. it does not matter that the [audio-thread] parameter
+            // will be set at the same speed, since it output parameter
+            if (plug_data->rt_tick == 0) {
+                // set the val on param container
+                param_set_value_rt(plug->plug_params, cur_port->param_index,
+                                   cur_port->control);
+            }
+        }
+        if (cur_port->type == PORT_TYPE_EVENT) {
+            midi_buf_clear(cur_port->midi_buf, nframes);
+            for (PLUG_EVBUF_ITERATOR iter_buf =
+                     plug_evbuf_begin(cur_port->evbuf);
+                 plug_evbuf_is_valid(iter_buf);
+                 iter_buf = plug_evbuf_next(iter_buf)) {
+                uint32_t frames = 0;
+                uint32_t subframes = 0;
+                LV2_URID type = 0;
+                uint32_t size = 0;
+                void *data = NULL;
+                plug_evbuf_get(iter_buf, &frames, &subframes, &type, &size,
+                               &data);
+                if (cur_port->midi_buf &&
+                    type == plug_data->urids.midi_MidiEvent)
+                    midi_buf_push(cur_port->midi_buf, frames, data, size);
+                // property values the plugin changed itself (a preset, its
+                // own gui). A plugin with control port params has no way
+                // to tell the host about such changes
+                if (type == plug_data->urids.atom_Object &&
+                    size >= sizeof(LV2_Atom_Object_Body))
+                    plug_patch_message_rt(plug, data, size);
+            }
+            if (cur_port->midi_buf)
+                app_jack_midi_out_rt(cur_port->sys_port, nframes,
+                                     cur_port->midi_buf);
+        }
+    }
+    param_rt_resend(plug->plug_params);
+    return true;
 }
 
 void plug_clean_memory(PLUG_INFO *plug_data) {

@@ -16,14 +16,16 @@ int synth_read_rt_to_ui_messages(SYNTH_DATA* synth_data);
 //of that oscillator's ports
 SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const char* cx_name, unsigned int with_metronome,
 			void* audio_backend, uint64_t owner_tag);
-//process the synth_data oscillators
-int synth_process_rt(SYNTH_DATA* synth_data, NFRAMES_T nframes);
+//process one oscillator (a synth_osc_return handle) on the [audio-thread].
+//true if it wrote its outputs this cycle
+bool synth_osc_process_rt(void* osc, NFRAMES_T nframes);
 //activate the audio ports
 int synth_activate_backend_ports(SYNTH_DATA* synth_data, SYNTH_OSC* osc);
 //return how many oscillators there are
 size_t synth_return_osc_num(SYNTH_DATA* synth_data);
 //return the osc_num-th oscillator as an opaque handle (NULL if out of range).
-//borrowed - do not free. Used as the DataObject user_data for one oscillator.
+//borrowed - do not free. Used as the DataObject user_data for one oscillator
+//and by synth_osc_process_rt. [audio-thread] safe.
 void* synth_osc_return(SYNTH_DATA* synth_data, unsigned int osc_num);
 //return the display name for a handle from synth_osc_return. Owned by the synth,
 //valid while the synth exists. NULL on error.

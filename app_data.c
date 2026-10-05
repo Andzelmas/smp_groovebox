@@ -161,6 +161,20 @@ static int app_read_rt_messages(APP_INFO *app_data, NFRAMES_T nframes) {
     return 0;
 }
 
+// master track: master_in copied to master_out
+static bool trk_master_process_rt(void *arg, NFRAMES_T nframes) {
+    APP_INFO *app_data = (APP_INFO *)arg;
+    SAMPLE_T *trk_in_L = app_jack_get_buffer_rt(app_data->main_in_L, nframes);
+    SAMPLE_T *trk_in_R = app_jack_get_buffer_rt(app_data->main_in_R, nframes);
+    SAMPLE_T *trk_out_L = app_jack_get_buffer_rt(app_data->main_out_L, nframes);
+    SAMPLE_T *trk_out_R = app_jack_get_buffer_rt(app_data->main_out_R, nframes);
+    if (!trk_in_L || !trk_in_R || !trk_out_L || !trk_out_R)
+        return false;
+    memcpy(trk_out_L, trk_in_L, sizeof(SAMPLE_T) * nframes);
+    memcpy(trk_out_R, trk_in_R, sizeof(SAMPLE_T) * nframes);
+    return true;
+}
+
 // The callback function sent to the audio backend (at this time to jack)
 // The audio processing happens here, only realtime functions are allowed here
 static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
@@ -179,30 +193,20 @@ static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
     if (read_err == -1)
         return -1;
 
-    // process the SAMPLER DATA
-    smp_sample_process_rt(app_data->smp_data, nframes);
-
-    // process the PLUGIN DATA
-    plug_process_data_rt(app_data->plug_data, nframes);
-
-    // process the CLAP PLUGIN DATA
-    clap_process_data_rt(app_data->clap_plug_data, nframes);
-
-    // process the SYNTH DATA
-    synth_process_rt(app_data->synth_data, nframes);
-
-    // get the buffers for the trk_data, that is used as track summer
-    SAMPLE_T *trk_in_L = app_jack_get_buffer_rt(app_data->main_in_L, nframes);
-    SAMPLE_T *trk_in_R = app_jack_get_buffer_rt(app_data->main_in_R, nframes);
-    SAMPLE_T *trk_out_L = app_jack_get_buffer_rt(app_data->main_out_L, nframes);
-    SAMPLE_T *trk_out_R = app_jack_get_buffer_rt(app_data->main_out_R, nframes);
-    // copy the Master track in  - to the Master track out
-    if (!trk_in_L || !trk_in_R || !trk_out_L || !trk_out_R) {
+    // one owner at a time, in a fixed order - the graph's plan takes over (G7)
+    smp_process_rt(app_data->smp_data, nframes);
+    void *owner = NULL;
+    for (unsigned int i = 0; (owner = plug_plugin_slot(app_data->plug_data, i));
+         i++)
+        plug_plugin_process_rt(owner, nframes);
+    for (unsigned int i = 0;
+         (owner = clap_plug_plugin_slot(app_data->clap_plug_data, i)); i++)
+        clap_plug_plugin_process_rt(owner, nframes);
+    for (unsigned int i = 0;
+         (owner = synth_osc_return(app_data->synth_data, i)); i++)
+        synth_osc_process_rt(owner, nframes);
+    if (!trk_master_process_rt(app_data, nframes))
         return -1;
-    }
-
-    memcpy(trk_out_L, trk_in_L, sizeof(SAMPLE_T) * nframes);
-    memcpy(trk_out_R, trk_in_R, sizeof(SAMPLE_T) * nframes);
 
     return 0;
 }

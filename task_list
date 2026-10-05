@@ -320,13 +320,32 @@ M4. DONE. CLAP note OUTPUT. Before: clap_output_events_read only applied
     - smp_init, plug_init, clap_plug_init and synth_init get trk_jack as
       their backend, and all four contexts include jack_funcs.h.
 
-G1. Per owner process functions, behaviour unchanged. Split the loop
-    bodies: clap_process_data_rt / plug_process_data_rt -> one plugin,
-    synth_process_rt -> one osc (the metronome osc a source node), the
-    sampler one, master one. trk_audio_process_rt calls them in today's
-    order. The per context ui_to_rt message reading stays at cycle start.
-    Each returns whether it wrote its outputs this cycle (G5).
-    Runnable alone - the graph later only changes who calls them.
+G1. DONE (split; the CLAP fix below is open). Per owner process
+    functions, behaviour unchanged. One shape, the graph node's fn later:
+    bool fn(void *owner, NFRAMES_T nframes), true = wrote its outputs
+    this cycle (G5):
+    - clap_plug_plugin_process_rt(void *plug): false when stopped, still
+      sleeping or CLAP_PROCESS_ERROR (outs zeroed there as before).
+    - plug_plugin_process_rt(void *plug): false when stopped.
+    - synth_osc_process_rt(void *osc): the metronome dispatched inside
+      (osc 0 with with_metronome); the old static one is now
+      synth_osc_midi_process_rt. synth_osc_write_outs_rt reports.
+    - smp_process_rt(void *smp_data): renamed from smp_sample_process_rt
+      - smp_sample_* take a SMP_SMP, a void* SMP_INFO under that name was
+      a trap.
+    - trk_master_process_rt, static in app_data.
+    The loop functions (clap_process_data_rt, plug_process_data_rt,
+    synth_process_rt) went, no twins. trk_audio_process_rt walks the
+    owners in today's order: plug_plugin_slot / clap_plug_plugin_slot
+    (O(1) &plugins[i], NULL past MAX_INSTANCES - the *_plugin_return
+    walkers read main-thread state) and synth_osc_return. Loops and slot
+    accessors go in G7. The per context ui_to_rt reading stays at cycle
+    start. The LV2 and CLAP bodies are the old loop bodies token for
+    token (continue -> return).
+    Tested in the app (ASan/UBSan, pipewire-jack, scratch JACK client):
+    sampler and synth osc play, a scratch LV2 MIDI thru and the scratch
+    CLAP note effect echo notes at their frame, synth -> master_in comes
+    out of master_out. No sanitizer reports.
     Fix alongside (a behaviour change, so its own commit):
     clap_prepare_input_ports / clap_prepare_output_ports return -1 for a
     plugin with no audio ports, and clap_process_data_rt's sleep logic
@@ -458,6 +477,11 @@ T2. Sync, an optional part of the backend (audio_backend.h): off /
 T3. Consumers: synth metronome, LV2 time:Position, and CLAP gets a real
     clap_event_transport (tempo, beats/seconds timeline, bar start and
     number, time signature, playing) - NULL today.
+    LV2 bug to fix here (seen in G1): the "did the position change"
+    state (isPlaying/posFrame/bpm) is on PLUG_INFO and updated per input
+    event port of every plugin - a 2nd plugin (or 2nd event port) gets
+    time:Position every cycle while playing and misses the stop. Keep it
+    per plugin, compared once per cycle.
     With T1-T3 jack_funcs holds no app state; another backend only
     implements audio_backend.h.
     DONE WHEN: the metronome and a tempo-synced LV2 and CLAP plugin follow
