@@ -193,7 +193,7 @@ static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
     if (read_err == -1)
         return -1;
 
-    // one owner at a time, in a fixed order - the graph's plan takes over (G7)
+    // one owner at a time, in a fixed order for now
     smp_process_rt(app_data->smp_data, nframes);
     void *owner = NULL;
     for (unsigned int i = 0; (owner = plug_plugin_slot(app_data->plug_data, i));
