@@ -2710,12 +2710,13 @@ static int clap_prepare_input_ports(CLAP_PLUG_INFO *plug_data,
         return -1;
     if (!input_ports)
         return -1;
+    // no ports is quiet, not an error
+    if (input_ports->ports_count == 0)
+        return 0;
     if (!input_ports->sys_port_array)
         return -1;
     if (!input_ports->audio_ports)
         return -1;
-    if (input_ports->ports_count <= 0)
-        return 0;
     int not_quiet = 0;
     for (uint32_t port = 0; port < input_ports->ports_count; port++) {
         CLAP_PLUG_PORT_SYS cur_port_sys = input_ports->sys_port_array[port];
@@ -2757,11 +2758,12 @@ static int clap_prepare_output_ports(CLAP_PLUG_INFO *plug_data,
         return -1;
     if (!output_ports)
         return -1;
+    // no ports is quiet, not an error
+    if (output_ports->ports_count == 0)
+        return 0;
     if (!output_ports->sys_port_array)
         return -1;
     if (!output_ports->audio_ports)
-        return -1;
-    if (output_ports->ports_count <= 0)
         return -1;
     int not_quiet = 0;
     for (uint32_t port = 0; port < output_ports->ports_count; port++) {

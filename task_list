@@ -320,7 +320,7 @@ M4. DONE. CLAP note OUTPUT. Before: clap_output_events_read only applied
     - smp_init, plug_init, clap_plug_init and synth_init get trk_jack as
       their backend, and all four contexts include jack_funcs.h.
 
-G1. DONE (split; the CLAP fix below is open). Per owner process
+G1. DONE. Per owner process
     functions, behaviour unchanged. One shape, the graph node's fn later:
     bool fn(void *owner, NFRAMES_T nframes), true = wrote its outputs
     this cycle (G5):
@@ -346,12 +346,17 @@ G1. DONE (split; the CLAP fix below is open). Per owner process
     sampler and synth osc play, a scratch LV2 MIDI thru and the scratch
     CLAP note effect echo notes at their frame, synth -> master_in comes
     out of master_out. No sanitizer reports.
-    Fix alongside (a behaviour change, so its own commit):
-    clap_prepare_input_ports / clap_prepare_output_ports return -1 for a
-    plugin with no audio ports, and clap_process_data_rt's sleep logic
-    reads -1 as not quiet - no audio inputs: a sleeping plugin wakes every
-    cycle; no audio outputs: CONTINUE_IF_NOT_QUIET never puts it to sleep.
-    Only costs CPU. No ports should count as quiet, -1 stay an error.
+    Fixed alongside (its own commit): clap_prepare_input_ports /
+    clap_prepare_output_ports returned -1 for a plugin with no audio
+    ports, read as not quiet by the sleep logic - no audio inputs: a
+    sleeping plugin woke every cycle; no audio outputs:
+    CONTINUE_IF_NOT_QUIET never put it to sleep. Now 0 ports -> 0
+    (quiet), NULL arrays with ports stay -1.
+    Tested A/B with the scratch CLAP note effect (note ports only): SLEEP
+    - before woke the next cycle with no input, now sleeps until the next
+    input event (20 cycles later); always CONTINUE_IF_NOT_QUIET with
+    nothing out - before never slept, now sleeps at once, wakes for one
+    cycle per input event. No sanitizer reports.
 
 G2. Graph module (engine/graph.c/.h, knows no backend). [main-thread]
     owns the graph, [audio-thread] only sees a compiled plan (G4).
