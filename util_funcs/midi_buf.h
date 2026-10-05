@@ -4,8 +4,9 @@
 
 // A time-ordered buffer of MIDI 1.0 messages for one cycle, one per MIDI port.
 // Every message is whole: status byte first (no running status), size matching
-// it. new/free/dropped_take on [main-thread]; clear, push, iter and merge on
-// the thread that fills or reads it this cycle ([audio-thread]).
+// it.
+// ONLY new/free/dropped_take on [main-thread] others in a thread
+// ([audio-thread]) that fills the buffers
 
 // status types, the high nibble of a channel message
 enum MidiType {
@@ -36,6 +37,13 @@ typedef struct _midi_buf_iter {
     const MIDI_BUF *buf;
     uint32_t idx;
 } MIDI_BUF_ITER;
+
+typedef struct _midi_buf_merge_iter {
+    uint32_t n;
+    MIDI_BUF_ITER its[MIDI_BUF_MERGE_MAX];
+    MIDI_EVENT heads[MIDI_BUF_MERGE_MAX];
+    bool live[MIDI_BUF_MERGE_MAX];
+} MIDI_BUF_MERGE_ITER;
 
 // size a message with this status byte has. 0 for a data byte and for sysex,
 // whose size is variable
@@ -92,7 +100,9 @@ static inline bool midi_is_note_off(const uint8_t *data) {
 }
 
 // capacity in bytes. An event takes 4 + its size, rounded up to 8
+// [main-thread]
 MIDI_BUF *midi_buf_new(uint32_t capacity);
+// [main-thread]
 void midi_buf_free(MIDI_BUF *buf);
 
 // empty it for a cycle of nframes, before the cycle's first push
@@ -104,9 +114,19 @@ void midi_buf_clear(MIDI_BUF *buf, uint32_t nframes);
 bool midi_buf_push(MIDI_BUF *buf, uint32_t frame, const uint8_t *data,
                    uint32_t size);
 
+uint32_t midi_buf_count(const MIDI_BUF *buf);
+
 MIDI_BUF_ITER midi_buf_iter(const MIDI_BUF *buf);
 // next event in frame order, false at the end
 bool midi_buf_next(MIDI_BUF_ITER *it, MIDI_EVENT *ev);
+
+// walks the first MIDI_BUF_MERGE_MAX of srcs together, ordered by frame. Same
+// frame: the lower source index first. NULL sources are empty
+MIDI_BUF_MERGE_ITER midi_buf_merge_iter(const MIDI_BUF *const *srcs,
+                                        uint32_t n);
+// next event and its index in srcs, false at the end
+bool midi_buf_merge_next(MIDI_BUF_MERGE_ITER *it, MIDI_EVENT *ev,
+                         uint32_t *src);
 
 // pushes the events of srcs to dst ordered by frame, after what dst holds -
 // clear it first. Same frame: the lower source index first. dst must not be
@@ -114,4 +134,5 @@ bool midi_buf_next(MIDI_BUF_ITER *it, MIDI_EVENT *ev);
 void midi_buf_merge(MIDI_BUF *dst, const MIDI_BUF *const *srcs, uint32_t n);
 
 // events dropped since the last call
+// [main-thread]
 uint32_t midi_buf_dropped_take(MIDI_BUF *buf);

@@ -97,6 +97,19 @@ typedef struct _synth_voice {
     OSC_OBJ *osc_table;
 } SYNTH_VOICE;
 
+// an oscillator's param values for this cycle
+typedef struct _synth_osc_vals {
+    PARAM_T amp;
+    PARAM_T freq;
+    PARAM_T octave;
+    PARAM_T wobble;
+    PARAM_T spread;
+    PARAM_T a;
+    PARAM_T d;
+    PARAM_T s;
+    PARAM_T r;
+} SYNTH_OSC_VALS;
+
 typedef struct _synth_osc {
     int id;
     // back pointer to the owning synth, so an oscillator handle carries its
@@ -124,6 +137,8 @@ typedef struct _synth_osc {
     int val_id[SYNTH_PARAM_COUNT];
     // smooths the raw Amp param on [audio-thread] reads
     MATH_RAMP_VAL *amp_smooth;
+    // [audio-thread] read once per cycle by synth_osc_params_read_rt
+    SYNTH_OSC_VALS vals;
     // which voice played last
     int last_voice;
     // the buffer of the summed voices output is kept here
@@ -760,36 +775,32 @@ static void synth_adsr_update(SYNTH_ADSR *adsr, PARAM_T a, PARAM_T d, PARAM_T s,
     adsr->samplerate = samplerate;
 }
 
+// once per cycle - the Amp read steps its smoothing ramp
+static void synth_osc_params_read_rt(SYNTH_OSC *osc) {
+    SYNTH_OSC_VALS *vals = &(osc->vals);
+    vals->amp = param_get_value(osc->params, osc->val_id[SYNTH_PARAM_AMP], 1);
+    vals->freq = param_get_value(osc->params, osc->val_id[SYNTH_PARAM_FREQ], 1);
+    vals->octave =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_OCTAVE], 1);
+    vals->wobble =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_WOBBLE], 1);
+    vals->spread =
+        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_SPREAD], 1);
+    vals->a = param_get_value(osc->params, osc->val_id[SYNTH_PARAM_ATTACK], 1);
+    vals->d = param_get_value(osc->params, osc->val_id[SYNTH_PARAM_DECAY], 1);
+    vals->s = param_get_value(osc->params, osc->val_id[SYNTH_PARAM_SUSTAIN], 1);
+    vals->r = param_get_value(osc->params, osc->val_id[SYNTH_PARAM_RELEASE], 1);
+}
+
+// render the voices into the osc buffers for frames [start, end), with the
+// values of synth_osc_params_read_rt
 static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
-                                     NFRAMES_T nframes) {
+                                     NFRAMES_T start, NFRAMES_T end) {
     if (!osc)
         return;
     if (!osc->osc_voices)
         return;
-
-    memset(osc->buffer_L, '\0', sizeof(SAMPLE_T) * nframes);
-    memset(osc->buffer_R, '\0', sizeof(SAMPLE_T) * nframes);
-
-    // interpolate the amp value
-    PARAM_T amp_in =
-        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_AMP], 1);
-    PARAM_T freq_in =
-        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_FREQ], 1);
-    PARAM_T octave_in =
-        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_OCTAVE], 1);
-    PARAM_T wobble =
-        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_WOBBLE], 1);
-    PARAM_T spread =
-        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_SPREAD], 1);
-    // get the adsr values from the user parameters
-    PARAM_T vco_a =
-        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_ATTACK], 1);
-    PARAM_T vco_d =
-        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_DECAY], 1);
-    PARAM_T vco_s =
-        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_SUSTAIN], 1);
-    PARAM_T vco_r =
-        param_get_value(osc->params, osc->val_id[SYNTH_PARAM_RELEASE], 1);
+    const SYNTH_OSC_VALS *vals = &(osc->vals);
 
     for (unsigned int i = 0; i < osc->num_voices; i++) {
         SYNTH_VOICE *cur_voice = &(osc->osc_voices[i]);
@@ -803,27 +814,27 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
             continue;
         }
         OSC_OBJ *osc_table = cur_voice->osc_table;
-        // update the adsr values on the voice with the user values
-        synth_adsr_update(cur_voice->vco_adsr, vco_a, vco_d, vco_s, vco_r,
-                          synth_data->samplerate);
+        // per segment too - a note started mid-cycle reset them
+        synth_adsr_update(cur_voice->vco_adsr, vals->a, vals->d, vals->s,
+                          vals->r, synth_data->samplerate);
 
         // this voices random value
         srand((i + 1) * cur_voice->rand_seed);
         int rand_val = rand();
         // spread randomness
         PARAM_T spread_am = 0;
-        if (spread != 0) {
-            spread_am = fit_range((PARAM_T)RAND_MAX, 0.0, spread, spread * -1,
-                                  (PARAM_T)rand_val);
+        if (vals->spread != 0) {
+            spread_am = fit_range((PARAM_T)RAND_MAX, 0.0, vals->spread,
+                                  vals->spread * -1, (PARAM_T)rand_val);
         }
         // wobble frequency randomness
         PARAM_T wobble_freq = 1.5;
         PARAM_T wobble_am = 0.0;
-        if (wobble != 0) {
+        if (vals->wobble != 0) {
             wobble_freq = fit_range((PARAM_T)RAND_MAX, 0.0, wobble_freq * 0.5,
                                     wobble_freq, (PARAM_T)rand_val);
-            wobble_am = fit_range((PARAM_T)RAND_MAX, 0.0, wobble, wobble * 0.5,
-                                  (PARAM_T)rand_val);
+            wobble_am = fit_range((PARAM_T)RAND_MAX, 0.0, vals->wobble,
+                                  vals->wobble * 0.5, (PARAM_T)rand_val);
         }
 
         PARAM_T freq = midi_note_to_freq(cur_voice->midi_note);
@@ -834,12 +845,12 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
             math_range_table_convert_value(synth_data->log_curve, midi_amp);
 
         // process the wavetable, get buffer
-        for (unsigned int j = 0; j < nframes; j++) {
+        for (NFRAMES_T j = start; j < end; j++) {
             // add the octaves and semitones
-            PARAM_T octaves_semitones = octave_in * 12;
+            PARAM_T octaves_semitones = vals->octave * 12;
             PARAM_T freq_final = freq * math_range_table_convert_value(
                                             synth_data->semi_to_freq_table,
-                                            octaves_semitones + freq_in);
+                                            octaves_semitones + vals->freq);
             // process the adsr
             PARAM_T adsr_amp = 1.0;
             int adsr_phase = synth_process_adsr(cur_voice->vco_adsr,
@@ -848,7 +859,7 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
             // random voices more quite in left or right side
             PARAM_T spread_mult_L = 1;
             PARAM_T spread_mult_R = 1;
-            if (spread != 0) {
+            if (vals->spread != 0) {
                 if (spread_am < 0)
                     spread_mult_R -= (spread_am * -1);
                 if (spread_am > 0)
@@ -856,7 +867,7 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
             }
 
             // randomly wobble the voices if the parameter is not 0
-            if (wobble != 0) {
+            if (vals->wobble != 0) {
                 PARAM_T wobble_semitones =
                     osc_getOutput(osc->sin_osc, cur_voice->wobble_ph,
                                   wobble_freq, 0, 0) *
@@ -875,10 +886,10 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
 
             PARAM_T interp_amp_in_L = math_ramp_val_get_value(
                 cur_voice->vco_amp_L,
-                amp_in * adsr_amp * spread_mult_L * midi_amp);
+                vals->amp * adsr_amp * spread_mult_L * midi_amp);
             PARAM_T interp_amp_in_R = math_ramp_val_get_value(
                 cur_voice->vco_amp_R,
-                amp_in * adsr_amp * spread_mult_R * midi_amp);
+                vals->amp * adsr_amp * spread_mult_R * midi_amp);
 
             osc->buffer_L[j] +=
                 wave_sample_L * math_range_table_convert_value(
@@ -900,8 +911,11 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
             }
         }
     }
+}
 
-    // now copy the buffers to the ports
+// copy the osc buffers to its audio out ports
+static void synth_osc_write_outs_rt(SYNTH_OSC *osc, NFRAMES_T nframes) {
+    // the metronome osc has no midi in port
     SYNTH_PORT *l_Port = NULL;
     SYNTH_PORT *r_Port = NULL;
     if (osc->num_ports == 2) {
@@ -911,18 +925,11 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
         l_Port = &(osc->ports[1]);
         r_Port = &(osc->ports[2]);
     }
-    if (!l_Port || !r_Port)
-        return;
 
     SAMPLE_T *out_L = app_jack_get_buffer_rt(l_Port->sys_port, nframes);
     SAMPLE_T *out_R = app_jack_get_buffer_rt(r_Port->sys_port, nframes);
     if (!out_L || !out_R)
         return;
-    // zeroe out the outputs
-
-    memset(out_L, '\0', sizeof(SAMPLE_T) * nframes);
-    memset(out_R, '\0', sizeof(SAMPLE_T) * nframes);
-
     memcpy(out_L, osc->buffer_L, sizeof(SAMPLE_T) * nframes);
     memcpy(out_R, osc->buffer_R, sizeof(SAMPLE_T) * nframes);
 }
@@ -1029,11 +1036,22 @@ static void synth_stop_osc_rt(SYNTH_OSC *osc, MIDI_DATA_T vel, MIDI_DATA_T note,
     }
 }
 
+// one segment, triggered at frame 0 from the transport
 static int synth_metronome_process_rt(SYNTH_DATA *synth_data,
-                                      SYNTH_OSC *metro_osc, NFRAMES_T nframes,
-                                      int32_t beat, int playhead) {
+                                      SYNTH_OSC *metro_osc, NFRAMES_T nframes) {
     if (!metro_osc)
         return -1;
+    int32_t bar = 1;
+    int32_t beat = 1;
+    int32_t tick = 0;
+    SAMPLE_T ticks_per_beat = 0;
+    NFRAMES_T total_frames = 0;
+    float bpm = 0;
+    float beat_type = 0;
+    float beats_per_bar = 0;
+    int playhead = app_jack_return_transport_rt(
+        synth_data->audio_backend, &bar, &beat, &tick, &ticks_per_beat,
+        &total_frames, &bpm, &beat_type, &beats_per_bar);
     if (playhead == 0) {
         synth_stop_osc_rt(metro_osc, 127, 0, 1);
     }
@@ -1053,10 +1071,32 @@ static int synth_metronome_process_rt(SYNTH_DATA *synth_data,
         }
     }
 
-    // now process the voices of this oscilator
-    synth_process_osc_voices(synth_data, metro_osc, nframes);
+    synth_process_osc_voices(synth_data, metro_osc, 0, nframes);
 
     return 0;
+}
+
+// render up to each MIDI event, then apply it - every event acts at its frame
+static void synth_osc_process_rt(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
+                                 NFRAMES_T nframes) {
+    SYNTH_PORT *midi_port = &(osc->ports[0]);
+    app_jack_midi_in_rt(midi_port->sys_port, nframes, midi_port->midi_buf);
+    NFRAMES_T pos = 0;
+    MIDI_BUF_ITER it = midi_buf_iter(midi_port->midi_buf);
+    MIDI_EVENT ev;
+    while (midi_buf_next(&it, &ev)) {
+        if (ev.frame > pos) {
+            synth_process_osc_voices(synth_data, osc, pos, ev.frame);
+            pos = ev.frame;
+        }
+        if (midi_is_note_on(ev.data))
+            synth_play_osc_rt(
+                osc, ev.data[2], ev.data[1],
+                (ev.frame + ev.data[2] + ((uint32_t)osc->id * 988)));
+        else if (midi_is_note_off(ev.data))
+            synth_stop_osc_rt(osc, ev.data[2], ev.data[1], 0);
+    }
+    synth_process_osc_voices(synth_data, osc, pos, nframes);
 }
 
 int synth_process_rt(SYNTH_DATA *synth_data, NFRAMES_T nframes) {
@@ -1069,55 +1109,19 @@ int synth_process_rt(SYNTH_DATA *synth_data, NFRAMES_T nframes) {
     if (synth_data->num_osc == 0)
         return -1;
 
-    // if there is a metronome process it
-    if (synth_data->with_metronome == 1) {
-        int32_t bar = 1;
-        int32_t beat = 1;
-        int32_t tick = 0;
-        SAMPLE_T ticks_per_beat = 0;
-        NFRAMES_T total_frames = 0;
-        float bpm = 0;
-        float beat_type = 0;
-        float beats_per_bar = 0;
-        int isPlaying = app_jack_return_transport_rt(
-            synth_data->audio_backend, &bar, &beat, &tick, &ticks_per_beat,
-            &total_frames, &bpm, &beat_type, &beats_per_bar);
-        if (isPlaying != -1) {
-            SYNTH_OSC *cur_osc = &(synth_data->osc_array[0]);
-            if (!cur_osc)
-                return -1;
-            synth_metronome_process_rt(synth_data, cur_osc, nframes, beat,
-                                       isPlaying);
-        }
-    }
-
-    // here we process all the oscillators except the metronome, if there is a
-    // metronome
-    unsigned int i = 0;
-    if (synth_data->with_metronome == 1)
-        i = 1;
-    for (; i < synth_data->num_osc; i++) {
-        if (i >= synth_data->num_osc)
-            continue;
+    for (unsigned int i = 0; i < synth_data->num_osc; i++) {
         SYNTH_OSC *cur_osc = &(synth_data->osc_array[i]);
-        SYNTH_PORT *midi_port = &(cur_osc->ports[0]);
-        app_jack_midi_in_rt(midi_port->sys_port, nframes, midi_port->midi_buf);
-        // TODO every event acts at the cycle start, render in segments
-        // between the events (task_list M3)
-        MIDI_BUF_ITER it = midi_buf_iter(midi_port->midi_buf);
-        MIDI_EVENT ev;
-        while (midi_buf_next(&it, &ev)) {
-            if (midi_is_note_on(ev.data))
-                synth_play_osc_rt(cur_osc, ev.data[2], ev.data[1],
-                                  (ev.frame + ev.data[2] + (i * 988)));
-            else if (midi_is_note_off(ev.data))
-                synth_stop_osc_rt(cur_osc, ev.data[2], ev.data[1], 0);
-        }
-
-        // now process the voices of this oscilator
-        // TODO this function could return the highest value or average added to
-        // the buffer Then could have a parameter that is readable only to show for exmaple Osc volume levels
-        synth_process_osc_voices(synth_data, cur_osc, nframes);
+        memset(cur_osc->buffer_L, '\0', sizeof(SAMPLE_T) * nframes);
+        memset(cur_osc->buffer_R, '\0', sizeof(SAMPLE_T) * nframes);
+        synth_osc_params_read_rt(cur_osc);
+        // osc 0 is the metronome, if there is one
+        if (i == 0 && synth_data->with_metronome == 1)
+            synth_metronome_process_rt(synth_data, cur_osc, nframes);
+        else
+            synth_osc_process_rt(synth_data, cur_osc, nframes);
+        // TODO the highest value or average of the buffers could go to a
+        // read-only param, to show for example Osc volume levels
+        synth_osc_write_outs_rt(cur_osc, nframes);
     }
 
     return 0;

@@ -1,8 +1,11 @@
 #compiler name
 CC=gcc
 #name of the binary filename
-FILE=build/smp_sampler
+BUILD_DIR=build
+BUILD_FILE=smp_grvbx
+FILE=$(BUILD_DIR)/$(BUILD_FILE)
 #the clap scanner, run by the app from the directory of its binary
+
 SCAN_FILE=build/smp_clap_scan
 
 # user interfaces, choose one
@@ -44,13 +47,13 @@ build_asan: make_dir clap_scanner
 clap_scanner: make_dir
 	$(CC) -Wall -Wextra -Wshadow -g -o $(SCAN_FILE) $(SCAN_C) $(INCDIR)
 run:
-	(cd build && ./smp_sampler)
+	(cd $(BUILD_DIR) && ./$(BUILD_FILE))
 run_valgrind:
-	(cd build && valgrind --leak-check=full --show-leak-kinds=all --log-file=val_log ./smp_sampler)
+	(cd $(BUILD_DIR) && valgrind --leak-check=full --show-leak-kinds=all --log-file=val_log ./$(BUILD_FILE))
 clean_build:
-	(cd build && rm -r *)
+	(cd $(BUILD_DIR) && rm -r *)
 make_dir:
-	mkdir -p build/
+	mkdir -p $(BUILD_DIR)/
 
 .PHONY: rsync_src
 pi_build: rsync_src
@@ -62,10 +65,10 @@ pi_build_sanitize: rsync_src
 pi_build_asan: rsync_src
 	ssh pi_daw make build_asan -C $(PI_DIR)
 pi_goto_build:
-	ssh pi_daw -t "cd $(PI_DIR)/build/ ; bash --login"
+	ssh pi_daw -t "cd $(PI_DIR)/$(BUILD_DIR)/ ; bash --login"
 pi_run:
-	ssh pi_daw -t "cd $(PI_DIR)/build/ && ./smp_sampler"
+	ssh pi_daw -t "cd $(PI_DIR)/$(BUILD_DIR)/ && ./$(BUILD_FILE)"
 pi_run_valgrind:
-	ssh pi_daw -t "cd $(PI_DIR)/build/ && valgrind --leak-check=full --log-file=val_log ./smp_sampler"
+	ssh pi_daw -t "cd $(PI_DIR)/$(BUILD_DIR)/ && valgrind --leak-check=full --log-file=val_log ./$(BUILD_FILE)"
 rsync_src:
-	rsync -va --exclude 'build' * pi_daw:$(PI_DIR)
+	rsync -va --exclude '$(BUILD_DIR)' * pi_daw:$(PI_DIR)

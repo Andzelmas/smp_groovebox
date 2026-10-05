@@ -55,8 +55,10 @@
 #define DEFAULT_BLOCK_LENGTH 512
 // default sample_rate should be set by the audio client
 #define DEFAULT_SAMPLE_RATE 48000
-// default midi buffer size (and event too)
-#define DEFAULT_MIDI_BUF_SIZE 4096U
+// default atom sequence size, also given to plugins as bufsz:sequenceSize.
+// Takes a full MIDI_BUF - an event there is 8 bytes or more, in a sequence up
+// to 3 times that - plus the frame 0 atoms of the control port
+#define DEFAULT_MIDI_BUF_SIZE (MIDI_PORT_BUF_SIZE * 3U + 4096U)
 // atom message body size
 #ifndef MSG_BUFFER_SIZE
 #define MSG_BUFFER_SIZE 1024
@@ -189,6 +191,8 @@ typedef struct _plug_port {
     float control;   ///< For control ports, otherwise 0.0f
     // for convenience we can save the current port urid of its type
     LV2_URID port_type_urid;
+    // MIDI events the input sequence had no room for, taken on [main-thread]
+    atomic_uint seq_dropped;
 } PLUG_PORT;
 
 typedef struct _plug_features {
@@ -1168,7 +1172,8 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
         param_msgs_process(cur_plug->plug_params, 0);
         for (uint32_t j = 0; cur_plug->ports && j < cur_plug->num_ports; j++) {
             PLUG_PORT *port = &(cur_plug->ports[j]);
-            uint32_t dropped = midi_buf_dropped_take(port->midi_buf);
+            uint32_t dropped = midi_buf_dropped_take(port->midi_buf) +
+                               atomic_exchange(&port->seq_dropped, 0U);
             if (dropped > 0)
                 log_append_logfile(
                     "%s %s: %u MIDI events dropped\n", cur_plug->name,
@@ -1791,6 +1796,7 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         cur_port->sys_port = NULL;
         cur_port->evbuf = NULL;
         cur_port->midi_buf = NULL;
+        atomic_init(&cur_port->seq_dropped, 0U);
         cur_port->buf_size = 0;
         cur_port->index = i;
         cur_port->param_index = -1;
@@ -1828,6 +1834,15 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         } else if (!optional) {
             return -1;
         }
+        // set the port buffer size, before the event port's sequence is made
+        LilvNode *min_size = lilv_port_get(plug->plug, cur_port->lilv_port,
+                                           plug_data->nodes.rsz_minimumSize);
+        if (min_size && lilv_node_is_int(min_size)) {
+            cur_port->buf_size = lilv_node_as_int(min_size);
+            plug_data->buffer_size = MAX(plug_data->buffer_size,
+                                         cur_port->buf_size * N_BUFFER_CYCLES);
+        }
+        lilv_node_free(min_size);
         // Set port types
         // control port
         if (lilv_port_is_a(plug->plug, cur_port->lilv_port,
@@ -1882,8 +1897,9 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
             // ready the evbuf for the events
             //--------------------
             free(cur_port->evbuf);
-            const size_t size = cur_port->buf_size ? cur_port->buf_size
-                                                   : plug_data->midi_buf_size;
+            // the plugin's minimum, never less than a MIDI_BUF needs
+            const size_t size =
+                MAX(cur_port->buf_size, plug_data->midi_buf_size);
             cur_port->evbuf = plug_evbuf_new(size, atom_Chunk, atom_Sequence);
             lilv_instance_connect_port(plug->plug_instance, i,
                                        plug_evbuf_get_buffer(cur_port->evbuf));
@@ -1902,15 +1918,6 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
             cur_port->type == PORT_TYPE_UNKNOWN) {
             lilv_instance_connect_port(plug->plug_instance, i, NULL);
         }
-        // set the port buffer size
-        LilvNode *min_size = lilv_port_get(plug->plug, cur_port->lilv_port,
-                                           plug_data->nodes.rsz_minimumSize);
-        if (min_size && lilv_node_is_int(min_size)) {
-            cur_port->buf_size = lilv_node_as_int(min_size);
-            plug_data->buffer_size = MAX(plug_data->buffer_size,
-                                         cur_port->buf_size * N_BUFFER_CYCLES);
-        }
-        lilv_node_free(min_size);
     }
     // find the controling port index
     const LilvPort *control_input = lilv_plugin_get_port_by_designation(
@@ -2144,9 +2151,12 @@ void plug_process_data_rt(PLUG_INFO *plug_data, unsigned int nframes) {
             PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_end(cur_port->evbuf);
             MIDI_BUF_ITER it = midi_buf_iter(cur_port->midi_buf);
             MIDI_EVENT ev;
-            while (midi_buf_next(&it, &ev))
-                plug_evbuf_write(&iter_buf, ev.frame, 0,
-                                 cur_port->port_type_urid, ev.size, ev.data);
+            while (midi_buf_next(&it, &ev)) {
+                if (plug_evbuf_write(&iter_buf, ev.frame, 0,
+                                     cur_port->port_type_urid, ev.size,
+                                     ev.data) != 0)
+                    atomic_fetch_add(&cur_port->seq_dropped, 1U);
+            }
         }
 
         plug->request_update = false;

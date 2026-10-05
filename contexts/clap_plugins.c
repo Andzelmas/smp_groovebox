@@ -55,9 +55,14 @@ extern char **environ;
 // define.
 #define CLAP_PLUGIN_NAME_MAX 128
 
-// size for the event lists
+// size for the output event list
 #define EVENT_LIST_SIZE 2048
 #define EVENT_LIST_ITEMS 50
+// the input event list holds the param changes and the note ports' events. A
+// param value is the largest event pushed to it
+#define IN_EVENT_LIST_ITEMS 1024
+#define IN_EVENT_LIST_SIZE                                                     \
+    ((uint32_t)(IN_EVENT_LIST_ITEMS * sizeof(clap_event_param_value_t)))
 
 static thread_local bool is_audio_thread = false;
 // set in clap_plug_init. Plugins can call the host from their own threads too,
@@ -181,6 +186,8 @@ typedef struct _clap_plug_plug {
     bool presets_built;
     // CLAP_PLUG_REQ_* bits, set from any thread
     atomic_uint requests;
+    // events the input event list had no room for, taken on [main-thread]
+    atomic_uint in_events_dropped;
 } CLAP_PLUG_PLUG;
 
 // the main clap struct
@@ -410,8 +417,9 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO *plug_data, int id,
 
     const clap_plugin_audio_ports_t *clap_plug_ports =
         plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_AUDIO_PORTS);
+    // without the extension the plugin has no audio ports
     if (!clap_plug_ports)
-        return -1;
+        return 0;
 
     uint32_t clap_ports_count =
         clap_plug_ports->count(plug->plug_inst, input_ports);
@@ -594,8 +602,9 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO *plug_data, int id,
 
     const clap_plugin_note_ports_t *clap_plug_note_ports =
         plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_NOTE_PORTS);
+    // without the extension the plugin has no note ports
     if (!clap_plug_note_ports)
-        return -1;
+        return 0;
 
     uint32_t clap_ports_count =
         clap_plug_note_ports->count(plug->plug_inst, input_ports);
@@ -881,8 +890,9 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
 
     const clap_plugin_params_t *clap_params =
         plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
+    // without the extension the plugin has no params
     if (!clap_params)
-        return -1;
+        return 0;
 
     uint32_t param_count = clap_params->count(plug->plug_inst);
     if (param_count == 0)
@@ -1225,9 +1235,10 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
         }
         plug->plug_inst = NULL;
     }
-    // requests left by the destroyed instance must not reach the next plugin
-    // loaded into this slot
+    // requests and drops left by the destroyed instance must not reach the
+    // next plugin loaded into this slot
     atomic_store(&plug->requests, 0U);
+    atomic_store(&plug->in_events_dropped, 0U);
     if (plug->plug_entry) {
         if (clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug) ==
             -1) {
@@ -1423,6 +1434,13 @@ static void clap_plug_request_callback(const clap_host_t *host) {
     atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_CALLBACK);
 }
 
+// a full list counts the event as dropped
+static void clap_input_events_push(CLAP_PLUG_PLUG *plug, UB_EVENT *ub_in,
+                                   const void *event, uint32_t size) {
+    if (ub_push(ub_in, event, size) != 0)
+        atomic_fetch_add(&plug->in_events_dropped, 1U);
+}
+
 // push the changed rt params to ub_in as param value events, return 1 if any
 // were pushed. Use on the thread that owns the rt params - [audio-thread], or
 // [main-thread] for a plugin that is not activated
@@ -1457,8 +1475,8 @@ static int clap_input_events_params_add(CLAP_PLUG_PLUG *plug,
         param_val.port_index = -1;
         param_val.value =
             (double)param_get_value(plug->plug_params, (int)param_idx, 1);
-        ub_push(ub_in, (void *)&(param_val),
-                (uint32_t)sizeof(clap_event_param_value_t));
+        clap_input_events_push(plug, ub_in, &param_val,
+                               (uint32_t)sizeof(clap_event_param_value_t));
     }
     return not_quiet;
 }
@@ -1643,6 +1661,11 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
         clap_plug_note_ports_drops_log(cur_plug, &(cur_plug->input_note_ports));
         clap_plug_note_ports_drops_log(cur_plug,
                                        &(cur_plug->output_note_ports));
+        unsigned int in_dropped =
+            atomic_exchange(&cur_plug->in_events_dropped, 0U);
+        if (in_dropped > 0)
+            log_append_logfile("%s: %u input events dropped\n", cur_plug->name,
+                               in_dropped);
         clap_plug_requests_process(cur_plug);
         // host side flush - send the param changes to a plugin that is not
         // activated, since it gets no process() calls
@@ -1745,6 +1768,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->presets = NULL;
         plug->presets_built = false;
         atomic_init(&plug->requests, 0U);
+        atomic_init(&plug->in_events_dropped, 0U);
     }
 
     return plug_data;
@@ -2413,12 +2437,12 @@ uint32_t clap_plug_load_and_activate(void *plugin_item) {
     }
 
     // Initiate the event lists
-    // TODO TEST if EVENT_LIST_SIZE and EVENT_LIST_ITEMS are good enough sizes
     clap_input_events_t *in_events = &(plug->input_events);
-    in_events->ctx = (void *)ub_init(EVENT_LIST_SIZE, EVENT_LIST_ITEMS);
+    in_events->ctx = (void *)ub_init(IN_EVENT_LIST_SIZE, IN_EVENT_LIST_ITEMS);
     in_events->get = clap_plug_ext_events_get;
     in_events->size = clap_plug_ext_events_size;
     clap_output_events_t *out_events = &(plug->output_events);
+    // TODO TEST if EVENT_LIST_SIZE and EVENT_LIST_ITEMS are good enough sizes
     out_events->ctx = (void *)ub_init(EVENT_LIST_SIZE, EVENT_LIST_ITEMS);
     out_events->try_push = clap_plug_ext_events_try_push;
     if (!in_events->ctx || !out_events->ctx) {
@@ -2633,6 +2657,70 @@ static int clap_output_events_read(CLAP_PLUG_INFO *plug_data,
     return clap_output_events_params_apply(plug, (UB_EVENT *)out_events->ctx);
 }
 
+// the dialect an input note port gets: the preferred one if it is CLAP or
+// MIDI, else CLAP, else MIDI. 0 when it supports neither
+static uint32_t clap_note_port_dialect(const CLAP_PLUG_NOTE_PORT *note_ports,
+                                       uint32_t port) {
+    uint32_t preferred = note_ports->preferred_dialects[port];
+    if (preferred == CLAP_NOTE_DIALECT_CLAP ||
+        preferred == CLAP_NOTE_DIALECT_MIDI)
+        return preferred;
+    uint32_t supported = note_ports->supported_dialects[port];
+    if (supported & CLAP_NOTE_DIALECT_CLAP)
+        return CLAP_NOTE_DIALECT_CLAP;
+    if (supported & CLAP_NOTE_DIALECT_MIDI)
+        return CLAP_NOTE_DIALECT_MIDI;
+    return 0;
+}
+
+// push an input note port event in the port's dialect. CLAP: notes as note
+// events, the rest raw if the port supports MIDI too. MIDI: every message raw.
+// false when the dialect has no place for it
+static bool clap_input_events_note_add(CLAP_PLUG_PLUG *plug, UB_EVENT *ub_in,
+                                       const MIDI_EVENT *ev, uint32_t port) {
+    const CLAP_PLUG_NOTE_PORT *note_ports = &(plug->input_note_ports);
+    uint32_t dialect = clap_note_port_dialect(note_ports, port);
+    clap_event_header_t head = {.time = ev->frame,
+                                .space_id = CLAP_CORE_EVENT_SPACE_ID,
+                                .flags = CLAP_EVENT_IS_LIVE};
+    if (dialect == CLAP_NOTE_DIALECT_CLAP &&
+        (midi_is_note_on(ev->data) || midi_is_note_off(ev->data))) {
+        head.type = midi_is_note_on(ev->data) ? CLAP_EVENT_NOTE_ON
+                                              : CLAP_EVENT_NOTE_OFF;
+        head.size = sizeof(clap_event_note_t);
+        clap_event_note_t note = {
+            .header = head,
+            .note_id = -1,
+            .port_index = (int16_t)port,
+            .channel = (int16_t)midi_channel(ev->data),
+            .key = (int16_t)ev->data[1],
+            .velocity = (double)fit_range(127, 0, 1, 0, (SAMPLE_T)ev->data[2])};
+        clap_input_events_push(plug, ub_in, &note, head.size);
+        return true;
+    }
+    if (dialect != CLAP_NOTE_DIALECT_MIDI &&
+        !(note_ports->supported_dialects[port] & CLAP_NOTE_DIALECT_MIDI))
+        return false;
+    if (midi_type(ev->data) == MIDI_SYSEX) {
+        head.type = CLAP_EVENT_MIDI_SYSEX;
+        head.size = sizeof(clap_event_midi_sysex_t);
+        // points into the port's MIDI_BUF, cleared only next cycle
+        clap_event_midi_sysex_t sysex = {.header = head,
+                                         .port_index = (uint16_t)port,
+                                         .buffer = ev->data,
+                                         .size = ev->size};
+        clap_input_events_push(plug, ub_in, &sysex, head.size);
+        return true;
+    }
+    head.type = CLAP_EVENT_MIDI;
+    head.size = sizeof(clap_event_midi_t);
+    // a shorter message stays zero padded
+    clap_event_midi_t midi = {.header = head, .port_index = (uint16_t)port};
+    memcpy(midi.data, ev->data, ev->size);
+    clap_input_events_push(plug, ub_in, &midi, head.size);
+    return true;
+}
+
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
 static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
@@ -2648,67 +2736,30 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
     UB_EVENT *ub_in = (UB_EVENT *)in_events->ctx;
     // reset the event array
     ub_list_reset(ub_in);
+    // the params go first, at frame 0
     int not_quiet = clap_input_events_params_add(plug, ub_in);
     // TODO how to add transport events so everything is sorted by the frames
     // offset?
 
-    // write to input note ports of the plugin
     CLAP_PLUG_NOTE_PORT *note_ports = &(plug->input_note_ports);
     if (note_ports->ports_count == 0)
         return not_quiet;
-    // Add the system midi messages
-    for (uint32_t port_num = 0; port_num < note_ports->ports_count;
-         port_num++) {
-        if (!(note_ports->sys_ports[port_num]))
-            continue;
-        MIDI_BUF *midi_in = note_ports->midi_bufs[port_num];
-        app_jack_midi_in_rt(note_ports->sys_ports[port_num], nframes, midi_in);
-        uint32_t note_dialect = note_ports->preferred_dialects[port_num];
-        int16_t port_index = (int16_t)port_num;
-        // write the midi1 messages, depending on the preferred dialect of the
-        // note port
-        MIDI_BUF_ITER it = midi_buf_iter(midi_in);
-        MIDI_EVENT ev;
-        while (midi_buf_next(&it, &ev)) {
-            if (not_quiet == 0)
-                not_quiet = 1;
-            // TODO the other messages are dropped (task_list M3)
-            if (!midi_is_note_on(ev.data) && !midi_is_note_off(ev.data))
-                continue;
-            clap_event_header_t clap_head;
-            clap_head.time = ev.frame;
-            clap_head.flags = CLAP_EVENT_IS_LIVE;
-            clap_head.space_id = CLAP_CORE_EVENT_SPACE_ID;
-
-            if ((note_dialect & CLAP_NOTE_DIALECT_CLAP) ==
-                CLAP_NOTE_DIALECT_CLAP) {
-                clap_head.type = midi_is_note_on(ev.data) ? CLAP_EVENT_NOTE_ON
-                                                          : CLAP_EVENT_NOTE_OFF;
-                clap_head.size = sizeof(clap_event_note_t);
-                clap_event_note_t clap_note;
-                clap_note.channel = (int16_t)midi_channel(ev.data);
-                clap_note.header = clap_head;
-                clap_note.key = (int16_t)ev.data[1];
-                clap_note.note_id = -1;
-                clap_note.port_index = port_index;
-                clap_note.velocity =
-                    (double)fit_range(127, 0, 1, 0, (SAMPLE_T)ev.data[2]);
-                ub_push(ub_in, (void *)&(clap_note),
-                        (uint32_t)sizeof(clap_note));
-                continue;
-            }
-            if ((note_dialect & CLAP_NOTE_DIALECT_MIDI) ==
-                CLAP_NOTE_DIALECT_MIDI) {
-                clap_head.type = CLAP_EVENT_MIDI;
-                clap_head.size = sizeof(clap_event_midi_t);
-                clap_event_midi_t clap_midi;
-                memcpy(clap_midi.data, ev.data, sizeof(clap_midi.data));
-                clap_midi.header = clap_head;
-                clap_midi.port_index = port_index;
-                ub_push(ub_in, (void *)&(clap_midi),
-                        (uint32_t)sizeof(clap_midi));
-            }
-        }
+    for (uint32_t port = 0; port < note_ports->ports_count; port++) {
+        app_jack_midi_in_rt(note_ports->sys_ports[port], nframes,
+                            note_ports->midi_bufs[port]);
+        // past what the merge walks
+        if (port >= MIDI_BUF_MERGE_MAX)
+            atomic_fetch_add(&plug->in_events_dropped,
+                             midi_buf_count(note_ports->midi_bufs[port]));
+    }
+    // every port's events in time order
+    MIDI_BUF_MERGE_ITER it = midi_buf_merge_iter(
+        (const MIDI_BUF *const *)note_ports->midi_bufs, note_ports->ports_count);
+    MIDI_EVENT ev;
+    uint32_t port = 0;
+    while (midi_buf_merge_next(&it, &ev, &port)) {
+        if (clap_input_events_note_add(plug, ub_in, &ev, port))
+            not_quiet = 1;
     }
     return not_quiet;
 }

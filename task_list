@@ -63,8 +63,8 @@ PLAN
       fixed (M1/M2, sizes kept, decoders take valid messages).
     - sampler/synth scanned every event for every frame - fixed (M2).
     - CLAP drops everything but notes, even in the MIDI dialect; several
-      note ports are appended, not sorted by time - open (M3).
-    - synth events all act at cycle start - open (M3).
+      note ports are appended, not sorted by time - fixed (M3).
+    - synth events all act at cycle start - fixed (M3).
     - every context includes jack_funcs.h - open (G7).
 
 M1. DONE. util_funcs/midi_buf.c/.h, knows only uniform_buffer. Item
@@ -116,46 +116,92 @@ M2. DONE. JACK adapters, the only jack_midi_* users:
     chord plays every note on a synth osc, Odin2 (LV2) and Surge XT
     (CLAP); note-on vel 0 releases; invalid messages and overflow (700
     CCs -> 188) dropped and logged; 300 byte sysex into LV2 clean. LV2
-    MIDI out untested - no installed LV2 plugin has a MIDI out port.
+    MIDI out untested here - no installed LV2 plugin has a MIDI out port
+    (tested after M3 with a scratch one).
     Notes:
     - clap_plug_note_ports_destroy dereferences sys_ports when it is NULL
       if that calloc fails. Was already there.
     - A stopped plugin's JACK MIDI out port is never cleared. M4 covers it
       for CLAP; the same applies to LV2, G5 fixes both.
 
-M3. Frame accurate events - M2 already handles every event in order
-    (chords, vel 0, frames + events); what is left is that the synth
-    applies them all at the cycle start, and CLAP's messages.
-    Segments per event: render [pos, ev.frame), handle ev, pos = ev.frame;
-    then render [pos, nframes).
+M3. DONE. Frame accurate events. Segments per event: render [pos,
+    ev.frame), handle ev, pos = ev.frame; then render [pos, nframes).
     - synth: synth_process_osc_voices(synth_data, osc, start, end)
-      renders the voices into the osc buffers for one segment - signature
-      changed, no twin. The buffer clear and the copy to the out ports
-      move to synth_process_rt, once per cycle. The metronome is one
-      segment (its trigger is at frame 0).
-    - sampler: already frame accurate (M2 walks the events along the
-      frame loop). Left: render per segment instead of per frame - a
-      speedup only, optional.
-    - CLAP clap_input_events_prepare: note ports in time order - a k-way
-      walk that keeps each event's port index. midi_buf_merge loses the
-      source, so midi_buf gets a merge iterator (next yields the event +
-      its source index) and midi_buf_merge becomes a loop over it - one
-      k-way implementation. Params at frame 0 stay first.
-      MIDI dialect -> every message raw: CLAP_EVENT_MIDI (data[3], a
-      shorter message zero padded), sysex CLAP_EVENT_MIDI_SYSEX pointing
-      into the port's MIDI_BUF (valid through process(), cleared next
-      cycle). CLAP dialect -> notes as NOTE_ON/NOTE_OFF, the rest raw when
-      the port also supports MIDI, else dropped.
-      Dialect picked from supported_dialects (the preferred one if it is
-      CLAP or MIDI) - today a port preferring MIDI2 gets nothing.
+      renders one segment into the osc buffers - signature changed, no
+      twin. synth_process_rt per osc, once per cycle: clear the buffers,
+      synth_osc_params_read_rt, the metronome (one segment, triggered at
+      frame 0 from the transport) or synth_osc_process_rt (MIDI in +
+      segments), synth_osc_write_outs_rt.
+      Params read once per cycle into SYNTH_OSC.vals: the Amp read steps
+      its smoothing ramp, a read per segment would smooth faster in busy
+      cycles. The render still copies A/D/S/R into each voice per segment
+      - synth_adsr_reset zeroes them when a note starts mid-cycle.
+    - sampler: already frame accurate (M2). Per segment rendering skipped
+      - it would only save the per frame frame compare.
+    - midi_buf: merge iterator - midi_buf_merge_iter(srcs, n) /
+      midi_buf_merge_next(it, ev, &src) walks the first
+      MIDI_BUF_MERGE_MAX sources in frame order, lower source first on a
+      tie; midi_buf_merge is a loop over it, one k-way implementation.
+      midi_buf_count(buf) added.
+    - CLAP clap_input_events_prepare: params first (frame 0), then every
+      note port through the merge iterator, each event in its port's
+      dialect (clap_note_port_dialect: the preferred one if CLAP or MIDI,
+      else CLAP, else MIDI from supported_dialects).
+      MIDI -> every message raw: CLAP_EVENT_MIDI (data[3], shorter
+      messages zero padded), sysex CLAP_EVENT_MIDI_SYSEX pointing into the
+      port's MIDI_BUF (valid through process(), cleared next cycle).
+      CLAP -> notes as NOTE_ON/NOTE_OFF, the rest raw when the port also
+      supports MIDI, else dropped. not_quiet only for events the plugin
+      gets.
+      Input event list: own size, IN_EVENT_LIST_ITEMS 1024 x the largest
+      event (param value, 56 bytes) - two full 4 KiB MIDI_BUFs fit. Failed
+      pushes (params too) and events of note ports past
+      MIDI_BUF_MERGE_MAX go to CLAP_PLUG_PLUG.in_events_dropped, logged in
+      clap_read_rt_to_ui_messages. The out list stays EVENT_LIST_SIZE /
+      EVENT_LIST_ITEMS (M4).
     - LV2: done in M2.
-    DONE WHEN: two notes at different frames of one cycle start at their
-    own frames on the synth; a retrigger (off then on, same frame)
-    restarts the note on the synth and the sampler; CC, pitch bend and
-    sysex reach a CLAP synth in the MIDI dialect (Surge XT supports both
-    dialects); events of two note ports arrive in time order.
-    Already passed in M2: chords on every consumer, note-on vel 0
-    releases, sysex into an LV2 plugin under ASan.
+    Tested:
+    - midi_buf: scratch unit test under ASan/UBSan and valgrind - order,
+      ties, source index, NULL sources, 18 sources, merge unchanged.
+    - synth: scratch harness, synth.c with stubbed app_jack_* (frame by
+      frame, vs HEAD): note at frame 10 sounds from 11 (HEAD: 1), a second
+      note at 150 from 151 (HEAD: 1), off + on at 100 restarts the note
+      from 101 and keeps sustaining (HEAD: 1). The 1 frame lag is the
+      voice amp ramp's first sample, HEAD has it too. A fresh synth is
+      near silent for ~400 cycles: the Amp ramp steps once per cycle.
+    - in the app (ASan, pipewire-jack, scratch JACK clients): a scratch
+      CLAP plugin logging its input events (2 note ports, dialect per
+      run): MIDI dialect - CC, pitch bend, program change (padded), clock,
+      6 and 300 byte sysex, both ports merged in time order, port 0 first
+      on a tie, vel 0 -> 0x8n; CLAP dialect - notes as note events, the
+      rest raw; CLAP only - notes only; preferring MIDI2 - falls back to
+      CLAP (got nothing before). A param change lands before a frame 0
+      CC of the same cycle. 3 flooded ports: 88 drops per MIDI_BUF, 512
+      list drops logged, 1024 in order; 18 ports: 2 drops logged.
+      Surge XT: max pitch bend moves A3 219 -> 247 Hz (2 semitones);
+      sampler: off + on at frame 300 restarts a ramp sample at 300; M2's
+      synth probe unchanged (chord, vel 0, junk and 700 CC drops).
+    Also: a CLAP plugin without the params, audio-ports or note-ports
+    extension failed to load - clap_plug_params_create /
+    clap_plug_create_ports / clap_plug_note_ports_create returned -1 for
+    a missing extension. Now it counts as none (the spec: no extension, no
+    ports); the count 0 paths already handled it.
+    Also, LV2 atom sequences: a 3 byte MIDI event takes 8 bytes in a
+    MIDI_BUF, 24 in a sequence, so the 4096 byte sequence took ~170 of a
+    MIDI_BUF's 512 and lost the rest silently (plug_evbuf_write's -1 was
+    ignored). DEFAULT_MIDI_BUF_SIZE (the sequence size, also
+    bufsz:sequenceSize) is now MIDI_PORT_BUF_SIZE * 3 + 4096 for the
+    frame 0 atoms. Failed writes go to PLUG_PORT.seq_dropped, logged with
+    the port's MIDI_BUF drops. rsz:minimumSize was read after the
+    sequence was made, so it never applied (OB-Xd asks 13952, got 4096):
+    now read first, sequence = max(minimum, default).
+    Tested with a scratch LV2 MIDI thru plugin (minimumSize 32768 on its
+    out): 500 CCs in -> 500 reach the plugin and come back out of its JACK
+    MIDI out (HEAD: 170, nothing logged); 600 -> 512, the 88 MIDI_BUF
+    drops logged; out sequence 32768 (HEAD: 4096); with the old size the
+    330 sequence drops are logged. OB-Xd chord, vel 0, junk and 700 CCs
+    as in M2, its sequence takes all 512. ASan: only OB-Xd's own leaks
+    (348 bytes, HEAD too).
 
 M4. CLAP note OUTPUT - not handled at all today: clap_output_events_read
     only applies param events; the output note ports exist as JACK MIDI
@@ -226,6 +272,12 @@ G1. Per owner process functions, behaviour unchanged. Split the loop
     order. The per context ui_to_rt message reading stays at cycle start.
     Each returns whether it wrote its outputs this cycle (G5).
     Runnable alone - the graph later only changes who calls them.
+    Fix alongside (a behaviour change, so its own commit):
+    clap_prepare_input_ports / clap_prepare_output_ports return -1 for a
+    plugin with no audio ports, and clap_process_data_rt's sleep logic
+    reads -1 as not quiet - no audio inputs: a sleeping plugin wakes every
+    cycle; no audio outputs: CONTINUE_IF_NOT_QUIET never puts it to sleep.
+    Only costs CPU. No ports should count as quiet, -1 stay an error.
 
 G2. Graph module (engine/graph.c/.h, knows no backend). [main-thread]
     owns the graph, [audio-thread] only sees a compiled plan (G4).

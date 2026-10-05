@@ -72,6 +72,12 @@ bool midi_buf_push(MIDI_BUF *buf, uint32_t frame, const uint8_t *data,
     return true;
 }
 
+uint32_t midi_buf_count(const MIDI_BUF *buf) {
+    if (!buf)
+        return 0;
+    return ub_size(buf->ub);
+}
+
 MIDI_BUF_ITER midi_buf_iter(const MIDI_BUF *buf) {
     MIDI_BUF_ITER it = {.buf = buf, .idx = 0};
     return it;
@@ -91,34 +97,48 @@ bool midi_buf_next(MIDI_BUF_ITER *it, MIDI_EVENT *ev) {
     return true;
 }
 
+MIDI_BUF_MERGE_ITER midi_buf_merge_iter(const MIDI_BUF *const *srcs,
+                                        uint32_t n) {
+    MIDI_BUF_MERGE_ITER it = {0};
+    if (!srcs)
+        return it;
+    it.n = n < MIDI_BUF_MERGE_MAX ? n : MIDI_BUF_MERGE_MAX;
+    for (uint32_t i = 0; i < it.n; i++) {
+        it.its[i] = midi_buf_iter(srcs[i]);
+        it.live[i] = midi_buf_next(&it.its[i], &it.heads[i]);
+    }
+    return it;
+}
+
+bool midi_buf_merge_next(MIDI_BUF_MERGE_ITER *it, MIDI_EVENT *ev,
+                         uint32_t *src) {
+    if (!it || !ev)
+        return false;
+    // strict < keeps the lower source first on equal frames
+    int best = -1;
+    for (uint32_t i = 0; i < it->n; i++) {
+        if (it->live[i] &&
+            (best == -1 || it->heads[i].frame < it->heads[best].frame))
+            best = (int)i;
+    }
+    if (best == -1)
+        return false;
+    *ev = it->heads[best];
+    if (src)
+        *src = (uint32_t)best;
+    it->live[best] = midi_buf_next(&it->its[best], &it->heads[best]);
+    return true;
+}
+
 void midi_buf_merge(MIDI_BUF *dst, const MIDI_BUF *const *srcs, uint32_t n) {
     if (!dst || !srcs)
         return;
-    uint32_t used = n < MIDI_BUF_MERGE_MAX ? n : MIDI_BUF_MERGE_MAX;
-    MIDI_BUF_ITER its[MIDI_BUF_MERGE_MAX];
-    MIDI_EVENT heads[MIDI_BUF_MERGE_MAX];
-    bool live[MIDI_BUF_MERGE_MAX];
-    for (uint32_t i = 0; i < used; i++) {
-        its[i] = midi_buf_iter(srcs[i]);
-        live[i] = midi_buf_next(&its[i], &heads[i]);
-    }
-    while (1) {
-        // strict < keeps the lower source first on equal frames
-        int best = -1;
-        for (uint32_t i = 0; i < used; i++) {
-            if (live[i] && (best == -1 || heads[i].frame < heads[best].frame))
-                best = (int)i;
-        }
-        if (best == -1)
-            break;
-        midi_buf_push(dst, heads[best].frame, heads[best].data,
-                      heads[best].size);
-        live[best] = midi_buf_next(&its[best], &heads[best]);
-    }
-    for (uint32_t i = used; i < n; i++) {
-        if (srcs[i])
-            atomic_fetch_add(&dst->dropped, ub_size(srcs[i]->ub));
-    }
+    MIDI_BUF_MERGE_ITER it = midi_buf_merge_iter(srcs, n);
+    MIDI_EVENT ev;
+    while (midi_buf_merge_next(&it, &ev, NULL))
+        midi_buf_push(dst, ev.frame, ev.data, ev.size);
+    for (uint32_t i = it.n; i < n; i++)
+        atomic_fetch_add(&dst->dropped, midi_buf_count(srcs[i]));
 }
 
 uint32_t midi_buf_dropped_take(MIDI_BUF *buf) {
