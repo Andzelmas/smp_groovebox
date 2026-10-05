@@ -15,6 +15,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <poll.h>
 #include <semaphore.h>
 #include <signal.h>
@@ -55,14 +56,13 @@ extern char **environ;
 // define.
 #define CLAP_PLUGIN_NAME_MAX 128
 
-// size for the output event list
-#define EVENT_LIST_SIZE 2048
-#define EVENT_LIST_ITEMS 50
-// the input event list holds the param changes and the note ports' events. A
-// param value is the largest event pushed to it
-#define IN_EVENT_LIST_ITEMS 1024
-#define IN_EVENT_LIST_SIZE                                                     \
-    ((uint32_t)(IN_EVENT_LIST_ITEMS * sizeof(clap_event_param_value_t)))
+// size of the input and output event lists. The input one holds the param
+// changes and the note ports' events, the output one the plugin's events but
+// note and MIDI ones (those go straight to the note ports). A param value is
+// the largest event either holds
+#define EVENT_LIST_ITEMS 1024
+#define EVENT_LIST_SIZE                                                        \
+    ((uint32_t)(EVENT_LIST_ITEMS * sizeof(clap_event_param_value_t)))
 
 static thread_local bool is_audio_thread = false;
 // set in clap_plug_init. Plugins can call the host from their own threads too,
@@ -177,9 +177,12 @@ typedef struct _clap_plug_plug {
     // input and output note ports
     CLAP_PLUG_NOTE_PORT input_note_ports;
     CLAP_PLUG_NOTE_PORT output_note_ports;
-    // input output event streams
+    // input output event streams. output_events.ctx is this plug: try_push
+    // sends note and MIDI events to the output note ports, the rest (param
+    // events) to out_list
     clap_input_events_t input_events;
     clap_output_events_t output_events;
+    UB_EVENT *out_list;
     // the preset list from the plugin's preset-discovery factory, built on
     // first browse (see clap_plug_presets_get)
     TREE_INDEX *presets;
@@ -188,6 +191,9 @@ typedef struct _clap_plug_plug {
     atomic_uint requests;
     // events the input event list had no room for, taken on [main-thread]
     atomic_uint in_events_dropped;
+    // output events out_list had no room for, or with no such port or note,
+    // taken on [main-thread]. A full MIDI_BUF counts its own drops
+    atomic_uint out_events_dropped;
 } CLAP_PLUG_PLUG;
 
 // the main clap struct
@@ -232,6 +238,8 @@ typedef struct _clap_plug_info {
     void *audio_backend;
     // paired with a plugin's uid when registering that plugin's ports
     uint64_t owner_tag;
+    // this cycle's nframes, for the stop callback [audio-thread]
+    unsigned int rt_nframes;
 } CLAP_PLUG_INFO;
 
 // return the clap_plug_plug id on the plugins array that has the same
@@ -1111,9 +1119,7 @@ clap_plug_ext_note_ports_supported_dialects(const clap_host_t *host) {
     uint32_t supported = 0;
     supported = (supported | CLAP_NOTE_DIALECT_CLAP);
     supported = (supported | CLAP_NOTE_DIALECT_MIDI);
-    supported = (supported | CLAP_NOTE_DIALECT_MIDI2);
-    // right now MPE is not supported
-    // supported = supported | CLAP_NOTE_DIALECT_MIDI_MPE;
+    // right now MIDI2 and MPE are not supported
     return supported;
 }
 
@@ -1174,18 +1180,138 @@ clap_plug_ext_events_get(const struct clap_input_events *list, uint32_t index) {
     return header;
 }
 
+// a CLAP velocity (0..1) as a MIDI one, at least min
+static uint8_t clap_velocity_to_midi(double velocity, uint8_t min) {
+    long vel = lround(fmin(fmax(velocity, 0.0), 1.0) * 127.0);
+    return (uint8_t)(vel < min ? min : vel);
+}
+
+// push a message to output note port port, -1 = every port
+static bool clap_output_midi_push(CLAP_PLUG_PLUG *plug, int32_t port,
+                                  uint32_t frame, const uint8_t *data,
+                                  uint32_t size) {
+    CLAP_PLUG_NOTE_PORT *note_ports = &(plug->output_note_ports);
+    if (!note_ports->midi_bufs || port >= (int32_t)note_ports->ports_count) {
+        atomic_fetch_add(&plug->out_events_dropped, 1U);
+        return false;
+    }
+    if (port >= 0)
+        return midi_buf_push(note_ports->midi_bufs[port], frame, data, size);
+    bool pushed = true;
+    for (uint32_t i = 0; i < note_ports->ports_count; i++)
+        pushed &= midi_buf_push(note_ports->midi_bufs[i], frame, data, size);
+    return pushed;
+}
+
+// NOTE_ON, NOTE_OFF or NOTE_CHOKE as MIDI. Off and choke take wildcards: every
+// port, all 16 channels, all notes - CC 123 All Notes Off, for a choke CC 120
+// All Sound Off
+static bool clap_output_note_push(CLAP_PLUG_PLUG *plug,
+                                  const clap_event_note_t *note) {
+    uint32_t frame = note->header.time;
+    bool on = note->header.type == CLAP_EVENT_NOTE_ON;
+    bool choke = note->header.type == CLAP_EVENT_NOTE_CHOKE;
+    int16_t min = on ? 0 : -1;
+    if (note->port_index < min || note->channel < min || note->channel > 15 ||
+        note->key < min || note->key > 127) {
+        atomic_fetch_add(&plug->out_events_dropped, 1U);
+        return false;
+    }
+    if (on) {
+        uint8_t msg[3] = {(uint8_t)(MIDI_NOTE_ON | note->channel),
+                          (uint8_t)note->key,
+                          clap_velocity_to_midi(note->velocity, 1)};
+        return clap_output_midi_push(plug, note->port_index, frame, msg, 3);
+    }
+    uint8_t first = note->channel < 0 ? 0 : (uint8_t)note->channel;
+    uint8_t last = note->channel < 0 ? 15 : (uint8_t)note->channel;
+    bool pushed = true;
+    for (uint8_t ch = first; ch <= last; ch++) {
+        uint8_t msg[3] = {(uint8_t)(MIDI_NOTE_OFF | ch), (uint8_t)note->key,
+                          choke ? MIDI_RELEASE_VELOCITY_DEFAULT
+                                : clap_velocity_to_midi(note->velocity, 0)};
+        if (note->key < 0) {
+            msg[0] = (uint8_t)(MIDI_CC | ch);
+            msg[1] = choke ? 120 : 123;
+            msg[2] = 0;
+        }
+        pushed &= clap_output_midi_push(plug, note->port_index, frame, msg, 3);
+    }
+    return pushed;
+}
+
+// a note or MIDI event to its output note port's MIDI_BUF, false if it is not
+// one. *pushed false when it was dropped
+static bool clap_output_events_note_add(CLAP_PLUG_PLUG *plug,
+                                        const clap_event_header_t *event,
+                                        bool *pushed) {
+    *pushed = true;
+    if (event->space_id != CLAP_CORE_EVENT_SPACE_ID)
+        return false;
+    switch (event->type) {
+    case CLAP_EVENT_NOTE_ON:
+    case CLAP_EVENT_NOTE_OFF:
+    case CLAP_EVENT_NOTE_CHOKE:
+    case CLAP_EVENT_MIDI:
+    case CLAP_EVENT_MIDI_SYSEX:
+        break;
+    case CLAP_EVENT_NOTE_END:
+    case CLAP_EVENT_NOTE_EXPRESSION:
+    case CLAP_EVENT_MIDI2:
+        // no use for them yet
+        return true;
+    default:
+        return false;
+    }
+    // a params flush on [main-thread] has no cycle to send them in
+    if (!is_audio_thread)
+        return true;
+    uint32_t min_size = sizeof(clap_event_note_t);
+    if (event->type == CLAP_EVENT_MIDI)
+        min_size = sizeof(clap_event_midi_t);
+    if (event->type == CLAP_EVENT_MIDI_SYSEX)
+        min_size = sizeof(clap_event_midi_sysex_t);
+    if (event->size < min_size) {
+        atomic_fetch_add(&plug->out_events_dropped, 1U);
+        *pushed = false;
+        return true;
+    }
+    if (event->type == CLAP_EVENT_MIDI) {
+        const clap_event_midi_t *midi = (const clap_event_midi_t *)event;
+        // 0 for sysex or a data byte, the MIDI_BUF drops those
+        uint32_t size = midi_expected_size(midi->data[0]);
+        *pushed = clap_output_midi_push(plug, midi->port_index, event->time,
+                                        midi->data, size);
+    } else if (event->type == CLAP_EVENT_MIDI_SYSEX) {
+        // the buffer is valid only during try_push, the MIDI_BUF copies it
+        const clap_event_midi_sysex_t *sysex =
+            (const clap_event_midi_sysex_t *)event;
+        *pushed = clap_output_midi_push(plug, sysex->port_index, event->time,
+                                        sysex->buffer, sysex->size);
+    } else {
+        *pushed = clap_output_note_push(plug, (const clap_event_note_t *)event);
+    }
+    return true;
+}
+
 static bool clap_plug_ext_events_try_push(const struct clap_output_events *list,
                                           const clap_event_header_t *event) {
-    if (!list)
+    if (!list || !event)
         return false;
-    UB_EVENT *ub_ev = (UB_EVENT *)list->ctx;
-    if (!ub_ev)
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)list->ctx;
+    if (!plug || !plug->out_list)
         return false;
-
-    int push_err = ub_push(ub_ev, (void *)event, event->size);
-    if (push_err != 0)
-        return false;
-    return true;
+    bool pushed = true;
+    if (clap_output_events_note_add(plug, event, &pushed))
+        return pushed;
+    if (ub_push(plug->out_list, event, event->size) == 0)
+        return true;
+    atomic_fetch_add(&plug->out_events_dropped, 1U);
+    // the ui side would miss the value
+    if (event->space_id == CLAP_CORE_EVENT_SPACE_ID &&
+        event->type == CLAP_EVENT_PARAM_VALUE)
+        atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_SYNC_VALUES);
+    return false;
 }
 
 // a from_location() call failed, [main-thread]
@@ -1239,6 +1365,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     // next plugin loaded into this slot
     atomic_store(&plug->requests, 0U);
     atomic_store(&plug->in_events_dropped, 0U);
+    atomic_store(&plug->out_events_dropped, 0U);
     if (plug->plug_entry) {
         if (clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug) ==
             -1) {
@@ -1260,9 +1387,9 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     clap_input_events_t *in_events = &(plug->input_events);
     ub_clean((UB_EVENT *)in_events->ctx);
     in_events->ctx = NULL;
-    clap_output_events_t *out_events = &(plug->output_events);
-    ub_clean((UB_EVENT *)out_events->ctx);
-    out_events->ctx = NULL;
+    ub_clean(plug->out_list);
+    plug->out_list = NULL;
+    plug->output_events.ctx = NULL;
     // clean the parameters
     clap_plug_params_destroy(plug_data, plug->id);
     // remove presets
@@ -1521,7 +1648,7 @@ static void clap_plug_params_flush_inactive(CLAP_PLUG_PLUG *plug,
     if (!plug->plug_params)
         return;
     UB_EVENT *ub_in = (UB_EVENT *)plug->input_events.ctx;
-    UB_EVENT *ub_out = (UB_EVENT *)plug->output_events.ctx;
+    UB_EVENT *ub_out = plug->out_list;
     if (!ub_in || !ub_out)
         return;
     // take the param changes the [audio-thread] would have picked up
@@ -1588,10 +1715,35 @@ static int clap_plug_start_process(void *user_data) {
     return 0;
 }
 
+// [audio-thread] empty the output note ports' MIDI_BUFs for a cycle
+static void clap_note_outs_clear(CLAP_PLUG_NOTE_PORT *note_ports,
+                                 unsigned int nframes) {
+    for (uint32_t i = 0; note_ports->midi_bufs && i < note_ports->ports_count;
+         i++)
+        midi_buf_clear(note_ports->midi_bufs[i], nframes);
+}
+
+// [audio-thread] every cycle - a MIDI out nobody writes repeats its last
+// events
+static void clap_note_outs_write(CLAP_PLUG_NOTE_PORT *note_ports,
+                                 unsigned int nframes) {
+    for (uint32_t i = 0; note_ports->midi_bufs && i < note_ports->ports_count;
+         i++)
+        app_jack_midi_out_rt(note_ports->sys_ports[i], nframes,
+                             note_ports->midi_bufs[i]);
+}
+
 static int clap_plug_stop_process(void *user_data) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)user_data;
     if (!plug)
         return -1;
+    // a stopped plugin's ports belong to [main-thread], so its MIDI outs are
+    // emptied once here, not every cycle
+    if (plug->plug_inst_processing != 0) {
+        unsigned int nframes = plug->plug_data->rt_nframes;
+        clap_note_outs_clear(&(plug->output_note_ports), nframes);
+        clap_note_outs_write(&(plug->output_note_ports), nframes);
+    }
 
     // if plugin is sleeping stop it completely, since when it is sleeping
     // [audio-thread] can still access some parts of the CLAP_PLUG_PLUG struct
@@ -1612,13 +1764,15 @@ static int clap_plug_stop_process(void *user_data) {
     return 0;
 }
 
-int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data) {
+int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data,
+                                unsigned int nframes) {
     // this is a local thread var its false on [main-thread] and true on
     // [audio-thread]
     is_audio_thread = true;
 
     if (!plug_data)
         return -1;
+    plug_data->rt_nframes = nframes;
     // process the sys messages (stop, start plugin and similar)
     context_sub_process_rt(plug_data->control_data);
 
@@ -1666,6 +1820,11 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
         if (in_dropped > 0)
             log_append_logfile("%s: %u input events dropped\n", cur_plug->name,
                                in_dropped);
+        unsigned int out_dropped =
+            atomic_exchange(&cur_plug->out_events_dropped, 0U);
+        if (out_dropped > 0)
+            log_append_logfile("%s: %u output events dropped\n",
+                               cur_plug->name, out_dropped);
         clap_plug_requests_process(cur_plug);
         // host side flush - send the param changes to a plugin that is not
         // activated, since it gets no process() calls
@@ -1769,6 +1928,8 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->presets_built = false;
         atomic_init(&plug->requests, 0U);
         atomic_init(&plug->in_events_dropped, 0U);
+        atomic_init(&plug->out_events_dropped, 0U);
+        plug->out_list = NULL;
     }
 
     return plug_data;
@@ -2438,14 +2599,13 @@ uint32_t clap_plug_load_and_activate(void *plugin_item) {
 
     // Initiate the event lists
     clap_input_events_t *in_events = &(plug->input_events);
-    in_events->ctx = (void *)ub_init(IN_EVENT_LIST_SIZE, IN_EVENT_LIST_ITEMS);
+    in_events->ctx = (void *)ub_init(EVENT_LIST_SIZE, EVENT_LIST_ITEMS);
     in_events->get = clap_plug_ext_events_get;
     in_events->size = clap_plug_ext_events_size;
-    clap_output_events_t *out_events = &(plug->output_events);
-    // TODO TEST if EVENT_LIST_SIZE and EVENT_LIST_ITEMS are good enough sizes
-    out_events->ctx = (void *)ub_init(EVENT_LIST_SIZE, EVENT_LIST_ITEMS);
-    out_events->try_push = clap_plug_ext_events_try_push;
-    if (!in_events->ctx || !out_events->ctx) {
+    plug->out_list = ub_init(EVENT_LIST_SIZE, EVENT_LIST_ITEMS);
+    plug->output_events.ctx = (void *)plug;
+    plug->output_events.try_push = clap_plug_ext_events_try_push;
+    if (!in_events->ctx || !plug->out_list) {
         context_sub_send_msg(
             plug_data->control_data, (void *)plug_data, is_audio_thread,
             "Failed to create %s plugin clap event structs\n", plug->plug_path);
@@ -2641,20 +2801,28 @@ static int clap_prepare_output_ports(CLAP_PLUG_INFO *plug_data,
     return not_quiet;
 }
 
-// TODO midi and note output events are not used yet, only param values
+// apply the param events, the note events are in the note ports already (see
+// clap_plug_ext_events_try_push).
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
 static int clap_output_events_read(CLAP_PLUG_INFO *plug_data,
-                                   unsigned int nframes, CLAP_PLUG_PLUG *plug) {
-    (void)nframes;
+                                   CLAP_PLUG_PLUG *plug) {
     if (!plug_data)
         return -1;
     if (!plug)
         return -1;
-    clap_output_events_t *out_events = &(plug->output_events);
-    if (!out_events->ctx)
+    if (!plug->out_list)
         return -1;
-    return clap_output_events_params_apply(plug, (UB_EVENT *)out_events->ctx);
+    int not_quiet = clap_output_events_params_apply(plug, plug->out_list);
+    if(not_quiet == 1)
+        return 1;
+    CLAP_PLUG_NOTE_PORT *note_ports = &(plug->output_note_ports);
+    for (uint32_t i = 0; note_ports->midi_bufs && i < note_ports->ports_count;
+         i++) {
+        if (midi_buf_count(note_ports->midi_bufs[i]) > 0)
+            return 1;
+    }
+    return not_quiet;
 }
 
 // the dialect an input note port gets: the preferred one if it is CLAP or
@@ -2796,20 +2964,22 @@ void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes) {
             clap_input_events_prepare(plug_data, nframes, plug);
         _process.in_events = &(plug->input_events);
 
-        // reset the output event array
-        clap_output_events_t *out_events = &(plug->output_events);
-        ub_list_reset((UB_EVENT *)out_events->ctx);
-        _process.out_events = out_events;
+        // reset the output event array and the note outs the plugin pushes to
+        ub_list_reset(plug->out_list);
+        clap_note_outs_clear(&(plug->output_note_ports), nframes);
+        _process.out_events = &(plug->output_events);
 
         // the plugin is sleeping, check if it needs to wake up
         if (plug->plug_inst_processing == 2) {
-            if (in_audio_not_quiet == 0 && in_event_not_quiet == 0)
-                continue;
             // if audio or event input was not quiet from the system ports start
             // the plugin and continue the process
-            if (!(plug->plug_inst->start_processing(plug->plug_inst)))
+            if ((in_audio_not_quiet != 0 || in_event_not_quiet != 0) &&
+                plug->plug_inst->start_processing(plug->plug_inst))
+                plug->plug_inst_processing = 1;
+            if (plug->plug_inst_processing == 2) {
+                clap_note_outs_write(&(plug->output_note_ports), nframes);
                 continue;
-            plug->plug_inst_processing = 1;
+            }
         }
 
         clap_process_status clap_status =
@@ -2820,6 +2990,7 @@ void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes) {
             // nothing with output events
             clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
                                       true);
+            clap_note_outs_clear(&(plug->output_note_ports), nframes);
             context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                                  is_audio_thread,
                                  "ERROR Processing discard buffer\n");
@@ -2827,13 +2998,13 @@ void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes) {
         if (clap_status == CLAP_PROCESS_CONTINUE) {
             clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
                                       false);
-            clap_output_events_read(plug_data, nframes, plug);
+            clap_output_events_read(plug_data, plug);
         }
         if (clap_status == CLAP_PROCESS_CONTINUE_IF_NOT_QUIET) {
             int not_quiet_audio = clap_prepare_output_ports(
                 plug_data, &(plug->output_ports), nframes, false);
             int not_quiet_events =
-                clap_output_events_read(plug_data, nframes, plug);
+                clap_output_events_read(plug_data, plug);
             context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                                  is_audio_thread, "Process if NOT_QUIET\n");
             // process successful but outputs are quiet send this plugin to
@@ -2848,7 +3019,7 @@ void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes) {
                                  is_audio_thread, "Process if TAIL\n");
             clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
                                       false);
-            clap_output_events_read(plug_data, nframes, plug);
+            clap_output_events_read(plug_data, plug);
             // TODO implement tail extension
         }
         if (clap_status == CLAP_PROCESS_SLEEP) {
@@ -2856,11 +3027,12 @@ void clap_process_data_rt(CLAP_PLUG_INFO *plug_data, unsigned int nframes) {
                                  is_audio_thread, "SLEEP for now\n");
             clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
                                       false);
-            clap_output_events_read(plug_data, nframes, plug);
+            clap_output_events_read(plug_data, plug);
             // no need to process further so plugin goes to sleep
             plug->plug_inst->stop_processing(plug->plug_inst);
             plug->plug_inst_processing = 2;
         }
+        clap_note_outs_write(&(plug->output_note_ports), nframes);
     }
 }
 

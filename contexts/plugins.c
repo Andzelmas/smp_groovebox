@@ -354,6 +354,8 @@ typedef struct _plug_info {
     // ui thread only when rt tick var is 0 should only be touched on
     // [audio-thread]
     int rt_tick;
+    // this cycle's nframes, for the stop callback [audio-thread]
+    unsigned int rt_nframes;
 } PLUG_INFO;
 
 static int plug_sys_send_msg(void *user_data, const char *msg) {
@@ -726,8 +728,20 @@ static int plug_plug_stop_process(void *user_data) {
     PLUG_PLUG *plug = (PLUG_PLUG *)user_data;
     if (!plug)
         return -1;
-    // TODO before stopping would be nice to clear midi events, and fadeout
-    // audio
+    // a stopped plugin's ports belong to [main-thread], so its MIDI outs are
+    // emptied once here - a MIDI out nobody writes repeats its last events
+    if (plug->is_processing == 1) {
+        unsigned int nframes = plug->plug_data->rt_nframes;
+        for (uint32_t i = 0; plug->ports && i < plug->num_ports; i++) {
+            PLUG_PORT *const cur_port = &(plug->ports[i]);
+            if (cur_port->flow != PORT_FLOW_OUTPUT || !cur_port->midi_buf)
+                continue;
+            midi_buf_clear(cur_port->midi_buf, nframes);
+            app_jack_midi_out_rt(cur_port->sys_port, nframes,
+                                 cur_port->midi_buf);
+        }
+    }
+    // TODO before stopping would be nice to fadeout audio
     plug->is_processing = 0;
     return 0;
 }
@@ -1133,13 +1147,14 @@ int plug_plugin_preset_load(void *plug, uint64_t key) {
     return 0;
 }
 
-int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data) {
+int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data, unsigned int nframes) {
     // set the is_audio_thread to true so its false on [main-thread] and true on
     // [audio-thread]
     is_audio_thread = true;
     if (!plug_data) {
         return -1;
     }
+    plug_data->rt_nframes = nframes;
     // update the rt_tick
     plug_data->rt_tick += 1;
     if (plug_data->rt_tick > RT_CYCLES)
@@ -1422,8 +1437,6 @@ uint32_t plug_load_and_activate(void *plugin_item) {
         return 0;
 
     PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
-    // just in case clean the plugin up
-    plug_stop_and_remove_plug((void *)plug);
     // assign the identity uid once, when the slot is claimed. Ports are
     // registered under it as their owner, so it has to exist before any of
     // them. A slot keeps its last uid until this reassigns it
@@ -1460,15 +1473,21 @@ uint32_t plug_load_and_activate(void *plugin_item) {
         &static_features[3],
         NULL};
 
+    // the failures below remove the plugin directly - it was never started,
+    // so [audio-thread] never saw it
     plug->feature_list = (const LV2_Feature **)calloc(1, sizeof(features));
     if (!plug->feature_list) {
-        plug_stop_and_remove_plug((void *)plug);
+        plug_remove_plug(plug_data, plug->id);
         return 0;
     }
     memcpy(plug->feature_list, features, sizeof(features));
     // instantiate and activate the plugin
     plug->plug_instance = lilv_plugin_instantiate(
         plugin, plug_data->sample_rate, plug->feature_list);
+    if (!plug->plug_instance) {
+        plug_remove_plug(plug_data, plug->id);
+        return 0;
+    }
 
     // Create workers if necessary
     if (lilv_plugin_has_extension_data(plug->plug,
@@ -1493,7 +1512,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
 
     // create the ports on audio_client from the sys_ports
     if (plug_activate_backend_ports(plug_data, plug) != 0) {
-        plug_stop_and_remove_plug((void *)plug);
+        plug_remove_plug(plug_data, plug->id);
         return 0;
     }
 
@@ -1593,7 +1612,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
         }
         if (!lockstep_ok) {
             param_clean_param_container(plug_params);
-            plug_stop_and_remove_plug((void *)plug);
+            plug_remove_plug(plug_data, plug->id);
             return 0;
         }
         // TODO val_to_string callback reading them straight from plug->controls
@@ -1603,7 +1622,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
 
         plug->plug_params = plug_params;
         if (plug_property_params_build(plug) != 0) {
-            plug_stop_and_remove_plug((void *)plug);
+            plug_remove_plug(plug_data, plug->id);
             return 0;
         }
     }
@@ -1832,6 +1851,7 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
                                   plug_data->nodes.lv2_OutputPort)) {
             cur_port->flow = PORT_FLOW_OUTPUT;
         } else if (!optional) {
+            free(default_values);
             return -1;
         }
         // set the port buffer size, before the event port's sequence is made
@@ -1911,6 +1931,7 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         }
         // if not optional but we dont know the type we cant load this plugin
         else if (!optional) {
+            free(default_values);
             return -1;
         }
         // if the type is unknown connect to null

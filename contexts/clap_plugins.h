@@ -14,8 +14,10 @@ typedef struct _clap_plug_info
     CLAP_PLUG_INFO; // the struct that holds all the plugin info
 
 // read the ui_to_rt messages on the [audio-thread] and call functions to stop
-// or start processing the plugin or the whole clap context.
-int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data);
+// or start processing the plugin or the whole clap context. nframes is this
+// cycle's.
+int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data,
+                                unsigned int nframes);
 
 // read the rt_to_ui messages on the [main-thread] and call functions to
 // restart, activate, write to log and similar main thread functions. some of

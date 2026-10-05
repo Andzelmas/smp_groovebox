@@ -135,7 +135,7 @@ static int app_sys_msg(void *user_data, const char *msg) {
 }
 
 // read ring buffers sent from ui to rt thread
-static int app_read_rt_messages(APP_INFO *app_data) {
+static int app_read_rt_messages(APP_INFO *app_data, NFRAMES_T nframes) {
     if (!app_data)
         return -1;
     // first read the app_data messages
@@ -147,10 +147,10 @@ static int app_read_rt_messages(APP_INFO *app_data) {
     // read the jack inner messages on the [audio-thread]
     app_jack_read_ui_to_rt_messages(app_data->trk_jack);
     // read the CLAP plugins inner messages on the [audio-thread]
-    if (clap_read_ui_to_rt_messages(app_data->clap_plug_data) != 0)
+    if (clap_read_ui_to_rt_messages(app_data->clap_plug_data, nframes) != 0)
         return -1;
     // read the lv2 plugin messages on the [audio-thread]
-    if (plug_read_ui_to_rt_messages(app_data->plug_data) != 0)
+    if (plug_read_ui_to_rt_messages(app_data->plug_data, nframes) != 0)
         return -1;
     // read the sampler messages on the [audio-thread]
     if (smp_read_ui_to_rt_messages(app_data->smp_data) != 0)
@@ -173,7 +173,7 @@ static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
     // stop_processing a plugin, update rt param values etc. if returns a 1
     // value, this means that is_processing is 0 and the function should not
     // process any contexts a value of -1 means that a fundamental error occured
-    int read_err = app_read_rt_messages(app_data);
+    int read_err = app_read_rt_messages(app_data, nframes);
     if (read_err == 1)
         return 0;
     if (read_err == -1)

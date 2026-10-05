@@ -67,7 +67,8 @@ int plug_plugin_preset_load(void *plug, uint64_t key);
 // read the main-thread audio-thread comm messages and launch apropriate
 // functions (stop, start processes etc.)
 int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data);
-int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data);
+// nframes is this cycle's
+int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data, unsigned int nframes);
 
 // initialize a plugin instance. On success returns its identity uid (always
 // > 0, matching plug_plugin_uid); on failure returns 0.

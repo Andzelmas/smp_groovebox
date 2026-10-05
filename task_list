@@ -122,7 +122,7 @@ M2. DONE. JACK adapters, the only jack_midi_* users:
     - clap_plug_note_ports_destroy dereferences sys_ports when it is NULL
       if that calloc fails. Was already there.
     - A stopped plugin's JACK MIDI out port is never cleared. M4 covers it
-      for CLAP; the same applies to LV2, G5 fixes both.
+      for CLAP and LV2.
 
 M3. DONE. Frame accurate events. Segments per event: render [pos,
     ev.frame), handle ev, pos = ev.frame; then render [pos, nframes).
@@ -203,40 +203,95 @@ M3. DONE. Frame accurate events. Segments per event: render [pos,
     as in M2, its sequence takes all 512. ASan: only OB-Xd's own leaks
     (348 bytes, HEAD too).
 
-M4. CLAP note OUTPUT - not handled at all today: clap_output_events_read
-    only applies param events; the output note ports exist as JACK MIDI
-    out ports (clap_plug_note_ports_create), each with a MIDI_BUF since
-    M2, but nothing writes to them.
-    Needed to test the new MIDI path end to end - a CLAP note effect (arp,
-    chord generator) feeding the synth, an LV2 instrument, JACK MIDI out.
-    Each output event goes by port_index (out of range -> dropped) into
-    that output note port's MIDI_BUF:
-    - NOTE_ON -> 0x9n, velocity round(v * 127) clamped to 1..127 (0 would
-      be a note-off); NOTE_OFF -> 0x8n; NOTE_CHOKE -> note-off. key or
-      channel -1 (wildcard, off/choke only) -> CC 123 All Notes Off on
-      that channel, all 16 when the channel is -1. note_id has no MIDI
-      equivalent.
-    - MIDI -> its bytes, size = midi_expected_size(data[0]) (0: sysex or
-      a data byte -> dropped); MIDI_SYSEX -> buffer/size copied in.
-    - NOTE_END (voice ended, plugin -> host), NOTE_EXPRESSION, MIDI2 ->
-      dropped for now. Stop advertising CLAP_NOTE_DIALECT_MIDI2 in
-      clap_plug_ext_note_ports_supported_dialects until both directions
-      handle it.
-    - param events keep going through clap_output_events_params_apply.
-    Each out MIDI_BUF is cleared every cycle, then
-    app_jack_midi_out_rt per port - also when the plugin is sleeping or
-    errored (the sleeping branch skips the outputs today): an out port
-    nobody clears can repeat its last events. LV2 has the same gap
-    (plug_process_data_rt skips a plugin with is_processing == 0) - cheap
-    to fix here too. After 2G: the graph port (G6), G5 empties it for a
-    node that did not run.
-    The out event list is EVENT_LIST_SIZE 2048 bytes / 50 items, shared
-    with param output (the TODO at its ub_init) - a chord or arp burst
-    plus param changes can fill it, try_push fails and the plugin loses
-    events. Size it for notes; count failed pushes like M1's drops.
-    DONE WHEN: a CLAP note effect's output (Stochas is installed) drives
-    the synth and an LV2 instrument; its notes, CC and sysex show in
-    pw-mididump on the JACK MIDI out; every note of a chord arrives.
+M4. DONE. CLAP note OUTPUT. Before: clap_output_events_read only applied
+    param events; the output note ports had JACK MIDI out ports and
+    MIDI_BUFs (M2), but nothing wrote to them.
+    Found before starting:
+    - CLAP: a sysex the plugin pushes is valid only during try_push - it
+      can not wait for a read after process(). So try_push converts note
+      and MIDI events at once, into the port's MIDI_BUF (cleared for
+      nframes before process()); they never take room in the out list.
+    - pipewire-jack (scratch JACK clients): an audio out nobody fetches in
+      a cycle is zeroed, a MIDI out repeats its last events every cycle,
+      forever. One jack_midi_clear_buffer ends it.
+    - a stopped plugin (CLAP plug_inst_processing 0, LV2 is_processing 0)
+      belongs to [main-thread], which frees or rebuilds its ports
+      (remove, note ports rescan) - [audio-thread] can not write its outs
+      every cycle.
+    Done:
+    - CLAP: output_events.ctx is the CLAP_PLUG_PLUG now, the list moved to
+      CLAP_PLUG_PLUG.out_list - try_push needs the note ports.
+      clap_output_events_note_add converts, on [audio-thread] only (a
+      params flush on [main-thread] has no cycle to send them in), by
+      port_index (out of range -> dropped):
+      NOTE_ON -> 0x9n, velocity round(v * 127) clamped to 1..127; port,
+      channel and key must be set. NOTE_OFF -> 0x8n, NOTE_CHOKE ->
+      note-off velocity 64. Wildcards (off/choke): port -1 -> every out
+      port, channel -1 -> all 16 channels, key -1 -> CC 123 All Notes Off
+      (choke: CC 120 All Sound Off). note_id has no MIDI equivalent.
+      MIDI -> size midi_expected_size(data[0]) (0 -> the MIDI_BUF drops
+      it); MIDI_SYSEX -> copied in. NOTE_END, NOTE_EXPRESSION, MIDI2 ->
+      accepted, ignored. An event smaller than its type -> dropped.
+      The rest (param events) to out_list, clap_output_events_params_apply
+      reads it after process() as before.
+    - out MIDI_BUFs cleared before process(), app_jack_midi_out_rt per
+      port after - also while sleeping (that branch skipped the outputs)
+      and on CLAP_PROCESS_ERROR (cleared again: discarded). Out MIDI
+      events count as not quiet for the sleep decision.
+    - stopped: the stop callbacks (clap_plug_stop_process,
+      plug_plug_stop_process) run on [audio-thread] inside the cycle while
+      [main-thread] waits - they empty the MIDI outs once.
+      clap_read_ui_to_rt_messages / plug_read_ui_to_rt_messages take the
+      cycle's nframes for it (rt_nframes) - signatures changed, no twin.
+      LV2 had only this gap (no sleep state).
+    - CLAP_NOTE_DIALECT_MIDI2 no longer advertised.
+    - out list: was EVENT_LIST_SIZE 2048 bytes / 50 items. Now one
+      EVENT_LIST_ITEMS 1024 x param value for both lists. Failed pushes
+      (no room, no port, invalid note) -> CLAP_PLUG_PLUG.
+      out_events_dropped, logged; a failed param value also requests
+      CLAP_PLUG_REQ_SYNC_VALUES.
+    After 2G: the graph port (G6), G5 empties it for a node that did not
+    run - also a sleeping or stopped plugin's audio outs (pipewire-jack
+    zeroes them, JACK2 not checked).
+    Tested in the app (ASan/UBSan, pipewire-jack, scratch JACK client,
+    scratch CLAP note effect with 2 out note ports, scratch LV2 MIDI thru
+    whose state restore sleeps 500 ms):
+    - every conversion in one cycle, on the right port and frame: chord
+      vel 0.8/1.0/0.0 -> 102/127/1, CC, program change size 2, a 6 byte
+      sysex intact although the plugin overwrote it after try_push,
+      note-off vel 0.5 -> 64, key -1 -> CC 123, all wildcards -> CC 120 x
+      16 channels x 2 ports, choke key -> 80 3C 40, channel -1 -> 16
+      note-offs; NOTE_END/expression/MIDI2 accepted, nothing out; out of
+      range port, channel -1 / key 128 note-on, header-only size refused:
+      "5 output events dropped"; data byte status, F0 in a MIDI event,
+      frame 99999: "note port 0: 3 MIDI events dropped". No repeats in
+      later cycles.
+    - a chord through the effect (CLAP note events) plays on a synth osc
+      and OB-Xd (LV2), every note on the JACK out, silent after the offs.
+    - 600 CCs in one cycle: 512 out, 89 MIDI_BUF drops logged.
+    - SLEEP after a note-on: the note once, no repeats while asleep, the
+      next input wakes it. ERROR after a note-on: nothing out.
+    - stopped: a CC every cycle, then a restart whose activate fails - the
+      out port silent after the stop; same build without the flush: the
+      last CC 188 times in 2 s. LV2 preset load: a 48 cycle gap, no
+      events; without the flush: the last CC 47 times.
+    - Surge XT still plays a chord (M3 input path). Stochas loads, its
+      note out stays empty - it plays only with its GUI and a host
+      transport (CLAP transport is NULL until 2T), so the scratch effect
+      stood in for it. ASan: only OB-Xd's own leaks.
+    Also: an LV2 load that failed part way cleaned nothing - every failure
+    path in plug_load_and_activate called plug_stop_and_remove_plug, which
+    returns at once while plug->plug_data is still NULL (set only after
+    activation). The instance, the registered JACK ports and the rest
+    leaked and the slot stayed taken; a NULL from lilv_plugin_instantiate
+    was not checked at all (crash). The plugin was never started, so those
+    paths call plug_remove_plug directly now; the no-op "just in case"
+    call on a free slot went. plug_activate_backend_ports also freed
+    default_values on only one of its failures. Tested with scratch LV2
+    plugins (a required port of an unknown type after an audio and a MIDI
+    port; instantiate returning NULL): HEAD leaves both ports registered,
+    then crashes in lilv_instance_get_descriptor; now both are rejected,
+    no ports left, the next plugin gets the slot, ASan clean.
 
 2G. INTERNAL GRAPH - the app routes its own ports, JACK only at the edges.
     Exposed to JACK: master_out L/R, master_in L/R, 1-2 MIDI in, 1 MIDI
