@@ -39,7 +39,7 @@ PLAN
     MODULES after 2M + 2G + 2T - each knows only what is listed:
     - util_funcs/uniform_buffer.c/.h (exists): nothing.
     - util_funcs/midi_buf.c/.h (exists, M1): uniform_buffer.
-    - engine/graph.c/.h: midi_buf.
+    - engine/graph.c/.h: midi_buf, intern_table.
     - engine/transport.c/.h: nothing.
     - audio_backend.h, implemented by jack_funcs.c and picked at compile
       time (Makefile, no runtime switch): JACK, graph (registers its
@@ -358,18 +358,44 @@ G1. DONE. Per owner process
     nothing out - before never slept, now sleeps at once, wakes for one
     cycle per input event. No sanitizer reports.
 
-G2. Graph module (engine/graph.c/.h, knows no backend). [main-thread]
-    owns the graph, [audio-thread] only sees a compiled plan (G4).
-    Node = owner (tag, uid) + process fn + user_data + latency L.
-    Port = heap record that never moves: node, type (audio/midi), flow,
-    name, buffer (audio) or MIDI_BUF (midi), key. Keys minted like the
-    JACK cache's - stable for the session, never saved (3: save domain
-    identity).
-    Edge = out port -> in port, same type.
-    API: node add/remove, port create/remove/rename, connect/disconnect,
-    and the list queries app_data uses today (count/at/by_key,
-    connection_at, connected) - shaped like the JackPortInfo accessors so
-    root_ops changes little. A generation counter for "graph changed".
+G2. DONE. Graph module (engine/graph.c/.h, knows no backend, in the
+    Makefile as ENGINE, unused by the app until the migration step).
+    [main-thread] owns the graph, [audio-thread] only sees a compiled plan
+    (G4).
+    Node = owner (tag, uid) + process fn (G1's shape, may be NULL) +
+    user_data + latency (no setter yet, L1a). owner_tag non-zero; nodes
+    may share an owner.
+    Port = heap record that never moves: node, type (PORT_TYPE_AUDIO/
+    MIDI), flow (PORT_FLOW_*), name, buffer (audio, max_buffer_size from
+    graph_new) or MIDI_BUF (MIDI_PORT_BUF_SIZE), key, peers. Every port
+    gets its buffer for now - G5 decides what inputs keep.
+    Keys: intern_table over (owner tag, owner uid, port name), like the
+    JACK cache over port names. So a name is unique per owner (refused
+    otherwise) - the identity 3 saves; the same owner + name re-created
+    gets its key back (a port rescan keeps the UI's keys), a new owner
+    uid gets new keys. Rename keeps the key, unless the owner had a
+    removed port of the new name - then that key. GraphPortInfo carries
+    owner_tag/owner_uid, so group_key = MAKE_ID(tag, uid) stays the
+    owner's ContextId.
+    Edge = out port -> in port, same type, filed on both ends in
+    connection order (an input's sources, for G4/G5 and the merge order).
+    API: graph_new/free, graph_node_add/remove (ports and edges go with
+    the node), graph_port_create/remove/rename, graph_connect_keys /
+    graph_disconnect_keys (either order; connect also 0 when already
+    connected; no cycle check - G3), and the JackPortInfo-shaped queries:
+    GraphPortList (ALL, OUT/IN x AUDIO/MIDI), graph_port_count/at/by_key,
+    graph_port_connection_count/at, graph_port_keys_connected. Lists are
+    one view grouped by GraphPortList, nodes in add order, rebuilt on
+    port add/remove; the intern slot is the view index.
+    graph_generation: bumped by every node, port (rename too) or edge
+    change.
+    Remove frees at once - G4 defers that past the plan ack.
+    Tested: scratch unit test under ASan/UBSan and valgrind - lists and
+    order, keys per owner, duplicates and bad type/flow refused,
+    connect/disconnect rules and order, rename (kept key, taken name,
+    old name's key), remove and re-create (same key, edges gone on both
+    ends), node remove with edges to other nodes and within itself, 300
+    ports / 100 edges on one port, free with everything live.
 
 G3. Cycles: connect refuses an edge that closes a loop
     (DATA_ACTION_ERR_INVALID; the peers list can leave such ports out).
@@ -436,7 +462,8 @@ G9. Routing UI. root_ops CONNECT lists graph ports, plus for an exposed
     port the foreign JACK ports it can link to. action_do: two graph ports
     -> graph connect/disconnect; exposed <-> foreign -> JACK as now.
     group_key/group_label stay owner based, DATA_NS_JACK_CLIENT stays for
-    foreign ports. "Ports changed" event from the graph generation
+    foreign ports. Graph keys and the JACK cache's keys are separate key
+    spaces - one DATA_LIST_NS each. "Ports changed" event from the graph generation
     counter, the same path app_jack_ports_sync feeds today.
 
 G10. Later, opt-in: a small pool of aux JACK outs/ins or a per node
