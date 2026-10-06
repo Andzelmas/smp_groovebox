@@ -397,11 +397,25 @@ G2. DONE. Graph module (engine/graph.c/.h, knows no backend, in the
     ends), node remove with edges to other nodes and within itself, 300
     ports / 100 edges on one port, free with everything live.
 
-G3. Cycles: connect refuses an edge that closes a loop
-    (DATA_ACTION_ERR_INVALID; the peers list can leave such ports out).
+G3. DONE. Cycles: graph_connect_keys refuses an edge that closes a
+    loop between nodes - out -> in where in's node already reaches out's
+    node, a node feeding itself included (loops are per node, any type:
+    G4 orders nodes). Also refused: a MIDI edge past MIDI_BUF_MERGE_MAX
+    (16) sources into one input - midi_buf_merge would count the extra
+    sources as drops. So the graph is always a DAG; removals keep it one.
+    graph_port_keys_connectable(a, b): whether connect takes the pair,
+    true when already connected - for G9's peers list and its check pass.
+    The search is a BFS from in's node over output edges, the queue
+    doubles as the list of visited marks to clear; [main-thread] only,
+    a malloc per call (allocation failure = refuse).
     A deliberate feedback edge (1 cycle late) can come later.
-    Also refused: a MIDI edge past MIDI_BUF_MERGE_MAX (16) sources into
-    one input - midi_buf_merge would count the extra sources as drops.
+    Tested: the G2 unit test extended (its self-feeding edges and a
+    smp -> plug -> smp MIDI edge are now refused) - self loops, chains
+    closed through audio and MIDI, forward skips, loops opened by a
+    disconnect and by a node remove, two nodes of one owner, 16 MIDI
+    sources then refused / room after a disconnect, audio uncapped, a
+    2000 node chain checked repeatedly (stale marks would let a loop
+    through). ASan/UBSan and valgrind clean.
 
 G4. Process plan. After any graph change [main-thread] builds an
     immutable plan: nodes in topological order (Kahn), per input port its
@@ -461,6 +475,36 @@ G8. Sample rate / buffer size changes. Today sample_rate_change only
 G9. Routing UI. root_ops CONNECT lists graph ports, plus for an exposed
     port the foreign JACK ports it can link to. action_do: two graph ports
     -> graph connect/disconnect; exposed <-> foreign -> JACK as now.
+    G3: the peers list leaves out ports graph_connect_keys would refuse,
+    the check pass returns DATA_ACTION_ERR_INVALID for them
+    (graph_port_keys_connectable - one search, fine for a one-off check).
+    Each check is against the current graph - fine for loops (one
+    source, many targets), but a MIDI input source with several new
+    targets must count them against MIDI_BUF_MERGE_MAX itself.
+    The peers list must NOT call graph_port_keys_connectable per row:
+    list_at(idx) on a filtered list scans from the start, so a render is
+    ~N^2/2 searches. All candidates of one source ask about the source's
+    node, so one search decides them all (source output on node S: walk
+    input edges back from S, marked nodes reach S = refused; source
+    input: walk forward from S, marked = refused).
+    Graph API, two list pairs:
+    - source list: graph_port_count/at(GRAPH_PORT_LIST_ALL) as now.
+    - target list: graph_peer_count(graph, source_key) /
+      graph_peer_at(graph, source_key, idx, out) - ports connect takes
+      with the source, linked ones included (so they can be
+      disconnected); unknown/removed source = 0.
+    The graph owns one cached array (GRAPH_PORT *, safe within one
+    generation - a removal bumps it), freed in graph_free. Rebuilt lazily,
+    only inside graph_peer_count/at, when the (source_key,
+    graph_generation) it was built for differs; else an O(1) index read.
+    Connect/port changes never touch it - they bump the generation. Not
+    eager (a plugin load bumps the generation per port, nobody looking),
+    not one array per port (one edge changes what every node upstream /
+    downstream may connect to). One cache is enough: one CONNECT picker
+    at a time, and nothing connects while targets are picked (only
+    action_do does). Non-const GRAPH * for the lazy rebuild.
+    app_data keeps the same shape: root_connect_source gives the key,
+    graph_peer_count/at replace app_jack_port_count/at(root_peer_list()).
     group_key/group_label stay owner based, DATA_NS_JACK_CLIENT stays for
     foreign ports. Graph keys and the JACK cache's keys are separate key
     spaces - one DATA_LIST_NS each. "Ports changed" event from the graph generation

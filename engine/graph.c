@@ -28,6 +28,7 @@ struct _graph_node {
     GRAPH_PROCESS_FN process;
     void *user_data;
     uint32_t latency; // frames
+    bool visited;     // node_reaches scratch, false between calls
     GRAPH_PORT **ports;
     size_t port_count;
     size_t port_max;
@@ -388,20 +389,82 @@ bool graph_port_keys_connected(const GRAPH *graph, uint64_t key_a,
     return a && b && ports_linked(a, b);
 }
 
-int graph_connect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b) {
-    if (!graph)
-        return -1;
+// the keys as an output and an input of the same type, false otherwise
+static bool ports_pair(const GRAPH *graph, uint64_t key_a, uint64_t key_b,
+                       GRAPH_PORT **out, GRAPH_PORT **in) {
     GRAPH_PORT *a = port_by_key(graph, key_a);
     GRAPH_PORT *b = port_by_key(graph, key_b);
     if (!a || !b || a->flow == b->flow || a->type != b->type)
+        return false;
+    *out = a->flow == PORT_FLOW_OUTPUT ? a : b;
+    *in = a->flow == PORT_FLOW_OUTPUT ? b : a;
+    return true;
+}
+
+// whether to is reachable from from along edges, from itself included. true
+// on allocation failure, so a caller refuses what it can not check
+static bool node_reaches(const GRAPH *graph, GRAPH_NODE *from,
+                         const GRAPH_NODE *to) {
+    if (from == to)
+        return true;
+    // breadth first, the queue doubles as the list of nodes to unmark
+    GRAPH_NODE **queue = malloc(sizeof(GRAPH_NODE *) * graph->node_count);
+    if (!queue)
+        return true;
+    size_t count = 0;
+    from->visited = true;
+    queue[count++] = from;
+    for (size_t q = 0; q < count && !to->visited; q++) {
+        GRAPH_NODE *node = queue[q];
+        for (size_t p = 0; p < node->port_count; p++) {
+            GRAPH_PORT *port = node->ports[p];
+            if (port->flow != PORT_FLOW_OUTPUT)
+                continue;
+            for (size_t e = 0; e < port->peer_count; e++) {
+                GRAPH_NODE *next = port->peers[e]->node;
+                if (next->visited)
+                    continue;
+                next->visited = true;
+                queue[count++] = next;
+            }
+        }
+    }
+    bool found = to->visited;
+    for (size_t q = 0; q < count; q++)
+        queue[q]->visited = false;
+    free(queue);
+    return found;
+}
+
+// a new edge out -> in: no loop, room for one more MIDI source
+static bool edge_allowed(const GRAPH *graph, GRAPH_PORT *out,
+                         const GRAPH_PORT *in) {
+    if (in->type == PORT_TYPE_MIDI && in->peer_count >= MIDI_BUF_MERGE_MAX)
+        return false;
+    return !node_reaches(graph, in->node, out->node);
+}
+
+bool graph_port_keys_connectable(const GRAPH *graph, uint64_t key_a,
+                                 uint64_t key_b) {
+    GRAPH_PORT *out, *in;
+    if (!graph || !ports_pair(graph, key_a, key_b, &out, &in))
+        return false;
+    return ports_linked(out, in) || edge_allowed(graph, out, in);
+}
+
+int graph_connect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b) {
+    GRAPH_PORT *out, *in;
+    if (!graph || !ports_pair(graph, key_a, key_b, &out, &in))
         return -1;
-    if (ports_linked(a, b))
+    if (ports_linked(out, in))
         return 0;
-    if (!ports_reserve(&a->peers, a->peer_count, &a->peer_max) ||
-        !ports_reserve(&b->peers, b->peer_count, &b->peer_max))
+    if (!edge_allowed(graph, out, in))
         return -1;
-    a->peers[a->peer_count++] = b;
-    b->peers[b->peer_count++] = a;
+    if (!ports_reserve(&out->peers, out->peer_count, &out->peer_max) ||
+        !ports_reserve(&in->peers, in->peer_count, &in->peer_max))
+        return -1;
+    out->peers[out->peer_count++] = in;
+    in->peers[in->peer_count++] = out;
     graph->generation++;
     return 0;
 }

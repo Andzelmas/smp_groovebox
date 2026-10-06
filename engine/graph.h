@@ -4,8 +4,9 @@
 #include <stdint.h>
 #include "../structs.h"
 
-// The app's own routing: nodes, their ports and the edges between them.
-// Knows no backend. Every function here is [main-thread].
+// The app's own routing: nodes, their ports and the edges between them. The
+// edges never form a loop between nodes. Knows no backend. Every function here
+// is [main-thread].
 
 typedef struct _graph GRAPH;
 typedef struct _graph_node GRAPH_NODE;
@@ -76,8 +77,13 @@ bool graph_port_connection_at(const GRAPH *graph, uint64_t key, size_t idx,
                               GraphPortInfo *out);
 bool graph_port_keys_connected(const GRAPH *graph, uint64_t key_a,
                                uint64_t key_b);
-// an edge from an output to an input of the same type, either order. 0 on
-// success or when already connected
+// whether graph_connect_keys takes the pair, true when already connected
+bool graph_port_keys_connectable(const GRAPH *graph, uint64_t key_a,
+                                 uint64_t key_b);
+// an edge from an output to an input of the same type, either order. Refused
+// when it closes a loop (a node feeding itself, directly or through others) or
+// gives a MIDI input more than MIDI_BUF_MERGE_MAX sources. 0 on success or
+// when already connected
 int graph_connect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b);
 // 0 when the edge was there
 int graph_disconnect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b);
