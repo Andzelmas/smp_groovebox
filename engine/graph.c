@@ -3,6 +3,7 @@
 #include "../util_funcs/intern_table.h"
 #include "../util_funcs/midi_buf.h"
 #include <inttypes.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,9 @@ struct _graph_port {
     GRAPH_PORT **peers;
     size_t peer_count;
     size_t peer_max;
+    // removed: freed once the ack reaches free_at
+    GRAPH_PORT *retired_next;
+    unsigned int free_at;
 };
 
 struct _graph_node {
@@ -29,9 +33,44 @@ struct _graph_node {
     void *user_data;
     uint32_t latency; // frames
     bool visited;     // node_reaches scratch, false between calls
+    size_t pending;   // plan_build scratch: in edges not ordered yet
     GRAPH_PORT **ports;
     size_t port_count;
     size_t port_max;
+};
+
+// one input port of a plan: its sources, in connection order
+typedef struct {
+    unsigned int type;
+    size_t src_first; // into GRAPH_PLAN.sources
+    size_t src_count;
+} PLAN_INPUT;
+
+// a source output's buffer, by the input's type
+typedef union {
+    SAMPLE_T *buffer;
+    MIDI_BUF *midi_buf;
+} PLAN_SOURCE;
+
+typedef struct {
+    GRAPH_PROCESS_FN process;
+    void *user_data;
+    size_t in_first; // into GRAPH_PLAN.inputs
+    size_t in_count;
+} PLAN_NODE;
+
+// what graph_process_rt runs, never changed once published. Buffers are
+// copied in, so [audio-thread] reads no GRAPH_PORT
+typedef struct _graph_plan GRAPH_PLAN;
+struct _graph_plan {
+    unsigned int gen;
+    PLAN_NODE *nodes; // edge order
+    size_t node_count;
+    PLAN_INPUT *inputs;
+    PLAN_SOURCE *sources;
+    // [main-thread], once replaced: freed when the ack reaches free_at
+    GRAPH_PLAN *retired_next;
+    unsigned int free_at;
 };
 
 struct _graph {
@@ -49,6 +88,13 @@ struct _graph {
     // port's view index
     INTERN_TABLE idents;
     uint64_t generation;
+    // the newest plan and the gen [audio-thread] last started a cycle with
+    _Atomic(GRAPH_PLAN *) plan;
+    atomic_uint ack;
+    unsigned int plan_gen;    // the newest plan's, 0 = none yet
+    uint64_t plan_built_from; // generation it was built from
+    GRAPH_PLAN *retired_plans;
+    GRAPH_PORT *retired_ports;
 };
 
 // grow a port array to hold one more, false on allocation failure
@@ -161,11 +207,57 @@ static void port_free(GRAPH_PORT *port) {
     free(port);
 }
 
+// a removed port: a published plan may still hold its buffer, the next one
+// does not
+static void port_retire(GRAPH *graph, GRAPH_PORT *port) {
+    if (graph->plan_gen == 0) {
+        port_free(port);
+        return;
+    }
+    port->free_at = graph->plan_gen + 1;
+    port->retired_next = graph->retired_ports;
+    graph->retired_ports = port;
+}
+
+static void plan_free(GRAPH_PLAN *plan) {
+    if (!plan)
+        return;
+    free(plan->nodes);
+    free(plan->inputs);
+    free(plan->sources);
+    free(plan);
+}
+
+// free what [audio-thread] can not run any more
+static void retired_reclaim(GRAPH *graph) {
+    unsigned int ack = atomic_load(&graph->ack);
+    for (GRAPH_PLAN **p = &graph->retired_plans; *p;) {
+        GRAPH_PLAN *plan = *p;
+        if (plan->free_at > ack) {
+            p = &plan->retired_next;
+            continue;
+        }
+        *p = plan->retired_next;
+        plan_free(plan);
+    }
+    for (GRAPH_PORT **p = &graph->retired_ports; *p;) {
+        GRAPH_PORT *port = *p;
+        if (port->free_at > ack) {
+            p = &port->retired_next;
+            continue;
+        }
+        *p = port->retired_next;
+        port_free(port);
+    }
+}
+
 GRAPH *graph_new(uint32_t max_buffer_size) {
     GRAPH *graph = calloc(1, sizeof(GRAPH));
     if (!graph)
         return NULL;
     graph->max_buffer_size = max_buffer_size;
+    atomic_init(&graph->plan, NULL);
+    atomic_init(&graph->ack, 0U);
     return graph;
 }
 
@@ -182,6 +274,17 @@ void graph_free(GRAPH *graph) {
     free(graph->nodes);
     free(graph->view);
     intern_clean(&graph->idents);
+    plan_free(atomic_load(&graph->plan));
+    while (graph->retired_plans) {
+        GRAPH_PLAN *next = graph->retired_plans->retired_next;
+        plan_free(graph->retired_plans);
+        graph->retired_plans = next;
+    }
+    while (graph->retired_ports) {
+        GRAPH_PORT *next = graph->retired_ports->retired_next;
+        port_free(graph->retired_ports);
+        graph->retired_ports = next;
+    }
     free(graph);
 }
 
@@ -220,7 +323,7 @@ void graph_node_remove(GRAPH *graph, GRAPH_NODE *node) {
         return;
     for (size_t p = 0; p < node->port_count; p++) {
         port_detach(node->ports[p]);
-        port_free(node->ports[p]);
+        port_retire(graph, node->ports[p]);
     }
     free(node->ports);
     for (size_t i = 0; i < graph->node_count; i++) {
@@ -287,7 +390,7 @@ void graph_port_remove(GRAPH *graph, GRAPH_PORT *port) {
         return;
     port_detach(port);
     ports_remove(port->node->ports, &port->node->port_count, port);
-    port_free(port);
+    port_retire(graph, port);
     view_rebuild(graph);
     graph->generation++;
 }
@@ -480,4 +583,125 @@ int graph_disconnect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b) {
     ports_remove(b->peers, &b->peer_count, a);
     graph->generation++;
     return 0;
+}
+
+// nodes in edge order (Kahn, ties in add order), per input port its sources.
+// NULL on allocation failure
+static GRAPH_PLAN *plan_build(GRAPH *graph) {
+    size_t n = graph->node_count;
+    size_t in_total = 0;
+    size_t src_total = 0;
+    for (size_t i = 0; i < n; i++) {
+        GRAPH_NODE *node = graph->nodes[i];
+        node->pending = 0;
+        for (size_t p = 0; p < node->port_count; p++) {
+            GRAPH_PORT *port = node->ports[p];
+            if (port->flow != PORT_FLOW_INPUT)
+                continue;
+            in_total++;
+            src_total += port->peer_count;
+            node->pending += port->peer_count;
+        }
+    }
+    GRAPH_PLAN *plan = calloc(1, sizeof(GRAPH_PLAN));
+    GRAPH_NODE **order = malloc(sizeof(GRAPH_NODE *) * (n ? n : 1));
+    if (plan) {
+        plan->nodes = malloc(sizeof(PLAN_NODE) * (n ? n : 1));
+        plan->inputs = malloc(sizeof(PLAN_INPUT) * (in_total ? in_total : 1));
+        plan->sources =
+            malloc(sizeof(PLAN_SOURCE) * (src_total ? src_total : 1));
+    }
+    if (!plan || !order || !plan->nodes || !plan->inputs || !plan->sources)
+        goto fail;
+
+    // the queue doubles as the order
+    size_t count = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (graph->nodes[i]->pending == 0)
+            order[count++] = graph->nodes[i];
+    }
+    for (size_t q = 0; q < count; q++) {
+        GRAPH_NODE *node = order[q];
+        for (size_t p = 0; p < node->port_count; p++) {
+            GRAPH_PORT *port = node->ports[p];
+            if (port->flow != PORT_FLOW_OUTPUT)
+                continue;
+            for (size_t e = 0; e < port->peer_count; e++) {
+                GRAPH_NODE *next = port->peers[e]->node;
+                if (--next->pending == 0)
+                    order[count++] = next;
+            }
+        }
+    }
+    // a loop - connect refuses them
+    if (count != n)
+        goto fail;
+
+    size_t in_i = 0;
+    size_t src_i = 0;
+    for (size_t i = 0; i < n; i++) {
+        GRAPH_NODE *node = order[i];
+        PLAN_NODE *plan_node = &plan->nodes[i];
+        plan_node->process = node->process;
+        plan_node->user_data = node->user_data;
+        plan_node->in_first = in_i;
+        for (size_t p = 0; p < node->port_count; p++) {
+            GRAPH_PORT *port = node->ports[p];
+            if (port->flow != PORT_FLOW_INPUT)
+                continue;
+            PLAN_INPUT *input = &plan->inputs[in_i++];
+            input->type = port->type;
+            input->src_first = src_i;
+            input->src_count = port->peer_count;
+            for (size_t e = 0; e < port->peer_count; e++) {
+                PLAN_SOURCE *src = &plan->sources[src_i++];
+                if (port->type == PORT_TYPE_AUDIO)
+                    src->buffer = port->peers[e]->buffer;
+                else
+                    src->midi_buf = port->peers[e]->midi_buf;
+            }
+        }
+        plan_node->in_count = in_i - plan_node->in_first;
+    }
+    plan->node_count = n;
+    free(order);
+    return plan;
+fail:
+    free(order);
+    plan_free(plan);
+    return NULL;
+}
+
+int graph_plan_update(GRAPH *graph) {
+    if (!graph)
+        return -1;
+    retired_reclaim(graph);
+    if (graph->plan_built_from == graph->generation)
+        return 0;
+    GRAPH_PLAN *plan = plan_build(graph);
+    if (!plan)
+        return -1;
+    plan->gen = graph->plan_gen + 1;
+    GRAPH_PLAN *old = atomic_exchange(&graph->plan, plan);
+    graph->plan_gen = plan->gen;
+    graph->plan_built_from = graph->generation;
+    if (old) {
+        old->free_at = plan->gen;
+        old->retired_next = graph->retired_plans;
+        graph->retired_plans = old;
+    }
+    return 0;
+}
+
+void graph_process_rt(GRAPH *graph, NFRAMES_T nframes) {
+    GRAPH_PLAN *plan = atomic_load(&graph->plan);
+    if (!plan)
+        return;
+    // from here the older plans are free to go
+    atomic_store(&graph->ack, plan->gen);
+    for (size_t i = 0; i < plan->node_count; i++) {
+        PLAN_NODE *node = &plan->nodes[i];
+        if (node->process)
+            node->process(node->user_data, nframes);
+    }
 }

@@ -417,13 +417,49 @@ G3. DONE. Cycles: graph_connect_keys refuses an edge that closes a
     2000 node chain checked repeatedly (stale marks would let a loop
     through). ASan/UBSan and valgrind clean.
 
-G4. Process plan. After any graph change [main-thread] builds an
+G4. DONE. Process plan. After any graph change [main-thread] builds an
     immutable plan: nodes in topological order (Kahn), per input port its
     source buffers. Handed over by atomic pointer swap; [audio-thread]
     stores the plan generation it runs at cycle start (ack), [main-thread]
     frees the old plan - and buffers of removed ports - only once the ack
     passed it. The old plan can still sum a removed node's output, so
     stopping the owner is not enough.
+    Survey: nothing in util_funcs hands a pointer over with a deferred
+    free (ring_buffer is SPSC messages, context_control blocks on a
+    semaphore) - an _Atomic plan pointer + atomic_uint ack in GRAPH.
+    Done:
+    - graph_plan_update(graph) [main-thread], called regularly: frees what
+      the ack passed, builds + publishes when graph_generation moved since
+      the last build (lazy - a plugin load adds many ports; L1a's latency
+      setter marks it dirty the same way). Build failure -> -1, the old
+      plan stays, the next call retries.
+    - plan = PLAN_NODE[] in Kahn order (FIFO, ties in node add order;
+      process + user_data copied, so the GRAPH_NODE frees at once), per
+      node its PLAN_INPUTs, per input its sources' buffer / MIDI_BUF
+      pointers in connection order (G5's merge order). Pointers copied -
+      the audio thread never reads GRAPH_PORT fields (G8 swaps buffers by
+      a new plan).
+    - plan gen = 1, 2, ... per publish. Retired plan: freed once ack >=
+      its successor's gen. Removed port (whole record - a stopped owner may
+      still hold it): freed once ack >= the next plan's gen; at once while
+      no plan was ever published.
+    - graph_process_rt(graph, nframes) [audio-thread]: load the plan, ack
+      its gen, call each node's process in order (NULL skipped). G5 adds
+      the input/output buffer work around the calls.
+    - a removed node's process can still be called until the ack passes:
+      its owner must be stopped first and user_data stay valid (today's
+      slot arrays).
+    Tested: scratch white-box test (includes graph.c) under ASan/UBSan,
+    TSan and valgrind - order (reverse-added chain, diamond over audio +
+    MIDI, ties in add order, NULL process skipped in place), sources per
+    input in connection order, no rebuild when unchanged, old plans and
+    removed ports (port and node remove) kept until the ack passes and
+    freed after, freed at once before the first plan, each plan_build
+    allocation failing (old plan stays, next call builds), leftovers freed
+    by graph_free. Stress: an rt thread reading every source buffer (G5
+    stand-in) while main adds/removes nodes, ports, edges and updates (6k
+    plans) - clean; freeing a port at once or one plan early is caught
+    (heap-use-after-free).
 
 G5. Buffers and summing, done by the plan before each node runs.
     Audio: each output port owns a max_buffer_size buffer. Input with no

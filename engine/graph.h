@@ -6,7 +6,7 @@
 
 // The app's own routing: nodes, their ports and the edges between them. The
 // edges never form a loop between nodes. Knows no backend. Every function here
-// is [main-thread].
+// is [main-thread], except the *_rt ones.
 
 typedef struct _graph GRAPH;
 typedef struct _graph_node GRAPH_NODE;
@@ -41,6 +41,7 @@ typedef struct _graph_port_info {
 
 // max_buffer_size: frames an audio port's buffer holds. NULL on failure
 GRAPH *graph_new(uint32_t max_buffer_size);
+// graph_process_rt must not run any more
 void graph_free(GRAPH *graph);
 
 // bumped by every change to nodes, ports or edges
@@ -52,7 +53,8 @@ uint64_t graph_generation(const GRAPH *graph);
 GRAPH_NODE *graph_node_add(GRAPH *graph, uint64_t owner_tag,
                            uint64_t owner_uid, GRAPH_PROCESS_FN process,
                            void *user_data);
-// its ports and their edges go with it
+// its ports and their edges go with it. The plan running may call process
+// until a newer one is acked - stop the owner first, keep user_data valid
 void graph_node_remove(GRAPH *graph, GRAPH_NODE *node);
 
 // type PORT_TYPE_AUDIO or PORT_TYPE_MIDI, flow PORT_FLOW_INPUT or
@@ -87,3 +89,11 @@ bool graph_port_keys_connectable(const GRAPH *graph, uint64_t key_a,
 int graph_connect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b);
 // 0 when the edge was there
 int graph_disconnect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b);
+
+// builds a new plan when the graph changed since the last one and hands it to
+// graph_process_rt; frees old plans and removed ports once it no longer runs
+// them. Call regularly. -1 when the build failed - the old plan stays, the
+// next call retries
+int graph_plan_update(GRAPH *graph);
+// [audio-thread] one cycle of the newest plan: the nodes in edge order
+void graph_process_rt(GRAPH *graph, NFRAMES_T nframes);
