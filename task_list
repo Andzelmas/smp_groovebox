@@ -461,25 +461,66 @@ G4. DONE. Process plan. After any graph change [main-thread] builds an
     plans) - clean; freeing a port at once or one plan early is caught
     (heap-use-after-free).
 
-G5. Buffers and summing, done by the plan before each node runs.
+G5. DONE. Buffers and summing, done by the plan before each node runs.
+    Survey: midi_buf_clear + midi_buf_merge (M1) do the MIDI side; nothing
+    in util_funcs sums audio - a loop in graph.c.
     Audio: each output port owns a max_buffer_size buffer. Input with no
     source -> shared silence, one source -> that buffer (zero copy,
     read-only to the consumer - LV2 connects it directly, CLAP copies),
     2+ -> summed into the input's own buffer.
-    MIDI: one source -> that MIDI_BUF, 2+ -> the input's own MIDI_BUF,
-    cleared for nframes, then midi_buf_merge.
+    MIDI: no source -> a shared empty MIDI_BUF, one source -> that
+    MIDI_BUF, 2+ -> the input's own MIDI_BUF, cleared for nframes, then
+    midi_buf_merge.
+    Inputs keep: an own buffer from their 2nd source on (allocated in
+    graph_connect_keys, failure = refused), until the port goes. 0-1
+    source inputs never allocate.
+    Nodes reach the cycle's buffers by graph_port_audio_rt /
+    graph_port_midi_rt (by type, both flows, an input's read-only, only
+    inside the node's process): a per port [audio-thread] slot the plan
+    sets before the node runs - the only GRAPH_PORT field [audio-thread]
+    touches. Set at create too (silence / empty / own), so a port no plan
+    has yet still answers.
+    The plan clears MIDI outputs for nframes before the node runs, nodes
+    only push.
     A node that did not write its outputs this cycle (stopped, sleeping,
-    error) gets them zeroed / emptied by the plan - else downstream sums
-    stale data every cycle (covers the CLAP sleeping branch too).
-    Buffers are sized by the max buffer size - G8 reallocates.
+    error, NULL process) gets them zeroed / emptied by the plan, every
+    such cycle - else downstream sums stale data every cycle (covers the
+    CLAP sleeping branch too).
+    Buffers are sized by the max buffer size - G8 reallocates;
+    graph_process_rt takes nframes <= max_buffer_size.
+    Done:
+    - plan: per PLAN_NODE a run of PLAN_PORTs (inputs, then outputs; the
+      GRAPH_PORT for its slot + its buffers copied), sources in two typed
+      arrays (audio_srcs / midi_srcs - midi_buf_merge reads them in
+      place). PLAN_INPUT / PLAN_SOURCE went. Silence and the empty
+      MIDI_BUF are the graph's, copied into each plan.
+    - graph_process_rt per node: inputs resolved into their slots, MIDI
+      outs cleared, slots set, process; false or NULL -> outputs zeroed /
+      emptied for nframes.
+    Tested: G4's white-box test extended (scratchpad g5/g5_test.c) under
+    ASan/UBSan, TSan and valgrind - slots before any plan (silence /
+    empty / own, NULL for the other type), own buffer on the 2nd source
+    only (its allocation failing refuses the edge, generation unchanged),
+    kept down to 1 and 0 sources and reused, 3 audio sources summed for
+    nframes only (16 of 64, then 4), MIDI merged by frame with ties in
+    connection order (not node order), one source zero copy, no source
+    silence / empty, outputs cleared each cycle (a source that never
+    clears does not pile up), a false return - also after writing - and a
+    NULL process zeroed / emptied downstream, 16 MIDI sources merged
+    without drops; the stress runs the real graph_process_rt (process
+    false every 3rd call). Each behaviour broken on purpose fails the
+    test: a port freed one plan early (heap-use-after-free), no zeroing,
+    no pre-clear, buffer on the 3rd source, a kept buffer copied instead
+    of zero copy, sum overwriting, merge of 1 source.
 
 G6. MIDI ports on the graph: the context-owned MIDI_BUFs from M2
     (SMP_PORT/SYNTH_PORT/PLUG_PORT.midi_buf, CLAP_PLUG_NOTE_PORT.
     midi_bufs) move into the graph ports. Contexts get them through a
-    typed accessor (graph_port_midi_rt) - audio and MIDI never share one
-    void* getter. The contexts' app_jack_midi_in_rt/out_rt calls go (the
-    backend's endpoint nodes do that, G7), and so does their drop logging
-    - the graph logs its ports' drops on [main-thread].
+    typed accessor (graph_port_midi_rt, G5) - audio and MIDI never share
+    one void* getter. The plan clears MIDI outs (G5), so the contexts'
+    own clears of them go. The contexts' app_jack_midi_in_rt/out_rt calls
+    go (the backend's endpoint nodes do that, G7), and so does their drop
+    logging - the graph logs its ports' drops on [main-thread].
 
 G7. JACK at the edges = the backend. audio_backend.h, implemented by
     jack_funcs.c, picked at compile time: start the process callback and
@@ -507,6 +548,13 @@ G8. Sample rate / buffer size changes. Today sample_rate_change only
     restarts with them, LV2 gets the rate at instantiate - a rate change
     means re-instantiating, state carried over. Sampler/synth take the
     new rate. 2L's latency is re-read through those restarts.
+    Graph buffers: the plan holds copies of the buffer addresses, which
+    protect the address, not the memory. So no realloc and no free in
+    place - allocate new buffers (ports' own, input sums, silence, the
+    empty MIDI_BUF), set them on the GRAPH_PORTs / GRAPH, publish a new
+    plan, and retire the old ones like removed ports (freed once the ack
+    passes the new plan). Until that plan runs, the old one keeps using
+    the old buffers - nframes must still fit them.
 
 G9. Routing UI. root_ops CONNECT lists graph ports, plus for an exposed
     port the foreign JACK ports it can link to. action_do: two graph ports

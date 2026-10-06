@@ -15,8 +15,14 @@ struct _graph_port {
     uint64_t key;
     unsigned int type;
     unsigned int flow;
-    SAMPLE_T *buffer;   // audio, max_buffer_size frames
-    MIDI_BUF *midi_buf; // midi
+    // by type. An output's, written by its node; an input's from its 2nd
+    // source on, the sum
+    SAMPLE_T *buffer;   // max_buffer_size frames
+    MIDI_BUF *midi_buf; // MIDI_PORT_BUF_SIZE bytes
+    // [audio-thread] the cycle's buffer, by type, set by the plan before the
+    // node runs - what graph_port_*_rt return
+    SAMPLE_T *rt_buffer;
+    MIDI_BUF *rt_midi_buf;
     // the other end of each edge, in connection order
     GRAPH_PORT **peers;
     size_t peer_count;
@@ -39,35 +45,39 @@ struct _graph_node {
     size_t port_max;
 };
 
-// one input port of a plan: its sources, in connection order
+// one port of a plan node, its buffers copied from the GRAPH_PORT
 typedef struct {
+    GRAPH_PORT *port; // [audio-thread] sets only its rt slot
     unsigned int type;
-    size_t src_first; // into GRAPH_PLAN.sources
-    size_t src_count;
-} PLAN_INPUT;
-
-// a source output's buffer, by the input's type
-typedef union {
     SAMPLE_T *buffer;
     MIDI_BUF *midi_buf;
-} PLAN_SOURCE;
+    // an input's sources in connection order, into GRAPH_PLAN.audio_srcs or
+    // midi_srcs by type
+    size_t src_first;
+    size_t src_count;
+} PLAN_PORT;
 
 typedef struct {
     GRAPH_PROCESS_FN process;
     void *user_data;
-    size_t in_first; // into GRAPH_PLAN.inputs
+    size_t port_first; // into GRAPH_PLAN.ports: the inputs, then the outputs
     size_t in_count;
+    size_t out_count;
 } PLAN_NODE;
 
 // what graph_process_rt runs, never changed once published. Buffers are
-// copied in, so [audio-thread] reads no GRAPH_PORT
+// copied in, [audio-thread] touches no GRAPH_PORT field but the rt slot
 typedef struct _graph_plan GRAPH_PLAN;
 struct _graph_plan {
     unsigned int gen;
     PLAN_NODE *nodes; // edge order
     size_t node_count;
-    PLAN_INPUT *inputs;
-    PLAN_SOURCE *sources;
+    PLAN_PORT *ports;
+    SAMPLE_T **audio_srcs;
+    MIDI_BUF **midi_srcs;
+    // what an input without sources reads
+    SAMPLE_T *silence;
+    MIDI_BUF *midi_empty;
     // [main-thread], once replaced: freed when the ack reaches free_at
     GRAPH_PLAN *retired_next;
     unsigned int free_at;
@@ -75,6 +85,9 @@ struct _graph_plan {
 
 struct _graph {
     uint32_t max_buffer_size;
+    // read-only, for inputs without sources
+    SAMPLE_T *silence;
+    MIDI_BUF *midi_empty;
     GRAPH_NODE **nodes;
     size_t node_count;
     size_t node_max;
@@ -223,8 +236,9 @@ static void plan_free(GRAPH_PLAN *plan) {
     if (!plan)
         return;
     free(plan->nodes);
-    free(plan->inputs);
-    free(plan->sources);
+    free(plan->ports);
+    free(plan->audio_srcs);
+    free(plan->midi_srcs);
     free(plan);
 }
 
@@ -256,6 +270,14 @@ GRAPH *graph_new(uint32_t max_buffer_size) {
     if (!graph)
         return NULL;
     graph->max_buffer_size = max_buffer_size;
+    graph->silence = calloc(max_buffer_size, sizeof(SAMPLE_T));
+    graph->midi_empty = midi_buf_new(MIDI_PORT_BUF_SIZE);
+    if (!graph->silence || !graph->midi_empty) {
+        free(graph->silence);
+        midi_buf_free(graph->midi_empty);
+        free(graph);
+        return NULL;
+    }
     atomic_init(&graph->plan, NULL);
     atomic_init(&graph->ack, 0U);
     return graph;
@@ -285,6 +307,8 @@ void graph_free(GRAPH *graph) {
         port_free(graph->retired_ports);
         graph->retired_ports = next;
     }
+    free(graph->silence);
+    midi_buf_free(graph->midi_empty);
     free(graph);
 }
 
@@ -371,14 +395,20 @@ GRAPH_PORT *graph_port_create(GRAPH *graph, GRAPH_NODE *node,
     port->type = type;
     port->flow = flow;
     port->name = strdup(name);
-    if (type == PORT_TYPE_AUDIO)
+    if (flow == PORT_FLOW_OUTPUT && type == PORT_TYPE_AUDIO)
         port->buffer = calloc(graph->max_buffer_size, sizeof(SAMPLE_T));
-    else
+    else if (flow == PORT_FLOW_OUTPUT)
         port->midi_buf = midi_buf_new(MIDI_PORT_BUF_SIZE);
-    if (!port->name || (!port->buffer && !port->midi_buf)) {
+    if (!port->name ||
+        (flow == PORT_FLOW_OUTPUT && !port->buffer && !port->midi_buf)) {
         port_free(port);
         return NULL;
     }
+    // until a plan has the port
+    if (type == PORT_TYPE_AUDIO)
+        port->rt_buffer = port->buffer ? port->buffer : graph->silence;
+    else
+        port->rt_midi_buf = port->midi_buf ? port->midi_buf : graph->midi_empty;
     node->ports[node->port_count++] = port;
     view_rebuild(graph);
     graph->generation++;
@@ -539,6 +569,17 @@ static bool node_reaches(const GRAPH *graph, GRAPH_NODE *from,
     return found;
 }
 
+// the buffer an input sums 2+ sources into, kept once made
+static bool input_sum_reserve(const GRAPH *graph, GRAPH_PORT *in) {
+    if (in->buffer || in->midi_buf)
+        return true;
+    if (in->type == PORT_TYPE_AUDIO)
+        in->buffer = calloc(graph->max_buffer_size, sizeof(SAMPLE_T));
+    else
+        in->midi_buf = midi_buf_new(MIDI_PORT_BUF_SIZE);
+    return in->buffer || in->midi_buf;
+}
+
 // a new edge out -> in: no loop, room for one more MIDI source
 static bool edge_allowed(const GRAPH *graph, GRAPH_PORT *out,
                          const GRAPH_PORT *in) {
@@ -566,6 +607,8 @@ int graph_connect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b) {
     if (!ports_reserve(&out->peers, out->peer_count, &out->peer_max) ||
         !ports_reserve(&in->peers, in->peer_count, &in->peer_max))
         return -1;
+    if (in->peer_count > 0 && !input_sum_reserve(graph, in))
+        return -1;
     out->peers[out->peer_count++] = in;
     in->peers[in->peer_count++] = out;
     graph->generation++;
@@ -585,21 +628,33 @@ int graph_disconnect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b) {
     return 0;
 }
 
-// nodes in edge order (Kahn, ties in add order), per input port its sources.
-// NULL on allocation failure
+static PLAN_PORT *plan_port_fill(PLAN_PORT *plan_port, GRAPH_PORT *port) {
+    *plan_port = (PLAN_PORT){.port = port,
+                             .type = port->type,
+                             .buffer = port->buffer,
+                             .midi_buf = port->midi_buf};
+    return plan_port;
+}
+
+// nodes in edge order (Kahn, ties in add order), per node its ports, per input
+// its sources. NULL on allocation failure
 static GRAPH_PLAN *plan_build(GRAPH *graph) {
     size_t n = graph->node_count;
-    size_t in_total = 0;
-    size_t src_total = 0;
+    size_t port_total = 0;
+    size_t audio_total = 0;
+    size_t midi_total = 0;
     for (size_t i = 0; i < n; i++) {
         GRAPH_NODE *node = graph->nodes[i];
         node->pending = 0;
+        port_total += node->port_count;
         for (size_t p = 0; p < node->port_count; p++) {
             GRAPH_PORT *port = node->ports[p];
             if (port->flow != PORT_FLOW_INPUT)
                 continue;
-            in_total++;
-            src_total += port->peer_count;
+            if (port->type == PORT_TYPE_AUDIO)
+                audio_total += port->peer_count;
+            else
+                midi_total += port->peer_count;
             node->pending += port->peer_count;
         }
     }
@@ -607,11 +662,14 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
     GRAPH_NODE **order = malloc(sizeof(GRAPH_NODE *) * (n ? n : 1));
     if (plan) {
         plan->nodes = malloc(sizeof(PLAN_NODE) * (n ? n : 1));
-        plan->inputs = malloc(sizeof(PLAN_INPUT) * (in_total ? in_total : 1));
-        plan->sources =
-            malloc(sizeof(PLAN_SOURCE) * (src_total ? src_total : 1));
+        plan->ports = malloc(sizeof(PLAN_PORT) * (port_total ? port_total : 1));
+        plan->audio_srcs =
+            malloc(sizeof(SAMPLE_T *) * (audio_total ? audio_total : 1));
+        plan->midi_srcs =
+            malloc(sizeof(MIDI_BUF *) * (midi_total ? midi_total : 1));
     }
-    if (!plan || !order || !plan->nodes || !plan->inputs || !plan->sources)
+    if (!plan || !order || !plan->nodes || !plan->ports || !plan->audio_srcs ||
+        !plan->midi_srcs)
         goto fail;
 
     // the queue doubles as the order
@@ -637,33 +695,41 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
     if (count != n)
         goto fail;
 
-    size_t in_i = 0;
-    size_t src_i = 0;
+    size_t port_i = 0;
+    size_t audio_i = 0;
+    size_t midi_i = 0;
     for (size_t i = 0; i < n; i++) {
         GRAPH_NODE *node = order[i];
         PLAN_NODE *plan_node = &plan->nodes[i];
         plan_node->process = node->process;
         plan_node->user_data = node->user_data;
-        plan_node->in_first = in_i;
+        plan_node->port_first = port_i;
         for (size_t p = 0; p < node->port_count; p++) {
             GRAPH_PORT *port = node->ports[p];
             if (port->flow != PORT_FLOW_INPUT)
                 continue;
-            PLAN_INPUT *input = &plan->inputs[in_i++];
-            input->type = port->type;
-            input->src_first = src_i;
-            input->src_count = port->peer_count;
+            PLAN_PORT *in = plan_port_fill(&plan->ports[port_i++], port);
+            bool audio = port->type == PORT_TYPE_AUDIO;
+            in->src_first = audio ? audio_i : midi_i;
+            in->src_count = port->peer_count;
             for (size_t e = 0; e < port->peer_count; e++) {
-                PLAN_SOURCE *src = &plan->sources[src_i++];
-                if (port->type == PORT_TYPE_AUDIO)
-                    src->buffer = port->peers[e]->buffer;
+                if (audio)
+                    plan->audio_srcs[audio_i++] = port->peers[e]->buffer;
                 else
-                    src->midi_buf = port->peers[e]->midi_buf;
+                    plan->midi_srcs[midi_i++] = port->peers[e]->midi_buf;
             }
         }
-        plan_node->in_count = in_i - plan_node->in_first;
+        plan_node->in_count = port_i - plan_node->port_first;
+        for (size_t p = 0; p < node->port_count; p++) {
+            if (node->ports[p]->flow == PORT_FLOW_OUTPUT)
+                plan_port_fill(&plan->ports[port_i++], node->ports[p]);
+        }
+        plan_node->out_count =
+            port_i - plan_node->port_first - plan_node->in_count;
     }
     plan->node_count = n;
+    plan->silence = graph->silence;
+    plan->midi_empty = graph->midi_empty;
     free(order);
     return plan;
 fail:
@@ -693,6 +759,38 @@ int graph_plan_update(GRAPH *graph) {
     return 0;
 }
 
+// the input's rt slot: silence / empty, its one source, or the sum of 2+
+static void plan_input_rt(const GRAPH_PLAN *plan, const PLAN_PORT *in,
+                          NFRAMES_T nframes) {
+    if (in->type == PORT_TYPE_AUDIO) {
+        SAMPLE_T *const *srcs = &plan->audio_srcs[in->src_first];
+        SAMPLE_T *buf = plan->silence;
+        if (in->src_count == 1) {
+            buf = srcs[0];
+        } else if (in->src_count > 1) {
+            buf = in->buffer;
+            memcpy(buf, srcs[0], sizeof(SAMPLE_T) * nframes);
+            for (size_t s = 1; s < in->src_count; s++) {
+                for (NFRAMES_T f = 0; f < nframes; f++)
+                    buf[f] += srcs[s][f];
+            }
+        }
+        in->port->rt_buffer = buf;
+        return;
+    }
+    MIDI_BUF *const *srcs = &plan->midi_srcs[in->src_first];
+    MIDI_BUF *buf = plan->midi_empty;
+    if (in->src_count == 1) {
+        buf = srcs[0];
+    } else if (in->src_count > 1) {
+        buf = in->midi_buf;
+        midi_buf_clear(buf, nframes);
+        midi_buf_merge(buf, (const MIDI_BUF *const *)srcs,
+                       (uint32_t)in->src_count);
+    }
+    in->port->rt_midi_buf = buf;
+}
+
 void graph_process_rt(GRAPH *graph, NFRAMES_T nframes) {
     GRAPH_PLAN *plan = atomic_load(&graph->plan);
     if (!plan)
@@ -700,8 +798,35 @@ void graph_process_rt(GRAPH *graph, NFRAMES_T nframes) {
     // from here the older plans are free to go
     atomic_store(&graph->ack, plan->gen);
     for (size_t i = 0; i < plan->node_count; i++) {
-        PLAN_NODE *node = &plan->nodes[i];
-        if (node->process)
-            node->process(node->user_data, nframes);
+        const PLAN_NODE *node = &plan->nodes[i];
+        const PLAN_PORT *ins = &plan->ports[node->port_first];
+        const PLAN_PORT *outs = ins + node->in_count;
+        for (size_t p = 0; p < node->in_count; p++)
+            plan_input_rt(plan, &ins[p], nframes);
+        for (size_t p = 0; p < node->out_count; p++) {
+            if (outs[p].type == PORT_TYPE_AUDIO) {
+                outs[p].port->rt_buffer = outs[p].buffer;
+                continue;
+            }
+            midi_buf_clear(outs[p].midi_buf, nframes);
+            outs[p].port->rt_midi_buf = outs[p].midi_buf;
+        }
+        if (node->process && node->process(node->user_data, nframes))
+            continue;
+        // did not write them - downstream must not read the last cycle's
+        for (size_t p = 0; p < node->out_count; p++) {
+            if (outs[p].type == PORT_TYPE_AUDIO)
+                memset(outs[p].buffer, 0, sizeof(SAMPLE_T) * nframes);
+            else
+                midi_buf_clear(outs[p].midi_buf, nframes);
+        }
     }
+}
+
+SAMPLE_T *graph_port_audio_rt(const GRAPH_PORT *port) {
+    return port ? port->rt_buffer : NULL;
+}
+
+MIDI_BUF *graph_port_midi_rt(const GRAPH_PORT *port) {
+    return port ? port->rt_midi_buf : NULL;
 }
