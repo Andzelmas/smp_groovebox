@@ -12,12 +12,15 @@
 #include <stdlib.h>
 #include <sys/types.h>
 
-// TODO
-// TODAY. Implement Params: param value set, view in CLI
-// Get rid of types.h if possible, and structs.h if not needed and logical too.
-
+// TODO integrate the internal graph fully
+// TODO internal transport
+// TODO latency
+// TODO posix_fd and timer_support for clap plugins
+// TODO params config files
+// TODO lv2, clap native gui.
 // TODO SAVING should be on the app_data layer. Implement with data_action (save
 // on root context and the different modules)
+// TODO types.h and structs.h merge/cleanup
 
 /*  TODO another ui implementation: clay or other lib with graphical intrf
  * (maybe vulkan or opengl?)*/
