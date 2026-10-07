@@ -1,5 +1,5 @@
 #include "synth.h"
-#include "../jack_funcs/jack_funcs.h"
+#include "../backend/jack_funcs.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/math_funcs.h"
 #include "../util_funcs/midi_buf.h"
@@ -149,8 +149,8 @@ typedef struct _synth_osc {
     OSC_OBJ *sqr_osc;
     OSC_OBJ *saw_osc;
     OSC_OBJ *sin_osc;
-    // ports for this oscillator
-    // the synth port array
+    // the oscillator's node and its ports
+    GRAPH_NODE *node;
     SYNTH_PORT *ports;
     // how many ports are there
     unsigned int num_ports;
@@ -162,11 +162,8 @@ typedef struct _synth_port {
     unsigned int port_type;
     // in or output
     unsigned int port_flow;
-    char *port_name;
-    // the system port for the audio system (for ex jack)
-    void *sys_port;
-    // the events of a midi port this cycle, NULL for audio ports
-    MIDI_BUF *midi_buf;
+    const char *port_name;
+    GRAPH_PORT *graph_port;
 } SYNTH_PORT;
 
 typedef struct _synth_data {
@@ -200,9 +197,10 @@ typedef struct _synth_data {
     SYNTH_OSC *osc_array;
     // how many oscilators we have
     size_t num_osc;
-    // this is the audio backend object to send to the audio functions
-    void *audio_backend;
-    // paired with an oscillator's uid when registering its ports
+    GRAPH *graph;
+    // for app_jack_return_transport_rt, until 2T
+    void *transport;
+    // paired with an oscillator's uid as its node's owner
     uint64_t owner_tag;
     // this is control for [audio-thread] and [main-thread] sys communication
     //(since there is no need to remove and add the oscillators this is used
@@ -241,13 +239,6 @@ int synth_read_rt_to_ui_messages(SYNTH_DATA *synth_data) {
     // read the param rt_to_ui messages and set the parameter values
     for (unsigned int i = 0; i < MAX_OSCS; i++) {
         SYNTH_OSC *osc = &(synth_data->osc_array[i]);
-        for (unsigned int j = 0; j < osc->num_ports; j++) {
-            SYNTH_PORT *port = &(osc->ports[j]);
-            uint32_t dropped = midi_buf_dropped_take(port->midi_buf);
-            if (dropped > 0)
-                log_append_logfile("%s: %u MIDI events dropped\n",
-                                   port->port_name, dropped);
-        }
         if (!osc->params)
             continue;
         param_msgs_process(osc->params, 0);
@@ -307,31 +298,12 @@ static PARAM_T synth_osc_build_value(const void *user_data, int val_id,
     return raw_val;
 }
 
-static int synth_clean_ports(SYNTH_DATA *synth_data, SYNTH_PORT **osc_ports,
-                             unsigned int num_ports) {
-    if (!synth_data)
-        return -1;
-    if (!osc_ports)
-        return -1;
-    for (unsigned int i = 0; i < num_ports; i++) {
-        SYNTH_PORT *ports = *osc_ports;
-        SYNTH_PORT *cur_port = &(ports[i]);
-        if (cur_port->port_name)
-            free(cur_port->port_name);
-        if (cur_port->sys_port) {
-            app_jack_unregister_port(synth_data->audio_backend,
-                                     cur_port->sys_port);
-        }
-        midi_buf_free(cur_port->midi_buf);
-    }
-    free(*osc_ports);
-
-    return 0;
-}
+// the oscillator's node and its ports
+static int synth_osc_ports_create(SYNTH_DATA *synth_data, SYNTH_OSC *osc);
 
 SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
-                       const char *cx_name, unsigned int with_metronome,
-                       void *audio_backend, uint64_t owner_tag) {
+                       unsigned int with_metronome, GRAPH *graph,
+                       void *transport, uint64_t owner_tag) {
 
     SYNTH_DATA *synth_data = (SYNTH_DATA *)malloc(sizeof(SYNTH_DATA));
     if (!synth_data)
@@ -354,7 +326,8 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
     synth_data->sqr_osc = NULL;
     synth_data->triang_osc = NULL;
     synth_data->sin_osc = NULL;
-    synth_data->audio_backend = audio_backend;
+    synth_data->graph = graph;
+    synth_data->transport = transport;
     synth_data->owner_tag = owner_tag;
     synth_data->semi_to_freq_table = NULL;
     synth_data->log_curve = NULL;
@@ -490,51 +463,21 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
 
         for (unsigned int j = 0; j < cur_osc->num_ports; j++) {
             SYNTH_PORT *cur_port = &(cur_osc->ports[j]);
-
-            unsigned int name_len = strlen(cx_name);
-            name_len += strlen(cur_osc->name);
-
             cur_port->id = j;
             if (j == 0) {
                 cur_port->port_flow = PORT_FLOW_INPUT;
                 cur_port->port_type = PORT_TYPE_MIDI;
-                name_len += 10;
-                cur_port->port_name = malloc(sizeof(char) * name_len);
-                if (!cur_port->port_name) {
-                    synth_clean_memory(synth_data);
-                    return NULL;
-                }
-                snprintf(cur_port->port_name, name_len, "%s|%s|midi_in",
-                         cx_name, cur_osc->name);
-                cur_port->midi_buf = midi_buf_new(MIDI_PORT_BUF_SIZE);
-                if (!cur_port->midi_buf) {
-                    synth_clean_memory(synth_data);
-                    return NULL;
-                }
+                cur_port->port_name = "midi_in";
             }
             if (j == 1) {
                 cur_port->port_flow = PORT_FLOW_OUTPUT;
                 cur_port->port_type = PORT_TYPE_AUDIO;
-                name_len += 8;
-                cur_port->port_name = malloc(sizeof(char) * name_len);
-                if (!cur_port->port_name) {
-                    synth_clean_memory(synth_data);
-                    return NULL;
-                }
-                snprintf(cur_port->port_name, name_len, "%s|%s|out_L", cx_name,
-                         cur_osc->name);
+                cur_port->port_name = "out_L";
             }
             if (j == 2) {
                 cur_port->port_flow = PORT_FLOW_OUTPUT;
                 cur_port->port_type = PORT_TYPE_AUDIO;
-                name_len += 8;
-                cur_port->port_name = malloc(sizeof(char) * name_len);
-                if (!cur_port->port_name) {
-                    synth_clean_memory(synth_data);
-                    return NULL;
-                }
-                snprintf(cur_port->port_name, name_len, "%s|%s|out_R", cx_name,
-                         cur_osc->name);
+                cur_port->port_name = "out_R";
             }
         }
 
@@ -550,8 +493,7 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
             }
             snprintf(cur_osc->name, 4, "Mtr");
             // change the ports
-            synth_clean_ports(synth_data, &(cur_osc->ports),
-                              cur_osc->num_ports);
+            free(cur_osc->ports);
             cur_osc->num_ports = SYNTH_OUTS;
             cur_osc->ports =
                 (SYNTH_PORT *)calloc(cur_osc->num_ports, sizeof(SYNTH_PORT));
@@ -563,32 +505,9 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
             for (unsigned int j = 0; j < cur_osc->num_ports; j++) {
                 SYNTH_PORT *cur_port = &(cur_osc->ports[j]);
                 cur_port->id = j;
-                unsigned int name_len = strlen(cx_name);
-                name_len += strlen(cur_osc->name);
-                if (j == 0) {
-                    cur_port->port_flow = PORT_FLOW_OUTPUT;
-                    cur_port->port_type = PORT_TYPE_AUDIO;
-                    name_len += 8;
-                    cur_port->port_name = malloc(sizeof(char) * name_len);
-                    if (!cur_port->port_name) {
-                        synth_clean_memory(synth_data);
-                        return NULL;
-                    }
-                    snprintf(cur_port->port_name, name_len, "%s|%s|out_L",
-                             cx_name, cur_osc->name);
-                }
-                if (j == 1) {
-                    cur_port->port_flow = PORT_FLOW_OUTPUT;
-                    cur_port->port_type = PORT_TYPE_AUDIO;
-                    name_len += 8;
-                    cur_port->port_name = malloc(sizeof(char) * name_len);
-                    if (!cur_port->port_name) {
-                        synth_clean_memory(synth_data);
-                        return NULL;
-                    }
-                    snprintf(cur_port->port_name, name_len, "%s|%s|out_R",
-                             cx_name, cur_osc->name);
-                }
+                cur_port->port_flow = PORT_FLOW_OUTPUT;
+                cur_port->port_type = PORT_TYPE_AUDIO;
+                cur_port->port_name = j == 0 ? "out_L" : "out_R";
             }
         }
 
@@ -657,26 +576,28 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
             cur_osc->params, "R", 0.001, SYNTH_ADSR_TIME_MIN,
             SYNTH_ADSR_TIME_MAX, 0.1, 0, SYNTH_PARAM_RELEASE, 0, 0, NULL);
 
-        synth_activate_backend_ports(synth_data, cur_osc);
+        if (synth_osc_ports_create(synth_data, cur_osc) != 0) {
+            synth_clean_memory(synth_data);
+            return NULL;
+        }
     }
 
     return synth_data;
 }
 
-int synth_activate_backend_ports(SYNTH_DATA *synth_data, SYNTH_OSC *osc) {
-    if (!synth_data)
-        return -1;
-    if (!synth_data->audio_backend)
-        return -1;
-    if (!osc->ports)
+static int synth_osc_ports_create(SYNTH_DATA *synth_data, SYNTH_OSC *osc) {
+    osc->node = graph_node_add(synth_data->graph, synth_data->owner_tag,
+                               synth_osc_uid(osc), synth_osc_process_rt, osc);
+    if (!osc->node)
         return -1;
     for (unsigned int i = 0; i < osc->num_ports; i++) {
         SYNTH_PORT *cur_port = &(osc->ports[i]);
-        cur_port->sys_port = app_jack_create_port_on_client(
-            synth_data->audio_backend, cur_port->port_type, cur_port->port_flow,
-            cur_port->port_name, synth_data->owner_tag, synth_osc_uid(osc));
+        cur_port->graph_port =
+            graph_port_create(synth_data->graph, osc->node, cur_port->port_type,
+                              cur_port->port_flow, cur_port->port_name);
+        if (!cur_port->graph_port)
+            return -1;
     }
-
     return 0;
 }
 
@@ -926,8 +847,8 @@ static bool synth_osc_write_outs_rt(SYNTH_OSC *osc, NFRAMES_T nframes) {
         r_Port = &(osc->ports[2]);
     }
 
-    SAMPLE_T *out_L = app_jack_get_buffer_rt(l_Port->sys_port, nframes);
-    SAMPLE_T *out_R = app_jack_get_buffer_rt(r_Port->sys_port, nframes);
+    SAMPLE_T *out_L = graph_port_audio_rt(l_Port->graph_port);
+    SAMPLE_T *out_R = graph_port_audio_rt(r_Port->graph_port);
     if (!out_L || !out_R)
         return false;
     memcpy(out_L, osc->buffer_L, sizeof(SAMPLE_T) * nframes);
@@ -1051,7 +972,7 @@ static int synth_metronome_process_rt(SYNTH_DATA *synth_data,
     float beat_type = 0;
     float beats_per_bar = 0;
     int playhead = app_jack_return_transport_rt(
-        synth_data->audio_backend, &bar, &beat, &tick, &ticks_per_beat,
+        synth_data->transport, &bar, &beat, &tick, &ticks_per_beat,
         &total_frames, &bpm, &beat_type, &beats_per_bar);
     if (playhead == 0) {
         synth_stop_osc_rt(metro_osc, 127, 0, 1);
@@ -1081,9 +1002,8 @@ static int synth_metronome_process_rt(SYNTH_DATA *synth_data,
 static void synth_osc_midi_process_rt(SYNTH_DATA *synth_data,
                                       SYNTH_OSC *osc, NFRAMES_T nframes) {
     SYNTH_PORT *midi_port = &(osc->ports[0]);
-    app_jack_midi_in_rt(midi_port->sys_port, nframes, midi_port->midi_buf);
     NFRAMES_T pos = 0;
-    MIDI_BUF_ITER it = midi_buf_iter(midi_port->midi_buf);
+    MIDI_BUF_ITER it = midi_buf_iter(graph_port_midi_rt(midi_port->graph_port));
     MIDI_EVENT ev;
     while (midi_buf_next(&it, &ev)) {
         if (ev.frame > pos) {
@@ -1105,7 +1025,7 @@ bool synth_osc_process_rt(void *osc_ptr, NFRAMES_T nframes) {
     if (!osc)
         return false;
     SYNTH_DATA *synth_data = osc->synth_data;
-    if (!synth_data || !synth_data->audio_backend)
+    if (!synth_data)
         return false;
 
     memset(osc->buffer_L, '\0', sizeof(SAMPLE_T) * nframes);
@@ -1188,9 +1108,10 @@ static int synth_clean_osc(SYNTH_DATA *synth_data, SYNTH_OSC *synth_osc) {
     if (synth_osc->buffer_R)
         free(synth_osc->buffer_R);
     synth_osc->buffer_R = NULL;
-    if (synth_osc->ports)
-        synth_clean_ports(synth_data, &(synth_osc->ports),
-                          synth_osc->num_ports);
+    // its ports go with it
+    graph_node_remove(synth_data->graph, synth_osc->node);
+    synth_osc->node = NULL;
+    free(synth_osc->ports);
     synth_osc->ports = NULL;
     if (synth_osc->name)
         free(synth_osc->name);

@@ -4,6 +4,8 @@
 #include <string.h>
 // my libraries
 #include "app_data.h"
+#include "backend/audio_backend.h"
+#include "engine/graph.h"
 // string functions
 #include "contexts/clap_plugins.h"
 #include "contexts/plugins.h"
@@ -12,7 +14,7 @@
 // math helper functions
 #include "contexts/context_control.h"
 #include "contexts/params.h"
-#include "jack_funcs/jack_funcs.h"
+#include "backend/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
 #include "util_funcs/math_funcs.h"
 #include "util_funcs/ring_buffer.h"
@@ -25,20 +27,16 @@
 typedef struct _app_info {
     // the smapler data
     SMP_INFO *smp_data;
-    // jack client for the whole program
-    JACK_INFO *trk_jack;
+    // the audio backend, also the transport (temporeraly) 
+    AUDIO_BACKEND *backend;
+    // the routing of every port, run by trk_audio_process_rt
+    GRAPH *graph;
     // plugin data
     PLUG_INFO *plug_data;
     // CLAP plugin data
     CLAP_PLUG_INFO *clap_plug_data;
     // built in synth data
     SYNTH_DATA *synth_data;
-
-    // main ports for the app
-    void *main_in_L;
-    void *main_in_R;
-    void *main_out_L;
-    void *main_out_R;
     // control struct for sys messages between [audio-thread] and [main-thread]
     // (stop all processes and send messages for this context)
     CXCONTROL *control_data;
@@ -92,9 +90,9 @@ static int clean_memory(APP_INFO *app_data) {
     if (app_data->synth_data)
         synth_clean_memory(app_data->synth_data);
 
-    // clean the track jack memory
-    if (app_data->trk_jack)
-        jack_clean_memory(app_data->trk_jack);
+    // stops the process callback, removes its endpoint nodes
+    audio_backend_clean(app_data->backend);
+    graph_free(app_data->graph);
 
     // clean the app_data
     context_sub_clean(app_data->control_data);
@@ -135,7 +133,7 @@ static int app_sys_msg(void *user_data, const char *msg) {
 }
 
 // read ring buffers sent from ui to rt thread
-static int app_read_rt_messages(APP_INFO *app_data, NFRAMES_T nframes) {
+static int app_read_rt_messages(APP_INFO *app_data) {
     if (!app_data)
         return -1;
     // first read the app_data messages
@@ -145,12 +143,12 @@ static int app_read_rt_messages(APP_INFO *app_data, NFRAMES_T nframes) {
         return 1;
 
     // read the jack inner messages on the [audio-thread]
-    app_jack_read_ui_to_rt_messages(app_data->trk_jack);
+    app_jack_read_ui_to_rt_messages(app_data->backend);
     // read the CLAP plugins inner messages on the [audio-thread]
-    if (clap_read_ui_to_rt_messages(app_data->clap_plug_data, nframes) != 0)
+    if (clap_read_ui_to_rt_messages(app_data->clap_plug_data) != 0)
         return -1;
     // read the lv2 plugin messages on the [audio-thread]
-    if (plug_read_ui_to_rt_messages(app_data->plug_data, nframes) != 0)
+    if (plug_read_ui_to_rt_messages(app_data->plug_data) != 0)
         return -1;
     // read the sampler messages on the [audio-thread]
     if (smp_read_ui_to_rt_messages(app_data->smp_data) != 0)
@@ -159,20 +157,6 @@ static int app_read_rt_messages(APP_INFO *app_data, NFRAMES_T nframes) {
     if (synth_read_ui_to_rt_messages(app_data->synth_data) != 0)
         return -1;
     return 0;
-}
-
-// master track: master_in copied to master_out
-static bool trk_master_process_rt(void *arg, NFRAMES_T nframes) {
-    APP_INFO *app_data = (APP_INFO *)arg;
-    SAMPLE_T *trk_in_L = app_jack_get_buffer_rt(app_data->main_in_L, nframes);
-    SAMPLE_T *trk_in_R = app_jack_get_buffer_rt(app_data->main_in_R, nframes);
-    SAMPLE_T *trk_out_L = app_jack_get_buffer_rt(app_data->main_out_L, nframes);
-    SAMPLE_T *trk_out_R = app_jack_get_buffer_rt(app_data->main_out_R, nframes);
-    if (!trk_in_L || !trk_in_R || !trk_out_L || !trk_out_R)
-        return false;
-    memcpy(trk_out_L, trk_in_L, sizeof(SAMPLE_T) * nframes);
-    memcpy(trk_out_R, trk_in_R, sizeof(SAMPLE_T) * nframes);
-    return true;
 }
 
 // The callback function sent to the audio backend (at this time to jack)
@@ -187,27 +171,14 @@ static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
     // stop_processing a plugin, update rt param values etc. if returns a 1
     // value, this means that is_processing is 0 and the function should not
     // process any contexts a value of -1 means that a fundamental error occured
-    int read_err = app_read_rt_messages(app_data, nframes);
+    int read_err = app_read_rt_messages(app_data);
     if (read_err == 1)
         return 0;
     if (read_err == -1)
         return -1;
 
-    // one owner at a time, in a fixed order for now
-    smp_process_rt(app_data->smp_data, nframes);
-    void *owner = NULL;
-    for (unsigned int i = 0; (owner = plug_plugin_slot(app_data->plug_data, i));
-         i++)
-        plug_plugin_process_rt(owner, nframes);
-    for (unsigned int i = 0;
-         (owner = clap_plug_plugin_slot(app_data->clap_plug_data, i)); i++)
-        clap_plug_plugin_process_rt(owner, nframes);
-    for (unsigned int i = 0;
-         (owner = synth_osc_return(app_data->synth_data, i)); i++)
-        synth_osc_process_rt(owner, nframes);
-    if (!trk_master_process_rt(app_data, nframes))
-        return -1;
-
+    // every node in edge order, the backend's endpoints included
+    graph_process_rt(app_data->graph, nframes);
     return 0;
 }
 
@@ -233,7 +204,7 @@ enum {
     DATA_NS_SYNTH_OSC = 5,
     DATA_NS_PARAM = 6,
     DATA_NS_PARAM_CATEGORY = 7,
-    // never a context: groups ports of other jack clients, so their group_key
+    // never a context: groups ports of other programs, so their group_key
     // cannot land on an owner's ContextId
     DATA_NS_JACK_CLIENT = 8,
 };
@@ -1352,7 +1323,7 @@ static bool root_child_at(void *user_data, size_t idx, DataObject *out) {
         return true;
     case 4:
         out->ops = &trk_ops;
-        out->user_data = app_data->trk_jack;
+        out->user_data = app_data->backend;
         return true;
     default:
         return false;
@@ -1368,51 +1339,54 @@ static ContextId root_id(void *user_data) {
 }
 
 // DATA_CAP_ACTIONS: the root context hosts the generic bipartite CONNECT
-// action over JACK ports. Ports are never materialised into the CX tree -
-// these read the port cache jack_funcs keeps, keyed by the identity it minted
-// for each port name.
+// action over the backend's ports. Ports are never materialised into the CX
+// tree - these read the port cache the backend keeps, keyed by the identity it
+// minted for each port name.
 
 // the peers a source can be linked to: opposite flow, matching type
-static JackPortList root_peer_list(const JackPortInfo *source) {
-    bool want_output = source->flow != JackPortIsOutput;
+static BackendPortList root_peer_list(const BackendPortInfo *source) {
+    bool want_output = source->flow != PORT_FLOW_OUTPUT;
     if (source->type == PORT_TYPE_MIDI)
-        return want_output ? JACK_PORT_LIST_OUT_MIDI : JACK_PORT_LIST_IN_MIDI;
-    return want_output ? JACK_PORT_LIST_OUT_AUDIO : JACK_PORT_LIST_IN_AUDIO;
+        return want_output ? BACKEND_PORT_LIST_OUT_MIDI
+                           : BACKEND_PORT_LIST_IN_MIDI;
+    return want_output ? BACKEND_PORT_LIST_OUT_AUDIO
+                       : BACKEND_PORT_LIST_IN_AUDIO;
 }
 
 // the source a peers list hangs off, read from the half-filled request. false
 // when none has been chosen yet, or the chosen one is gone
-static bool root_connect_source(JACK_INFO *jack_data,
+static bool root_connect_source(AUDIO_BACKEND *backend,
                                 const DataActionReq *partial,
-                                JackPortInfo *out) {
+                                BackendPortInfo *out) {
     if (!partial || partial->type != DATA_ACTION_CONNECT)
         return false;
     ContextId value = (ContextId)partial->connect.source;
     if (CTXID_NS(value) != DATA_LIST_NS_PORTS)
         return false;
-    return app_jack_port_by_key(jack_data, value & CTXID_LOCAL_MASK, out);
+    return audio_backend_port_by_key(backend, value & CTXID_LOCAL_MASK, out);
 }
 
 // our own ports group under the object that registered them; anything else
-// has only its jack client to go on. Owners register with (namespace, uid),
-// so MAKE_ID(tag, uid) is the owner's own id - which is why those owners'
+// has only its client to go on. Owners register with (namespace, uid), so
+// MAKE_ID(tag, uid) is the owner's own id - which is why those owners'
 // group_key op is simply their id op
-static uint64_t root_port_group_key(const JackPortInfo *info) {
+static uint64_t root_port_group_key(const BackendPortInfo *info) {
     if (info->owner_tag == 0)
         return MAKE_ID(DATA_NS_JACK_CLIENT, str_hash_fnv1a64(info->client));
     return MAKE_ID(info->owner_tag, info->owner_uid);
 }
 
-// owner handles are only reachable by index, so this is a scan
-static const char *root_port_group_label(APP_INFO *app_data,
-                                         const JackPortInfo *info) {
-    switch ((unsigned)info->owner_tag) {
+// the name the tree shows for a port owner, NULL for an unknown one. Owner
+// handles are only reachable by index, so this is a scan
+static const char *owner_label(APP_INFO *app_data, uint64_t owner_tag,
+                               uint64_t owner_uid) {
+    switch ((unsigned)owner_tag) {
     case DATA_NS_LV2_PLUG:
         for (unsigned int i = 0;; i++) {
             void *plug = plug_plugin_return(app_data->plug_data, i);
             if (!plug)
                 break;
-            if (plug_plugin_uid(plug) == (uint32_t)info->owner_uid)
+            if (plug_plugin_uid(plug) == (uint32_t)owner_uid)
                 return plug_plugin_name(plug);
         }
         break;
@@ -1421,7 +1395,7 @@ static const char *root_port_group_label(APP_INFO *app_data,
             void *plug = clap_plug_plugin_return(app_data->clap_plug_data, i);
             if (!plug)
                 break;
-            if (clap_plug_plugin_uid(plug) == (uint32_t)info->owner_uid)
+            if (clap_plug_plugin_uid(plug) == (uint32_t)owner_uid)
                 return clap_plug_plugin_name(plug);
         }
         break;
@@ -1430,32 +1404,38 @@ static const char *root_port_group_label(APP_INFO *app_data,
             void *osc = synth_osc_return(app_data->synth_data, i);
             if (!osc)
                 break;
-            if (synth_osc_uid(osc) == (uint32_t)info->owner_uid)
+            if (synth_osc_uid(osc) == (uint32_t)owner_uid)
                 return synth_osc_name(osc);
         }
         break;
     case DATA_NS_SINGLETON:
         // the same names the tree shows for these contexts
-        if (info->owner_uid == SID_SAMPLER)
+        if (owner_uid == SID_SAMPLER)
             return sampler_name(NULL);
-        if (info->owner_uid == SID_ROOT)
+        if (owner_uid == SID_ROOT)
             return root_name(NULL);
         break;
     }
-    return info->client;
+    return NULL;
+}
+
+static const char *root_port_group_label(APP_INFO *app_data,
+                                         const BackendPortInfo *info) {
+    const char *label = owner_label(app_data, info->owner_tag, info->owner_uid);
+    return label ? label : info->client;
 }
 
 // linked_to is the key a row's DATA_CHOICE_LINKED is measured against, 0 for a
 // list with no "linked" concept
-static void root_port_choice_fill(APP_INFO *app_data, const JackPortInfo *info,
+static void root_port_choice_fill(APP_INFO *app_data,
+                                  const BackendPortInfo *info,
                                   uint64_t linked_to, DataChoice *out) {
     out->value = MAKE_ID(DATA_LIST_NS_PORTS, info->key);
     out->label = info->name;
     out->group_key = root_port_group_key(info);
     out->group_label = root_port_group_label(app_data, info);
-    out->flags = (linked_to &&
-                  app_jack_port_keys_connected(app_data->trk_jack, linked_to,
-                                               info->key))
+    out->flags = (linked_to && audio_backend_port_keys_connected(
+                                   app_data->backend, linked_to, info->key))
                      ? DATA_CHOICE_LINKED
                      : 0;
 }
@@ -1467,7 +1447,7 @@ static size_t root_connect_action_list(void *user_data, DataAction *out, size_t 
     out[0] = (DataAction){
         .type = DATA_ACTION_CONNECT,
         .label = "Connect",
-        .tooltip = "Connect or disconnect JACK ports",
+        .tooltip = "Connect or disconnect the backend's ports",
         .enabled = true,
         .style = DATA_ACTION_STYLE_NORMAL,
     };
@@ -1502,18 +1482,18 @@ static size_t root_connect_list_count(void *user_data, DataListId list,
                                       const DataActionReq *partial,
                                       uint64_t branch) {
     APP_INFO *app_data = (APP_INFO *)user_data;
-    JACK_INFO *jack_data = app_data ? app_data->trk_jack : NULL;
-    if (!jack_data || branch != 0)
+    AUDIO_BACKEND *backend = app_data ? app_data->backend : NULL;
+    if (!backend || branch != 0)
         return 0;
 
     if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_ANY))
-        return app_jack_port_count(jack_data, JACK_PORT_LIST_ALL);
+        return audio_backend_port_count(backend, BACKEND_PORT_LIST_ALL);
 
     if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_PEERS)) {
-        JackPortInfo source;
-        if (!root_connect_source(jack_data, partial, &source))
+        BackendPortInfo source;
+        if (!root_connect_source(backend, partial, &source))
             return 0;
-        return app_jack_port_count(jack_data, root_peer_list(&source));
+        return audio_backend_port_count(backend, root_peer_list(&source));
     }
 
     return 0;
@@ -1523,13 +1503,13 @@ static bool root_connect_list_at(void *user_data, DataListId list,
                         const DataActionReq *partial, uint64_t branch,
                         size_t idx, DataChoice *out) {
     APP_INFO *app_data = (APP_INFO *)user_data;
-    JACK_INFO *jack_data = app_data ? app_data->trk_jack : NULL;
-    if (!jack_data || branch != 0)
+    AUDIO_BACKEND *backend = app_data ? app_data->backend : NULL;
+    if (!backend || branch != 0)
         return false;
 
-    JackPortInfo info;
+    BackendPortInfo info;
     if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_ANY)) {
-        if (!app_jack_port_at(jack_data, JACK_PORT_LIST_ALL, idx, &info))
+        if (!audio_backend_port_at(backend, BACKEND_PORT_LIST_ALL, idx, &info))
             return false;
         root_port_choice_fill(app_data, &info, 0, out);
         return true;
@@ -1537,10 +1517,11 @@ static bool root_connect_list_at(void *user_data, DataListId list,
 
     if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_PEERS)) {
         // empty until a source is chosen - its flow and type pick the list
-        JackPortInfo source;
-        if (!root_connect_source(jack_data, partial, &source))
+        BackendPortInfo source;
+        if (!root_connect_source(backend, partial, &source))
             return false;
-        if (!app_jack_port_at(jack_data, root_peer_list(&source), idx, &info))
+        if (!audio_backend_port_at(backend, root_peer_list(&source), idx,
+                                   &info))
             return false;
         root_port_choice_fill(app_data, &info, source.key, out);
         return true;
@@ -1553,9 +1534,9 @@ static DataActionResult root_connect_action_do(void *user_data,
                                       const DataActionReq *req,
                                       ContextId *out_new) {
     APP_INFO *app_data = (APP_INFO *)user_data;
-    JACK_INFO *jack_data = app_data ? app_data->trk_jack : NULL;
+    AUDIO_BACKEND *backend = app_data ? app_data->backend : NULL;
     (void)out_new; // CONNECT creates no new context
-    if (!jack_data || !req || req->type != DATA_ACTION_CONNECT)
+    if (!backend || !req || req->type != DATA_ACTION_CONNECT)
         return DATA_ACTION_ERR_INVALID;
     if (!req->connect.targets || req->connect.target_count == 0)
         return DATA_ACTION_ERR_INVALID;
@@ -1563,9 +1544,9 @@ static DataActionResult root_connect_action_do(void *user_data,
     ContextId source_val = (ContextId)req->connect.source;
     if (CTXID_NS(source_val) != DATA_LIST_NS_PORTS)
         return DATA_ACTION_ERR_INVALID;
-    JackPortInfo source;
-    if (!app_jack_port_by_key(jack_data, source_val & CTXID_LOCAL_MASK,
-                              &source))
+    BackendPortInfo source;
+    if (!audio_backend_port_by_key(backend, source_val & CTXID_LOCAL_MASK,
+                                   &source))
         return DATA_ACTION_ERR_STALE;
 
     // every target is checked before any is linked, so a request that is
@@ -1574,9 +1555,9 @@ static DataActionResult root_connect_action_do(void *user_data,
         ContextId target_val = (ContextId)req->connect.targets[i];
         if (CTXID_NS(target_val) != DATA_LIST_NS_PORTS)
             return DATA_ACTION_ERR_INVALID;
-        JackPortInfo target;
-        if (!app_jack_port_by_key(jack_data, target_val & CTXID_LOCAL_MASK,
-                                  &target))
+        BackendPortInfo target;
+        if (!audio_backend_port_by_key(backend, target_val & CTXID_LOCAL_MASK,
+                                       &target))
             return DATA_ACTION_ERR_STALE;
         // the peers list only offers opposite flow and matching type
         if (target.flow == source.flow || target.type != source.type)
@@ -1587,11 +1568,11 @@ static DataActionResult root_connect_action_do(void *user_data,
     for (size_t i = 0; i < req->connect.target_count; i++) {
         uint64_t target_key = req->connect.targets[i] & CTXID_LOCAL_MASK;
         bool linked =
-            app_jack_port_keys_connected(jack_data, source.key, target_key);
-        int rc = linked
-                     ? app_jack_disconnect_keys(jack_data, source.key,
-                                                target_key)
-                     : app_jack_connect_keys(jack_data, source.key, target_key);
+            audio_backend_port_keys_connected(backend, source.key, target_key);
+        int rc =
+            linked
+                ? audio_backend_disconnect_keys(backend, source.key, target_key)
+                : audio_backend_connect_keys(backend, source.key, target_key);
         if (rc != 0)
             any_failed = true;
     }
@@ -1629,7 +1610,8 @@ DataObject app_init(void) {
     }
     // init the members to NULLS
     app_data->smp_data = NULL;
-    app_data->trk_jack = NULL;
+    app_data->backend = NULL;
+    app_data->graph = NULL;
     app_data->plug_data = NULL;
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
@@ -1639,37 +1621,30 @@ DataObject app_init(void) {
     app_data->event_read = 0;
     app_data->event_cap = 0;
 
-    /*init jack client for the whole program*/
+    /*init the audio backend for the whole program*/
     /*--------------------------------------------------*/
-    app_data->trk_jack =
-        jack_initialize(app_data, APP_NAME, trk_audio_process_rt);
-    if (!app_data->trk_jack) {
+    app_data->backend =
+        audio_backend_init(app_data, APP_NAME, trk_audio_process_rt);
+    if (!app_data->backend) {
         clean_memory(app_data);
         return invalid;
     }
 
-    uint32_t buffer_size =
-        (uint32_t)app_jack_return_buffer_size(app_data->trk_jack);
-    SAMPLE_T samplerate =
-        (SAMPLE_T)app_jack_return_samplerate(app_data->trk_jack);
-    // create ports for trk_jack
-    app_data->main_in_L = app_jack_create_port_on_client(
-        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_INPUT, "master_in_L",
-        DATA_NS_SINGLETON, SID_ROOT);
-    app_data->main_in_R = app_jack_create_port_on_client(
-        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_INPUT, "master_in_R",
-        DATA_NS_SINGLETON, SID_ROOT);
-    app_data->main_out_L = app_jack_create_port_on_client(
-        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT, "master_out_L",
-        DATA_NS_SINGLETON, SID_ROOT);
-    app_data->main_out_R = app_jack_create_port_on_client(
-        app_data->trk_jack, PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT, "master_out_R",
-        DATA_NS_SINGLETON, SID_ROOT);
-    // now activate the jack client, it will launch the rt thread
+    uint32_t buffer_size = audio_backend_buffer_size(app_data->backend);
+    SAMPLE_T samplerate = audio_backend_sample_rate(app_data->backend);
+    app_data->graph = graph_new(buffer_size);
+    // the exposed ports (master_in/out, midi_in/out) group under the root
+    if (!app_data->graph ||
+        audio_backend_endpoints_add(app_data->backend, app_data->graph,
+                                    DATA_NS_SINGLETON, SID_ROOT) != 0) {
+        clean_memory(app_data);
+        return invalid;
+    }
+    // now activate the backend, it will launch the rt thread
     // (trk_audio_process_rt function) but app_data->is_processing == 0, so the
-    // contexts will not be processed, only app_data sys messages (to start the
+    // graph will not run, only app_data sys messages (to start the
     // processes for example)
-    if (app_jack_activate(app_data->trk_jack) != 0) {
+    if (audio_backend_activate(app_data->backend) != 0) {
         clean_memory(app_data);
         return invalid;
     }
@@ -1677,7 +1652,7 @@ DataObject app_init(void) {
     /*-----------------------------------------------*/
     smp_status_t smp_status_err = 0;
     app_data->smp_data =
-        smp_init(buffer_size, samplerate, &smp_status_err, app_data->trk_jack,
+        smp_init(buffer_size, samplerate, &smp_status_err, app_data->graph,
                  DATA_NS_SINGLETON, SID_SAMPLER);
     if (!app_data->smp_data) {
         // clean app_data
@@ -1688,8 +1663,8 @@ DataObject app_init(void) {
     // Init the plugin data object, it will not run any plugins yet
     plug_status_t plug_errors = 0;
     app_data->plug_data =
-        plug_init(buffer_size, samplerate, &plug_errors, app_data->trk_jack,
-                  DATA_NS_LV2_PLUG);
+        plug_init(buffer_size, samplerate, &plug_errors, app_data->graph,
+                  app_data->backend, DATA_NS_LV2_PLUG);
     if (!app_data->plug_data) {
         clean_memory(app_data);
         return invalid;
@@ -1700,7 +1675,7 @@ DataObject app_init(void) {
     clap_plug_status_t clap_plug_errors = 0;
     app_data->clap_plug_data =
         clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors,
-                       app_data->trk_jack, DATA_NS_CLAP_PLUG);
+                       app_data->graph, DATA_NS_CLAP_PLUG);
     if (!(app_data->clap_plug_data)) {
         clean_memory(app_data);
         return invalid;
@@ -1710,9 +1685,14 @@ DataObject app_init(void) {
 
     // initiate the Synth data
     app_data->synth_data =
-        synth_init((unsigned int)buffer_size, samplerate, "Synth", 1,
-                   app_data->trk_jack, DATA_NS_SYNTH_OSC);
+        synth_init((unsigned int)buffer_size, samplerate, 1, app_data->graph,
+                   app_data->backend, DATA_NS_SYNTH_OSC);
     if (!app_data->synth_data) {
+        clean_memory(app_data);
+        return invalid;
+    }
+    // the first cycle already runs a plan with every node
+    if (graph_plan_update(app_data->graph) != 0) {
         clean_memory(app_data);
         return invalid;
     }
@@ -1754,6 +1734,15 @@ static void app_data_push_param_changes(APP_INFO *app_data,
     }
 }
 
+// GRAPH_DROPS_FN
+static void app_log_midi_drops(void *arg, const GraphPortInfo *port,
+                               uint32_t dropped) {
+    const char *owner =
+        owner_label((APP_INFO *)arg, port->owner_tag, port->owner_uid);
+    log_append_logfile("%s %s: %u MIDI events dropped\n", owner ? owner : "?",
+                       port->name, dropped);
+}
+
 void app_data_update(void *root_user_data) {
     if (!root_user_data)
         return;
@@ -1761,7 +1750,7 @@ void app_data_update(void *root_user_data) {
     // read app_data messages from [audio-thread] on the [main-thread]
     context_sub_process_ui(app_data->control_data);
     // read messages for jack from rt thread on [main-thread]
-    app_jack_read_rt_to_ui_messages(app_data->trk_jack);
+    app_jack_read_rt_to_ui_messages(app_data->backend);
     // read messages from rt thread on [main-thread] for CLAP plugins
     clap_read_rt_to_ui_messages(app_data->clap_plug_data);
     // read messages from the rt thread on the [main-thread] for lv2 plugins
@@ -1771,6 +1760,10 @@ void app_data_update(void *root_user_data) {
     // read messages from the rt thread on the [main-thread] for the synth
     // context
     synth_read_rt_to_ui_messages(app_data->synth_data);
+    // publish what the contexts changed in the graph, free what the audio
+    // thread no longer runs
+    graph_plan_update(app_data->graph);
+    graph_midi_drops_take(app_data->graph, app_log_midi_drops, app_data);
 
     // now that all rt->ui messages are drained, turn each module's "my contents
     // is dirty" flag into a CHILDREN_CHANGED event.
@@ -1797,9 +1790,9 @@ void app_data_update(void *root_user_data) {
                                        clap_plug_plugin_uid(plug)));
     }
 
-    // since JACK ports are not in CX tree, if they changed, report as a context
-    // data changed event, not a context structure change event
-    JackPortSync port_sync = app_jack_ports_sync(app_data->trk_jack);
+    // since the backend's ports are not in CX tree, if they changed, report as
+    // a context data changed event, not a context structure change event
+    BackendPortSync port_sync = audio_backend_ports_sync(app_data->backend);
     if (port_sync.ports || port_sync.connections)
         app_data_push_event(app_data, DATA_EVENT_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_ROOT));
@@ -1807,7 +1800,7 @@ void app_data_update(void *root_user_data) {
     // param value/name/flag changes, after the structure events above so a
     // just added param already has its context
     app_data_push_param_changes(
-        app_data, app_jack_trk_param_container(app_data->trk_jack));
+        app_data, app_jack_trk_param_container(app_data->backend));
     for (unsigned int i = 0;; i++) {
         void *smp = smp_sample_return(app_data->smp_data, i);
         if (!smp)

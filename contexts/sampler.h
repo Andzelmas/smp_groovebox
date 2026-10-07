@@ -1,5 +1,6 @@
 #pragma once
 #include "params.h"
+#include "../engine/graph.h"
 #include "../types.h"
 #include <stdbool.h>
 
@@ -21,12 +22,10 @@ typedef struct _smp_info SMP_INFO;
 int smp_read_ui_to_rt_messages(SMP_INFO* smp_data);
 int smp_read_rt_to_ui_messages(SMP_INFO* smp_data);
 //initialize the sampler to empty values
-//owner_tag/owner_uid together name the owner of the sampler's ports - the
-//sampler is one owner, so both come from the caller
-SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate, smp_status_t *status, void* audio_backend,
+//the sampler is one node of graph, owned by (owner_tag, owner_uid) - both come
+//from the caller
+SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate, smp_status_t *status, GRAPH* graph,
 		   uint64_t owner_tag, uint64_t owner_uid);
-//create ports in ports[n]->sys_port
-int smp_activate_backend_ports(SMP_INFO* smp_data);
 //the function that adds a new sample and gets its buffer from a file to memory.
 //on success returns the new sample's identity uid (always > 0, matching
 //smp_sample_uid); on failure returns 0.

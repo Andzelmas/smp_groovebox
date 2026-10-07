@@ -33,7 +33,7 @@
 #include "../util_funcs/jalv/worker.h"
 #include "../util_funcs/jalv/zix/sem.h"
 // for log functions
-#include "../jack_funcs/jack_funcs.h"
+#include "../backend/jack_funcs.h"
 #include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/midi_buf.h"
@@ -179,9 +179,8 @@ typedef struct _plug_port {
     const LilvPort *lilv_port; ///< LV2 port
     enum PortType type;        ///< Data type
     enum FlowType flow;        ///< Data flow direction
-    void *sys_port;            ///< For audio/MIDI ports, otherwise NULL
+    GRAPH_PORT *graph_port;    ///< For audio/CV/midi:MidiEvent ports
     PLUG_EVBUF *evbuf;         ///< For MIDI ports, otherwise NULL
-    MIDI_BUF *midi_buf;        ///< For midi:MidiEvent ports, otherwise NULL
     void *widget;              ///< Control widget, if applicable
     size_t buf_size;           ///< Custom buffer size, or 0
     uint32_t index;            ///< Port index
@@ -267,6 +266,8 @@ typedef struct _plug_plug {
     // display name, owned by this struct, built once at load by
     // plug_load_and_activate() and handed out by plug_plugin_name()
     char name[PLUG_PLUGIN_NAME_MAX];
+    // the plugin's node, its audio/MIDI ports are on it
+    GRAPH_NODE *node;
     // array of available ports for the plugin
     PLUG_PORT *ports;
     // how many ports do we have on plugin
@@ -335,9 +336,10 @@ typedef struct _plug_info {
     uint32_t buffer_size;
     // node for convenience
     PLUG_NODES nodes;
-    // the address to the audio client
-    void *audio_backend;
-    // paired with a plugin's uid when registering that plugin's ports
+    GRAPH *graph;
+    // for app_jack_return_transport_rt, until 2T
+    void *transport;
+    // paired with a plugin's uid as its node's owner
     uint64_t owner_tag;
     // the available plugins list struct
     PLUGIN_LIST plugin_list;
@@ -354,8 +356,6 @@ typedef struct _plug_info {
     // ui thread only when rt tick var is 0 should only be touched on
     // [audio-thread]
     int rt_tick;
-    // this cycle's nframes, for the stop callback [audio-thread]
-    unsigned int rt_nframes;
 } PLUG_INFO;
 
 static int plug_sys_send_msg(void *user_data, const char *msg) {
@@ -417,18 +417,12 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
         cur_plug->state_worker = NULL;
     }
 
-    // clean the ports
-    if (plug_data->audio_backend && cur_plug->ports) {
-        for (uint32_t i = 0; i < cur_plug->num_ports; i++) {
-            PLUG_PORT *const cur_port = &(cur_plug->ports[i]);
-            if (cur_port->sys_port)
-                app_jack_unregister_port(plug_data->audio_backend,
-                                         cur_port->sys_port);
-            if (cur_port)
-                if (cur_port->evbuf)
-                    free(cur_port->evbuf);
-            midi_buf_free(cur_port->midi_buf);
-        }
+    // clean the ports, the graph ones go with the node
+    graph_node_remove(plug_data->graph, cur_plug->node);
+    cur_plug->node = NULL;
+    if (cur_plug->ports) {
+        for (uint32_t i = 0; i < cur_plug->num_ports; i++)
+            free(cur_plug->ports[i].evbuf);
     }
     if (cur_plug->ports)
         free(cur_plug->ports);
@@ -728,26 +722,13 @@ static int plug_plug_stop_process(void *user_data) {
     PLUG_PLUG *plug = (PLUG_PLUG *)user_data;
     if (!plug)
         return -1;
-    // a stopped plugin's ports belong to [main-thread], so its MIDI outs are
-    // emptied once here - a MIDI out nobody writes repeats its last events
-    if (plug->is_processing == 1) {
-        unsigned int nframes = plug->plug_data->rt_nframes;
-        for (uint32_t i = 0; plug->ports && i < plug->num_ports; i++) {
-            PLUG_PORT *const cur_port = &(plug->ports[i]);
-            if (cur_port->flow != PORT_FLOW_OUTPUT || !cur_port->midi_buf)
-                continue;
-            midi_buf_clear(cur_port->midi_buf, nframes);
-            app_jack_midi_out_rt(cur_port->sys_port, nframes,
-                                 cur_port->midi_buf);
-        }
-    }
     // TODO before stopping would be nice to fadeout audio
     plug->is_processing = 0;
     return 0;
 }
 
 PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
-                     plug_status_t *plug_errors, void *audio_backend,
+                     plug_status_t *plug_errors, GRAPH *graph, void *transport,
                      uint64_t owner_tag) {
     PLUG_INFO *plug_data = (PLUG_INFO *)malloc(sizeof(PLUG_INFO));
     if (!plug_data) {
@@ -787,7 +768,8 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_init_urids(plug_data->symap, &(plug_data->urids));
     plug_init_nodes(plug_data->lv_world, &(plug_data->nodes));
 
-    plug_data->audio_backend = audio_backend;
+    plug_data->graph = graph;
+    plug_data->transport = transport;
     plug_data->owner_tag = owner_tag;
 
     // init the plugin instances to shell
@@ -1147,14 +1129,13 @@ int plug_plugin_preset_load(void *plug, uint64_t key) {
     return 0;
 }
 
-int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data, unsigned int nframes) {
+int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data) {
     // set the is_audio_thread to true so its false on [main-thread] and true on
     // [audio-thread]
     is_audio_thread = true;
     if (!plug_data) {
         return -1;
     }
-    plug_data->rt_nframes = nframes;
     // update the rt_tick
     plug_data->rt_tick += 1;
     if (plug_data->rt_tick > RT_CYCLES)
@@ -1187,8 +1168,7 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
         param_msgs_process(cur_plug->plug_params, 0);
         for (uint32_t j = 0; cur_plug->ports && j < cur_plug->num_ports; j++) {
             PLUG_PORT *port = &(cur_plug->ports[j]);
-            uint32_t dropped = midi_buf_dropped_take(port->midi_buf) +
-                               atomic_exchange(&port->seq_dropped, 0U);
+            uint32_t dropped = atomic_exchange(&port->seq_dropped, 0U);
             if (dropped > 0)
                 log_append_logfile(
                     "%s %s: %u MIDI events dropped\n", cur_plug->name,
@@ -1403,6 +1383,8 @@ static void plug_patch_message_rt(PLUG_PLUG *plug,
     }
 }
 
+static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug);
+
 uint32_t plug_load_and_activate(void *plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
     if (!plugin_list_item)
@@ -1510,8 +1492,8 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     jalv_worker_start(plug->state_worker, worker_iface,
                       plug->plug_instance->lv2_handle);
 
-    // create the ports on audio_client from the sys_ports
-    if (plug_activate_backend_ports(plug_data, plug) != 0) {
+    // the plugin's node and its ports
+    if (plug_ports_create(plug_data, plug) != 0) {
         plug_remove_plug(plug_data, plug->id);
         return 0;
     }
@@ -1633,6 +1615,8 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     plug->plug_data = plug_data;
     // build the display name once, now that plug->plug and plug->id are set
     plug_set_display_name(plug);
+    // its first cycle already runs a plan with its ports
+    graph_plan_update(plug_data->graph);
     // wait for the plugin to start processing
     context_sub_wait_for_start(plug_data->control_data, (void *)plug);
     plug_data->plugins_dirty = true;
@@ -1784,12 +1768,16 @@ void plug_set_block_length(PLUG_INFO *plug_data, uint32_t new_block_length) {
     plug_data->block_length = new_block_length;
 }
 
-int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
+// the ports that are not control ports are graph ports, on the plugin's node.
+// 0 on success
+static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
     if (!plug_data)
         return -1;
     if (!plug)
         return -1;
-    if (!plug_data->audio_backend)
+    plug->node = graph_node_add(plug_data->graph, plug_data->owner_tag,
+                                plug->uid, plug_plugin_process_rt, plug);
+    if (!plug->node)
         return -1;
     const LV2_URID atom_Chunk = plug->map.map(
         plug->map.handle, lilv_node_as_string(plug_data->nodes.atom_Chunk));
@@ -1812,9 +1800,8 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
     for (uint32_t i = 0; i < plug->num_ports; i++) {
         PLUG_PORT *const cur_port = &(plug->ports[i]);
         cur_port->lilv_port = lilv_plugin_get_port_by_index(plug->plug, i);
-        cur_port->sys_port = NULL;
+        cur_port->graph_port = NULL;
         cur_port->evbuf = NULL;
-        cur_port->midi_buf = NULL;
         atomic_init(&cur_port->seq_dropped, 0U);
         cur_port->buf_size = 0;
         cur_port->index = i;
@@ -1831,16 +1818,8 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         const unsigned int optional =
             lilv_port_has_property(plug->plug, cur_port->lilv_port,
                                    plug_data->nodes.lv2_connectionOptional);
-        // build full port name if this is not a control port, so that the port
-        // name is unique on the audio backend
-        //--------------------------------------------------
-        LilvNode *plug_name_node = lilv_plugin_get_name(plug->plug);
-        int port_name_size = app_jack_port_name_size();
-        char full_port_name[port_name_size];
-        snprintf(full_port_name, port_name_size, "%.2d_%s_|%s", plug->id,
-                 lilv_node_as_string(plug_name_node), lilv_node_as_string(sym));
-        lilv_node_free(plug_name_node);
-        //--------------------------------------------------
+        // a graph port is named by the symbol, unique within the plugin
+        const char *port_name = lilv_node_as_string(sym);
         unsigned int port_io = PORT_FLOW_OUTPUT;
         // set if the port is input or output
         if (lilv_port_is_a(plug->plug, cur_port->lilv_port,
@@ -1890,26 +1869,33 @@ int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         } else if (lilv_port_is_a(plug->plug, cur_port->lilv_port,
                                   plug_data->nodes.lv2_AudioPort)) {
             cur_port->type = PORT_TYPE_AUDIO;
-            cur_port->sys_port = app_jack_create_port_on_client(
-                plug_data->audio_backend, PORT_TYPE_AUDIO, port_io,
-                full_port_name, plug_data->owner_tag, plug->uid);
+            cur_port->graph_port =
+                graph_port_create(plug_data->graph, plug->node, PORT_TYPE_AUDIO,
+                                  port_io, port_name);
+            if (!cur_port->graph_port) {
+                free(default_values);
+                return -1;
+            }
         } else if (lilv_port_is_a(plug->plug, cur_port->lilv_port,
                                   plug_data->nodes.lv2_CVPort)) {
             cur_port->type = PORT_TYPE_CV;
-            cur_port->sys_port = app_jack_create_port_on_client(
-                plug_data->audio_backend, PORT_TYPE_AUDIO, port_io,
-                full_port_name, plug_data->owner_tag, plug->uid);
+            cur_port->graph_port =
+                graph_port_create(plug_data->graph, plug->node, PORT_TYPE_AUDIO,
+                                  port_io, port_name);
+            if (!cur_port->graph_port) {
+                free(default_values);
+                return -1;
+            }
         } else if (lilv_port_is_a(plug->plug, cur_port->lilv_port,
                                   plug_data->nodes.atom_AtomPort)) {
             cur_port->type = PORT_TYPE_EVENT;
             if (lilv_port_supports_event(plug->plug, cur_port->lilv_port,
                                          plug_data->nodes.midi_MidiEvent)) {
                 cur_port->port_type_urid = plug_data->urids.midi_MidiEvent;
-                cur_port->sys_port = app_jack_create_port_on_client(
-                    plug_data->audio_backend, PORT_TYPE_MIDI, port_io,
-                    full_port_name, plug_data->owner_tag, plug->uid);
-                cur_port->midi_buf = midi_buf_new(MIDI_PORT_BUF_SIZE);
-                if (!cur_port->midi_buf) {
+                cur_port->graph_port =
+                    graph_port_create(plug_data->graph, plug->node,
+                                      PORT_TYPE_MIDI, port_io, port_name);
+                if (!cur_port->graph_port) {
                     free(default_values);
                     return -1;
                 }
@@ -1983,12 +1969,6 @@ int plug_stop_and_remove_plug(void *plug) {
     return plug_remove_plug(cur_plug->plug_data, cur_plug->id);
 }
 
-void *plug_plugin_slot(PLUG_INFO *plug_data, unsigned int slot) {
-    if (!plug_data || slot >= MAX_INSTANCES)
-        return NULL;
-    return (void *)&(plug_data->plugins[slot]);
-}
-
 bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     PLUG_PLUG *plug = (PLUG_PLUG *)plug_ptr;
     if (!plug)
@@ -2006,11 +1986,8 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     // first connect the ports for processing
     for (uint32_t i = 0; i < plug->num_ports; i++) {
         PLUG_PORT *const cur_port = &(plug->ports[i]);
-        // if there is a sys_port get the buffer from it
-        void *a_buffer = NULL;
-        if (cur_port->sys_port) {
-            a_buffer = app_jack_get_buffer_rt(cur_port->sys_port, nframes);
-        }
+        // an input's is read-only, LV2 does not write inputs
+        SAMPLE_T *a_buffer = graph_port_audio_rt(cur_port->graph_port);
         if (cur_port->type == PORT_TYPE_AUDIO) {
             lilv_instance_connect_port(plug->plug_instance, i, a_buffer);
         }
@@ -2038,12 +2015,12 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
             int32_t cur_beat = 0;
             int32_t cur_tick = 0;
             SAMPLE_T ticks_per_beat = 0;
-            jack_nframes_t total_frames = 0;
+            NFRAMES_T total_frames = 0;
             float bpm = plug_data->bpm;
             float beat_type = 0;
             float beats_per_bar = 0;
             int tr_playing = app_jack_return_transport_rt(
-                plug_data->audio_backend, &cur_bar, &cur_beat, &cur_tick,
+                plug_data->transport, &cur_bar, &cur_beat, &cur_tick,
                 &ticks_per_beat, &total_frames, &bpm, &beat_type,
                 &beats_per_bar);
             if (tr_playing != -1) {
@@ -2165,11 +2142,12 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     // frame 0
     for (uint32_t i = 0; i < plug->num_ports; i++) {
         PLUG_PORT *const cur_port = &(plug->ports[i]);
-        if (cur_port->flow != PORT_FLOW_INPUT || !cur_port->midi_buf)
+        if (cur_port->flow != PORT_FLOW_INPUT ||
+            cur_port->type != PORT_TYPE_EVENT || !cur_port->graph_port)
             continue;
-        app_jack_midi_in_rt(cur_port->sys_port, nframes, cur_port->midi_buf);
         PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_end(cur_port->evbuf);
-        MIDI_BUF_ITER it = midi_buf_iter(cur_port->midi_buf);
+        MIDI_BUF_ITER it =
+            midi_buf_iter(graph_port_midi_rt(cur_port->graph_port));
         MIDI_EVENT ev;
         while (midi_buf_next(&it, &ev)) {
             if (plug_evbuf_write(&iter_buf, ev.frame, 0,
@@ -2207,7 +2185,8 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
             }
         }
         if (cur_port->type == PORT_TYPE_EVENT) {
-            midi_buf_clear(cur_port->midi_buf, nframes);
+            // NULL for an atom port without MIDI
+            MIDI_BUF *midi_out = graph_port_midi_rt(cur_port->graph_port);
             for (PLUG_EVBUF_ITERATOR iter_buf =
                      plug_evbuf_begin(cur_port->evbuf);
                  plug_evbuf_is_valid(iter_buf);
@@ -2219,9 +2198,8 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
                 void *data = NULL;
                 plug_evbuf_get(iter_buf, &frames, &subframes, &type, &size,
                                &data);
-                if (cur_port->midi_buf &&
-                    type == plug_data->urids.midi_MidiEvent)
-                    midi_buf_push(cur_port->midi_buf, frames, data, size);
+                if (midi_out && type == plug_data->urids.midi_MidiEvent)
+                    midi_buf_push(midi_out, frames, data, size);
                 // property values the plugin changed itself (a preset, its
                 // own gui). A plugin with control port params has no way
                 // to tell the host about such changes
@@ -2229,9 +2207,6 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
                     size >= sizeof(LV2_Atom_Object_Body))
                     plug_patch_message_rt(plug, data, size);
             }
-            if (cur_port->midi_buf)
-                app_jack_midi_out_rt(cur_port->sys_port, nframes,
-                                     cur_port->midi_buf);
         }
     }
     param_rt_resend(plug->plug_params);

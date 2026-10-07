@@ -1,5 +1,6 @@
 #pragma once
 #include "params.h"
+#include "../engine/graph.h"
 #include "../types.h"
 #include "../structs.h"
 
@@ -11,16 +12,13 @@ typedef struct _synth_data SYNTH_DATA;
 //read sys and param messages on [audio-thread] and [main-thread]
 int synth_read_ui_to_rt_messages(SYNTH_DATA* synth_data);
 int synth_read_rt_to_ui_messages(SYNTH_DATA* synth_data);
-//initiate the synth data
-//owner_tag is what the caller pairs with an oscillator's uid to name the owner
-//of that oscillator's ports
-SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, const char* cx_name, unsigned int with_metronome,
-			void* audio_backend, uint64_t owner_tag);
+//initiate the synth data, one graph node per oscillator, owned by (owner_tag,
+//the oscillator's uid). transport is for app_jack_return_transport_rt, until 2T
+SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, unsigned int with_metronome,
+			GRAPH* graph, void* transport, uint64_t owner_tag);
 //process one oscillator (a synth_osc_return handle) on the [audio-thread].
 //true if it wrote its outputs this cycle
 bool synth_osc_process_rt(void* osc, NFRAMES_T nframes);
-//activate the audio ports
-int synth_activate_backend_ports(SYNTH_DATA* synth_data, SYNTH_OSC* osc);
 //return how many oscillators there are
 size_t synth_return_osc_num(SYNTH_DATA* synth_data);
 //return the osc_num-th oscillator as an opaque handle (NULL if out of range).

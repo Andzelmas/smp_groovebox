@@ -1,5 +1,4 @@
 #include "clap_plugins.h"
-#include "../jack_funcs/jack_funcs.h"
 #include "../types.h"
 #include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
@@ -55,6 +54,8 @@ extern char **environ;
 // to this module - the name leaves as a const char* so callers need no matching
 // define.
 #define CLAP_PLUGIN_NAME_MAX 128
+// a graph port's name: the CLAP port's, and its channel
+#define CLAP_PORT_NAME_MAX (CLAP_NAME_SIZE + 16)
 
 // size of the input and output event lists. The input one holds the param
 // changes and the note ports' events, the output one the plugin's events but
@@ -108,30 +109,29 @@ typedef struct _plugin_list {
     INTERN_TABLE ids;
 } PLUGIN_LIST;
 
-// sys port struct, that holds info about the port and a backend audio client
-// port equivalent
-typedef struct _clap_plug_port_sys {
+// the graph ports of one clap audio port, one per channel
+typedef struct _clap_plug_port_graph {
     uint32_t channel_count; // how many channels on one clap plugin port (the
-                            // sys_ports array will be the same size)
-    void **sys_ports; // sys_port array per port channel - this will be exposed
-                      // to the system, where user can connect other ports
-} CLAP_PLUG_PORT_SYS;
+                            // graph_ports array will be the same size)
+    GRAPH_PORT **graph_ports;
+} CLAP_PLUG_PORT_GRAPH;
 
-// port struct that holds the sys port array and clap_audio_buffer_t array
+// port struct that holds the graph port array and clap_audio_buffer_t array
 typedef struct _clap_plug_port {
     uint32_t ports_count;
-    CLAP_PLUG_PORT_SYS *sys_port_array;
+    CLAP_PLUG_PORT_GRAPH *graph_port_array;
     clap_audio_buffer_t *audio_ports;
 } CLAP_PLUG_PORT;
 
-// note port struct holds the audio client sys ports and info about the ports
+// note port struct holds the graph ports and info about the ports
 typedef struct _clap_plug_note_port {
     uint32_t ports_count;
-    void **sys_ports;
+    GRAPH_PORT **graph_ports;
     clap_id *ids;
     uint32_t *supported_dialects;
     uint32_t *preferred_dialects;
-    MIDI_BUF **midi_bufs; // the events of each port this cycle
+    // [audio-thread] the graph ports' buffers this cycle
+    MIDI_BUF **midi_bufs;
 } CLAP_PLUG_NOTE_PORT;
 
 // the single clap plugin struct
@@ -169,9 +169,10 @@ typedef struct _clap_plug_plug {
                                 // struct has this CLAP_PLUG_PLUG in the
                                 // host_data var as (void*)
     CLAP_PLUG_INFO *plug_data;  // CLAP_PLUG_INFO struct address for convenience
-    // CLAP_PLUG_PORT holds an array of sys backend audio ports (to connect to
-    // jack for example) and the clap_audio_buffer_t arrays, to send to plugin
-    // process function
+    // the plugin's node, its audio and note ports are on it
+    GRAPH_NODE *node;
+    // CLAP_PLUG_PORT holds the graph ports and the clap_audio_buffer_t
+    // arrays, to send to plugin process function
     CLAP_PLUG_PORT input_ports;
     CLAP_PLUG_PORT output_ports;
     // input and output note ports
@@ -234,12 +235,9 @@ typedef struct _clap_plug_info {
         ext_params; // struct that holds functions for the params extension
     clap_host_preset_load_t ext_preset_load; // struct that holds functions for
                                              // the preset-load extension
-    // address of the audio client
-    void *audio_backend;
-    // paired with a plugin's uid when registering that plugin's ports
+    GRAPH *graph;
+    // paired with a plugin's uid as its node's owner
     uint64_t owner_tag;
-    // this cycle's nframes, for the stop callback [audio-thread]
-    unsigned int rt_nframes;
 } CLAP_PLUG_INFO;
 
 // return the clap_plug_plug id on the plugins array that has the same
@@ -270,28 +268,24 @@ clap_plug_return_plug_id_with_same_plug_entry(CLAP_PLUG_INFO *plug_data,
     return return_id;
 }
 
-static int clap_plug_destroy_sys_ports(CLAP_PLUG_INFO *plug_data,
-                                       CLAP_PLUG_PORT_SYS *ports_sys,
-                                       uint32_t port_count) {
+static int clap_plug_destroy_graph_ports(CLAP_PLUG_INFO *plug_data,
+                                         CLAP_PLUG_PORT_GRAPH *ports_graph,
+                                         uint32_t port_count) {
     if (!plug_data)
         return -1;
-    if (!ports_sys)
+    if (!ports_graph)
         return -1;
     for (uint32_t i = 0; i < port_count; i++) {
-        CLAP_PLUG_PORT_SYS *cur_sys_port = &(ports_sys[i]);
-        uint32_t channels = cur_sys_port->channel_count;
-        cur_sys_port->channel_count = 0;
-        if (!cur_sys_port->sys_ports)
+        CLAP_PLUG_PORT_GRAPH *cur_port = &(ports_graph[i]);
+        uint32_t channels = cur_port->channel_count;
+        cur_port->channel_count = 0;
+        if (!cur_port->graph_ports)
             continue;
-        for (uint32_t chan = 0; chan < channels; chan++) {
-            if (!cur_sys_port->sys_ports[chan])
-                continue;
-            app_jack_unregister_port(plug_data->audio_backend,
-                                     cur_sys_port->sys_ports[chan]);
-        }
-        free(cur_sys_port->sys_ports);
+        for (uint32_t chan = 0; chan < channels; chan++)
+            graph_port_remove(plug_data->graph, cur_port->graph_ports[chan]);
+        free(cur_port->graph_ports);
     }
-    free(ports_sys);
+    free(ports_graph);
     return 0;
 }
 
@@ -328,33 +322,29 @@ static int clap_plug_destroy_ports(CLAP_PLUG_INFO *plug_data,
         return -1;
     if (!port)
         return -1;
-    clap_plug_destroy_sys_ports(plug_data, port->sys_port_array,
-                                port->ports_count);
-    port->sys_port_array = NULL;
+    clap_plug_destroy_graph_ports(plug_data, port->graph_port_array,
+                                  port->ports_count);
+    port->graph_port_array = NULL;
     clap_plug_destroy_audio_ports(port->audio_ports, port->ports_count);
     port->audio_ports = NULL;
     port->ports_count = 0;
     return 0;
 }
 
+// the port's name, with _chan_num for an audio channel (chan_num >= 0)
 static int clap_plug_port_name_create(int name_size, char *full_name,
-                                      int plug_id, const char *plug_inst_name,
                                       const char *port_name, int chan_num) {
-    if (!plug_inst_name || !port_name)
-        return -1;
-    if (plug_id < 0)
+    if (!port_name)
         return -1;
     if (name_size <= 0)
         return -1;
     if (!full_name)
         return -1;
     if (chan_num < 0) {
-        snprintf(full_name, name_size, "%.2d_%s_|%s", plug_id, plug_inst_name,
-                 port_name);
+        snprintf(full_name, name_size, "%s", port_name);
         return 0;
     }
-    snprintf(full_name, name_size, "%.2d_%s_|%s_%d", plug_id, plug_inst_name,
-             port_name, chan_num);
+    snprintf(full_name, name_size, "%s_%d", port_name, chan_num);
     return 0;
 }
 
@@ -369,9 +359,6 @@ static int clap_plug_ports_rename(CLAP_PLUG_INFO *plug_data,
         return -1;
     if (!plug->plug_inst)
         return -1;
-    int port_name_size = app_jack_port_name_size();
-    if (port_name_size <= 0)
-        return -1;
     // TODO in clap plugin source code warns to scan ports only if the plugin is
     // deactivated, but the rescan flag of rename allows to rescan the ports
     // right away?
@@ -385,22 +372,21 @@ static int clap_plug_ports_rename(CLAP_PLUG_INFO *plug_data,
         return -1;
 
     for (uint32_t i = 0; i < port_count; i++) {
-        CLAP_PLUG_PORT_SYS cur_sys_port = ports->sys_port_array[i];
-        if (!cur_sys_port.sys_ports)
+        CLAP_PLUG_PORT_GRAPH cur_graph_port = ports->graph_port_array[i];
+        if (!cur_graph_port.graph_ports)
             continue;
         clap_audio_port_info_t port_info;
         if (!clap_plug_ports->get(plug->plug_inst, i, 0, &port_info))
             continue;
-        for (uint32_t chan = 0; chan < cur_sys_port.channel_count; chan++) {
-            char full_port_name[port_name_size];
-            if (clap_plug_port_name_create(
-                    port_name_size, full_port_name, plug->id,
-                    plug->plug_inst->desc->name, port_info.name, chan) != 0)
+        for (uint32_t chan = 0; chan < cur_graph_port.channel_count; chan++) {
+            char full_port_name[CLAP_PORT_NAME_MAX];
+            if (clap_plug_port_name_create(CLAP_PORT_NAME_MAX, full_port_name,
+                                           port_info.name, chan) != 0)
                 continue;
-            if (app_jack_port_rename(plug_data->audio_backend,
-                                     cur_sys_port.sys_ports[chan],
-                                     full_port_name) != 0)
+            if (!cur_graph_port.graph_ports[chan])
                 continue;
+            graph_port_rename(plug_data->graph,
+                              cur_graph_port.graph_ports[chan], full_port_name);
         }
     }
     return 0;
@@ -419,9 +405,6 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO *plug_data, int id,
         return -1;
     if (!plug->plug_inst)
         return -1;
-    int port_name_size = app_jack_port_name_size();
-    if (port_name_size <= 0)
-        return -1;
 
     const clap_plugin_audio_ports_t *clap_plug_ports =
         plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_AUDIO_PORTS);
@@ -433,22 +416,22 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO *plug_data, int id,
         clap_plug_ports->count(plug->plug_inst, input_ports);
     if (clap_ports_count <= 0)
         return 0;
-    // create the sys port and clap audio buffer port arrays
-    port->sys_port_array =
-        malloc(sizeof(CLAP_PLUG_PORT_SYS) * clap_ports_count);
-    if (!port->sys_port_array)
+    // create the graph port and clap audio buffer port arrays
+    port->graph_port_array =
+        malloc(sizeof(CLAP_PLUG_PORT_GRAPH) * clap_ports_count);
+    if (!port->graph_port_array)
         return -1;
     port->audio_ports = malloc(sizeof(clap_audio_buffer_t) * clap_ports_count);
     if (!port->audio_ports) {
-        clap_plug_destroy_sys_ports(plug_data, port->sys_port_array, 0);
-        port->sys_port_array = NULL;
+        clap_plug_destroy_graph_ports(plug_data, port->graph_port_array, 0);
+        port->graph_port_array = NULL;
         return -1;
     }
 
     for (uint32_t i = 0; i < clap_ports_count; i++) {
-        CLAP_PLUG_PORT_SYS *cur_sys_port = &(port->sys_port_array[i]);
-        cur_sys_port->channel_count = 0;
-        cur_sys_port->sys_ports = NULL;
+        CLAP_PLUG_PORT_GRAPH *cur_graph_port = &(port->graph_port_array[i]);
+        cur_graph_port->channel_count = 0;
+        cur_graph_port->graph_ports = NULL;
         clap_audio_buffer_t *cur_clap_port = &(port->audio_ports[i]);
         cur_clap_port->channel_count = 0;
         cur_clap_port->constant_mask = 0;
@@ -461,26 +444,25 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO *plug_data, int id,
             continue;
         uint32_t channels = port_info.channel_count;
 
-        // create data for the backend audio client ports
-        cur_sys_port->sys_ports = malloc(sizeof(void *) * channels);
-        if (cur_sys_port->sys_ports) {
+        // a graph port per channel. One that fails stays NULL - silence in,
+        // nothing out
+        cur_graph_port->graph_ports = malloc(sizeof(GRAPH_PORT *) * channels);
+        if (cur_graph_port->graph_ports) {
             for (uint32_t chan = 0; chan < channels; chan++) {
-                cur_sys_port->sys_ports[chan] = NULL;
-                char full_port_name[port_name_size];
-                if (clap_plug_port_name_create(port_name_size, full_port_name,
-                                               id, plug->plug_inst->desc->name,
-                                               port_info.name, chan) != 0)
+                cur_graph_port->graph_ports[chan] = NULL;
+                char full_port_name[CLAP_PORT_NAME_MAX];
+                if (clap_plug_port_name_create(CLAP_PORT_NAME_MAX,
+                                               full_port_name, port_info.name,
+                                               chan) != 0)
                     continue;
                 unsigned int io_flow = PORT_FLOW_OUTPUT;
                 if (input_ports == 1)
                     io_flow = PORT_FLOW_INPUT;
-                cur_sys_port->sys_ports[chan] = app_jack_create_port_on_client(
-                    plug_data->audio_backend, PORT_TYPE_AUDIO, io_flow,
-                    full_port_name, plug_data->owner_tag, plug->uid);
-                if (!cur_sys_port->sys_ports[chan])
-                    continue;
+                cur_graph_port->graph_ports[chan] =
+                    graph_port_create(plug_data->graph, plug->node,
+                                      PORT_TYPE_AUDIO, io_flow, full_port_name);
             }
-            cur_sys_port->channel_count = channels;
+            cur_graph_port->channel_count = channels;
         }
 
         // create data for the clap_audio_buffer
@@ -520,9 +502,6 @@ static int clap_plug_note_ports_rename(CLAP_PLUG_INFO *plug_data,
         return -1;
     if (!plug->plug_inst)
         return -1;
-    int port_name_size = app_jack_port_name_size();
-    if (port_name_size <= 0)
-        return -1;
     // TODO in clap plugin source code warns to scan ports only if the plugin is
     // deactivated, but the rescan flag of rename allows to rescan the ports
     // right away?
@@ -539,20 +518,18 @@ static int clap_plug_note_ports_rename(CLAP_PLUG_INFO *plug_data,
         return -1;
 
     for (uint32_t i = 0; i < port_count; i++) {
-        void *cur_sys_port = cur_port.sys_ports[i];
-        if (!cur_sys_port)
+        GRAPH_PORT *cur_graph_port = cur_port.graph_ports[i];
+        if (!cur_graph_port)
             continue;
         clap_note_port_info_t note_port_info;
         if (!clap_note_ports->get(plug->plug_inst, i, input_ports,
                                   &note_port_info))
             continue;
-        char full_port_name[port_name_size];
-        if (clap_plug_port_name_create(port_name_size, full_port_name, plug->id,
-                                       plug->plug_inst->desc->name,
+        char full_port_name[CLAP_PORT_NAME_MAX];
+        if (clap_plug_port_name_create(CLAP_PORT_NAME_MAX, full_port_name,
                                        note_port_info.name, -1) != 0)
             continue;
-        app_jack_port_rename(plug_data->audio_backend, cur_sys_port,
-                             full_port_name);
+        graph_port_rename(plug_data->graph, cur_graph_port, full_port_name);
     }
     return 0;
 }
@@ -565,30 +542,20 @@ static int clap_plug_note_ports_destroy(CLAP_PLUG_INFO *plug_data,
     if (!note_port)
         return -1;
 
-    for (uint32_t i = 0; i < note_port->ports_count; i++) {
-        void *cur_sys_port = note_port->sys_ports[i];
-        if (cur_sys_port)
-            app_jack_unregister_port(plug_data->audio_backend, cur_sys_port);
-        if (note_port->ids)
-            free(note_port->ids);
-        note_port->ids = NULL;
-        if (note_port->preferred_dialects)
-            free(note_port->preferred_dialects);
-        note_port->preferred_dialects = NULL;
-        if (note_port->supported_dialects)
-            free(note_port->supported_dialects);
-        note_port->supported_dialects = NULL;
-    }
-    if (note_port->midi_bufs) {
-        for (uint32_t i = 0; i < note_port->ports_count; i++)
-            midi_buf_free(note_port->midi_bufs[i]);
-        free(note_port->midi_bufs);
-    }
+    for (uint32_t i = 0; note_port->graph_ports && i < note_port->ports_count;
+         i++)
+        graph_port_remove(plug_data->graph, note_port->graph_ports[i]);
+    free(note_port->graph_ports);
+    note_port->graph_ports = NULL;
+    free(note_port->ids);
+    note_port->ids = NULL;
+    free(note_port->preferred_dialects);
+    note_port->preferred_dialects = NULL;
+    free(note_port->supported_dialects);
+    note_port->supported_dialects = NULL;
+    free(note_port->midi_bufs);
     note_port->midi_bufs = NULL;
     note_port->ports_count = 0;
-    if (note_port->sys_ports)
-        free(note_port->sys_ports);
-    note_port->sys_ports = NULL;
     return 0;
 }
 
@@ -604,9 +571,6 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO *plug_data, int id,
         return -1;
     if (!plug->plug_inst)
         return -1;
-    int port_name_size = app_jack_port_name_size();
-    if (port_name_size <= 0)
-        return -1;
 
     const clap_plugin_note_ports_t *clap_plug_note_ports =
         plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_NOTE_PORTS);
@@ -618,29 +582,22 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO *plug_data, int id,
         clap_plug_note_ports->count(plug->plug_inst, input_ports);
     if (clap_ports_count <= 0)
         return 0;
-    // create the sys port pointer and other arrays per note port
+    // create the graph port pointer and other arrays per note port
     CLAP_PLUG_NOTE_PORT *note_port = &(plug->output_note_ports);
     if (input_ports)
         note_port = &(plug->input_note_ports);
 
-    note_port->sys_ports = calloc(clap_ports_count, sizeof(void *));
+    note_port->graph_ports = calloc(clap_ports_count, sizeof(GRAPH_PORT *));
     note_port->ports_count = clap_ports_count;
     note_port->ids = calloc(clap_ports_count, sizeof(clap_id));
     note_port->supported_dialects = calloc(clap_ports_count, sizeof(uint32_t));
     note_port->preferred_dialects = calloc(clap_ports_count, sizeof(uint32_t));
     note_port->midi_bufs = calloc(clap_ports_count, sizeof(MIDI_BUF *));
-    if (!note_port->sys_ports || !note_port->ids ||
+    if (!note_port->graph_ports || !note_port->ids ||
         !note_port->supported_dialects || !note_port->preferred_dialects ||
         !note_port->midi_bufs) {
         clap_plug_note_ports_destroy(plug_data, note_port);
         return -1;
-    }
-    for (uint32_t i = 0; i < clap_ports_count; i++) {
-        note_port->midi_bufs[i] = midi_buf_new(MIDI_PORT_BUF_SIZE);
-        if (!note_port->midi_bufs[i]) {
-            clap_plug_note_ports_destroy(plug_data, note_port);
-            return -1;
-        }
     }
 
     for (uint32_t i = 0; i < clap_ports_count; i++) {
@@ -648,17 +605,17 @@ static int clap_plug_note_ports_create(CLAP_PLUG_INFO *plug_data, int id,
         if (!clap_plug_note_ports->get(plug->plug_inst, i, input_ports,
                                        &note_port_info))
             continue;
-        char full_port_name[port_name_size];
-        if (clap_plug_port_name_create(port_name_size, full_port_name, id,
-                                       plug->plug_inst->desc->name,
+        char full_port_name[CLAP_PORT_NAME_MAX];
+        if (clap_plug_port_name_create(CLAP_PORT_NAME_MAX, full_port_name,
                                        note_port_info.name, -1) != 0)
             continue;
         unsigned int io_flow = PORT_FLOW_OUTPUT;
         if (input_ports == 1)
             io_flow = PORT_FLOW_INPUT;
-        note_port->sys_ports[i] = app_jack_create_port_on_client(
-            plug_data->audio_backend, PORT_TYPE_MIDI, io_flow, full_port_name,
-            plug_data->owner_tag, plug->uid);
+        // one that fails stays NULL - its buffer is NULL, nothing in or out
+        note_port->graph_ports[i] =
+            graph_port_create(plug_data->graph, plug->node, PORT_TYPE_MIDI,
+                              io_flow, full_port_name);
         note_port->ids[i] = note_port_info.id;
         note_port->preferred_dialects[i] = note_port_info.preferred_dialect;
         note_port->supported_dialects[i] = note_port_info.supported_dialects;
@@ -1383,6 +1340,8 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     // clean the note ports
     clap_plug_note_ports_destroy(plug_data, &(plug->input_note_ports));
     clap_plug_note_ports_destroy(plug_data, &(plug->output_note_ports));
+    graph_node_remove(plug_data->graph, plug->node);
+    plug->node = NULL;
     // clean the event structs
     clap_input_events_t *in_events = &(plug->input_events);
     ub_clean((UB_EVENT *)in_events->ctx);
@@ -1510,6 +1469,8 @@ static int clap_plug_activate_start_processing(void *user_data) {
         }
     }
     plug->plug_inst_activated = 1;
+    // its first cycle already runs a plan with its ports
+    graph_plan_update(plug_data->graph);
     // send message to the audio thread that the plugin can be started to
     // process and wait for it to start
     context_sub_wait_for_start(plug_data->control_data, (void *)plug);
@@ -1715,35 +1676,18 @@ static int clap_plug_start_process(void *user_data) {
     return 0;
 }
 
-// [audio-thread] empty the output note ports' MIDI_BUFs for a cycle
-static void clap_note_outs_clear(CLAP_PLUG_NOTE_PORT *note_ports,
-                                 unsigned int nframes) {
+// [audio-thread] point midi_bufs at the graph ports' buffers this cycle
+static void clap_note_ports_bufs_rt(CLAP_PLUG_NOTE_PORT *note_ports) {
     for (uint32_t i = 0; note_ports->midi_bufs && i < note_ports->ports_count;
          i++)
-        midi_buf_clear(note_ports->midi_bufs[i], nframes);
-}
-
-// [audio-thread] every cycle - a MIDI out nobody writes repeats its last
-// events
-static void clap_note_outs_write(CLAP_PLUG_NOTE_PORT *note_ports,
-                                 unsigned int nframes) {
-    for (uint32_t i = 0; note_ports->midi_bufs && i < note_ports->ports_count;
-         i++)
-        app_jack_midi_out_rt(note_ports->sys_ports[i], nframes,
-                             note_ports->midi_bufs[i]);
+        note_ports->midi_bufs[i] =
+            graph_port_midi_rt(note_ports->graph_ports[i]);
 }
 
 static int clap_plug_stop_process(void *user_data) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)user_data;
     if (!plug)
         return -1;
-    // a stopped plugin's ports belong to [main-thread], so its MIDI outs are
-    // emptied once here, not every cycle
-    if (plug->plug_inst_processing != 0) {
-        unsigned int nframes = plug->plug_data->rt_nframes;
-        clap_note_outs_clear(&(plug->output_note_ports), nframes);
-        clap_note_outs_write(&(plug->output_note_ports), nframes);
-    }
 
     // if plugin is sleeping stop it completely, since when it is sleeping
     // [audio-thread] can still access some parts of the CLAP_PLUG_PLUG struct
@@ -1764,15 +1708,13 @@ static int clap_plug_stop_process(void *user_data) {
     return 0;
 }
 
-int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data,
-                                unsigned int nframes) {
+int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data) {
     // this is a local thread var its false on [main-thread] and true on
     // [audio-thread]
     is_audio_thread = true;
 
     if (!plug_data)
         return -1;
-    plug_data->rt_nframes = nframes;
     // process the sys messages (stop, start plugin and similar)
     context_sub_process_rt(plug_data->control_data);
 
@@ -1788,18 +1730,6 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data,
     return 0;
 }
 
-// [main-thread]
-static void clap_plug_note_ports_drops_log(CLAP_PLUG_PLUG *plug,
-                                           CLAP_PLUG_NOTE_PORT *note_ports) {
-    for (uint32_t i = 0; note_ports->midi_bufs && i < note_ports->ports_count;
-         i++) {
-        uint32_t dropped = midi_buf_dropped_take(note_ports->midi_bufs[i]);
-        if (dropped > 0)
-            log_append_logfile("%s note port %u: %u MIDI events dropped\n",
-                               plug->name, i, dropped);
-    }
-}
-
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
     if (!plug_data)
         return -1;
@@ -1812,9 +1742,6 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
         if (!cur_plug->plug_inst)
             continue;
         param_msgs_process(cur_plug->plug_params, 0);
-        clap_plug_note_ports_drops_log(cur_plug, &(cur_plug->input_note_ports));
-        clap_plug_note_ports_drops_log(cur_plug,
-                                       &(cur_plug->output_note_ports));
         unsigned int in_dropped =
             atomic_exchange(&cur_plug->in_events_dropped, 0U);
         if (in_dropped > 0)
@@ -1836,9 +1763,9 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
 
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
-                               clap_plug_status_t *plug_error,
-                               void *audio_backend, uint64_t owner_tag) {
-    if (!audio_backend)
+                               clap_plug_status_t *plug_error, GRAPH *graph,
+                               uint64_t owner_tag) {
+    if (!graph)
         return NULL;
     // clap_plug_init is called on [main-thread]
     is_main_thread = true;
@@ -1849,7 +1776,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         return NULL;
     }
     memset(plug_data, '\0', sizeof(*plug_data));
-    plug_data->audio_backend = audio_backend;
+    plug_data->graph = graph;
     plug_data->owner_tag = owner_tag;
     plug_data->clap_plugin_list.plugin_list = NULL;
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
@@ -2506,6 +2433,10 @@ uint32_t clap_plug_load_and_activate(void *plugin_item) {
     // from as early as init - so it has to exist before anything else runs.
     // A slot keeps its last uid until this reassigns it
     plug->uid = ++plug_data->next_plug_uid;
+    plug->node = graph_node_add(plug_data->graph, plug_data->owner_tag,
+                                plug->uid, clap_plug_plugin_process_rt, plug);
+    if (!plug->node)
+        return 0;
 
     snprintf(plug->plug_path, MAX_PATH_STRING, "%s", plugin_list_item->path);
     clap_plug_entry_open(plug_data, plug);
@@ -2613,7 +2544,7 @@ uint32_t clap_plug_load_and_activate(void *plugin_item) {
         return 0;
     }
 
-    // Initiate the note ports on the audio client backend
+    // Initiate the note ports on the graph
     int note_port_out_err = clap_plug_note_ports_create(plug_data, plug->id, 0);
     int note_port_in_err = clap_plug_note_ports_create(plug_data, plug->id, 1);
     if (note_port_in_err == -1 || note_port_out_err == -1) {
@@ -2713,25 +2644,26 @@ static int clap_prepare_input_ports(CLAP_PLUG_INFO *plug_data,
     // no ports is quiet, not an error
     if (input_ports->ports_count == 0)
         return 0;
-    if (!input_ports->sys_port_array)
+    if (!input_ports->graph_port_array)
         return -1;
     if (!input_ports->audio_ports)
         return -1;
     int not_quiet = 0;
     for (uint32_t port = 0; port < input_ports->ports_count; port++) {
-        CLAP_PLUG_PORT_SYS cur_port_sys = input_ports->sys_port_array[port];
+        CLAP_PLUG_PORT_GRAPH cur_port_graph =
+            input_ports->graph_port_array[port];
         clap_audio_buffer_t cur_clap_port = input_ports->audio_ports[port];
         // TODO nothing is done with the latency property
-        uint32_t channels = cur_port_sys.channel_count;
+        uint32_t channels = cur_port_graph.channel_count;
         for (uint32_t chan = 0; chan < channels; chan++) {
-            SAMPLE_T *sys_buffer = NULL;
-            if (cur_port_sys.sys_ports)
-                sys_buffer = app_jack_get_buffer_rt(
-                    cur_port_sys.sys_ports[chan], nframes);
+            const SAMPLE_T *graph_buffer = NULL;
+            if (cur_port_graph.graph_ports)
+                graph_buffer =
+                    graph_port_audio_rt(cur_port_graph.graph_ports[chan]);
             for (unsigned int frame = 0; frame < nframes; frame++) {
                 SAMPLE_T cur_frame = 0.0;
-                if (sys_buffer)
-                    cur_frame = sys_buffer[frame];
+                if (graph_buffer)
+                    cur_frame = graph_buffer[frame];
                 if (not_quiet == 0 && cur_frame != 0)
                     not_quiet = 1;
 #if SAMPLE_T_AS_DOUBLE == 1
@@ -2748,12 +2680,12 @@ static int clap_prepare_input_ports(CLAP_PLUG_INFO *plug_data,
     return not_quiet;
 }
 
-// process the output audio ports, by copying them to the system output ports
+// process the output audio ports, by copying them to the graph output ports
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
 static int clap_prepare_output_ports(CLAP_PLUG_INFO *plug_data,
                                      CLAP_PLUG_PORT *output_ports,
-                                     unsigned int nframes, bool fill_zeroes) {
+                                     unsigned int nframes) {
     if (!plug_data)
         return -1;
     if (!output_ports)
@@ -2761,15 +2693,16 @@ static int clap_prepare_output_ports(CLAP_PLUG_INFO *plug_data,
     // no ports is quiet, not an error
     if (output_ports->ports_count == 0)
         return 0;
-    if (!output_ports->sys_port_array)
+    if (!output_ports->graph_port_array)
         return -1;
     if (!output_ports->audio_ports)
         return -1;
     int not_quiet = 0;
     for (uint32_t port = 0; port < output_ports->ports_count; port++) {
-        CLAP_PLUG_PORT_SYS cur_port_sys = output_ports->sys_port_array[port];
+        CLAP_PLUG_PORT_GRAPH cur_port_graph =
+            output_ports->graph_port_array[port];
         clap_audio_buffer_t clap_port = output_ports->audio_ports[port];
-        uint32_t channels = cur_port_sys.channel_count;
+        uint32_t channels = cur_port_graph.channel_count;
         // TODO nothing is done with the latency property
         for (uint32_t chan = 0; chan < channels; chan++) {
             SAMPLE_T *clap_buffer = NULL;
@@ -2780,21 +2713,21 @@ static int clap_prepare_output_ports(CLAP_PLUG_INFO *plug_data,
             if (clap_port.data32)
                 clap_buffer = clap_port.data32[chan];
 #endif
-            SAMPLE_T *sys_buffer = NULL;
-            if (cur_port_sys.sys_ports)
-                sys_buffer = app_jack_get_buffer_rt(
-                    cur_port_sys.sys_ports[chan], nframes);
-            if (!sys_buffer)
+            SAMPLE_T *graph_buffer = NULL;
+            if (cur_port_graph.graph_ports)
+                graph_buffer =
+                    graph_port_audio_rt(cur_port_graph.graph_ports[chan]);
+            if (!graph_buffer)
                 continue;
-            memset(sys_buffer, '\0', sizeof(SAMPLE_T) * nframes);
-            if (!clap_buffer || fill_zeroes)
+            memset(graph_buffer, '\0', sizeof(SAMPLE_T) * nframes);
+            if (!clap_buffer)
                 continue;
-            // if the buffer is constant leave the sys port buffer filled with
+            // if the buffer is constant leave the graph buffer filled with
             // zeroes
             if ((clap_port.constant_mask & (1 << chan)) != 0)
                 continue;
             for (unsigned int frame = 0; frame < nframes; frame++) {
-                sys_buffer[frame] = clap_buffer[frame];
+                graph_buffer[frame] = clap_buffer[frame];
                 if (clap_buffer[frame] != 0 && not_quiet == 0)
                     not_quiet = 1;
             }
@@ -2894,7 +2827,6 @@ static bool clap_input_events_note_add(CLAP_PLUG_PLUG *plug, UB_EVENT *ub_in,
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
 static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
-                                     unsigned int nframes,
                                      CLAP_PLUG_PLUG *plug) {
     if (!plug_data)
         return -1;
@@ -2914,14 +2846,12 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
     CLAP_PLUG_NOTE_PORT *note_ports = &(plug->input_note_ports);
     if (note_ports->ports_count == 0)
         return not_quiet;
-    for (uint32_t port = 0; port < note_ports->ports_count; port++) {
-        app_jack_midi_in_rt(note_ports->sys_ports[port], nframes,
-                            note_ports->midi_bufs[port]);
-        // past what the merge walks
-        if (port >= MIDI_BUF_MERGE_MAX)
-            atomic_fetch_add(&plug->in_events_dropped,
-                             midi_buf_count(note_ports->midi_bufs[port]));
-    }
+    clap_note_ports_bufs_rt(note_ports);
+    // past what the merge walks
+    for (uint32_t port = MIDI_BUF_MERGE_MAX; port < note_ports->ports_count;
+         port++)
+        atomic_fetch_add(&plug->in_events_dropped,
+                         midi_buf_count(note_ports->midi_bufs[port]));
     // every port's events in time order
     MIDI_BUF_MERGE_ITER it = midi_buf_merge_iter(
         (const MIDI_BUF *const *)note_ports->midi_bufs, note_ports->ports_count);
@@ -2932,12 +2862,6 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
             not_quiet = 1;
     }
     return not_quiet;
-}
-
-void *clap_plug_plugin_slot(CLAP_PLUG_INFO *plug_data, unsigned int slot) {
-    if (!plug_data || slot >= MAX_INSTANCES)
-        return NULL;
-    return (void *)&(plug_data->plugins[slot]);
 }
 
 bool clap_plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
@@ -2954,7 +2878,7 @@ bool clap_plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     _process.frames_count = nframes;
     _process.transport = NULL;
 
-    // copy sys input audio buffers to clap input audio buffers
+    // copy the graph input buffers to clap input audio buffers
     int in_audio_not_quiet =
         clap_prepare_input_ports(plug_data, &(plug->input_ports), nframes);
     _process.audio_inputs = NULL;
@@ -2968,51 +2892,44 @@ bool clap_plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     _process.audio_outputs_count = plug->output_ports.ports_count;
 
     // write messages from midi, parameters and similar to the input events
-    int in_event_not_quiet =
-        clap_input_events_prepare(plug_data, nframes, plug);
+    int in_event_not_quiet = clap_input_events_prepare(plug_data, plug);
     _process.in_events = &(plug->input_events);
 
-    // reset the output event array and the note outs the plugin pushes to
+    // reset the output event array, the note outs the plugin pushes to were
+    // cleared by the plan
     ub_list_reset(plug->out_list);
-    clap_note_outs_clear(&(plug->output_note_ports), nframes);
+    clap_note_ports_bufs_rt(&(plug->output_note_ports));
     _process.out_events = &(plug->output_events);
 
     // the plugin is sleeping, check if it needs to wake up
     if (plug->plug_inst_processing == 2) {
-        // if audio or event input was not quiet from the system ports start
+        // if audio or event input was not quiet from the graph ports start
         // the plugin and continue the process
         if ((in_audio_not_quiet != 0 || in_event_not_quiet != 0) &&
             plug->plug_inst->start_processing(plug->plug_inst))
             plug->plug_inst_processing = 1;
-        if (plug->plug_inst_processing == 2) {
-            clap_note_outs_write(&(plug->output_note_ports), nframes);
+        if (plug->plug_inst_processing == 2)
             return false;
-        }
     }
 
     clap_process_status clap_status =
         plug->plug_inst->process(plug->plug_inst, &_process);
 
     if (clap_status == CLAP_PROCESS_ERROR) {
-        // process failed so fill the system output with zeroes and do
-        // nothing with output events
-        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
-                                  true);
-        clap_note_outs_clear(&(plug->output_note_ports), nframes);
-        clap_note_outs_write(&(plug->output_note_ports), nframes);
+        // process failed, false - the plan empties the outputs, the output
+        // events are left unread
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              is_audio_thread,
                              "ERROR Processing discard buffer\n");
         return false;
     }
     if (clap_status == CLAP_PROCESS_CONTINUE) {
-        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
-                                  false);
+        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes);
         clap_output_events_read(plug_data, plug);
     }
     if (clap_status == CLAP_PROCESS_CONTINUE_IF_NOT_QUIET) {
         int not_quiet_audio = clap_prepare_output_ports(
-            plug_data, &(plug->output_ports), nframes, false);
+            plug_data, &(plug->output_ports), nframes);
         int not_quiet_events = clap_output_events_read(plug_data, plug);
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              is_audio_thread, "Process if NOT_QUIET\n");
@@ -3026,22 +2943,19 @@ bool clap_plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     if (clap_status == CLAP_PROCESS_TAIL) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              is_audio_thread, "Process if TAIL\n");
-        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
-                                  false);
+        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes);
         clap_output_events_read(plug_data, plug);
         // TODO implement tail extension
     }
     if (clap_status == CLAP_PROCESS_SLEEP) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              is_audio_thread, "SLEEP for now\n");
-        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes,
-                                  false);
+        clap_prepare_output_ports(plug_data, &(plug->output_ports), nframes);
         clap_output_events_read(plug_data, plug);
         // no need to process further so plugin goes to sleep
         plug->plug_inst->stop_processing(plug->plug_inst);
         plug->plug_inst_processing = 2;
     }
-    clap_note_outs_write(&(plug->output_note_ports), nframes);
     return true;
 }
 

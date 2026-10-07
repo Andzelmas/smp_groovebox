@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include "../engine/graph.h"
 #include "../structs.h"
 #include "../util_funcs/tree_index.h"
 #include "params.h"
@@ -14,10 +15,8 @@ typedef struct _clap_plug_info
     CLAP_PLUG_INFO; // the struct that holds all the plugin info
 
 // read the ui_to_rt messages on the [audio-thread] and call functions to stop
-// or start processing the plugin or the whole clap context. nframes is this
-// cycle's.
-int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data,
-                                unsigned int nframes);
+// or start processing the plugin or the whole clap context.
+int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data);
 
 // read the rt_to_ui messages on the [main-thread] and call functions to
 // restart, activate, write to log and similar main thread functions. some of
@@ -41,12 +40,12 @@ bool clap_plug_presets_level_at(void *plug, uint64_t branch, size_t idx,
 int clap_plug_preset_load(void *plug, uint64_t key);
 //--------------------------------------------------
 
-// initiate the main plugin data struct. owner_tag is what the caller pairs
-// with a plugin's uid to name the owner of that plugin's ports
+// initiate the main plugin data struct. A plugin is a node of graph, owned by
+// (owner_tag, the plugin's uid)
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
-                               clap_plug_status_t *plug_error,
-                               void *audio_backend, uint64_t owner_tag);
+                               clap_plug_status_t *plug_error, GRAPH *graph,
+                               uint64_t owner_tag);
 
 // Scans the clap paths and (re)builds the list of available plugins.
 // Safe to call again while plugins are loaded. A plugin keeps its key across
@@ -97,11 +96,7 @@ bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data);
 // return this plugin instance's own param container, NULL on error/none yet
 PRM_CONTAIN *clap_plug_plugin_param_container(void *plug);
 
-// the slot-th plugin slot, loaded or not; NULL past the last slot.
-// [audio-thread] safe, for the per-plugin process loop
-void *clap_plug_plugin_slot(CLAP_PLUG_INFO *plug_data, unsigned int slot);
-
-// process one plugin (a clap_plug_plugin_slot handle) on the [audio-thread].
+// the plugin's node process: process one plugin on the [audio-thread].
 // true if it wrote its outputs this cycle (false: stopped, sleeping, error)
 bool clap_plug_plugin_process_rt(void *plug, NFRAMES_T nframes);
 

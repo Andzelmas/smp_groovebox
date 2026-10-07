@@ -8,7 +8,7 @@
 #include "../util_funcs/midi_buf.h"
 #include "sampler.h"
 #include "../util_funcs/log_funcs.h"
-#include "../jack_funcs/jack_funcs.h"
+#include "../engine/graph.h"
 #include "context_control.h"
 
 //how many samples to read to SMP_SMP buffer at once
@@ -83,10 +83,7 @@ typedef struct _smp_port{
     unsigned int port_flow;
     //the name of the port
     const char* port_name;
-    //the ptr to the port itself;
-    void* sys_port;
-    //the events of a midi port this cycle, NULL for audio ports
-    MIDI_BUF* midi_buf;
+    GRAPH_PORT* graph_port;
 }SMP_PORT;
 //the drum sampler main struct that holds the samples and other data
 //Only realtime thread directly modifies and reads the SMP_SMP, non realtime thread can remove it or add
@@ -102,10 +99,9 @@ typedef struct _smp_info{
     SMP_PORT* ports;
     //number of available ports
     unsigned int num_ports;
-    //callback functions for the audio backend to manipulate ports, midi etc.
-    //the audio client data 
-    void* audio_backend;
-    //name the sampler's ports are registered under
+    GRAPH* graph;
+    //the sampler is one node, owned by (owner_tag, owner_uid)
+    GRAPH_NODE* node;
     uint64_t owner_tag;
     uint64_t owner_uid;
     //control_data struct to control sys messages between [audio-thread] and [main-thread] (stop processing sample, start processing sample and etc.)
@@ -160,13 +156,6 @@ int smp_read_rt_to_ui_messages(SMP_INFO* smp_data){
     if(!smp_data)return -1;
     context_sub_process_ui(smp_data->control_data);
 
-    for(unsigned int i = 0; i < smp_data->num_ports; i++){
-	SMP_PORT* port = &(smp_data->ports[i]);
-	uint32_t dropped = midi_buf_dropped_take(port->midi_buf);
-	if(dropped > 0)
-	    log_append_logfile("%s: %u MIDI events dropped\n", port->port_name, dropped);
-    }
-
     //read the param rt_to_ui messages and set the parameter values
     for(unsigned int i = 0; i < MAX_SAMPLES; i++){
 	SMP_SMP* smp = &(smp_data->samples[i]);
@@ -205,9 +194,12 @@ static int smp_remove_sample(SMP_INFO* smp_data, unsigned int idx){
     return 0;
 }
 
+//the sampler's node and its ports
+static int smp_ports_create(SMP_INFO* smp_data);
+
 SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 		   smp_status_t *status,
-		   void* audio_backend, uint64_t owner_tag, uint64_t owner_uid){
+		   GRAPH* graph, uint64_t owner_tag, uint64_t owner_uid){
     /*allocate memory for the smp_data struct, that will contain the other samples*/
     SMP_INFO *smp_data = (SMP_INFO*) malloc(sizeof(SMP_INFO));
     if(!smp_data){
@@ -241,18 +233,18 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 	if(i==0){
 	    smp_data->ports[i].port_flow = PORT_FLOW_INPUT;
 	    smp_data->ports[i].port_type = PORT_TYPE_MIDI;
-	    smp_data->ports[i].port_name = "sampler|midi_in";
+	    smp_data->ports[i].port_name = "midi_in";
 	   
 	}
 	if(i==1){
 	    smp_data->ports[i].port_flow = PORT_FLOW_OUTPUT;
 	    smp_data->ports[i].port_type = PORT_TYPE_AUDIO;
-	    smp_data->ports[i].port_name = "sampler|out_L";	    
+	    smp_data->ports[i].port_name = "out_L";	    
 	}
 	if(i==2){
 	    smp_data->ports[i].port_flow = PORT_FLOW_OUTPUT;
 	    smp_data->ports[i].port_type = PORT_TYPE_AUDIO;
-	    smp_data->ports[i].port_name = "sampler|out_R";	    
+	    smp_data->ports[i].port_name = "out_R";	    
 	}	
     }
     smp_data->samples_dirty = false;
@@ -274,34 +266,28 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 	 samp->samples_loaded = 0;
     }
      
-     //inititalize the callbacks from the audio backend
-     smp_data->audio_backend = audio_backend;
+     smp_data->graph = graph;
+     smp_data->node = NULL;
      smp_data->owner_tag = owner_tag;
      smp_data->owner_uid = owner_uid;
-     for(unsigned int i = 0; i < smp_data->num_ports; i++){
-	 SMP_PORT* port = &(smp_data->ports[i]);
-	 if(port->port_type != PORT_TYPE_MIDI)continue;
-	 port->midi_buf = midi_buf_new(MIDI_PORT_BUF_SIZE);
-	 if(!port->midi_buf){
-	     smp_clean_memory(smp_data);
-	     return NULL;
-	 }
+     if(smp_ports_create(smp_data) != 0){
+	 *status = smp_data_malloc_fail;
+	 smp_clean_memory(smp_data);
+	 return NULL;
      }
-     
-     smp_activate_backend_ports(smp_data);
 
      return smp_data;
 }
 
-int smp_activate_backend_ports(SMP_INFO* smp_data){
-    if(!smp_data)return -1;
-    if(!smp_data->audio_backend)return -1;
-    if(!smp_data->ports)return -1;
+static int smp_ports_create(SMP_INFO* smp_data){
+    smp_data->node = graph_node_add(smp_data->graph, smp_data->owner_tag, smp_data->owner_uid,
+				    smp_process_rt, smp_data);
+    if(!smp_data->node)return -1;
     for(unsigned int i = 0; i < smp_data->num_ports; i++){
 	SMP_PORT* cur_port = &(smp_data->ports[i]);
-	cur_port->sys_port = app_jack_create_port_on_client(smp_data->audio_backend, cur_port->port_type,
-						     cur_port->port_flow, cur_port->port_name,
-						     smp_data->owner_tag, smp_data->owner_uid);
+	cur_port->graph_port = graph_port_create(smp_data->graph, smp_data->node, cur_port->port_type,
+						 cur_port->port_flow, cur_port->port_name);
+	if(!cur_port->graph_port)return -1;
     }
     return 0;
 }
@@ -411,72 +397,80 @@ static void smp_sum_channel_buffers_rt(SMP_SMP* cur_smp, SAMPLE_T* out_L, SAMPLE
     }    
 }
 
-bool smp_process_rt(void* smp_data_ptr, NFRAMES_T nframes){
-    SMP_INFO* smp_data = (SMP_INFO*)smp_data_ptr;
-    if(!smp_data)return false;
-    SMP_PORT* midi_port = &(smp_data->ports[0]);
-    SMP_PORT* out_L_port = &(smp_data->ports[1]);
-    SMP_PORT* out_R_port = &(smp_data->ports[2]);    
-    SAMPLE_T* out_L = app_jack_get_buffer_rt(out_L_port->sys_port, nframes);
-    SAMPLE_T* out_R = app_jack_get_buffer_rt(out_R_port->sys_port, nframes);
-    if(!out_L || !out_R)return false;
-    memset(out_L, '\0', sizeof(SAMPLE_T)*nframes);
-    memset(out_R, '\0', sizeof(SAMPLE_T)*nframes); 
+bool smp_process_rt(void *smp_data_ptr, NFRAMES_T nframes) {
+    SMP_INFO *smp_data = (SMP_INFO *)smp_data_ptr;
+    if (!smp_data)
+        return false;
+    SMP_PORT *midi_port = &(smp_data->ports[0]);
+    SMP_PORT *out_L_port = &(smp_data->ports[1]);
+    SMP_PORT *out_R_port = &(smp_data->ports[2]);
+    SAMPLE_T *out_L = graph_port_audio_rt(out_L_port->graph_port);
+    SAMPLE_T *out_R = graph_port_audio_rt(out_R_port->graph_port);
+    if (!out_L || !out_R)
+        return false;
+    memset(out_L, '\0', sizeof(SAMPLE_T) * nframes);
+    memset(out_R, '\0', sizeof(SAMPLE_T) * nframes);
 
-    MIDI_BUF* midi_in = midi_port->midi_buf;
-    app_jack_midi_in_rt(midi_port->sys_port, nframes, midi_in);
-    //go through each sample
-    for(unsigned int iter = 0; iter < MAX_SAMPLES; iter++){
-	SMP_SMP* cur_smp = &(smp_data->samples[iter]);
-	if(cur_smp->processing == 0)continue;
-	if(!cur_smp->params)continue;
-        //if the sample is not ready go to another
-        if(cur_smp->buffer==NULL)continue;
-	if(cur_smp->chans<=0)continue;
-	if(cur_smp->samples_loaded <=0)continue;
-	//get the note parameter from the current samples rt_param array
-	unsigned char cur_note = (unsigned char)param_get_value(
-	    cur_smp->params, cur_smp->val_id[SMP_PARAM_NOTE], 1);
-	//the events are in frame order, so they are walked along with the frames
-	MIDI_BUF_ITER it = midi_buf_iter(midi_in);
-	MIDI_EVENT ev;
-	bool has_ev = midi_buf_next(&it, &ev);
-	for(unsigned int cur_frame = 0; cur_frame < nframes; cur_frame++){
-	    //velocity of this sample's note-on on this frame
-	    unsigned char this_vel = 0;
-	    for(; has_ev && ev.frame == cur_frame; has_ev = midi_buf_next(&it, &ev)){
-		if(midi_is_note_on(ev.data) && ev.data[1] == cur_note)
-		    this_vel = ev.data[2];
-	    }
-	    if(this_vel>0){
-		//play this sample if the midi trigger is more than 0
-		cur_smp->playing = 1;
-		//convert the midi velocity and apply to sample
-		//TODO should not be linear
-		SAMPLE_T cur_vel = fit_range(127.0, 0.0, 1.0, 0.0, (SAMPLE_T)this_vel);
-		cur_smp->midi_vel = cur_vel;
-		//sample playhead to 0
-		cur_smp->offset = 0;
-	    }
-	    //if sample is not playing go to next frame
-	    if(cur_smp->playing == 0)continue;
-	    smp_sum_channel_buffers_rt(cur_smp, &(out_L[cur_frame]), &(out_R[cur_frame]),
-				       cur_smp->midi_vel, OUTS);
-	    //increase the playhead if the playhead is at the end go to the start 
-	    //and stop playing the sample. We offset by the number of the channels, because the files are saved
-	    //in the buffer as interleaved
-	    cur_smp->offset += cur_smp->chans;
-	    if(cur_smp->offset>=cur_smp->samples_loaded){
-		cur_smp->offset = 0;
-		cur_smp->playing = 0;
-	    }
-
-	    //TODO a very simple summing here, maybe add and then normalize the out_L and out_R
-	    if(out_L[cur_frame] > 1.0) out_L[cur_frame] = 1.0;
-	    if(out_R[cur_frame] > 1.0) out_R[cur_frame] = 1.0;
-	}
+    const MIDI_BUF *midi_in = graph_port_midi_rt(midi_port->graph_port);
+    // go through each sample
+    for (unsigned int iter = 0; iter < MAX_SAMPLES; iter++) {
+        SMP_SMP *cur_smp = &(smp_data->samples[iter]);
+        if (cur_smp->processing == 0)
+            continue;
+        if (!cur_smp->params)
+            continue;
+        // if the sample is not ready go to another
+        if (cur_smp->buffer == NULL)
+            continue;
+        if (cur_smp->chans <= 0)
+            continue;
+        if (cur_smp->samples_loaded <= 0)
+            continue;
+        // get the note parameter from the current samples rt_param array
+        unsigned char cur_note = (unsigned char)param_get_value(
+            cur_smp->params, cur_smp->val_id[SMP_PARAM_NOTE], 1);
+        // the events are in frame order, so they are walked along with the
+        // frames
+        MIDI_BUF_ITER it = midi_buf_iter(midi_in);
+        MIDI_EVENT ev;
+        bool has_ev = midi_buf_next(&it, &ev);
+        for (unsigned int cur_frame = 0; cur_frame < nframes; cur_frame++) {
+            // velocity of this sample's note-on on this frame
+            unsigned char this_vel = 0;
+            for (; has_ev && ev.frame == cur_frame;
+                 has_ev = midi_buf_next(&it, &ev)) {
+                if (midi_is_note_on(ev.data) && ev.data[1] == cur_note)
+                    this_vel = ev.data[2];
+            }
+            if (this_vel > 0) {
+                // play this sample if the midi trigger is more than 0
+                cur_smp->playing = 1;
+                // convert the midi velocity and apply to sample
+                // TODO should not be linear
+                SAMPLE_T cur_vel =
+                    fit_range(127.0, 0.0, 1.0, 0.0, (SAMPLE_T)this_vel);
+                cur_smp->midi_vel = cur_vel;
+                // sample playhead to 0
+                cur_smp->offset = 0;
+            }
+            // if sample is not playing go to next frame
+            if (cur_smp->playing == 0)
+                continue;
+            smp_sum_channel_buffers_rt(cur_smp, &(out_L[cur_frame]),
+                                       &(out_R[cur_frame]), cur_smp->midi_vel,
+                                       OUTS);
+            // increase the playhead if the playhead is at the end go to the
+            // start and stop playing the sample. We offset by the number of the
+            // channels, because the files are saved in the buffer as
+            // interleaved
+            cur_smp->offset += cur_smp->chans;
+            if (cur_smp->offset >= cur_smp->samples_loaded) {
+                cur_smp->offset = 0;
+                cur_smp->playing = 0;
+            }
+        }
     }
-    
+
     return true;
 }
 
@@ -554,16 +548,11 @@ int smp_clean_memory(SMP_INFO *smp_data){
 	smp_remove_sample(smp_data, i);
     }
 
-    if(smp_data->ports){
-	for(unsigned int i = 0; i< smp_data->num_ports; i++){
-	    SMP_PORT* port = &(smp_data->ports[i]);
-	    if(port->sys_port){
-		app_jack_unregister_port(smp_data->audio_backend, port->sys_port);
-	    }
-	    midi_buf_free(port->midi_buf);
-	}
+    //its ports go with it
+    graph_node_remove(smp_data->graph, smp_data->node);
+    smp_data->node = NULL;
+    if(smp_data->ports)
 	free(smp_data->ports);
-    }
     smp_data->ports = NULL;
 
     context_sub_clean(smp_data->control_data);

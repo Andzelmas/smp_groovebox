@@ -97,8 +97,13 @@ int graph_disconnect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b);
 // next call retries
 int graph_plan_update(GRAPH *graph);
 // [audio-thread] one cycle of the newest plan: the nodes in edge order, each
-// once its inputs are ready. nframes <= max_buffer_size
+// once its inputs are ready. Runs nothing for nframes > max_buffer_size
 void graph_process_rt(GRAPH *graph, NFRAMES_T nframes);
+
+// fn gets each MIDI port whose buffer dropped events since the last call
+typedef void (*GRAPH_DROPS_FN)(void *arg, const GraphPortInfo *port,
+                               uint32_t dropped);
+void graph_midi_drops_take(GRAPH *graph, GRAPH_DROPS_FN fn, void *arg);
 
 // [audio-thread] inside its node's process: the port's buffer this cycle,
 // NULL for the other type. An input's is read-only: silence / empty without

@@ -1,3 +1,4 @@
+#include <jack/jack.h>
 #include <jack/midiport.h>
 #include <jack/types.h>
 #include <math.h>
@@ -8,13 +9,32 @@
 #include <string.h>
 #include <threads.h>
 // my libraries
+#include "audio_backend.h"
 #include "../contexts/context_control.h"
 #include "../types.h"
 #include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
+#include "../util_funcs/midi_buf.h"
 #include "jack_funcs.h"
 // the maximum number of bars there can be
 #define MAX_BARS 1000
+
+// the exposed ports, flow as JACK sees it: an input feeds the graph through
+// the "in" node's output of the same name, an output takes the sum of the "out"
+// node's input
+static const struct {
+    const char *name;
+    unsigned int type;
+    unsigned int flow;
+} exposed_defs[] = {
+    {"master_in_L", PORT_TYPE_AUDIO, PORT_FLOW_INPUT},
+    {"master_in_R", PORT_TYPE_AUDIO, PORT_FLOW_INPUT},
+    {"midi_in", PORT_TYPE_MIDI, PORT_FLOW_INPUT},
+    {"master_out_L", PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT},
+    {"master_out_R", PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT},
+    {"midi_out", PORT_TYPE_MIDI, PORT_FLOW_OUTPUT},
+};
+#define EXPOSED_COUNT (sizeof(exposed_defs) / sizeof(exposed_defs[0]))
 
 // this module's own id space for the transport params, passed to
 // param_add_param as owner_id. Source-defined, so it is stable across runs and
@@ -54,10 +74,16 @@ typedef struct _port_owner {
 } PORT_OWNER;
 
 // jack main struct
-typedef struct _jack_info {
+typedef struct _audio_backend {
     int port_size;
     // the jack client
     jack_client_t *client;
+    // by exposed_defs index: the JACK port and its graph side
+    jack_port_t *exposed_ports[EXPOSED_COUNT];
+    GRAPH_PORT *exposed_graph_ports[EXPOSED_COUNT];
+    GRAPH *graph;
+    GRAPH_NODE *in_node;
+    GRAPH_NODE *out_node;
     // the current server sample_rate
     jack_nframes_t sample_rate;
     // the current server buffer size
@@ -80,11 +106,11 @@ typedef struct _jack_info {
     // set (true) by app_jack_port_registration_cb, on JACK's own notification
     // thread, whenever a port is registered/unregistered anywhere on the
     // system (not just by this client) - read-and-cleared by
-    // app_jack_ports_sync on [main-thread].
+    // audio_backend_ports_sync on [main-thread].
     atomic_bool ports_changed;
     // same as ports_changed, but set by app_jack_port_connect_cb whenever any
     // two ports are connected/disconnected (including by another program) -
-    // read-and-cleared by app_jack_ports_sync too.
+    // read-and-cleared by audio_backend_ports_sync too.
     atomic_bool connections_changed;
     // ownership of the ports this client registered, filled at registration.
     // Foreign ports are simply absent
@@ -92,12 +118,12 @@ typedef struct _jack_info {
     size_t port_owner_count;
     size_t port_owner_max;
     // snapshot of every audio/midi port on the system, rebuilt by
-    // app_jack_ports_sync. Grouped by (flow, type), so each JackPortList is a
-    // contiguous run described by list_first/list_count
+    // audio_backend_ports_sync. Grouped by (flow, type), so each
+    // BackendPortList is a contiguous run described by list_first/list_count
     JACK_PORT_REC *ports;
     size_t port_count;
-    size_t list_first[JACK_PORT_LIST_COUNT];
-    size_t list_count[JACK_PORT_LIST_COUNT];
+    size_t list_first[BACKEND_PORT_LIST_COUNT];
+    size_t list_count[BACKEND_PORT_LIST_COUNT];
     // client names, interned once so every port of a client shares one string
     char **clients;
     size_t client_count;
@@ -129,40 +155,6 @@ static void port_owner_add(JACK_INFO *jack_data, const char *port_name,
         return;
     jack_data->port_owners[jack_data->port_owner_count++] =
         (PORT_OWNER){.name = name_copy, .tag = tag, .uid = uid};
-}
-
-// order carries no meaning here, so the hole is filled from the end
-static void port_owner_remove(JACK_INFO *jack_data, const char *port_name) {
-    if (!port_name)
-        return;
-    for (size_t i = 0; i < jack_data->port_owner_count; i++) {
-        if (strcmp(jack_data->port_owners[i].name, port_name) != 0)
-            continue;
-        free(jack_data->port_owners[i].name);
-        jack_data->port_owner_count--;
-        if (i != jack_data->port_owner_count)
-            jack_data->port_owners[i] =
-                jack_data->port_owners[jack_data->port_owner_count];
-        return;
-    }
-}
-
-static void port_owner_rename(JACK_INFO *jack_data, const char *old_name,
-                              const char *new_name) {
-    if (!old_name || !new_name)
-        return;
-    // a leftover entry under the new name would shadow the renamed one
-    port_owner_remove(jack_data, new_name);
-    for (size_t i = 0; i < jack_data->port_owner_count; i++) {
-        if (strcmp(jack_data->port_owners[i].name, old_name) != 0)
-            continue;
-        char *name_copy = strdup(new_name);
-        if (!name_copy)
-            return;
-        free(jack_data->port_owners[i].name);
-        jack_data->port_owners[i].name = name_copy;
-        return;
-    }
 }
 
 static void port_owners_clean(JACK_INFO *jack_data) {
@@ -261,11 +253,11 @@ static void port_rec_add(JACK_INFO *jack_data, const char *name,
     rec->conn_count = 0;
 }
 
-// what each JackPortList after ALL is queried with, in list order
+// what each BackendPortList after ALL is queried with, in list order
 static const struct {
     unsigned int type;
     unsigned long flow;
-} port_list_query[JACK_PORT_LIST_COUNT - 1] = {
+} port_list_query[BACKEND_PORT_LIST_COUNT - 1] = {
     {PORT_TYPE_AUDIO, JackPortIsOutput},
     {PORT_TYPE_MIDI, JackPortIsOutput},
     {PORT_TYPE_AUDIO, JackPortIsInput},
@@ -303,9 +295,9 @@ static const char **app_jack_port_names(JACK_INFO *jack_data,
 static void ports_rebuild(JACK_INFO *jack_data) {
     ports_cache_clear(jack_data);
 
-    const char **queried[JACK_PORT_LIST_COUNT - 1] = {0};
+    const char **queried[BACKEND_PORT_LIST_COUNT - 1] = {0};
     size_t total = 0;
-    for (size_t q = 0; q < JACK_PORT_LIST_COUNT - 1; q++) {
+    for (size_t q = 0; q < BACKEND_PORT_LIST_COUNT - 1; q++) {
         queried[q] = app_jack_port_names(jack_data, NULL, port_list_query[q].type,
                                          port_list_query[q].flow);
         if (!queried[q])
@@ -318,7 +310,7 @@ static void ports_rebuild(JACK_INFO *jack_data) {
         if (!jack_data->ports)
             total = 0;
     }
-    for (size_t q = 0; q < JACK_PORT_LIST_COUNT - 1; q++) {
+    for (size_t q = 0; q < BACKEND_PORT_LIST_COUNT - 1; q++) {
         jack_data->list_first[q + 1] = jack_data->port_count;
         if (queried[q]) {
             for (size_t i = 0; queried[q][i]; i++)
@@ -329,8 +321,8 @@ static void ports_rebuild(JACK_INFO *jack_data) {
         jack_data->list_count[q + 1] =
             jack_data->port_count - jack_data->list_first[q + 1];
     }
-    jack_data->list_first[JACK_PORT_LIST_ALL] = 0;
-    jack_data->list_count[JACK_PORT_LIST_ALL] = jack_data->port_count;
+    jack_data->list_first[BACKEND_PORT_LIST_ALL] = 0;
+    jack_data->list_count[BACKEND_PORT_LIST_ALL] = jack_data->port_count;
 }
 
 // index of the cached port with this key, port_count when there is none
@@ -451,8 +443,8 @@ static void edge_set_toggle(JACK_INFO *jack_data, size_t a, size_t b,
     free(edges);
 }
 
-JackPortSync app_jack_ports_sync(JACK_INFO *jack_data) {
-    JackPortSync done = {false, false};
+BackendPortSync audio_backend_ports_sync(JACK_INFO *jack_data) {
+    BackendPortSync done = {false, false};
     if (!jack_data)
         return done;
     done.ports = atomic_exchange(&jack_data->ports_changed, false);
@@ -467,25 +459,26 @@ JackPortSync app_jack_ports_sync(JACK_INFO *jack_data) {
     return done;
 }
 
-static void port_info_fill(const JACK_PORT_REC *rec, JackPortInfo *out) {
+static void port_info_fill(const JACK_PORT_REC *rec, BackendPortInfo *out) {
     out->name = rec->name;
     out->client = rec->client;
     out->key = rec->key;
     out->type = rec->type;
-    out->flow = rec->flow;
+    out->flow =
+        rec->flow == JackPortIsOutput ? PORT_FLOW_OUTPUT : PORT_FLOW_INPUT;
     out->owner_tag = rec->owner_tag;
     out->owner_uid = rec->owner_uid;
 }
 
-size_t app_jack_port_count(JACK_INFO *jack_data, JackPortList list) {
-    if (!jack_data || list >= JACK_PORT_LIST_COUNT)
+size_t audio_backend_port_count(JACK_INFO *jack_data, BackendPortList list) {
+    if (!jack_data || list >= BACKEND_PORT_LIST_COUNT)
         return 0;
     return jack_data->list_count[list];
 }
 
-bool app_jack_port_at(JACK_INFO *jack_data, JackPortList list, size_t idx,
-                      JackPortInfo *out) {
-    if (!jack_data || !out || list >= JACK_PORT_LIST_COUNT)
+bool audio_backend_port_at(JACK_INFO *jack_data, BackendPortList list,
+                           size_t idx, BackendPortInfo *out) {
+    if (!jack_data || !out || list >= BACKEND_PORT_LIST_COUNT)
         return false;
     if (idx >= jack_data->list_count[list])
         return false;
@@ -493,8 +486,8 @@ bool app_jack_port_at(JACK_INFO *jack_data, JackPortList list, size_t idx,
     return true;
 }
 
-bool app_jack_port_by_key(JACK_INFO *jack_data, uint64_t key,
-                          JackPortInfo *out) {
+bool audio_backend_port_by_key(JACK_INFO *jack_data, uint64_t key,
+                               BackendPortInfo *out) {
     if (!jack_data || !out)
         return false;
     size_t i = port_index_by_key(jack_data, key);
@@ -504,7 +497,7 @@ bool app_jack_port_by_key(JACK_INFO *jack_data, uint64_t key,
     return true;
 }
 
-size_t app_jack_port_connection_count(JACK_INFO *jack_data, uint64_t key) {
+size_t audio_backend_port_connection_count(JACK_INFO *jack_data, uint64_t key) {
     if (!jack_data)
         return 0;
     size_t i = port_index_by_key(jack_data, key);
@@ -513,8 +506,8 @@ size_t app_jack_port_connection_count(JACK_INFO *jack_data, uint64_t key) {
     return jack_data->ports[i].conn_count;
 }
 
-bool app_jack_port_connection_at(JACK_INFO *jack_data, uint64_t key, size_t idx,
-                                 JackPortInfo *out) {
+bool audio_backend_port_connection_at(JACK_INFO *jack_data, uint64_t key,
+                                      size_t idx, BackendPortInfo *out) {
     if (!jack_data || !out)
         return false;
     size_t i = port_index_by_key(jack_data, key);
@@ -529,8 +522,8 @@ bool app_jack_port_connection_at(JACK_INFO *jack_data, uint64_t key, size_t idx,
     return true;
 }
 
-bool app_jack_port_keys_connected(JACK_INFO *jack_data, uint64_t key_a,
-                                  uint64_t key_b) {
+bool audio_backend_port_keys_connected(JACK_INFO *jack_data, uint64_t key_a,
+                                       uint64_t key_b) {
     if (!jack_data)
         return false;
     size_t a = port_index_by_key(jack_data, key_a);
@@ -543,6 +536,12 @@ bool app_jack_port_keys_connected(JACK_INFO *jack_data, uint64_t key_a,
     }
     return false;
 }
+
+static int sample_rate_change(jack_nframes_t new_sample_rate, void *arg);
+static void timebbt_callback_rt(jack_transport_state_t state,
+                                jack_nframes_t nframes, jack_position_t *pos,
+                                int new_pos, void *arg);
+static void app_jack_update_transport_from_params_rt(JACK_INFO *jack_data);
 
 // ticks per beat, since user should not set these anyway
 double time_ticks_per_beat = 1920.0;
@@ -588,28 +587,13 @@ static void app_jack_port_connect_cb(jack_port_id_t a, jack_port_id_t b,
     atomic_store(&jack_data->connections_changed, true);
 }
 
-JACK_INFO *jack_initialize(void *arg, const char *client_name,
-                           int (*process)(jack_nframes_t, void *)) {
-
-    JACK_INFO *jack_data = (JACK_INFO *)malloc(sizeof(JACK_INFO));
+AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
+                                  int (*process)(NFRAMES_T, void *)) {
+    // every pointer NULL, so a failure below can clean at any point
+    JACK_INFO *jack_data = (JACK_INFO *)calloc(1, sizeof(JACK_INFO));
     if (!jack_data) {
         return NULL;
     }
-    jack_data->rt_tick = 0;
-    jack_data->control_data = NULL;
-    jack_data->port_owners = NULL;
-    jack_data->port_owner_count = 0;
-    jack_data->port_owner_max = 0;
-    jack_data->ports = NULL;
-    jack_data->port_count = 0;
-    memset(jack_data->list_first, 0, sizeof(jack_data->list_first));
-    memset(jack_data->list_count, 0, sizeof(jack_data->list_count));
-    jack_data->clients = NULL;
-    jack_data->client_count = 0;
-    jack_data->client_max = 0;
-    jack_data->conns = NULL;
-    jack_data->conn_total = 0;
-    jack_data->idents = (INTERN_TABLE){0};
     // start dirty so the first sync builds the cache
     atomic_init(&jack_data->ports_changed, true);
     atomic_init(&jack_data->connections_changed, true);
@@ -620,7 +604,7 @@ JACK_INFO *jack_initialize(void *arg, const char *client_name,
     jack_data->control_data =
         context_sub_init(rt_funcs_struct, ui_funcs_struct);
     if (!jack_data->control_data) {
-        jack_clean_memory(jack_data);
+        audio_backend_clean(jack_data);
         return NULL;
     }
 
@@ -657,12 +641,12 @@ JACK_INFO *jack_initialize(void *arg, const char *client_name,
     // a failed add returns -1, which would silently index out of range on the
     //[audio-thread] later - refuse to start instead
     if (!jack_data->trk_params) {
-        jack_clean_memory(jack_data);
+        audio_backend_clean(jack_data);
         return NULL;
     }
     for (int i = TRK_PARAM_NONE + 1; i < TRK_PARAM_COUNT; i++) {
         if (jack_data->trk_val[i] < 0) {
-            jack_clean_memory(jack_data);
+            audio_backend_clean(jack_data);
             return NULL;
         }
     }
@@ -671,7 +655,7 @@ JACK_INFO *jack_initialize(void *arg, const char *client_name,
     jack_data->client =
         jack_client_open(client_name, options & status, server_name);
     if (jack_data->client == NULL) {
-        free(jack_data);
+        audio_backend_clean(jack_data);
         return NULL;
     }
 
@@ -697,8 +681,7 @@ JACK_INFO *jack_initialize(void *arg, const char *client_name,
     // requirement
     jack_set_port_connect_callback(jack_data->client, app_jack_port_connect_cb,
                                    jack_data);
-    // a rename is its own notification, not a register/unregister pair - own
-    // renames re-key the cache in app_jack_port_rename, this catches the rest
+    // a rename is its own notification, not a register/unregister pair
     jack_set_port_rename_callback(jack_data->client, app_jack_port_rename_cb,
                                   jack_data);
 
@@ -787,100 +770,58 @@ int app_jack_read_rt_to_ui_messages(JACK_INFO *jack_data) {
     return 0;
 }
 
-int app_jack_port_rename(void *client_in, void *port,
-                         const char *new_port_name) {
-    if (!new_port_name)
-        return -1;
-    JACK_INFO *jack_data = (JACK_INFO *)client_in;
-    if (!jack_data)
-        return -1;
-    jack_port_t *jack_port = (jack_port_t *)port;
-    if (!jack_port)
-        return -1;
-
-    // jack_port_name points at the port's own storage, so the old name has to
-    // be taken before the rename overwrites it
-    char *old_name = strdup(jack_port_name(jack_port));
-    int result = jack_port_rename(jack_data->client, jack_port, new_port_name);
-    if (result == 0 && old_name) {
-        const char *new_name = jack_port_name(jack_port);
-        intern_rename(&jack_data->idents, old_name, new_name);
-        port_owner_rename(jack_data, old_name, new_name);
-        atomic_store(&jack_data->ports_changed, true);
-    }
-    free(old_name);
-    return result;
-}
-
-void *app_jack_create_port_on_client(void *client_in, unsigned int port_type,
-                                     unsigned int io_type,
+// port_type PORT_TYPE_AUDIO or PORT_TYPE_MIDI, flow PORT_FLOW_*
+static jack_port_t *jack_port_create(JACK_INFO *jack_data,
+                                     unsigned int port_type, unsigned int flow,
                                      const char *port_name, uint64_t owner_tag,
                                      uint64_t owner_uid) {
-    JACK_INFO *jack_data = (JACK_INFO *)client_in;
-    if (!jack_data)
+    if (!jack_data->client)
         return NULL;
-    jack_client_t *client = jack_data->client;
-    if (!client)
-        return NULL;
-    const char *type = NULL;
-    switch (port_type) {
-    case PORT_TYPE_AUDIO:
-        type = JACK_DEFAULT_AUDIO_TYPE;
-        break;
-    case PORT_TYPE_MIDI:
-        type = JACK_DEFAULT_MIDI_TYPE;
-        break;
-    default:
-        type = JACK_DEFAULT_AUDIO_TYPE;
-    }
-
-    void *ret_port = jack_port_register(client, port_name, type, io_type, 0);
-    if (!ret_port)
+    const char *type = port_type == PORT_TYPE_MIDI ? JACK_DEFAULT_MIDI_TYPE
+                                                   : JACK_DEFAULT_AUDIO_TYPE;
+    unsigned long flags =
+        flow == PORT_FLOW_INPUT ? JackPortIsInput : JackPortIsOutput;
+    jack_port_t *port =
+        jack_port_register(jack_data->client, port_name, type, flags, 0);
+    if (!port)
         return NULL;
     // jack prefixes the client name, so record what the port list will see
-    port_owner_add(jack_data, jack_port_name((jack_port_t *)ret_port),
-                   owner_tag, owner_uid);
+    port_owner_add(jack_data, jack_port_name(port), owner_tag, owner_uid);
     atomic_store(&jack_data->ports_changed, true);
-    return ret_port;
+    return port;
 }
 
-float app_jack_return_samplerate(JACK_INFO *jack_data) {
-    if (!jack_data)
+SAMPLE_T audio_backend_sample_rate(AUDIO_BACKEND *jack_data) {
+    if (!jack_data || !jack_data->client)
         return -1;
-    if (!jack_data->client)
-        return -1;
-    return (float)jack_get_sample_rate(jack_data->client);
+    return (SAMPLE_T)jack_get_sample_rate(jack_data->client);
 }
-int app_jack_return_buffer_size(JACK_INFO *jack_data) {
-    if (!jack_data)
-        return -1;
-    if (!jack_data->client)
-        return -1;
+
+uint32_t audio_backend_buffer_size(AUDIO_BACKEND *jack_data) {
+    if (!jack_data || !jack_data->client)
+        return 0;
     return jack_get_buffer_size(jack_data->client);
 }
 
-int app_jack_activate(JACK_INFO *jack_data) {
+int audio_backend_activate(AUDIO_BACKEND *jack_data) {
     // activate the client and launch the process function
-    if (jack_activate(jack_data->client)) {
+    if (!jack_data || jack_activate(jack_data->client)) {
         return -1;
     }
     return 0;
 }
 
-int app_jack_port_name_size() { return jack_port_name_size(); }
-
-void *app_jack_get_buffer_rt(void *port, jack_nframes_t nframes) {
-    jack_port_t *cur_port = (jack_port_t *)port;
-    if (!cur_port)
+static void *jack_buffer_rt(jack_port_t *port, NFRAMES_T nframes) {
+    if (!port)
         return NULL;
-    void *out = NULL;
-    out = jack_port_get_buffer(cur_port, nframes);
-    return out;
+    return jack_port_get_buffer(port, nframes);
 }
 
-void app_jack_midi_in_rt(void *port, jack_nframes_t nframes, MIDI_BUF *buf) {
+// clear buf for nframes and fill it with the events of the midi in port
+static void jack_midi_in_rt(jack_port_t *port, NFRAMES_T nframes,
+                            MIDI_BUF *buf) {
     midi_buf_clear(buf, nframes);
-    void *jack_buf = app_jack_get_buffer_rt(port, nframes);
+    void *jack_buf = jack_buffer_rt(port, nframes);
     if (!jack_buf)
         return;
     uint32_t count = jack_midi_get_event_count(jack_buf);
@@ -892,9 +833,10 @@ void app_jack_midi_in_rt(void *port, jack_nframes_t nframes, MIDI_BUF *buf) {
     }
 }
 
-void app_jack_midi_out_rt(void *port, jack_nframes_t nframes,
-                          const MIDI_BUF *buf) {
-    void *jack_buf = app_jack_get_buffer_rt(port, nframes);
+// replace the events of the midi out port with the events of buf
+static void jack_midi_out_rt(jack_port_t *port, NFRAMES_T nframes,
+                             const MIDI_BUF *buf) {
+    void *jack_buf = jack_buffer_rt(port, nframes);
     if (!jack_buf)
         return;
     jack_midi_clear_buffer(jack_buf);
@@ -904,6 +846,74 @@ void app_jack_midi_out_rt(void *port, jack_nframes_t nframes,
     // (jack_midi_get_lost_event_count)
     while (midi_buf_next(&it, &ev))
         jack_midi_event_write(jack_buf, ev.frame, ev.data, ev.size);
+}
+
+// [audio-thread] the "in" node: the exposed inputs into its outputs
+static bool endpoint_in_process_rt(void *arg, NFRAMES_T nframes) {
+    JACK_INFO *jack_data = (JACK_INFO *)arg;
+    for (size_t i = 0; i < EXPOSED_COUNT; i++) {
+        if (exposed_defs[i].flow != PORT_FLOW_INPUT)
+            continue;
+        jack_port_t *port = jack_data->exposed_ports[i];
+        GRAPH_PORT *graph_port = jack_data->exposed_graph_ports[i];
+        if (exposed_defs[i].type == PORT_TYPE_MIDI) {
+            jack_midi_in_rt(port, nframes, graph_port_midi_rt(graph_port));
+            continue;
+        }
+        SAMPLE_T *out = graph_port_audio_rt(graph_port);
+        SAMPLE_T *in = jack_buffer_rt(port, nframes);
+        if (in)
+            memcpy(out, in, sizeof(SAMPLE_T) * nframes);
+        else
+            memset(out, 0, sizeof(SAMPLE_T) * nframes);
+    }
+    return true;
+}
+
+// [audio-thread] the "out" node: its inputs' sums into the exposed outputs
+static bool endpoint_out_process_rt(void *arg, NFRAMES_T nframes) {
+    JACK_INFO *jack_data = (JACK_INFO *)arg;
+    for (size_t i = 0; i < EXPOSED_COUNT; i++) {
+        if (exposed_defs[i].flow != PORT_FLOW_OUTPUT)
+            continue;
+        jack_port_t *port = jack_data->exposed_ports[i];
+        GRAPH_PORT *graph_port = jack_data->exposed_graph_ports[i];
+        if (exposed_defs[i].type == PORT_TYPE_MIDI) {
+            jack_midi_out_rt(port, nframes, graph_port_midi_rt(graph_port));
+            continue;
+        }
+        SAMPLE_T *out = jack_buffer_rt(port, nframes);
+        if (out)
+            memcpy(out, graph_port_audio_rt(graph_port),
+                   sizeof(SAMPLE_T) * nframes);
+    }
+    return true;
+}
+
+int audio_backend_endpoints_add(AUDIO_BACKEND *jack_data, GRAPH *graph,
+                                uint64_t owner_tag, uint64_t owner_uid) {
+    if (!jack_data || !graph || jack_data->graph)
+        return -1;
+    jack_data->graph = graph;
+    jack_data->in_node = graph_node_add(graph, owner_tag, owner_uid,
+                                        endpoint_in_process_rt, jack_data);
+    jack_data->out_node = graph_node_add(graph, owner_tag, owner_uid,
+                                         endpoint_out_process_rt, jack_data);
+    if (!jack_data->in_node || !jack_data->out_node)
+        return -1;
+    for (size_t i = 0; i < EXPOSED_COUNT; i++) {
+        bool to_graph = exposed_defs[i].flow == PORT_FLOW_INPUT;
+        jack_data->exposed_ports[i] = jack_port_create(
+            jack_data, exposed_defs[i].type, exposed_defs[i].flow,
+            exposed_defs[i].name, owner_tag, owner_uid);
+        jack_data->exposed_graph_ports[i] = graph_port_create(
+            graph, to_graph ? jack_data->in_node : jack_data->out_node,
+            exposed_defs[i].type, to_graph ? PORT_FLOW_OUTPUT : PORT_FLOW_INPUT,
+            exposed_defs[i].name);
+        if (!jack_data->exposed_ports[i] || !jack_data->exposed_graph_ports[i])
+            return -1;
+    }
+    return 0;
 }
 
 // jack_connect wants the output first, so the pair is ordered here. Two ports
@@ -931,17 +941,17 @@ static int port_keys_link(JACK_INFO *jack_data, uint64_t key_a, uint64_t key_b,
     return 0;
 }
 
-int app_jack_connect_keys(JACK_INFO *jack_data, uint64_t key_a,
-                          uint64_t key_b) {
+int audio_backend_connect_keys(JACK_INFO *jack_data, uint64_t key_a,
+                               uint64_t key_b) {
     return port_keys_link(jack_data, key_a, key_b, true);
 }
 
-int app_jack_disconnect_keys(JACK_INFO *jack_data, uint64_t key_a,
-                             uint64_t key_b) {
+int audio_backend_disconnect_keys(JACK_INFO *jack_data, uint64_t key_a,
+                                  uint64_t key_b) {
     return port_keys_link(jack_data, key_a, key_b, false);
 }
 
-int sample_rate_change(jack_nframes_t new_sample_rate, void *arg) {
+static int sample_rate_change(jack_nframes_t new_sample_rate, void *arg) {
     JACK_INFO *jack_data = (JACK_INFO *)arg;
     if (!jack_data)
         return -1;
@@ -953,25 +963,15 @@ int sample_rate_change(jack_nframes_t new_sample_rate, void *arg) {
     return 0;
 }
 
-void app_jack_unregister_port(void *client_in, void *port) {
-    if (!client_in)
-        return;
-    if (!port)
-        return;
-    JACK_INFO *jack_data = (JACK_INFO *)client_in;
-    jack_client_t *client = jack_data->client;
-    port_owner_remove(jack_data, jack_port_name((jack_port_t *)port));
-    jack_port_unregister(client, port);
-    atomic_store(&jack_data->ports_changed, true);
-}
-
-void jack_clean_memory(void *jack_data_in) {
-    JACK_INFO *jack_data = (JACK_INFO *)jack_data_in;
+void audio_backend_clean(AUDIO_BACKEND *jack_data) {
     if (!jack_data)
         return;
-    // close the jack client
+    // close the jack client, the process callback stops with it
     if (jack_data->client != NULL)
         jack_client_close(jack_data->client);
+    // the graph outlives the backend
+    graph_node_remove(jack_data->graph, jack_data->in_node);
+    graph_node_remove(jack_data->graph, jack_data->out_node);
     // clean the general parameters
     if (jack_data->trk_params)
         param_clean_param_container(jack_data->trk_params);
@@ -1000,8 +1000,9 @@ static int app_jack_transport(JACK_INFO *jack_data,
     return ret_int;
 }
 
-void timebbt_callback_rt(jack_transport_state_t state, jack_nframes_t nframes,
-                         jack_position_t *pos, int new_pos, void *arg) {
+static void timebbt_callback_rt(jack_transport_state_t state,
+                                jack_nframes_t nframes, jack_position_t *pos,
+                                int new_pos, void *arg) {
     (void)state;
     // the struct will be used to get a struct from the circle buffer for the
     // time_beats_per_bar and such
@@ -1090,7 +1091,7 @@ void timebbt_callback_rt(jack_transport_state_t state, jack_nframes_t nframes,
     }
 }
 
-void app_jack_update_transport_from_params_rt(JACK_INFO *jack_data) {
+static void app_jack_update_transport_from_params_rt(JACK_INFO *jack_data) {
     if (!jack_data)
         return;
 
@@ -1149,7 +1150,7 @@ void app_jack_update_transport_from_params_rt(JACK_INFO *jack_data) {
 int app_jack_return_transport_rt(void *audio_client, int32_t *cur_bar,
                                  int32_t *cur_beat, int32_t *cur_tick,
                                  SAMPLE_T *ticks_per_beat,
-                                 jack_nframes_t *total_frames, float *bpm,
+                                 NFRAMES_T *total_frames, float *bpm,
                                  float *beat_type, float *beats_per_bar) {
     if (!audio_client)
         return -1;

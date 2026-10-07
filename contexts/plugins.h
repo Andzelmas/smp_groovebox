@@ -1,4 +1,5 @@
 #pragma once
+#include "../engine/graph.h"
 #include "../structs.h"
 #include "../util_funcs/tree_index.h"
 #include "params.h"
@@ -19,10 +20,11 @@ typedef struct _plug_evbuf_impl PLUG_EVBUF;
 // the event iterator for PLUG_EVBUF
 typedef struct _plug_evbuf_iterator_impl PLUG_EVBUF_ITERATOR;
 
-// inititialize the plugin host data. owner_tag is what the caller pairs with a
-// plugin's uid to name the owner of that plugin's ports
+// inititialize the plugin host data. A plugin is a node of graph, owned by
+// (owner_tag, the plugin's uid). transport is for app_jack_return_transport_rt,
+// until 2T
 PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
-                     plug_status_t *plug_errors, void *audio_backend,
+                     plug_status_t *plug_errors, GRAPH *graph, void *transport,
                      uint64_t owner_tag);
 
 // Scans the installed plugins and (re)builds the list of them on plug_data.
@@ -67,8 +69,7 @@ int plug_plugin_preset_load(void *plug, uint64_t key);
 // read the main-thread audio-thread comm messages and launch apropriate
 // functions (stop, start processes etc.)
 int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data);
-// nframes is this cycle's
-int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data, unsigned int nframes);
+int plug_read_ui_to_rt_messages(PLUG_INFO *plug_data);
 
 // initialize a plugin instance. On success returns its identity uid (always
 // > 0, matching plug_plugin_uid); on failure returns 0.
@@ -99,15 +100,7 @@ void plug_set_samplerate(PLUG_INFO *plug_data, float new_sample_rate);
 // set the buffer size, should be usually done before launching any plugins
 void plug_set_block_length(PLUG_INFO *plug_data, uint32_t block_length);
 
-// activate the ports, that the backend needs to activate, uses the callback
-// function sent here returns 0 on success
-int plug_activate_backend_ports(PLUG_INFO *plug_data, PLUG_PLUG *plug);
-
-// the slot-th plugin slot, loaded or not; NULL past the last slot.
-// [audio-thread] safe, for the per-plugin process loop
-void *plug_plugin_slot(PLUG_INFO *plug_data, unsigned int slot);
-
-// connect the ports, run one plugin (a plug_plugin_slot handle) for nframes
+// the plugin's node process: connect the ports, run one plugin for nframes
 // and update its output ports, on [audio-thread]. true if it wrote its
 // outputs this cycle (false: stopped)
 bool plug_plugin_process_rt(void *plug, NFRAMES_T nframes);

@@ -793,7 +793,7 @@ static void plan_input_rt(const GRAPH_PLAN *plan, const PLAN_PORT *in,
 
 void graph_process_rt(GRAPH *graph, NFRAMES_T nframes) {
     GRAPH_PLAN *plan = atomic_load(&graph->plan);
-    if (!plan)
+    if (!plan || nframes > graph->max_buffer_size)
         return;
     // from here the older plans are free to go
     atomic_store(&graph->ack, plan->gen);
@@ -820,6 +820,21 @@ void graph_process_rt(GRAPH *graph, NFRAMES_T nframes) {
             else
                 midi_buf_clear(outs[p].midi_buf, nframes);
         }
+    }
+}
+
+void graph_midi_drops_take(GRAPH *graph, GRAPH_DROPS_FN fn, void *arg) {
+    if (!graph || !fn)
+        return;
+    for (size_t i = 0; i < graph->list_count[GRAPH_PORT_LIST_ALL]; i++) {
+        GRAPH_PORT *port = graph->view[i];
+        // an output's own buffer, or an input's sum
+        uint32_t dropped = midi_buf_dropped_take(port->midi_buf);
+        if (dropped == 0)
+            continue;
+        GraphPortInfo info;
+        port_info_fill(port, &info);
+        fn(arg, &info, dropped);
     }
 }
 
