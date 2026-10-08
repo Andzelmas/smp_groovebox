@@ -70,7 +70,8 @@ typedef struct {
 typedef struct _graph_plan GRAPH_PLAN;
 struct _graph_plan {
     unsigned int gen;
-    PLAN_NODE *nodes; // edge order
+    uint32_t max_frames; // what its audio buffers hold
+    PLAN_NODE *nodes;    // edge order
     size_t node_count;
     PLAN_PORT *ports;
     SAMPLE_T **audio_srcs;
@@ -81,6 +82,15 @@ struct _graph_plan {
     // [main-thread], once replaced: freed when the ack reaches free_at
     GRAPH_PLAN *retired_next;
     unsigned int free_at;
+};
+
+// the audio buffers one resize replaced, freed when the ack reaches free_at
+typedef struct _retired_bufs RETIRED_BUFS;
+struct _retired_bufs {
+    RETIRED_BUFS *retired_next;
+    unsigned int free_at;
+    size_t count;
+    SAMPLE_T *bufs[];
 };
 
 struct _graph {
@@ -108,6 +118,7 @@ struct _graph {
     uint64_t plan_built_from; // generation it was built from
     GRAPH_PLAN *retired_plans;
     GRAPH_PORT *retired_ports;
+    RETIRED_BUFS *retired_bufs;
 };
 
 // grow a port array to hold one more, false on allocation failure
@@ -242,6 +253,12 @@ static void plan_free(GRAPH_PLAN *plan) {
     free(plan);
 }
 
+static void retired_bufs_free(RETIRED_BUFS *old) {
+    for (size_t i = 0; i < old->count; i++)
+        free(old->bufs[i]);
+    free(old);
+}
+
 // free what [audio-thread] can not run any more
 static void retired_reclaim(GRAPH *graph) {
     unsigned int ack = atomic_load(&graph->ack);
@@ -262,6 +279,15 @@ static void retired_reclaim(GRAPH *graph) {
         }
         *p = port->retired_next;
         port_free(port);
+    }
+    for (RETIRED_BUFS **p = &graph->retired_bufs; *p;) {
+        RETIRED_BUFS *old = *p;
+        if (old->free_at > ack) {
+            p = &old->retired_next;
+            continue;
+        }
+        *p = old->retired_next;
+        retired_bufs_free(old);
     }
 }
 
@@ -307,6 +333,11 @@ void graph_free(GRAPH *graph) {
         port_free(graph->retired_ports);
         graph->retired_ports = next;
     }
+    while (graph->retired_bufs) {
+        RETIRED_BUFS *next = graph->retired_bufs->retired_next;
+        retired_bufs_free(graph->retired_bufs);
+        graph->retired_bufs = next;
+    }
     free(graph->silence);
     midi_buf_free(graph->midi_empty);
     free(graph);
@@ -314,6 +345,59 @@ void graph_free(GRAPH *graph) {
 
 uint64_t graph_generation(const GRAPH *graph) {
     return graph ? graph->generation : 0;
+}
+
+int graph_max_buffer_size_set(GRAPH *graph, uint32_t max_buffer_size) {
+    if (!graph || max_buffer_size == 0)
+        return -1;
+    if (max_buffer_size == graph->max_buffer_size)
+        return 0;
+    // every port's audio buffer, then the silence
+    size_t port_total = graph->list_count[GRAPH_PORT_LIST_ALL];
+    size_t count = 1;
+    for (size_t i = 0; i < port_total; i++) {
+        if (graph->view[i]->buffer)
+            count++;
+    }
+    RETIRED_BUFS *old =
+        malloc(sizeof(RETIRED_BUFS) + sizeof(SAMPLE_T *) * count);
+    if (!old)
+        return -1;
+    // holds the new buffers until all are made, then the ones they replace
+    old->count = 0;
+    for (size_t i = 0; i < count; i++) {
+        SAMPLE_T *buf = calloc(max_buffer_size, sizeof(SAMPLE_T));
+        if (!buf) {
+            retired_bufs_free(old);
+            return -1;
+        }
+        old->bufs[old->count++] = buf;
+    }
+    size_t b = 0;
+    for (size_t i = 0; i < port_total; i++) {
+        GRAPH_PORT *port = graph->view[i];
+        if (!port->buffer)
+            continue;
+        SAMPLE_T *prev = port->buffer;
+        port->buffer = old->bufs[b];
+        old->bufs[b++] = prev;
+    }
+    SAMPLE_T *prev = graph->silence;
+    graph->silence = old->bufs[b];
+    old->bufs[b] = prev;
+    graph->max_buffer_size = max_buffer_size;
+    graph->generation++;
+    // the published plan runs them until the next one is acked. An rt slot
+    // set at create may point at one too - only read by its node's process,
+    // which the next plan gives the new buffer first
+    if (graph->plan_gen == 0) {
+        retired_bufs_free(old);
+        return 0;
+    }
+    old->free_at = graph->plan_gen + 1;
+    old->retired_next = graph->retired_bufs;
+    graph->retired_bufs = old;
+    return 0;
 }
 
 GRAPH_NODE *graph_node_add(GRAPH *graph, uint64_t owner_tag,
@@ -728,6 +812,7 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
             port_i - plan_node->port_first - plan_node->in_count;
     }
     plan->node_count = n;
+    plan->max_frames = graph->max_buffer_size;
     plan->silence = graph->silence;
     plan->midi_empty = graph->midi_empty;
     free(order);
@@ -793,7 +878,7 @@ static void plan_input_rt(const GRAPH_PLAN *plan, const PLAN_PORT *in,
 
 void graph_process_rt(GRAPH *graph, NFRAMES_T nframes) {
     GRAPH_PLAN *plan = atomic_load(&graph->plan);
-    if (!plan || nframes > graph->max_buffer_size)
+    if (!plan || nframes > plan->max_frames)
         return;
     // from here the older plans are free to go
     atomic_store(&graph->ack, plan->gen);

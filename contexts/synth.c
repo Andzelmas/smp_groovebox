@@ -31,6 +31,8 @@
 #define SYNTH_ADSR_TIME_MAX 5.0
 // how many samples math_ramp_val_get_value smooths the Amp param over,
 #define SYNTH_AMP_INTERP_SAMPLES 400
+// how long a voice's amp ramps take, in seconds
+#define SYNTH_VOICE_AMP_RAMP_SECS 0.002
 // the increments that the semitones will be incremented or decreased by the
 // user
 #define SEMITONES_INC 0.1
@@ -141,9 +143,9 @@ typedef struct _synth_osc {
     SYNTH_OSC_VALS vals;
     // which voice played last
     int last_voice;
-    // the buffer of the summed voices output is kept here
-    SAMPLE_T *buffer_L;
-    SAMPLE_T *buffer_R;
+    // [audio-thread] this cycle's graph outputs, the voices sum into them
+    SAMPLE_T *out_L;
+    SAMPLE_T *out_R;
     // for convenience osc tables on the osc struct
     OSC_OBJ *triang_osc;
     OSC_OBJ *sqr_osc;
@@ -167,9 +169,9 @@ typedef struct _synth_port {
 } SYNTH_PORT;
 
 typedef struct _synth_data {
-    // size of the single buffer (nframes in jack) for the rt thread process
-    // function cycle
-    unsigned int buffer_size;
+    // 0 while [main-thread] swaps what the oscillators read (a rate change),
+    // touch only on [audio-thread]
+    unsigned int processing;
     // oscillator object with the triangle table
     OSC_OBJ *triang_osc;
     // oscillator object with the square table
@@ -202,15 +204,24 @@ typedef struct _synth_data {
     void *transport;
     // paired with an oscillator's uid as its node's owner
     uint64_t owner_tag;
-    // this is control for [audio-thread] and [main-thread] sys communication
-    //(since there is no need to remove and add the oscillators this is used
-    // right now only for thread safe message sending)
+    // this is control for [audio-thread] and [main-thread] sys communication:
+    // thread safe messages, and the whole synth's stop/start
     CXCONTROL *control_data;
 } SYNTH_DATA;
 
 static int synth_sys_msg(void *user_data, const char *msg) {
     (void)user_data;
     log_append_logfile("%s", msg);
+    return 0;
+}
+
+// user_data is the SYNTH_DATA
+static int synth_start_process(void *user_data) {
+    ((SYNTH_DATA *)user_data)->processing = 1;
+    return 0;
+}
+static int synth_stop_process(void *user_data) {
+    ((SYNTH_DATA *)user_data)->processing = 0;
     return 0;
 }
 
@@ -301,15 +312,16 @@ static PARAM_T synth_osc_build_value(const void *user_data, int val_id,
 // the oscillator's node and its ports
 static int synth_osc_ports_create(SYNTH_DATA *synth_data, SYNTH_OSC *osc);
 
-SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
-                       unsigned int with_metronome, GRAPH *graph,
-                       void *transport, uint64_t owner_tag) {
+SYNTH_DATA *synth_init(SAMPLE_T sample_rate, unsigned int with_metronome,
+                       GRAPH *graph, void *transport, uint64_t owner_tag) {
 
     SYNTH_DATA *synth_data = (SYNTH_DATA *)malloc(sizeof(SYNTH_DATA));
     if (!synth_data)
         return NULL;
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
+    rt_funcs_struct.subcx_start_process = synth_start_process;
+    rt_funcs_struct.subcx_stop_process = synth_stop_process;
     ui_funcs_struct.send_msg = synth_sys_msg;
     synth_data->control_data =
         context_sub_init(rt_funcs_struct, ui_funcs_struct);
@@ -317,7 +329,9 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
         free(synth_data);
         return NULL;
     }
-    synth_data->buffer_size = buffer_size;
+    // [audio-thread] sees it only through a plan with the nodes, published
+    // after this
+    synth_data->processing = 1;
     synth_data->samplerate = sample_rate;
     synth_data->with_metronome = with_metronome;
     synth_data->num_osc = MAX_OSCS;
@@ -432,19 +446,12 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
         cur_osc->params = NULL;
         cur_osc->osc_voices = NULL;
         cur_osc->ports = NULL;
-        cur_osc->buffer_L = NULL;
-        cur_osc->buffer_R = NULL;
+        cur_osc->out_L = NULL;
+        cur_osc->out_R = NULL;
         cur_osc->name = NULL;
         cur_osc->num_ports = 0;
         cur_osc->ports = NULL;
         cur_osc->num_voices = MAX_SYNTH_VOICES;
-        // initiate the buffer
-        cur_osc->buffer_L = calloc(synth_data->buffer_size, sizeof(SAMPLE_T));
-        cur_osc->buffer_R = calloc(synth_data->buffer_size, sizeof(SAMPLE_T));
-        if (!cur_osc->buffer_L || !cur_osc->buffer_R) {
-            synth_clean_memory(synth_data);
-            return NULL;
-        }
         cur_osc->name = malloc(sizeof(char) * 6);
         if (!cur_osc->name) {
             synth_clean_memory(synth_data);
@@ -520,9 +527,11 @@ SYNTH_DATA *synth_init(unsigned int buffer_size, SAMPLE_T sample_rate,
         for (unsigned int j = 0; j < cur_osc->num_voices; j++) {
             SYNTH_VOICE *cur_voice = &(cur_osc->osc_voices[j]);
             cur_voice->vco_amp_L = math_ramp_val_init(
-                1.0, (unsigned int)(0.002 * synth_data->samplerate));
+                1.0, (unsigned int)(SYNTH_VOICE_AMP_RAMP_SECS *
+                                    synth_data->samplerate));
             cur_voice->vco_amp_R = math_ramp_val_init(
-                1.0, (unsigned int)(0.002 * synth_data->samplerate));
+                1.0, (unsigned int)(SYNTH_VOICE_AMP_RAMP_SECS *
+                                    synth_data->samplerate));
             cur_voice->vco_adsr = synth_init_adsr(synth_data->samplerate);
             cur_voice->vco_ph = 0;
             cur_voice->wobble_ph = 0;
@@ -713,7 +722,7 @@ static void synth_osc_params_read_rt(SYNTH_OSC *osc) {
     vals->r = param_get_value(osc->params, osc->val_id[SYNTH_PARAM_RELEASE], 1);
 }
 
-// render the voices into the osc buffers for frames [start, end), with the
+// render the voices into the osc outputs for frames [start, end), with the
 // values of synth_osc_params_read_rt
 static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
                                      NFRAMES_T start, NFRAMES_T end) {
@@ -812,10 +821,10 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
                 cur_voice->vco_amp_R,
                 vals->amp * adsr_amp * spread_mult_R * midi_amp);
 
-            osc->buffer_L[j] +=
+            osc->out_L[j] +=
                 wave_sample_L * math_range_table_convert_value(
                                     synth_data->amp_to_exp, interp_amp_in_L);
-            osc->buffer_R[j] +=
+            osc->out_R[j] +=
                 wave_sample_R * math_range_table_convert_value(
                                     synth_data->amp_to_exp, interp_amp_in_R);
 
@@ -834,8 +843,8 @@ static void synth_process_osc_voices(SYNTH_DATA *synth_data, SYNTH_OSC *osc,
     }
 }
 
-// copy the osc buffers to its audio out ports
-static bool synth_osc_write_outs_rt(SYNTH_OSC *osc, NFRAMES_T nframes) {
+// point out_L/out_R at this cycle's audio out ports, cleared. false if missing
+static bool synth_osc_outs_rt(SYNTH_OSC *osc, NFRAMES_T nframes) {
     // the metronome osc has no midi in port
     SYNTH_PORT *l_Port = NULL;
     SYNTH_PORT *r_Port = NULL;
@@ -847,12 +856,12 @@ static bool synth_osc_write_outs_rt(SYNTH_OSC *osc, NFRAMES_T nframes) {
         r_Port = &(osc->ports[2]);
     }
 
-    SAMPLE_T *out_L = graph_port_audio_rt(l_Port->graph_port);
-    SAMPLE_T *out_R = graph_port_audio_rt(r_Port->graph_port);
-    if (!out_L || !out_R)
+    osc->out_L = graph_port_audio_rt(l_Port->graph_port);
+    osc->out_R = graph_port_audio_rt(r_Port->graph_port);
+    if (!osc->out_L || !osc->out_R)
         return false;
-    memcpy(out_L, osc->buffer_L, sizeof(SAMPLE_T) * nframes);
-    memcpy(out_R, osc->buffer_R, sizeof(SAMPLE_T) * nframes);
+    memset(osc->out_L, '\0', sizeof(SAMPLE_T) * nframes);
+    memset(osc->out_R, '\0', sizeof(SAMPLE_T) * nframes);
     return true;
 }
 
@@ -1025,20 +1034,20 @@ bool synth_osc_process_rt(void *osc_ptr, NFRAMES_T nframes) {
     if (!osc)
         return false;
     SYNTH_DATA *synth_data = osc->synth_data;
-    if (!synth_data)
+    if (!synth_data || synth_data->processing == 0)
+        return false;
+    if (!synth_osc_outs_rt(osc, nframes))
         return false;
 
-    memset(osc->buffer_L, '\0', sizeof(SAMPLE_T) * nframes);
-    memset(osc->buffer_R, '\0', sizeof(SAMPLE_T) * nframes);
     synth_osc_params_read_rt(osc);
     // osc 0 is the metronome, if there is one
     if (osc->id == 0 && synth_data->with_metronome == 1)
         synth_metronome_process_rt(synth_data, osc, nframes);
     else
         synth_osc_midi_process_rt(synth_data, osc, nframes);
-    // TODO the highest value or average of the buffers could go to a
+    // TODO the highest value or average of the outputs could go to a
     // read-only param, to show for example Osc volume levels
-    return synth_osc_write_outs_rt(osc, nframes);
+    return true;
 }
 
 void *synth_osc_return(SYNTH_DATA *synth_data, unsigned int osc_num) {
@@ -1078,6 +1087,70 @@ size_t synth_return_osc_num(SYNTH_DATA *synth_data) {
     return synth_data->num_osc;
 }
 
+// a new ramp of samples in place of *ramp, the old one kept on failure
+static void synth_ramp_renew(MATH_RAMP_VAL **ramp, unsigned int samples) {
+    MATH_RAMP_VAL *fresh = math_ramp_val_init(1.0, samples);
+    if (!fresh)
+        return;
+    free(*ramp);
+    *ramp = fresh;
+}
+
+int synth_sample_rate_set(SYNTH_DATA *synth_data, SAMPLE_T sample_rate) {
+    if (!synth_data)
+        return -1;
+    if (sample_rate == synth_data->samplerate)
+        return 0;
+    // built for a rate, made before the stop
+    OSC_OBJ *tables[] = {
+        osc_init_osc_wavetable(SIN_WAVETABLE, sample_rate),
+        osc_init_osc_wavetable(TRIANGLE_WAVETABLE, sample_rate),
+        osc_init_osc_wavetable(SAW_WAVETABLE, sample_rate),
+        osc_init_osc_wavetable(SQUARE_WAVETABLE, sample_rate)};
+    size_t table_count = sizeof(tables) / sizeof(tables[0]);
+    for (size_t t = 0; t < table_count; t++) {
+        if (tables[t])
+            continue;
+        for (size_t f = 0; f < table_count; f++)
+            osc_clean_osc_wavetable(tables[f]);
+        return -1;
+    }
+    // [audio-thread] reads the tables, the rate and the voices
+    context_sub_wait_for_stop(synth_data->control_data, (void *)synth_data);
+    OSC_OBJ **current[] = {&synth_data->sin_osc, &synth_data->triang_osc,
+                           &synth_data->saw_osc, &synth_data->sqr_osc};
+    for (size_t t = 0; t < table_count; t++) {
+        OSC_OBJ *old = *current[t];
+        *current[t] = tables[t];
+        tables[t] = old;
+    }
+    synth_data->samplerate = sample_rate;
+    unsigned int ramp_samples =
+        (unsigned int)(SYNTH_VOICE_AMP_RAMP_SECS * sample_rate);
+    for (size_t i = 0; i < synth_data->num_osc; i++) {
+        SYNTH_OSC *osc = &(synth_data->osc_array[i]);
+        osc->sin_osc = synth_data->sin_osc;
+        osc->triang_osc = synth_data->triang_osc;
+        osc->saw_osc = synth_data->saw_osc;
+        osc->sqr_osc = synth_data->sqr_osc;
+        // a playing voice ends, its table and ramps were for the old rate
+        for (unsigned int j = 0; osc->osc_voices && j < osc->num_voices; j++) {
+            SYNTH_VOICE *voice = &(osc->osc_voices[j]);
+            voice->playing = 0;
+            voice->stopped = 1;
+            voice->osc_table = NULL;
+            synth_adsr_reset(voice->vco_adsr);
+            synth_ramp_renew(&voice->vco_amp_L, ramp_samples);
+            synth_ramp_renew(&voice->vco_amp_R, ramp_samples);
+        }
+    }
+    context_sub_wait_for_start(synth_data->control_data, (void *)synth_data);
+    // the old tables, no voice holds them any more
+    for (size_t t = 0; t < table_count; t++)
+        osc_clean_osc_wavetable(tables[t]);
+    return 0;
+}
+
 static int synth_clean_osc(SYNTH_DATA *synth_data, SYNTH_OSC *synth_osc) {
     if (!synth_osc)
         return -1;
@@ -1102,12 +1175,6 @@ static int synth_clean_osc(SYNTH_DATA *synth_data, SYNTH_OSC *synth_osc) {
         free(synth_osc->osc_voices);
         synth_osc->osc_voices = NULL;
     }
-    if (synth_osc->buffer_L)
-        free(synth_osc->buffer_L);
-    synth_osc->buffer_L = NULL;
-    if (synth_osc->buffer_R)
-        free(synth_osc->buffer_R);
-    synth_osc->buffer_R = NULL;
     // its ports go with it
     graph_node_remove(synth_data->graph, synth_osc->node);
     synth_osc->node = NULL;

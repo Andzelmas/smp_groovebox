@@ -10,12 +10,15 @@
 // every other port belongs to the graph. All [main-thread]
 typedef struct _audio_backend AUDIO_BACKEND;
 
-// process runs on [audio-thread] once activated, with arg. NULL on failure
+// process runs on [audio-thread] once activated, with arg. The exposed outputs
+// are empty when it starts. NULL on failure
 AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
                                   int (*process)(NFRAMES_T nframes, void *arg));
 int audio_backend_activate(AUDIO_BACKEND *backend);
 // stops the process callback first
 void audio_backend_clean(AUDIO_BACKEND *backend);
+// the server's current values, changed by the server at any time. Polled to
+// follow a change - process may already run at a new buffer size
 SAMPLE_T audio_backend_sample_rate(AUDIO_BACKEND *backend);
 uint32_t audio_backend_buffer_size(AUDIO_BACKEND *backend);
 

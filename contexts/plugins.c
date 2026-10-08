@@ -239,6 +239,7 @@ typedef struct _plug_control {
     bool is_logarithmic;
     bool is_writable;
     bool is_readable;
+    bool is_sample_rate; // lv2:sampleRate - min/max are multiples of the rate
 } PLUG_CONTROL;
 
 // one property control's param, see PLUG_PLUG.property_params
@@ -372,6 +373,55 @@ static void plug_presets_clear(PLUG_PLUG *plug) {
     plug->presets_built = false;
 }
 
+// the instance's extension data access and its workers, started
+static void plug_workers_start(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
+    if (lilv_plugin_has_extension_data(plug->plug,
+                                       plug_data->nodes.work_interface)) {
+        plug->worker = jalv_worker_new(&(plug->work_lock), true);
+        plug->features.sched.handle = plug->worker;
+        if (plug->safe_restore) {
+            plug->state_worker = jalv_worker_new(&(plug->work_lock), false);
+            plug->features.ssched.handle = plug->state_worker;
+        }
+    }
+    plug->features.ext_data.data_access =
+        lilv_instance_get_descriptor(plug->plug_instance)->extension_data;
+    const LV2_Worker_Interface *worker_iface =
+        (const LV2_Worker_Interface *)lilv_instance_get_extension_data(
+            plug->plug_instance, LV2_WORKER__interface);
+    jalv_worker_start(plug->worker, worker_iface,
+                      plug->plug_instance->lv2_handle);
+    jalv_worker_start(plug->state_worker, worker_iface,
+                      plug->plug_instance->lv2_handle);
+}
+
+// the features restore() gets, NULL terminated. A threadSafeRestore plugin
+// must get a work:schedule there - the state worker's, which runs the work at
+// once. Never the RT worker's
+#define PLUG_RESTORE_FEATURES_MAX 7
+static void plug_restore_features(PLUG_PLUG *plug, const LV2_Feature **out) {
+    size_t n = 0;
+    out[n++] = &(plug->features.map_feature);
+    out[n++] = &(plug->features.unmap_feature);
+    out[n++] = &(plug->features.log_feature);
+    out[n++] = &(plug->features.options_feature);
+    if (plug->state_worker) {
+        out[n++] = &(plug->features.state_sched_feature);
+        out[n++] = &(plug->features.safe_restore_feature);
+    }
+    out[n] = NULL;
+}
+
+// before the instance goes - a worker thread may be inside its work()
+static void plug_workers_free(PLUG_PLUG *plug) {
+    jalv_worker_free(plug->worker);
+    plug->worker = NULL;
+    plug->features.sched.handle = NULL;
+    jalv_worker_free(plug->state_worker);
+    plug->state_worker = NULL;
+    plug->features.ssched.handle = NULL;
+}
+
 static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     if (!plug_data)
         return -1;
@@ -395,6 +445,7 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     free(cur_plug->property_params);
     cur_plug->property_params = NULL;
     cur_plug->num_property_params = 0;
+    plug_workers_free(cur_plug);
     // free instance
     if (cur_plug->plug_instance) {
         LilvInstance *cur_instance = cur_plug->plug_instance;
@@ -404,17 +455,6 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
         }
         lilv_instance_free(cur_instance);
         cur_plug->plug_instance = NULL;
-    }
-    // Terminate the worker
-    if (cur_plug->worker) {
-        jalv_worker_exit(cur_plug->worker);
-        jalv_worker_free(cur_plug->worker);
-        cur_plug->worker = NULL;
-    }
-    if (cur_plug->state_worker) {
-        jalv_worker_exit(cur_plug->state_worker);
-        jalv_worker_free(cur_plug->state_worker);
-        cur_plug->state_worker = NULL;
     }
 
     // clean the ports, the graph ones go with the node
@@ -1102,10 +1142,10 @@ int plug_plugin_preset_load(void *plug, uint64_t key) {
 
     context_sub_wait_for_stop(plug_data->control_data, (void *)cur_plug);
     // TODO a plugin with safe_restore would not need the pause
-    // TODO features are not passed - restoring crashed with them, which one is
-    // to blame is not found yet
+    const LV2_Feature *features[PLUG_RESTORE_FEATURES_MAX];
+    plug_restore_features(cur_plug, features);
     lilv_state_restore(state, cur_plug->plug_instance, plug_set_value_direct,
-                       cur_plug, 0, NULL);
+                       cur_plug, 0, features);
     // the preset set the control ports directly - sync the params to them,
     // as values the plugin already has, so they are not sent back
     for (uint32_t i = 0; i < cur_plug->num_ports; i++) {
@@ -1205,6 +1245,45 @@ enum appReturnType {
     // float that should be presented to the user as a special curve
     Curve_Float_Return_Type = 0x06
 };
+
+// a control's param increment for its range [min, max], 0 when read-only
+static PARAM_T plug_control_increment(const PLUG_CONTROL *ctrl, PARAM_T min,
+                                      PARAM_T max) {
+    unsigned char val_t = Float_type;
+    if (ctrl->is_integer || ctrl->is_toggle) {
+        val_t = Int_type;
+    }
+    if (ctrl->is_enumeration) {
+        val_t = String_Return_Type;
+    }
+
+    PARAM_T cur_inc = 0;
+    if (ctrl->is_writable == 1) {
+        // decide how big the increment of the parameter will be
+        PARAM_T total_range = max - min;
+        if (total_range < 0)
+            total_range *= -1;
+        cur_inc = 1;
+        if (val_t == Float_type) {
+            cur_inc = total_range * 0.01;
+        }
+        if (val_t == Int_type) {
+            if (total_range <= 10)
+                cur_inc = 1;
+            else if (total_range <= 100)
+                cur_inc = 5;
+            else if (total_range <= 1000)
+                cur_inc = 10;
+            else
+                cur_inc = (unsigned int)(total_range * 0.05);
+        }
+        if (ctrl->is_toggle)
+            cur_inc = 1;
+        if (ctrl->is_enumeration)
+            cur_inc = 1;
+    }
+    return cur_inc;
+}
 
 // create a control from property (not a port control)
 static PLUG_CONTROL *new_property_control(LilvWorld *const world,
@@ -1434,20 +1513,21 @@ uint32_t plug_load_and_activate(void *plugin_item) {
         plug->safe_restore = true;
     }
     lilv_node_free(state_threadSafeRestore);
-    // init features that have no data
-    const LV2_Feature static_features[] = {
+    // features that have no data. static - feature_list keeps pointing at
+    // them, a re-instantiate passes it again
+    static const LV2_Feature static_features[] = {
         {LV2_STATE__loadDefaultState, NULL},
         {LV2_BUF_SIZE__powerOf2BlockLength, NULL},
         {LV2_BUF_SIZE__fixedBlockLength, NULL},
         {LV2_BUF_SIZE__boundedBlockLength, NULL}};
     // build the features list to pass to plugins
+    // one work:schedule, the RT worker's - the state worker's and
+    // threadSafeRestore are for restore() only (plug_restore_features)
     const LV2_Feature *const features[] = {
         &(plug->features.map_feature),
         &(plug->features.unmap_feature),
         &(plug->features.sched_feature),
-        &(plug->features.state_sched_feature),
         &(plug->features.log_feature),
-        &(plug->features.safe_restore_feature),
         &(plug->features.options_feature),
         &static_features[0],
         &static_features[1],
@@ -1471,26 +1551,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
         return 0;
     }
 
-    // Create workers if necessary
-    if (lilv_plugin_has_extension_data(plug->plug,
-                                       plug_data->nodes.work_interface)) {
-        plug->worker = jalv_worker_new(&(plug->work_lock), true);
-        plug->features.sched.handle = plug->worker;
-        if (plug->safe_restore) {
-            plug->state_worker = jalv_worker_new(&(plug->work_lock), false);
-            plug->features.ssched.handle = plug->state_worker;
-        }
-    }
-    // somethings need to get instance
-    plug->features.ext_data.data_access =
-        lilv_instance_get_descriptor(plug->plug_instance)->extension_data;
-    const LV2_Worker_Interface *worker_iface =
-        (const LV2_Worker_Interface *)lilv_instance_get_extension_data(
-            plug->plug_instance, LV2_WORKER__interface);
-    jalv_worker_start(plug->worker, worker_iface,
-                      plug->plug_instance->lv2_handle);
-    jalv_worker_start(plug->state_worker, worker_iface,
-                      plug->plug_instance->lv2_handle);
+    plug_workers_start(plug_data, plug);
 
     // the plugin's node and its ports
     if (plug_ports_create(plug_data, plug) != 0) {
@@ -1546,40 +1607,8 @@ uint32_t plug_load_and_activate(void *plugin_item) {
             }
             PARAM_T param_min = lilv_node_as_float(cur_ctrl->min);
             PARAM_T param_max = lilv_node_as_float(cur_ctrl->max);
-
-            unsigned char val_t = Float_type;
-            if (cur_ctrl->is_integer || cur_ctrl->is_toggle) {
-                val_t = Int_type;
-            }
-            if (cur_ctrl->is_enumeration) {
-                val_t = String_Return_Type;
-            }
-
-            PARAM_T cur_inc = 0;
-            if (cur_ctrl->is_writable == 1) {
-                // decide how big the increment of the parameter will be
-                PARAM_T total_range = param_max - param_min;
-                if (total_range < 0)
-                    total_range *= -1;
-                cur_inc = 1;
-                if (val_t == Float_type) {
-                    cur_inc = total_range * 0.01;
-                }
-                if (val_t == Int_type) {
-                    if (total_range <= 10)
-                        cur_inc = 1;
-                    if (total_range <= 100)
-                        cur_inc = 5;
-                    if (total_range <= 1000)
-                        cur_inc = 10;
-                    if (total_range > 1000)
-                        cur_inc = (unsigned int)(total_range * 0.05);
-                }
-                if (cur_ctrl->is_toggle)
-                    cur_inc = 1;
-                if (cur_ctrl->is_enumeration)
-                    cur_inc = 1;
-            }
+            PARAM_T cur_inc =
+                plug_control_increment(cur_ctrl, param_min, param_max);
             uint32_t p_flags = 0;
             if (cur_ctrl->is_writable == 0)
                 p_flags |= PARAM_FLAG_READONLY;
@@ -1686,6 +1715,32 @@ static int scale_point_cmp(const ScalePoint *a, const ScalePoint *b) {
 
     return 1;
 }
+// a port control's min/max as the plugin declares them, an lv2:sampleRate
+// port's as multiples of sample_rate
+static void plug_control_range_read(LilvWorld *world, const LilvPlugin *plugin,
+                                    PLUG_CONTROL *control, float sample_rate) {
+    lilv_node_free(control->min);
+    lilv_node_free(control->max);
+    control->min = NULL;
+    control->max = NULL;
+    const LilvPort *port = lilv_plugin_get_port_by_index(plugin, control->index);
+    if (!port)
+        return;
+    lilv_port_get_range(plugin, port, NULL, &control->min, &control->max);
+    if (!control->is_sample_rate)
+        return;
+    if (lilv_node_is_float(control->min) || lilv_node_is_int(control->min)) {
+        const float min = lilv_node_as_float(control->min) * sample_rate;
+        lilv_node_free(control->min);
+        control->min = lilv_new_float(world, min);
+    }
+    if (lilv_node_is_float(control->max) || lilv_node_is_int(control->max)) {
+        const float max = lilv_node_as_float(control->max) * sample_rate;
+        lilv_node_free(control->max);
+        control->max = lilv_new_float(world, max);
+    }
+}
+
 // create a control from control port
 static PLUG_CONTROL *
 new_port_control(LilvWorld *const world, const LilvPlugin *const plugin,
@@ -1713,19 +1768,10 @@ new_port_control(LilvWorld *const world, const LilvPlugin *const plugin,
     id->is_logarithmic =
         lilv_port_has_property(plugin, port, nodes->pprops_logarithmic);
 
-    lilv_port_get_range(plugin, port, &id->def, &id->min, &id->max);
-    if (lilv_port_has_property(plugin, port, nodes->lv2_sampleRate)) {
-        if (lilv_node_is_float(id->min) || lilv_node_is_int(id->min)) {
-            const float min = lilv_node_as_float(id->min) * sample_rate;
-            lilv_node_free(id->min);
-            id->min = lilv_new_float(world, min);
-        }
-        if (lilv_node_is_float(id->max) || lilv_node_is_int(id->max)) {
-            const float max = lilv_node_as_float(id->max) * sample_rate;
-            lilv_node_free(id->max);
-            id->max = lilv_new_float(world, max);
-        }
-    }
+    id->is_sample_rate =
+        lilv_port_has_property(plugin, port, nodes->lv2_sampleRate);
+    lilv_port_get_range(plugin, port, &id->def, NULL, NULL);
+    plug_control_range_read(world, plugin, id, sample_rate);
 
     LilvScalePoints *sp = lilv_port_get_scale_points(plugin, port);
     id->points = NULL;
@@ -1756,16 +1802,138 @@ new_port_control(LilvWorld *const world, const LilvPlugin *const plugin,
     return id;
 }
 
-void plug_set_samplerate(PLUG_INFO *plug_data, float new_sample_rate) {
-    if (!plug_data)
-        return;
-    plug_data->sample_rate = new_sample_rate;
+// what plug_plugin_process_rt does not connect each cycle: controls to their
+// values, atom ports to their sequences, unknown ports to nothing
+static void plug_ports_connect(PLUG_PLUG *plug) {
+    for (uint32_t i = 0; i < plug->num_ports; i++) {
+        PLUG_PORT *const cur_port = &(plug->ports[i]);
+        if (cur_port->type == PORT_TYPE_CONTROL)
+            lilv_instance_connect_port(plug->plug_instance, i,
+                                       &(cur_port->control));
+        if (cur_port->type == PORT_TYPE_EVENT) {
+            plug_evbuf_reset(cur_port->evbuf,
+                             cur_port->flow == PORT_FLOW_INPUT);
+            lilv_instance_connect_port(plug->plug_instance, i,
+                                       plug_evbuf_get_buffer(cur_port->evbuf));
+        }
+        if (cur_port->flow == PORT_FLOW_UNKNOWN ||
+            cur_port->type == PORT_TYPE_UNKNOWN)
+            lilv_instance_connect_port(plug->plug_instance, i, NULL);
+    }
 }
 
-void plug_set_block_length(PLUG_INFO *plug_data, uint32_t new_block_length) {
+// LilvGetPortValueFunc - a control input's value, for a state
+static const void *plug_get_port_value(const char *port_symbol,
+                                       void *user_data, uint32_t *size,
+                                       uint32_t *type) {
+    PLUG_PLUG *plug = (PLUG_PLUG *)user_data;
+    PLUG_PORT *port = plug_find_port_by_name(plug, port_symbol);
+    if (!port || port->type != PORT_TYPE_CONTROL ||
+        port->flow != PORT_FLOW_INPUT) {
+        *size = 0;
+        *type = 0;
+        return NULL;
+    }
+    *size = sizeof(float);
+    *type = plug->forge.Float;
+    return &(port->control);
+}
+
+// [main-thread] a new instance at plug_data's sample rate and block length,
+// with the old one's state. The plugin is stopped. -1 when instantiating
+// failed - the plugin has no instance then
+static int plug_reinstantiate(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
+    LilvState *state = lilv_state_new_from_instance(
+        plug->plug, plug->plug_instance, &(plug->map), NULL, NULL, NULL, NULL,
+        plug_get_port_value, plug, LV2_STATE_IS_POD | LV2_STATE_IS_PORTABLE,
+        NULL);
+    // they hold the old instance, and requests made for it
+    plug_workers_free(plug);
+    if (plug->plug_instance_activated == 1) {
+        lilv_instance_deactivate(plug->plug_instance);
+        plug->plug_instance_activated = 0;
+    }
+    lilv_instance_free(plug->plug_instance);
+    plug->plug_instance = lilv_plugin_instantiate(
+        plug->plug, plug_data->sample_rate, plug->feature_list);
+    if (!plug->plug_instance) {
+        if (state)
+            lilv_state_free(state);
+        return -1;
+    }
+    plug_workers_start(plug_data, plug);
+    plug_ports_connect(plug);
+    if (state) {
+        const LV2_Feature *features[PLUG_RESTORE_FEATURES_MAX];
+        plug_restore_features(plug, features);
+        lilv_state_restore(state, plug->plug_instance, plug_set_value_direct,
+                           plug, 0, features);
+        lilv_state_free(state);
+    }
+    lilv_instance_activate(plug->plug_instance);
+    plug->plug_instance_activated = 1;
+    // its property params are read back from the new instance
+    plug->request_update = true;
+    return 0;
+}
+
+// [main-thread] the lv2:sampleRate controls' ranges for plug_data's rate. Their
+// params clamp the value into the new range and send it to the plugin
+static void plug_controls_rescale(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
+    for (unsigned int i = 0; i < plug->num_controls; i++) {
+        PLUG_CONTROL *control = plug->controls[i];
+        if (!control || control->type != PORT || !control->is_sample_rate)
+            continue;
+        plug_control_range_read(plug_data->lv_world, plug->plug, control,
+                                plug_data->sample_rate);
+        PARAM_T min = lilv_node_as_float(control->min);
+        PARAM_T max = lilv_node_as_float(control->max);
+        // a control's val_id is its index in controls
+        // the host's value - the plugin gets the clamped one
+        if (param_set_range(plug->plug_params, (int)i, min, max, false) != 0)
+            continue;
+        param_set_value(plug->plug_params, (int)i,
+                        plug_control_increment(control, min, max), NULL,
+                        Operation_SetIncr);
+    }
+}
+
+int plug_audio_config_set(PLUG_INFO *plug_data, SAMPLE_T sample_rate,
+                          uint32_t block_length) {
     if (!plug_data)
-        return;
-    plug_data->block_length = new_block_length;
+        return -1;
+    bool rate_changed = (float)sample_rate != plug_data->sample_rate;
+    if (!rate_changed && block_length == plug_data->block_length)
+        return 0;
+    // [audio-thread] reads block_length for a processing plugin, so every
+    // plugin stops before it changes
+    for (int i = 0; i < MAX_INSTANCES; i++) {
+        PLUG_PLUG *plug = &(plug_data->plugins[i]);
+        if (plug->plug_instance)
+            context_sub_wait_for_stop(plug_data->control_data, (void *)plug);
+    }
+    plug_data->sample_rate = (float)sample_rate;
+    plug_data->block_length = block_length;
+    // a plugin gets both only at instantiate
+    int result = 0;
+    for (int i = 0; i < MAX_INSTANCES; i++) {
+        PLUG_PLUG *plug = &(plug_data->plugins[i]);
+        if (!plug->plug_instance)
+            continue;
+        if (plug_reinstantiate(plug_data, plug) != 0) {
+            context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                                 is_audio_thread,
+                                 "%s could not be instantiated again, removed\n",
+                                 plug->name);
+            plug_remove_plug(plug_data, plug->id);
+            result = -1;
+            continue;
+        }
+        if (rate_changed)
+            plug_controls_rescale(plug_data, plug);
+        context_sub_wait_for_start(plug_data->control_data, (void *)plug);
+    }
+    return result;
 }
 
 // the ports that are not control ports are graph ports, on the plugin's node.
@@ -1849,9 +2017,6 @@ static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
             cur_port->type = PORT_TYPE_CONTROL;
             cur_port->control =
                 isnan(default_values[i]) ? 0.0f : default_values[i];
-            // connect the port to its value
-            lilv_instance_connect_port(plug->plug_instance, i,
-                                       &(cur_port->control));
             // Create and add to the control array the PLUG_CONTROL for this
             // control port
             PLUG_CONTROL *record = new_port_control(
@@ -1907,12 +2072,10 @@ static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
             const size_t size =
                 MAX(cur_port->buf_size, plug_data->midi_buf_size);
             cur_port->evbuf = plug_evbuf_new(size, atom_Chunk, atom_Sequence);
-            lilv_instance_connect_port(plug->plug_instance, i,
-                                       plug_evbuf_get_buffer(cur_port->evbuf));
-            unsigned int is_input = 0;
-            if (cur_port->flow == PORT_FLOW_INPUT)
-                is_input = 1;
-            plug_evbuf_reset(cur_port->evbuf, is_input);
+            if (!cur_port->evbuf) {
+                free(default_values);
+                return -1;
+            }
             //--------------------
         }
         // if not optional but we dont know the type we cant load this plugin
@@ -1920,12 +2083,8 @@ static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
             free(default_values);
             return -1;
         }
-        // if the type is unknown connect to null
-        if (cur_port->flow == PORT_FLOW_UNKNOWN ||
-            cur_port->type == PORT_TYPE_UNKNOWN) {
-            lilv_instance_connect_port(plug->plug_instance, i, NULL);
-        }
     }
+    plug_ports_connect(plug);
     // find the controling port index
     const LilvPort *control_input = lilv_plugin_get_port_by_designation(
         plug->plug, plug_data->nodes.lv2_InputPort,
@@ -1981,6 +2140,10 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     if (!plug->ports)
         return false;
     PLUG_INFO *plug_data = plug->plug_data;
+    // instantiated for exactly block_length (fixedBlockLength) - a buffer size
+    // change, until the new instance
+    if (nframes != plug_data->block_length)
+        return false;
 
     //----------------------------------------------------------------------------------------------------
     // first connect the ports for processing

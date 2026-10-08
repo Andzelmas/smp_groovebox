@@ -93,12 +93,12 @@ PRM_CONTAIN *plug_plugin_param_container(void *plug);
 // check if the plugins array changed (became dirty)
 bool plug_plugins_is_dirty(PLUG_INFO *plug_data);
 
-// set the samplerate of the plug_data, should usually be done before launching
-// any plugins
-void plug_set_samplerate(PLUG_INFO *plug_data, float new_sample_rate);
-
-// set the buffer size, should be usually done before launching any plugins
-void plug_set_block_length(PLUG_INFO *plug_data, uint32_t block_length);
+// [main-thread] the values plugins are instantiated with. Every loaded plugin
+// gets a new instance, its state carried over; one that fails is removed.
+// A plugin runs nothing for nframes != block_length. 0 on success, -1 when a
+// plugin was removed
+int plug_audio_config_set(PLUG_INFO *plug_data, SAMPLE_T sample_rate,
+                          uint32_t block_length);
 
 // the plugin's node process: connect the ports, run one plugin for nframes
 // and update its output ports, on [audio-thread]. true if it wrote its

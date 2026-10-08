@@ -89,9 +89,7 @@ typedef struct _smp_port{
 //Only realtime thread directly modifies and reads the SMP_SMP, non realtime thread can remove it or add
 //new one, but before doing so it asks the realtime thread to pause sample processing.
 typedef struct _smp_info{
-    //the buffer size of the audio system
-    unsigned int buffer_size;
-    //the samplerate of the system;
+    //the samplerate of the system, [main-thread]
     SAMPLE_T samplerate;
     //this is the sample array
     SMP_SMP samples [MAX_SAMPLES+1]; //one sample too many in array, the last one will be to check for the end of the array
@@ -197,8 +195,7 @@ static int smp_remove_sample(SMP_INFO* smp_data, unsigned int idx){
 //the sampler's node and its ports
 static int smp_ports_create(SMP_INFO* smp_data);
 
-SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
-		   smp_status_t *status,
+SMP_INFO* smp_init(SAMPLE_T samplerate, smp_status_t *status,
 		   GRAPH* graph, uint64_t owner_tag, uint64_t owner_uid){
     /*allocate memory for the smp_data struct, that will contain the other samples*/
     SMP_INFO *smp_data = (SMP_INFO*) malloc(sizeof(SMP_INFO));
@@ -218,7 +215,6 @@ SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate,
 	return NULL;
     }
 
-    smp_data->buffer_size = buffer_size;
     smp_data->samplerate = samplerate;
     //init the ports
     smp_data->num_ports = IN_MIDI + OUTS;
@@ -519,6 +515,11 @@ PRM_CONTAIN *smp_sample_param_container(void *smp){
     if(!cur_smp)
         return NULL;
     return cur_smp->params;
+}
+
+void smp_sample_rate_set(SMP_INFO* smp_data, SAMPLE_T samplerate){
+    if(!smp_data)return;
+    smp_data->samplerate = samplerate;
 }
 
 bool smp_samples_is_dirty(SMP_INFO* smp_data){

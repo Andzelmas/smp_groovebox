@@ -86,11 +86,11 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 // the owner's own array, a module-private enum). 
 // cookie is optional convenience storage for the owner (e.g. a CLAP param's
 // cookie) - may be NULL, and is only ever readable from the rt side (see
-// param_cookie_return_rt). flags is this param's initial paramFlags bitmask
-// (0 if the owner has no flag source). category_uid is which category this
-// param sits in (see param_category_intern), 0 for none. Reuses a freed
-// slot if one exists, else grows the container. Returns the new val_id (same
-// index on both the rt and ui side) on success.
+// param_cookie_return_rt), replaced by param_set_cookie. flags is this param's
+// initial paramFlags bitmask (0 if the owner has no flag source). category_uid
+// is which category this param sits in (see param_category_intern), 0 for
+// none. Reuses a freed slot if one exists, else grows the container. Returns
+// the new val_id (same index on both the rt and ui side) on success.
 int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
                     PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
                     uint32_t owner_id, uint32_t flags, uint32_t category_uid,
@@ -150,7 +150,8 @@ unsigned int param_return_num_params(PRM_CONTAIN *param_container,
 
 // process ring_buffers - apply value messages that crossed from the other
 // side. Each message is already the final, clamped value (see
-// PARAM_RING_DATA_BIT) - this just stores it, no operation is replayed.
+// PARAM_RING_DATA_BIT) - this just stores it, no operation is replayed. The
+// rt side also takes a new range or cookie (param_set_range / _cookie).
 void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params);
 
 // rt-side value setter, for values that come from the owner (a plugin output,
@@ -174,6 +175,17 @@ void param_rt_resend(PRM_CONTAIN *param_container);
 // changed, propagate the final value to the rt side; Returns -1 on error.
 int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
                     const char *set_string_to, unsigned char param_op);
+
+// ui-side range setter: both sides take [min, max], the value is clamped into
+// it and, if that changed it, sent on like a SetValue - or, from_owner, like a
+// SyncValue (the owner has its own value, it is not sent back). Marks the
+// param changed. -1 on error (min > max or NaN included)
+int param_set_range(PRM_CONTAIN *param_container, int val_id, PARAM_T min,
+                    PARAM_T max, bool from_owner);
+
+// ui-side: the rt side takes the owner's new cookie (see param_add_param).
+// -1 on error or a full ui_to_rt queue
+int param_set_cookie(PRM_CONTAIN *param_container, int val_id, void *cookie);
 
 // return the cookie stored for this param (see param_add_param) - rt-side
 // only, NULL if none/on error.

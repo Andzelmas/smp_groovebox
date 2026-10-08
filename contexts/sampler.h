@@ -24,8 +24,10 @@ int smp_read_rt_to_ui_messages(SMP_INFO* smp_data);
 //initialize the sampler to empty values
 //the sampler is one node of graph, owned by (owner_tag, owner_uid) - both come
 //from the caller
-SMP_INFO* smp_init(unsigned int buffer_size, SAMPLE_T samplerate, smp_status_t *status, GRAPH* graph,
+SMP_INFO* smp_init(SAMPLE_T samplerate, smp_status_t *status, GRAPH* graph,
 		   uint64_t owner_tag, uint64_t owner_uid);
+//[main-thread] the system's new sample rate
+void smp_sample_rate_set(SMP_INFO* smp_data, SAMPLE_T samplerate);
 //the function that adds a new sample and gets its buffer from a file to memory.
 //on success returns the new sample's identity uid (always > 0, matching
 //smp_sample_uid); on failure returns 0.

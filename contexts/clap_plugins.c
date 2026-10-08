@@ -121,6 +121,8 @@ typedef struct _clap_plug_port {
     uint32_t ports_count;
     CLAP_PLUG_PORT_GRAPH *graph_port_array;
     clap_audio_buffer_t *audio_ports;
+    // what each channel buffer holds, 0 when not allocated
+    uint32_t frames;
 } CLAP_PLUG_PORT;
 
 // note port struct holds the graph ports and info about the ports
@@ -328,6 +330,36 @@ static int clap_plug_destroy_ports(CLAP_PLUG_INFO *plug_data,
     clap_plug_destroy_audio_ports(port->audio_ports, port->ports_count);
     port->audio_ports = NULL;
     port->ports_count = 0;
+    port->frames = 0;
+    return 0;
+}
+
+// [main-thread] every channel buffer of the ports to hold frames, zeroed, while
+// the plugin is not activated. -1 on failure - frames stays 0
+static int clap_plug_audio_buffers_fit(CLAP_PLUG_PORT *port, uint32_t frames) {
+    if (port->frames == frames)
+        return 0;
+    port->frames = 0;
+    for (uint32_t i = 0; port->audio_ports && i < port->ports_count; i++) {
+        clap_audio_buffer_t *audio = &(port->audio_ports[i]);
+        for (uint32_t chan = 0; chan < audio->channel_count; chan++) {
+            if (audio->data32) {
+                float *fresh = calloc(frames, sizeof(float));
+                if (!fresh)
+                    return -1;
+                free(audio->data32[chan]);
+                audio->data32[chan] = fresh;
+            }
+            if (audio->data64) {
+                double *fresh = calloc(frames, sizeof(double));
+                if (!fresh)
+                    return -1;
+                free(audio->data64[chan]);
+                audio->data64[chan] = fresh;
+            }
+        }
+    }
+    port->frames = frames;
     return 0;
 }
 
@@ -465,32 +497,21 @@ static int clap_plug_create_ports(CLAP_PLUG_INFO *plug_data, int id,
             cur_graph_port->channel_count = channels;
         }
 
-        // create data for the clap_audio_buffer
+        // the clap_audio_buffer's channel arrays, their buffers made by
+        // clap_plug_audio_buffers_fit
         cur_clap_port->data64 = NULL;
-        cur_clap_port->data32 = malloc(sizeof(float *) * channels);
+        cur_clap_port->data32 = calloc(channels, sizeof(float *));
         if (cur_clap_port->data32) {
-            for (uint32_t chan = 0; chan < channels; chan++) {
-                // create buffer for float32
-                cur_clap_port->data32[chan] =
-                    calloc(plug_data->max_buffer_size, sizeof(float));
-            }
             if ((port_info.flags & CLAP_AUDIO_PORT_SUPPORTS_64BITS) ==
-                CLAP_AUDIO_PORT_SUPPORTS_64BITS) {
-                cur_clap_port->data64 = malloc(sizeof(double *) * channels);
-                if (cur_clap_port->data64) {
-                    for (uint32_t chan = 0; chan < channels; chan++) {
-                        cur_clap_port->data64[chan] =
-                            calloc(plug_data->max_buffer_size, sizeof(double));
-                    }
-                }
-            }
+                CLAP_AUDIO_PORT_SUPPORTS_64BITS)
+                cur_clap_port->data64 = calloc(channels, sizeof(double *));
             cur_clap_port->constant_mask = 0;
             cur_clap_port->latency = 0;
             cur_clap_port->channel_count = channels;
         }
     }
     port->ports_count = clap_ports_count;
-    return 0;
+    return clap_plug_audio_buffers_fit(port, plug_data->max_buffer_size);
 }
 
 // rename the note ports
@@ -826,22 +847,58 @@ static void clap_plug_reconcile_param_flags(PRM_CONTAIN *plug_params,
                         Operation_SetFlags);
 }
 
-// reconcile every survivor's flags after a discovery/resync pass - new adds
-// already got correct flags from param_add_param, this only matters for
-// params that were already alive (resync leaves survivors untouched, see
-// params_container_resync's own doc comment).
+// after a discovery/resync pass, what only RESCAN_ALL may change on a survivor:
+// range, increment, default and cookie (resync leaves survivors untouched, new
+// adds got them from param_add_param; name, flags and category are the INFO
+// pass's). The plugin is not activated, so [main-thread] owns the rt side -
+// the messages are applied at once, a big param set never fills the queue
 static void clap_plug_reconcile_survivors(PRM_CONTAIN *plug_params,
                                           const PARAM_RESYNC_ITEM *items,
                                           uint32_t item_count) {
     for (uint32_t i = 0; i < item_count; i++) {
         int val_id = param_find_uid(plug_params, items[i].uid);
-        clap_plug_reconcile_param_flags(plug_params, val_id, items[i].flags);
-        clap_plug_reconcile_param_category(plug_params, val_id,
-                                           items[i].category_uid);
+        if (val_id == -1)
+            continue;
+        // the plugin has its own value, read again after this
+        param_set_range(plug_params, val_id, items[i].min, items[i].max, true);
+        param_set_value(plug_params, val_id, items[i].inc, NULL,
+                        Operation_SetIncr);
+        param_set_value(plug_params, val_id, items[i].val, NULL,
+                        Operation_SetDefValue);
+        param_set_cookie(plug_params, val_id, items[i].cookie);
+        param_msgs_process(plug_params, 1);
     }
 }
 
-// create parameters on the id plugin, the plugin should not be processing
+// the param set (re)built from the plugin, while it is not activated: at load
+// every param is new, on a RESCAN_ALL survivors keep their uid. -1 on
+// allocation failure
+static int clap_plug_params_rescan_all(CLAP_PLUG_PLUG *plug) {
+    const clap_plugin_params_t *clap_params =
+        plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
+    // without the extension the plugin has no params
+    if (!clap_params)
+        return 0;
+    uint32_t param_count = clap_params->count(plug->plug_inst);
+    // param_count==0 still must run resync (as an empty new_params[])
+    // so pass 1 removes every param this plugin no longer has
+    PARAM_RESYNC_ITEM *items =
+        param_count > 0 ? malloc(param_count * sizeof(PARAM_RESYNC_ITEM))
+                        : NULL;
+    if (param_count > 0 && !items)
+        return -1;
+    uint32_t item_count =
+        param_count > 0
+            ? clap_plug_discover_params(plug, clap_params, items, param_count)
+            : 0;
+    params_container_resync(plug->plug_params, items, item_count);
+    clap_plug_reconcile_survivors(plug->plug_params, items, item_count);
+    free(items);
+    return 0;
+}
+
+// the id plugin's param container, the plugin not activated yet. Every plugin
+// gets one, empty without params - a RESCAN_ALL may add some later
 static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     if (!plug_data)
         return -1;
@@ -853,16 +910,6 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     if (!plug->plug_inst)
         return -1;
 
-    const clap_plugin_params_t *clap_params =
-        plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
-    // without the extension the plugin has no params
-    if (!clap_params)
-        return 0;
-
-    uint32_t param_count = clap_params->count(plug->plug_inst);
-    if (param_count == 0)
-        return 0;
-
     PRM_CONT_USER_DATA container_user_data;
     container_user_data.user_data = (void *)plug;
     container_user_data.build_value = NULL;
@@ -870,16 +917,7 @@ static int clap_plug_params_create(CLAP_PLUG_INFO *plug_data, int id) {
     plug->plug_params = params_init_param_container(&container_user_data);
     if (!plug->plug_params)
         return -1;
-
-    PARAM_RESYNC_ITEM *items = malloc(param_count * sizeof(PARAM_RESYNC_ITEM));
-    if (!items)
-        return -1;
-    uint32_t item_count =
-        clap_plug_discover_params(plug, clap_params, items, param_count);
-    params_container_resync(plug->plug_params, items, item_count);
-    clap_plug_reconcile_survivors(plug->plug_params, items, item_count);
-    free(items);
-    return 0;
+    return clap_plug_params_rescan_all(plug);
 }
 
 // [main-thread] read every param value from the plugin into the param
@@ -911,6 +949,7 @@ static void clap_plug_params_sync_values(CLAP_PLUG_PLUG *plug) {
     }
 }
 
+
 static void clap_plug_ext_params_rescan(const clap_host_t *host,
                                         clap_param_rescan_flags flags) {
     if (!is_main_thread)
@@ -923,6 +962,14 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
     CLAP_PLUG_INFO *plug_data = plug->plug_data;
     if (!plug_data)
         return;
+    // ALL first, the passes below then read the rebuilt set. It invalidates
+    // everything the host knows, so values, texts and info are read again too
+    if ((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL &&
+        plug->plug_inst_activated == 0) {
+        clap_plug_params_rescan_all(plug);
+        flags |= CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT |
+                 CLAP_PARAM_RESCAN_INFO;
+    }
     if ((flags & CLAP_PARAM_RESCAN_VALUES) == CLAP_PARAM_RESCAN_VALUES)
         clap_plug_params_sync_values(plug);
     if ((flags & CLAP_PARAM_RESCAN_TEXT) == CLAP_PARAM_RESCAN_TEXT) {
@@ -956,29 +1003,6 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
                 plug->plug_params, val_id,
                 clap_plug_intern_module(plug->plug_params, param_info.module));
         }
-    }
-    if ((flags & CLAP_PARAM_RESCAN_ALL) == CLAP_PARAM_RESCAN_ALL) {
-        if (plug->plug_inst_activated == 1)
-            return;
-        const clap_plugin_params_t *clap_params =
-            plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_PARAMS);
-        if (!clap_params)
-            return;
-        uint32_t param_count = clap_params->count(plug->plug_inst);
-        // param_count==0 still must run resync (as an empty new_params[])
-        // so pass 1 removes every param this plugin no longer has
-        PARAM_RESYNC_ITEM *items =
-            param_count > 0 ? malloc(param_count * sizeof(PARAM_RESYNC_ITEM))
-                            : NULL;
-        if (param_count > 0 && !items)
-            return;
-        uint32_t item_count =
-            param_count > 0 ? clap_plug_discover_params(plug, clap_params,
-                                                        items, param_count)
-                            : 0;
-        params_container_resync(plug->plug_params, items, item_count);
-        clap_plug_reconcile_survivors(plug->plug_params, items, item_count);
-        free(items);
     }
 }
 
@@ -1296,6 +1320,15 @@ static void clap_ext_preset_load_on_load(const clap_host_t *host,
     return;
 }
 
+// deactivate the plugin if it is activated. The flag goes first - a plugin
+// may rescan(CLAP_PARAM_RESCAN_ALL) from inside deactivate()
+static void clap_plug_deactivate(CLAP_PLUG_PLUG *plug) {
+    if (plug->plug_inst_activated != 1)
+        return;
+    plug->plug_inst_activated = 0;
+    plug->plug_inst->deactivate(plug->plug_inst);
+}
+
 // clean the single plugin struct
 // before calling this the plug_inst_processing should be == 0
 static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
@@ -1308,10 +1341,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     CLAP_PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
 
     if (plug->plug_inst) {
-        if (plug->plug_inst_activated == 1) {
-            plug->plug_inst->deactivate(plug->plug_inst);
-            plug->plug_inst_activated = 0;
-        }
+        clap_plug_deactivate(plug);
         if (plug->plug_inst_created == 1) {
             plug->plug_inst->destroy(plug->plug_inst);
             plug->plug_inst_created = 0;
@@ -1462,6 +1492,12 @@ static int clap_plug_activate_start_processing(void *user_data) {
     if (plug->plug_inst_activated == 0) {
         if (!plug->plug_inst)
             return -1;
+        // the channel buffers hold what activate promises
+        if (clap_plug_audio_buffers_fit(&(plug->input_ports),
+                                        plug_data->max_buffer_size) != 0 ||
+            clap_plug_audio_buffers_fit(&(plug->output_ports),
+                                        plug_data->max_buffer_size) != 0)
+            return -1;
         if (!plug->plug_inst->activate(plug->plug_inst, plug_data->sample_rate,
                                        plug_data->min_buffer_size,
                                        plug_data->max_buffer_size)) {
@@ -1489,14 +1525,49 @@ static int clap_plug_restart(void *user_data) {
     // its stopping
     context_sub_wait_for_stop(plug_data->control_data, (void *)plug);
 
-    if (plug->plug_inst_activated == 1) {
-        plug->plug_inst->deactivate(plug->plug_inst);
-        plug->plug_inst_activated = 0;
-    }
+    clap_plug_deactivate(plug);
     // now when the plugin was deactivated simply call the activate and process
     // function, that will reactivate the plugin and send a message to
     // [audio-thread] to start processing it
     return clap_plug_activate_start_processing((void *)plug);
+}
+
+int clap_plug_audio_config_set(CLAP_PLUG_INFO *plug_data, SAMPLE_T sample_rate,
+                               uint32_t min_buffer_size,
+                               uint32_t max_buffer_size) {
+    if (!plug_data)
+        return -1;
+    if (sample_rate == plug_data->sample_rate &&
+        min_buffer_size == plug_data->min_buffer_size &&
+        max_buffer_size == plug_data->max_buffer_size)
+        return 0;
+    // [audio-thread] reads the sizes for a processing plugin, so every plugin
+    // stops before they change
+    bool was_activated[MAX_INSTANCES] = {false};
+    for (int i = 0; i < MAX_INSTANCES; i++) {
+        CLAP_PLUG_PLUG *plug = &(plug_data->plugins[i]);
+        if (!plug->plug_inst)
+            continue;
+        context_sub_wait_for_stop(plug_data->control_data, (void *)plug);
+        was_activated[i] = plug->plug_inst_activated == 1;
+        clap_plug_deactivate(plug);
+    }
+    plug_data->sample_rate = sample_rate;
+    plug_data->min_buffer_size = min_buffer_size;
+    plug_data->max_buffer_size = max_buffer_size;
+    // the others take the values when they activate
+    int result = 0;
+    for (int i = 0; i < MAX_INSTANCES; i++) {
+        CLAP_PLUG_PLUG *plug = &(plug_data->plugins[i]);
+        if (!was_activated[i] ||
+            clap_plug_activate_start_processing((void *)plug) == 0)
+            continue;
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "%s did not activate again\n", plug->name);
+        result = -1;
+    }
+    return result;
 }
 
 // [thread-safe] clap_host_t requests - only mark them, clap_plug_requests_process
@@ -2872,6 +2943,10 @@ bool clap_plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     if (plug->plug_inst_processing == 0)
         return false;
     CLAP_PLUG_INFO *plug_data = plug->plug_data;
+    // not what it was activated for - a buffer size change, until its restart
+    if (nframes < plug_data->min_buffer_size ||
+        nframes > plug_data->max_buffer_size)
+        return false;
 
     clap_process_t _process = {0};
     _process.steady_time = -1;

@@ -48,6 +48,11 @@ void graph_free(GRAPH *graph);
 // bumped by every change to nodes, ports or edges
 uint64_t graph_generation(const GRAPH *graph);
 
+// new audio buffers of max_buffer_size frames for every port, used from the
+// next plan on; the old ones are freed once no plan runs them. 0 on success,
+// -1 on failure - nothing changed
+int graph_max_buffer_size_set(GRAPH *graph, uint32_t max_buffer_size);
+
 // owner_tag/owner_uid name what the node belongs to - the graph interprets
 // neither, it hands them back on its ports' GraphPortInfo. Both must be final,
 // owner_tag non-zero. Nodes may share an owner. process may be NULL
@@ -97,7 +102,8 @@ int graph_disconnect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b);
 // next call retries
 int graph_plan_update(GRAPH *graph);
 // [audio-thread] one cycle of the newest plan: the nodes in edge order, each
-// once its inputs are ready. Runs nothing for nframes > max_buffer_size
+// once its inputs are ready. Runs nothing for nframes > the max_buffer_size
+// the plan was built with
 void graph_process_rt(GRAPH *graph, NFRAMES_T nframes);
 
 // fn gets each MIDI port whose buffer dropped events since the last call

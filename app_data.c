@@ -42,6 +42,9 @@ typedef struct _app_info {
     CXCONTROL *control_data;
     unsigned int is_processing; // is the main jack function processing, should
                                 // be touched only on [audio-thread]
+    // what the graph and the contexts run at, follows the backend
+    SAMPLE_T sample_rate;
+    uint32_t buffer_size;
 
     // data event queue (main thread only: produced in app_data_update, drained
     // by app_data_poll_event). Grows instead of dropping - a lost
@@ -1632,6 +1635,8 @@ DataObject app_init(void) {
 
     uint32_t buffer_size = audio_backend_buffer_size(app_data->backend);
     SAMPLE_T samplerate = audio_backend_sample_rate(app_data->backend);
+    app_data->buffer_size = buffer_size;
+    app_data->sample_rate = samplerate;
     app_data->graph = graph_new(buffer_size);
     // the exposed ports (master_in/out, midi_in/out) group under the root
     if (!app_data->graph ||
@@ -1651,9 +1656,8 @@ DataObject app_init(void) {
     /*initiate the sampler it will be empty initialy*/
     /*-----------------------------------------------*/
     smp_status_t smp_status_err = 0;
-    app_data->smp_data =
-        smp_init(buffer_size, samplerate, &smp_status_err, app_data->graph,
-                 DATA_NS_SINGLETON, SID_SAMPLER);
+    app_data->smp_data = smp_init(samplerate, &smp_status_err, app_data->graph,
+                                  DATA_NS_SINGLETON, SID_SAMPLER);
     if (!app_data->smp_data) {
         // clean app_data
         clean_memory(app_data);
@@ -1684,9 +1688,8 @@ DataObject app_init(void) {
     clap_plug_plugin_list_init(app_data->clap_plug_data);
 
     // initiate the Synth data
-    app_data->synth_data =
-        synth_init((unsigned int)buffer_size, samplerate, 1, app_data->graph,
-                   app_data->backend, DATA_NS_SYNTH_OSC);
+    app_data->synth_data = synth_init(samplerate, 1, app_data->graph,
+                                      app_data->backend, DATA_NS_SYNTH_OSC);
     if (!app_data->synth_data) {
         clean_memory(app_data);
         return invalid;
@@ -1743,6 +1746,30 @@ static void app_log_midi_drops(void *arg, const GraphPortInfo *port,
                        port->name, dropped);
 }
 
+// follow the backend's sample rate and buffer size. The plan and the plugins
+// guard the sizes they were set up for, so the order is free; the graph goes
+// first so the plugins' restarts already publish its new buffers
+static void app_audio_config_update(APP_INFO *app_data) {
+    SAMPLE_T sample_rate = audio_backend_sample_rate(app_data->backend);
+    uint32_t buffer_size = audio_backend_buffer_size(app_data->backend);
+    if (sample_rate == app_data->sample_rate &&
+        buffer_size == app_data->buffer_size)
+        return;
+    log_append_logfile("Audio config: %.0f Hz, %u frames\n", (double)sample_rate,
+                       buffer_size);
+    // not retried - a failure would repeat every update
+    app_data->sample_rate = sample_rate;
+    app_data->buffer_size = buffer_size;
+    if (graph_max_buffer_size_set(app_data->graph, buffer_size) != 0)
+        log_append_logfile("Graph buffers stay at the old size\n");
+    smp_sample_rate_set(app_data->smp_data, sample_rate);
+    if (synth_sample_rate_set(app_data->synth_data, sample_rate) != 0)
+        log_append_logfile("Synth stays at the old sample rate\n");
+    plug_audio_config_set(app_data->plug_data, sample_rate, buffer_size);
+    clap_plug_audio_config_set(app_data->clap_plug_data, sample_rate,
+                               buffer_size, buffer_size);
+}
+
 void app_data_update(void *root_user_data) {
     if (!root_user_data)
         return;
@@ -1760,6 +1787,7 @@ void app_data_update(void *root_user_data) {
     // read messages from the rt thread on the [main-thread] for the synth
     // context
     synth_read_rt_to_ui_messages(app_data->synth_data);
+    app_audio_config_update(app_data);
     // publish what the contexts changed in the graph, free what the audio
     // thread no longer runs
     graph_plan_update(app_data->graph);

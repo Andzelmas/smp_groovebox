@@ -14,8 +14,11 @@ int synth_read_ui_to_rt_messages(SYNTH_DATA* synth_data);
 int synth_read_rt_to_ui_messages(SYNTH_DATA* synth_data);
 //initiate the synth data, one graph node per oscillator, owned by (owner_tag,
 //the oscillator's uid). transport is for app_jack_return_transport_rt, until 2T
-SYNTH_DATA* synth_init (unsigned int buffer_size, SAMPLE_T sample_rate, unsigned int with_metronome,
+SYNTH_DATA* synth_init (SAMPLE_T sample_rate, unsigned int with_metronome,
 			GRAPH* graph, void* transport, uint64_t owner_tag);
+//[main-thread] run at a new sample rate: the synth stops while its tables are
+//swapped, playing voices end. 0 on success, -1 (old rate kept) on failure
+int synth_sample_rate_set(SYNTH_DATA* synth_data, SAMPLE_T sample_rate);
 //process one oscillator (a synth_osc_return handle) on the [audio-thread].
 //true if it wrote its outputs this cycle
 bool synth_osc_process_rt(void* osc, NFRAMES_T nframes);

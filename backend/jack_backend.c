@@ -84,10 +84,13 @@ typedef struct _audio_backend {
     GRAPH *graph;
     GRAPH_NODE *in_node;
     GRAPH_NODE *out_node;
-    // the current server sample_rate
-    jack_nframes_t sample_rate;
-    // the current server buffer size
-    jack_nframes_t buffer_size;
+    // the app's process, run by jack_process_rt
+    int (*process)(NFRAMES_T nframes, void *arg);
+    void *process_arg;
+    // the server's current values, set by the change callbacks on JACK's
+    // notification thread
+    atomic_uint sample_rate;
+    atomic_uint buffer_size;
     // parameters for the general song track settings, like current bar, beat
     // also play, stop etc.
     PRM_CONTAIN *trk_params;
@@ -538,6 +541,8 @@ bool audio_backend_port_keys_connected(JACK_INFO *jack_data, uint64_t key_a,
 }
 
 static int sample_rate_change(jack_nframes_t new_sample_rate, void *arg);
+static int buffer_size_change(jack_nframes_t new_buffer_size, void *arg);
+static int jack_process_rt(jack_nframes_t nframes, void *arg);
 static void timebbt_callback_rt(jack_transport_state_t state,
                                 jack_nframes_t nframes, jack_position_t *pos,
                                 int new_pos, void *arg);
@@ -659,11 +664,14 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
         return NULL;
     }
 
-    // what the process function is
-    jack_set_process_callback(jack_data->client, process, arg);
+    jack_data->process = process;
+    jack_data->process_arg = arg;
+    jack_set_process_callback(jack_data->client, jack_process_rt, jack_data);
 
-    // call this function when the engine sample rate changes
+    // the values the app follows, read on [main-thread]
     jack_set_sample_rate_callback(jack_data->client, sample_rate_change,
+                                  jack_data);
+    jack_set_buffer_size_callback(jack_data->client, buffer_size_change,
                                   jack_data);
 
     // set the callback function that updates the *pos struct that holds beat,
@@ -685,10 +693,11 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
     jack_set_port_rename_callback(jack_data->client, app_jack_port_rename_cb,
                                   jack_data);
 
-    /*write some jack client attributes to the jack_data struct*/
-    // sample rate of the server
-    jack_data->sample_rate = jack_get_sample_rate(jack_data->client);
-    jack_data->buffer_size = jack_get_buffer_size(jack_data->client);
+    // the callbacks keep them current from activate on
+    atomic_store(&jack_data->sample_rate,
+                 jack_get_sample_rate(jack_data->client));
+    atomic_store(&jack_data->buffer_size,
+                 jack_get_buffer_size(jack_data->client));
 
     return jack_data;
 }
@@ -794,13 +803,13 @@ static jack_port_t *jack_port_create(JACK_INFO *jack_data,
 SAMPLE_T audio_backend_sample_rate(AUDIO_BACKEND *jack_data) {
     if (!jack_data || !jack_data->client)
         return -1;
-    return (SAMPLE_T)jack_get_sample_rate(jack_data->client);
+    return (SAMPLE_T)atomic_load(&jack_data->sample_rate);
 }
 
 uint32_t audio_backend_buffer_size(AUDIO_BACKEND *jack_data) {
     if (!jack_data || !jack_data->client)
         return 0;
-    return jack_get_buffer_size(jack_data->client);
+    return atomic_load(&jack_data->buffer_size);
 }
 
 int audio_backend_activate(AUDIO_BACKEND *jack_data) {
@@ -890,6 +899,25 @@ static bool endpoint_out_process_rt(void *arg, NFRAMES_T nframes) {
     return true;
 }
 
+// [audio-thread] the exposed outputs start empty - the "out" node only fills
+// them when the graph runs (not while stopped, or nframes bigger than its
+// buffers)
+static int jack_process_rt(jack_nframes_t nframes, void *arg) {
+    JACK_INFO *jack_data = (JACK_INFO *)arg;
+    for (size_t i = 0; i < EXPOSED_COUNT; i++) {
+        if (exposed_defs[i].flow != PORT_FLOW_OUTPUT)
+            continue;
+        void *out = jack_buffer_rt(jack_data->exposed_ports[i], nframes);
+        if (!out)
+            continue;
+        if (exposed_defs[i].type == PORT_TYPE_MIDI)
+            jack_midi_clear_buffer(out);
+        else
+            memset(out, 0, sizeof(SAMPLE_T) * nframes);
+    }
+    return jack_data->process(nframes, jack_data->process_arg);
+}
+
 int audio_backend_endpoints_add(AUDIO_BACKEND *jack_data, GRAPH *graph,
                                 uint64_t owner_tag, uint64_t owner_uid) {
     if (!jack_data || !graph || jack_data->graph)
@@ -951,15 +979,20 @@ int audio_backend_disconnect_keys(JACK_INFO *jack_data, uint64_t key_a,
     return port_keys_link(jack_data, key_a, key_b, false);
 }
 
+// JACK's notification thread. [main-thread] follows the value in app_data
 static int sample_rate_change(jack_nframes_t new_sample_rate, void *arg) {
     JACK_INFO *jack_data = (JACK_INFO *)arg;
     if (!jack_data)
         return -1;
-    // TODO this should be [thread-safe] and not a simple var change
-    // set the new sample rate on the app data struct so other functions can use
-    // that info
-    jack_data->sample_rate = new_sample_rate;
+    atomic_store(&jack_data->sample_rate, new_sample_rate);
+    return 0;
+}
 
+static int buffer_size_change(jack_nframes_t new_buffer_size, void *arg) {
+    JACK_INFO *jack_data = (JACK_INFO *)arg;
+    if (!jack_data)
+        return -1;
+    atomic_store(&jack_data->buffer_size, new_buffer_size);
     return 0;
 }
 

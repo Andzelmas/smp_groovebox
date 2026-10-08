@@ -10,18 +10,30 @@
 // max size for the ui<->rt parameter ring buffer messaging arrays
 #define MAX_PARAM_RING_BUFFER_ARRAY_SIZE 1024
 
+// what a ui_to_rt message sets, rt_to_ui ones are always a value
+enum { PARAM_MSG_VALUE = 0, PARAM_MSG_RANGE, PARAM_MSG_COOKIE };
+
 // message struct for the ui<->rt ring buffers - always "this param's value is
-// now X", never an operation to replay. Whichever side (rt/ui) originates a
-// change computes the final, already-clamped result itself val_id (position in
-// the container) uid rides along too, as a safety check: val_id alone is only a
-// position, and add/remove resync can reuse a freed slot for a DIFFERENT param.
+// now X" (or, ui_to_rt only, "its range / cookie is now ..."), never an
+// operation to replay. Whichever side (rt/ui) originates a change computes the
+// final, already-clamped result itself val_id (position in the container) uid
+// rides along too, as a safety check: val_id alone is only a position, and
+// add/remove resync can reuse a freed slot for a DIFFERENT param.
 typedef struct _params_ring_data_bit {
     int val_id;
     uint32_t uid;
-    PARAM_T param_value;
+    union {
+        PARAM_T param_value;
+        struct {
+            PARAM_T min_val;
+            PARAM_T max_val;
+        } range;
+        void *cookie;
+    };
     // ui_to_rt only: the value came from the owner (Operation_SyncValue), so
     // the rt side does not mark it changed
     bool from_owner;
+    unsigned char kind; // a PARAM_MSG_*
 } PARAM_RING_DATA_BIT;
 
 // rt-side parameter - only what the audio thread actually touches. it only ever
@@ -39,7 +51,7 @@ typedef struct _params_param_rt {
     uint32_t owner_id;
     // owner-supplied optional convenience pointer (e.g. a CLAP param cookie)
     //- borrowed, params.c never touches it. rt-only: nothing on the ui side
-    // has ever needed a param's cookie.
+    // has ever needed a param's cookie. Replaced by param_set_cookie
     void *cookie;
     // val never reached the ui side (full rt_to_ui queue), see param_rt_resend
     bool resend;
@@ -454,6 +466,19 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
                 param_container->rt_params[cur_bit.val_id];
             if (!cur_param || cur_param->uid != cur_bit.uid)
                 continue;
+            // val kept inside it - the ui's clamped value, if it changed,
+            // follows as its own message
+            if (cur_bit.kind == PARAM_MSG_RANGE) {
+                cur_param->min_val = cur_bit.range.min_val;
+                cur_param->max_val = cur_bit.range.max_val;
+                cur_param->val = param_clamp(cur_param->val, cur_param->min_val,
+                                             cur_param->max_val);
+                continue;
+            }
+            if (cur_bit.kind == PARAM_MSG_COOKIE) {
+                cur_param->cookie = cur_bit.cookie;
+                continue;
+            }
             if (cur_bit.from_owner) {
                 // a ui change not yet sent to the owner wins over the older
                 // value the owner reported
@@ -481,11 +506,8 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
 // param_rt_resend instead. false when it did not fit
 static bool param_rt_send(PRM_CONTAIN *param_container, int val_id,
                           PRM_PARAM_RT *cur_param) {
-    PARAM_RING_DATA_BIT send_bit;
-    send_bit.val_id = val_id;
-    send_bit.uid = cur_param->uid;
-    send_bit.param_value = cur_param->val;
-    send_bit.from_owner = false;
+    PARAM_RING_DATA_BIT send_bit = {
+        .val_id = val_id, .uid = cur_param->uid, .param_value = cur_param->val};
     cur_param->resend = ring_buffer_write(param_container->param_rt_to_ui,
                                           &send_bit, sizeof(send_bit)) != 1;
     if (cur_param->resend)
@@ -530,6 +552,24 @@ void param_rt_resend(PRM_CONTAIN *param_container) {
         if (!param_rt_send(param_container, (int)i, cur_param))
             return;
     }
+}
+
+// store a ui param's new value; if it changed, mark it and send it to the rt
+// side
+static void param_ui_value_store(PRM_CONTAIN *param_container, int val_id,
+                                 PRM_PARAM_UI *cur_param, PARAM_T new_val,
+                                 bool from_owner) {
+    PARAM_T prev_val = cur_param->val;
+    cur_param->val = new_val;
+    if (new_val == prev_val)
+        return;
+    param_ui_mark_changed(param_container, cur_param);
+    PARAM_RING_DATA_BIT send_bit = {.val_id = val_id,
+                                    .uid = cur_param->uid,
+                                    .param_value = new_val,
+                                    .from_owner = from_owner};
+    ring_buffer_write(param_container->param_ui_to_rt, &send_bit,
+                      sizeof(send_bit));
 }
 
 int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
@@ -603,18 +643,55 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
         return -1;
     }
     new_val = param_clamp(new_val, cur_param->min_val, cur_param->max_val);
-    cur_param->val = new_val;
-    if (new_val != prev_val) {
-        param_ui_mark_changed(param_container, cur_param);
-        PARAM_RING_DATA_BIT send_bit;
-        send_bit.val_id = val_id;
-        send_bit.uid = cur_param->uid;
-        send_bit.param_value = new_val;
-        send_bit.from_owner = (param_op == Operation_SyncValue);
-        ring_buffer_write(param_container->param_ui_to_rt, &send_bit,
-                          sizeof(send_bit));
-    }
+    param_ui_value_store(param_container, val_id, cur_param, new_val,
+                         param_op == Operation_SyncValue);
     return 0;
+}
+
+int param_set_range(PRM_CONTAIN *param_container, int val_id, PARAM_T min,
+                    PARAM_T max, bool from_owner) {
+    if (!param_container)
+        return -1;
+    if (isnan(min) || isnan(max) || min > max)
+        return -1;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
+    PRM_PARAM_UI *cur_param = param_container->ui_params[val_id];
+    if (!cur_param)
+        return -1;
+    if (cur_param->min_val == min && cur_param->max_val == max)
+        return 0;
+    cur_param->min_val = min;
+    cur_param->max_val = max;
+    param_ui_mark_changed(param_container, cur_param);
+    // the range first, so the rt side clamps with it before the value below
+    PARAM_RING_DATA_BIT send_bit = {.val_id = val_id,
+                                    .uid = cur_param->uid,
+                                    .range = {.min_val = min, .max_val = max},
+                                    .kind = PARAM_MSG_RANGE};
+    ring_buffer_write(param_container->param_ui_to_rt, &send_bit,
+                      sizeof(send_bit));
+    param_ui_value_store(param_container, val_id, cur_param,
+                         param_clamp(cur_param->val, min, max), from_owner);
+    return 0;
+}
+
+int param_set_cookie(PRM_CONTAIN *param_container, int val_id, void *cookie) {
+    if (!param_container)
+        return -1;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
+    PRM_PARAM_UI *cur_param = param_container->ui_params[val_id];
+    if (!cur_param)
+        return -1;
+    PARAM_RING_DATA_BIT send_bit = {.val_id = val_id,
+                                    .uid = cur_param->uid,
+                                    .cookie = cookie,
+                                    .kind = PARAM_MSG_COOKIE};
+    return ring_buffer_write(param_container->param_ui_to_rt, &send_bit,
+                             sizeof(send_bit)) == 1
+               ? 0
+               : -1;
 }
 
 void *param_cookie_return_rt(PRM_CONTAIN *param_container, int val_id) {

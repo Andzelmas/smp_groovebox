@@ -47,6 +47,13 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                clap_plug_status_t *plug_error, GRAPH *graph,
                                uint64_t owner_tag);
 
+// [main-thread] the values plugins are activated with. Every activated plugin
+// restarts with them. A plugin runs nothing for nframes outside [min, max].
+// 0 on success, -1 when a plugin did not activate again
+int clap_plug_audio_config_set(CLAP_PLUG_INFO *plug_data, SAMPLE_T sample_rate,
+                               uint32_t min_buffer_size,
+                               uint32_t max_buffer_size);
+
 // Scans the clap paths and (re)builds the list of available plugins.
 // Safe to call again while plugins are loaded. A plugin keeps its key across
 // rebuilds. Loaded plugins read their presets again on the next browse
