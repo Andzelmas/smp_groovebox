@@ -6,6 +6,7 @@
 #include "../util_funcs/midi_buf.h"
 #include "../util_funcs/path_funcs.h"
 #include "../util_funcs/ring_buffer.h"
+#include "../util_funcs/string_funcs.h"
 #include "../util_funcs/uniform_buffer.h"
 #include "clap_scan.h"
 #include "context_control.h"
@@ -146,6 +147,10 @@ typedef struct _clap_plug_plug {
     // display name, owned by this struct, built once at load by
     // clap_plug_load_and_activate() and handed out by clap_plug_plugin_name()
     char name[CLAP_PLUGIN_NAME_MAX];
+    // name's number among the loaded ones of the same name, 1 = not shown,
+    // and where the plain name starts in name
+    uint32_t name_num;
+    size_t name_at;
     char plugin_id[MAX_UNIQUE_ID_STRING]; // unique plugin id that is from the
                                           // clap_plugin_descriptor. Used rarely
                                           // (now to match if preset container
@@ -2463,12 +2468,25 @@ void *clap_plug_plugin_list_item_by_key(CLAP_PLUG_INFO *plug_data,
     return &list->plugin_list[slot];
 }
 
-// build the display name into plug->name. Called once when the plugin is
-// loaded; clap_plug_plugin_name() just returns the stored string after.
+// build the display name into plug->name, numbered when a loaded plugin has
+// the same name. Called once when the plugin is loaded;
+// clap_plug_plugin_name() just returns the stored string after.
 static void clap_plug_set_display_name(CLAP_PLUG_PLUG *plug) {
-    if (!plug || !plug->plug_inst || !plug->plug_inst->desc)
+    if (!plug || !plug->plug_data || !plug->plug_inst || !plug->plug_inst->desc)
         return;
-    snprintf(plug->name, sizeof(plug->name), "%s", plug->plug_inst->desc->name);
+    const char *name = plug->plug_inst->desc->name;
+    if (!name)
+        name = "";
+    uint32_t used[MAX_INSTANCES];
+    size_t used_count = 0;
+    for (unsigned int i = 0; i < MAX_INSTANCES; i++) {
+        const CLAP_PLUG_PLUG *other = &plug->plug_data->plugins[i];
+        if (other != plug && other->plug_inst &&
+            strcmp(other->name + other->name_at, name) == 0)
+            used[used_count++] = other->name_num;
+    }
+    plug->name_num = str_numbered_name(plug->name, sizeof(plug->name), name,
+                                       used, used_count, &plug->name_at);
 }
 
 uint32_t clap_plug_load_and_activate(void *plugin_item) {

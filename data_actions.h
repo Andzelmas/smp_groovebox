@@ -62,6 +62,9 @@ typedef enum {
 // one entry in a context's action menu
 typedef struct {
     DataActionType type;
+    // tells apart actions of one type on one context, 0 when there is one.
+    // Opaque to the caller, which hands it back with the type
+    uint32_t id;
     const char *label;      // borrowed, static in the data layer
     const char *tooltip;
     bool enabled;
@@ -105,6 +108,7 @@ typedef struct {
 // module copies whatever it needs to keep past the call.
 typedef struct {
     DataActionType type;
+    uint32_t id; // the DataAction's
     union {
         struct {
             uint64_t choice_value; // also used by DATA_ACTION_SET_CHOICE -

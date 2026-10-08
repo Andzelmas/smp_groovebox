@@ -673,13 +673,14 @@ size_t nav_cx_actions(APP_INTRF *app_intrf, ContextId context, DataAction *out,
 }
 
 size_t nav_cx_action_args(APP_INTRF *app_intrf, ContextId context,
-                          DataActionType type, DataArgSpec *out, size_t cap) {
+                          DataActionType type, uint32_t id, DataArgSpec *out,
+                          size_t cap) {
     if (!app_intrf || context == CONTEXT_ID_NULL)
         return 0;
     CX *cx = ht_get(app_intrf->cx_hashtable, context);
     if (!cx)
         return 0;
-    return data_action_args(&cx->data, type, out, cap);
+    return data_action_args(&cx->data, type, id, out, cap);
 }
 
 size_t nav_cx_list_count(APP_INTRF *app_intrf, ContextId context,

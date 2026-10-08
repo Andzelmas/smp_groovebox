@@ -88,7 +88,8 @@ size_t nav_cx_actions(APP_INTRF *app_intrf, ContextId context,
 
 // fill *out with up to cap argument specs the given action needs.
 size_t nav_cx_action_args(APP_INTRF *app_intrf, ContextId context,
-                          DataActionType type, DataArgSpec *out, size_t cap);
+                          DataActionType type, uint32_t id, DataArgSpec *out,
+                          size_t cap);
 
 // how many options `list` currently has. May return 0 to mean "unknown, page
 // with nav_cx_list_at until it returns false" instead of "empty".

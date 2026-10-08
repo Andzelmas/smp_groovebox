@@ -808,13 +808,14 @@ size_t ui_layer_context_actions(UI_LAYER *ui_layer, ContextId context,
 }
 
 size_t ui_layer_context_action_args(UI_LAYER *ui_layer, ContextId context,
-                                    DataActionType type, DataArgSpec *out,
-                                    size_t cap)
+                                    DataActionType type, uint32_t id,
+                                    DataArgSpec *out, size_t cap)
 {
     if (!ui_layer)
         return 0;
 
-    return nav_cx_action_args(ui_layer->app_intrf, context, type, out, cap);
+    return nav_cx_action_args(ui_layer->app_intrf, context, type, id, out,
+                              cap);
 }
 
 size_t ui_layer_context_list_count(UI_LAYER *ui_layer, ContextId context,

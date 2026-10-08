@@ -28,13 +28,13 @@ uint32_t audio_backend_buffer_size(AUDIO_BACKEND *backend);
 int audio_backend_endpoints_add(AUDIO_BACKEND *backend, GRAPH *graph,
                                 uint64_t owner_tag, uint64_t owner_uid);
 
-// The ports outside the app the exposed ones can link to, the exposed ones
-// among them. A backend without other programs lists only its own.
+// The exposed ports and the ports outside the app they can link to. A backend
+// without other programs lists only its own.
 
-// which list to read. ALL is every port; the others are the ports a source of
-// the opposite flow and the same type can be connected to
+// which list to read. EXPOSED is the app's own; the others are other programs'
+// ports, those a source of the opposite flow and the same type can link to
 typedef enum {
-    BACKEND_PORT_LIST_ALL = 0,
+    BACKEND_PORT_LIST_EXPOSED = 0,
     BACKEND_PORT_LIST_OUT_AUDIO,
     BACKEND_PORT_LIST_OUT_MIDI,
     BACKEND_PORT_LIST_IN_AUDIO,
@@ -77,7 +77,8 @@ bool audio_backend_port_connection_at(AUDIO_BACKEND *backend, uint64_t key,
                                       size_t idx, BackendPortInfo *out);
 bool audio_backend_port_keys_connected(AUDIO_BACKEND *backend, uint64_t key_a,
                                        uint64_t key_b);
-// link or unlink two ports of opposite flow, either order. 0 on success
+// link or unlink two ports of opposite flow, either order. Two exposed ones
+// are never linked - a loop outside the graph. 0 on success
 int audio_backend_connect_keys(AUDIO_BACKEND *backend, uint64_t key_a,
                                uint64_t key_b);
 int audio_backend_disconnect_keys(AUDIO_BACKEND *backend, uint64_t key_a,

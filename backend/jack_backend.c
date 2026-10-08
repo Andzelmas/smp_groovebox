@@ -121,8 +121,9 @@ typedef struct _audio_backend {
     size_t port_owner_count;
     size_t port_owner_max;
     // snapshot of every audio/midi port on the system, rebuilt by
-    // audio_backend_ports_sync. Grouped by (flow, type), so each
-    // BackendPortList is a contiguous run described by list_first/list_count
+    // audio_backend_ports_sync. Own ports first, then the others by (flow,
+    // type), so each BackendPortList is a contiguous run described by
+    // list_first/list_count
     JACK_PORT_REC *ports;
     size_t port_count;
     size_t list_first[BACKEND_PORT_LIST_COUNT];
@@ -256,7 +257,7 @@ static void port_rec_add(JACK_INFO *jack_data, const char *name,
     rec->conn_count = 0;
 }
 
-// what each BackendPortList after ALL is queried with, in list order
+// what each BackendPortList after EXPOSED is queried with, in list order
 static const struct {
     unsigned int type;
     unsigned long flow;
@@ -313,19 +314,26 @@ static void ports_rebuild(JACK_INFO *jack_data) {
         if (!jack_data->ports)
             total = 0;
     }
-    for (size_t q = 0; q < BACKEND_PORT_LIST_COUNT - 1; q++) {
-        jack_data->list_first[q + 1] = jack_data->port_count;
-        if (queried[q]) {
-            for (size_t i = 0; queried[q][i]; i++)
+    // own ports from every query first, then each query's other ones
+    for (size_t l = 0; l < BACKEND_PORT_LIST_COUNT; l++) {
+        bool own = l == BACKEND_PORT_LIST_EXPOSED;
+        jack_data->list_first[l] = jack_data->port_count;
+        for (size_t q = 0; q < BACKEND_PORT_LIST_COUNT - 1; q++) {
+            if ((!own && l != q + 1) || !queried[q])
+                continue;
+            for (size_t i = 0; queried[q][i]; i++) {
+                if ((port_owner_find(jack_data, queried[q][i], NULL) != 0) !=
+                    own)
+                    continue;
                 port_rec_add(jack_data, queried[q][i], port_list_query[q].type,
                              port_list_query[q].flow, total);
-            free(queried[q]);
+            }
         }
-        jack_data->list_count[q + 1] =
-            jack_data->port_count - jack_data->list_first[q + 1];
+        jack_data->list_count[l] =
+            jack_data->port_count - jack_data->list_first[l];
     }
-    jack_data->list_first[BACKEND_PORT_LIST_ALL] = 0;
-    jack_data->list_count[BACKEND_PORT_LIST_ALL] = jack_data->port_count;
+    for (size_t q = 0; q < BACKEND_PORT_LIST_COUNT - 1; q++)
+        free(queried[q]);
 }
 
 // index of the cached port with this key, port_count when there is none
@@ -955,6 +963,9 @@ static int port_keys_link(JACK_INFO *jack_data, uint64_t key_a, uint64_t key_b,
     if (a >= jack_data->port_count || b >= jack_data->port_count)
         return -1;
     if (jack_data->ports[a].flow == jack_data->ports[b].flow)
+        return -1;
+    if (connect && jack_data->ports[a].owner_tag != 0 &&
+        jack_data->ports[b].owner_tag != 0)
         return -1;
     size_t out = jack_data->ports[a].flow == JackPortIsOutput ? a : b;
     size_t in = (out == a) ? b : a;

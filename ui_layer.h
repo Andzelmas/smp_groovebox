@@ -153,8 +153,8 @@ size_t ui_layer_context_actions(UI_LAYER *ui_layer, ContextId context,
                                 DataAction *out, size_t cap);
 // fill *out with up to cap argument specs the given action needs.
 size_t ui_layer_context_action_args(UI_LAYER *ui_layer, ContextId context,
-                                    DataActionType type, DataArgSpec *out,
-                                    size_t cap);
+                                    DataActionType type, uint32_t id,
+                                    DataArgSpec *out, size_t cap);
 // how many options `list` currently has at `branch` (0 = top level).
 size_t ui_layer_context_list_count(UI_LAYER *ui_layer, ContextId context,
                                    DataListId list,

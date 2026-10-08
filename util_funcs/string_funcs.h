@@ -1,4 +1,5 @@
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 // Functions that manipulate strings in some specific ways to the app
 // infrastructure
@@ -7,6 +8,13 @@
 // string always hashes to the same value, so a key survives a re-scan that
 // moved the item. Not cryptographic - collisions are unlikely, not impossible
 uint64_t str_hash_fnv1a64(const char *s);
+
+// a display name told apart from loaded ones of the same name: used holds the
+// numbers those have. Writes name for the lowest free number 1, "<num> name"
+// for one above. Returns the number, *name_at = where name starts in out
+uint32_t str_numbered_name(char *out, size_t cap, const char *name,
+                           const uint32_t *used, size_t used_count,
+                           size_t *name_at);
 
 // combines a string with integer and padding and _ symbols
 // the result is in the string_in, but it is freed if succesfully combined

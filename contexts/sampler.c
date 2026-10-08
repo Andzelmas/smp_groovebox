@@ -8,6 +8,7 @@
 #include "../util_funcs/midi_buf.h"
 #include "sampler.h"
 #include "../util_funcs/log_funcs.h"
+#include "../util_funcs/string_funcs.h"
 #include "../engine/graph.h"
 #include "context_control.h"
 
@@ -48,6 +49,10 @@ typedef struct _smp_smp{
     //display name, owned by this struct, built once at load by smp_add() and
     //handed out by smp_sample_name()
     char name[SMP_SAMPLE_NAME_MAX];
+    // name's number among the loaded ones of the same name, 1 = not shown,
+    // and where the plain name starts in name
+    uint32_t name_num;
+    size_t name_at;
     //the file path of the sample
     char* file_path;
     //the sample sample rate
@@ -288,14 +293,24 @@ static int smp_ports_create(SMP_INFO* smp_data){
     return 0;
 }
 
-//build the display name (the file basename) into smp->name. Called once when
-//the sample is loaded; smp_sample_name() just returns the stored string after.
+//build the display name (the file basename) into smp->name, numbered when a
+//loaded sample has the same name. Called once when the sample is loaded;
+//smp_sample_name() just returns the stored string after.
 static void smp_set_display_name(SMP_SMP *smp){
-    if(!smp || !smp->file_path)
+    if(!smp || !smp->file_path || !smp->smp_data)
 	return;
     const char *base = strrchr(smp->file_path, '/');
     base = base ? base + 1 : smp->file_path;
-    snprintf(smp->name, sizeof(smp->name), "%s", base);
+    uint32_t used[MAX_SAMPLES];
+    size_t used_count = 0;
+    for (unsigned int i = 0; i < MAX_SAMPLES; i++) {
+        const SMP_SMP *other = &smp->smp_data->samples[i];
+        if (other != smp && other->file_path &&
+            strcmp(other->name + other->name_at, base) == 0)
+            used[used_count++] = other->name_num;
+    }
+    smp->name_num = str_numbered_name(smp->name, sizeof(smp->name), base,
+                                      used, used_count, &smp->name_at);
 }
 
 uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {

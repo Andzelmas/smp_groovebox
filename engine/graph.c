@@ -111,6 +111,13 @@ struct _graph {
     // port's view index
     INTERN_TABLE idents;
     uint64_t generation;
+    // graph_peer_*: the ports connect takes with peer_view_source, as of
+    // peer_view_generation. Source 0 = nothing built
+    GRAPH_PORT **peer_view;
+    size_t peer_view_count;
+    size_t peer_view_max;
+    uint64_t peer_view_source;
+    uint64_t peer_view_generation;
     // the newest plan and the gen [audio-thread] last started a cycle with
     _Atomic(GRAPH_PLAN *) plan;
     atomic_uint ack;
@@ -321,6 +328,7 @@ void graph_free(GRAPH *graph) {
     }
     free(graph->nodes);
     free(graph->view);
+    free(graph->peer_view);
     intern_clean(&graph->idents);
     plan_free(atomic_load(&graph->plan));
     while (graph->retired_plans) {
@@ -618,38 +626,56 @@ static bool ports_pair(const GRAPH *graph, uint64_t key_a, uint64_t key_b,
     return true;
 }
 
-// whether to is reachable from from along edges, from itself included. true
-// on allocation failure, so a caller refuses what it can not check
-static bool node_reaches(const GRAPH *graph, GRAPH_NODE *from,
-                         const GRAPH_NODE *to) {
-    if (from == to)
-        return true;
+// marks from and the nodes reached from it over the edges of its ports of
+// `flow` (OUTPUT: downstream, INPUT: upstream), until stop (may be NULL) is
+// marked. Returns the marked nodes for nodes_unmark, NULL on allocation failure
+static GRAPH_NODE **nodes_mark(const GRAPH *graph, GRAPH_NODE *from,
+                               unsigned int flow, const GRAPH_NODE *stop,
+                               size_t *count) {
     // breadth first, the queue doubles as the list of nodes to unmark
     GRAPH_NODE **queue = malloc(sizeof(GRAPH_NODE *) * graph->node_count);
     if (!queue)
-        return true;
-    size_t count = 0;
+        return NULL;
+    size_t n = 0;
     from->visited = true;
-    queue[count++] = from;
-    for (size_t q = 0; q < count && !to->visited; q++) {
+    queue[n++] = from;
+    for (size_t q = 0; q < n && !(stop && stop->visited); q++) {
         GRAPH_NODE *node = queue[q];
         for (size_t p = 0; p < node->port_count; p++) {
             GRAPH_PORT *port = node->ports[p];
-            if (port->flow != PORT_FLOW_OUTPUT)
+            if (port->flow != flow)
                 continue;
             for (size_t e = 0; e < port->peer_count; e++) {
                 GRAPH_NODE *next = port->peers[e]->node;
                 if (next->visited)
                     continue;
                 next->visited = true;
-                queue[count++] = next;
+                queue[n++] = next;
             }
         }
     }
+    *count = n;
+    return queue;
+}
+
+static void nodes_unmark(GRAPH_NODE **marked, size_t count) {
+    for (size_t i = 0; i < count; i++)
+        marked[i]->visited = false;
+    free(marked);
+}
+
+// whether to is reachable from from along edges, from itself included. true
+// on allocation failure, so a caller refuses what it can not check
+static bool node_reaches(const GRAPH *graph, GRAPH_NODE *from,
+                         const GRAPH_NODE *to) {
+    if (from == to)
+        return true;
+    size_t count;
+    GRAPH_NODE **marked = nodes_mark(graph, from, PORT_FLOW_OUTPUT, to, &count);
+    if (!marked)
+        return true;
     bool found = to->visited;
-    for (size_t q = 0; q < count; q++)
-        queue[q]->visited = false;
-    free(queue);
+    nodes_unmark(marked, count);
     return found;
 }
 
@@ -710,6 +736,66 @@ int graph_disconnect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b) {
     ports_remove(b->peers, &b->peer_count, a);
     graph->generation++;
     return 0;
+}
+
+// what edge_allowed decides per pair, for every candidate of one source with
+// one search: a new edge closes a loop through exactly the nodes upstream of
+// an output's node / downstream of an input's (its own node included)
+static bool peer_view_update(GRAPH *graph, uint64_t source_key) {
+    if (source_key != 0 && source_key == graph->peer_view_source &&
+        graph->peer_view_generation == graph->generation)
+        return true;
+    graph->peer_view_source = 0;
+    graph->peer_view_count = 0;
+    GRAPH_PORT *source = port_by_key(graph, source_key);
+    if (!source)
+        return false;
+    unsigned int other = source->flow == PORT_FLOW_OUTPUT ? PORT_FLOW_INPUT
+                                                          : PORT_FLOW_OUTPUT;
+    GraphPortList list = port_list(source->type, other);
+    size_t first = graph->list_first[list];
+    size_t n = graph->list_count[list];
+    if (n > graph->peer_view_max) {
+        GRAPH_PORT **grown =
+            realloc(graph->peer_view, sizeof(GRAPH_PORT *) * n);
+        if (!grown)
+            return false;
+        graph->peer_view = grown;
+        graph->peer_view_max = n;
+    }
+    size_t marked_count;
+    GRAPH_NODE **marked =
+        nodes_mark(graph, source->node, other, NULL, &marked_count);
+    if (!marked)
+        return false;
+    for (size_t i = 0; i < n; i++) {
+        GRAPH_PORT *peer = graph->view[first + i];
+        const GRAPH_PORT *in = other == PORT_FLOW_INPUT ? peer : source;
+        bool room =
+            in->type != PORT_TYPE_MIDI || in->peer_count < MIDI_BUF_MERGE_MAX;
+        if (ports_linked(source, peer) || (!peer->node->visited && room))
+            graph->peer_view[graph->peer_view_count++] = peer;
+    }
+    nodes_unmark(marked, marked_count);
+    graph->peer_view_source = source_key;
+    graph->peer_view_generation = graph->generation;
+    return true;
+}
+
+size_t graph_peer_count(GRAPH *graph, uint64_t source_key) {
+    if (!graph || !peer_view_update(graph, source_key))
+        return 0;
+    return graph->peer_view_count;
+}
+
+bool graph_peer_at(GRAPH *graph, uint64_t source_key, size_t idx,
+                   GraphPortInfo *out) {
+    if (!graph || !out || !peer_view_update(graph, source_key))
+        return false;
+    if (idx >= graph->peer_view_count)
+        return false;
+    port_info_fill(graph->peer_view[idx], out);
+    return true;
 }
 
 static PLAN_PORT *plan_port_fill(PLAN_PORT *plan_port, GRAPH_PORT *port) {

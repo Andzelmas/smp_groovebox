@@ -267,6 +267,10 @@ typedef struct _plug_plug {
     // display name, owned by this struct, built once at load by
     // plug_load_and_activate() and handed out by plug_plugin_name()
     char name[PLUG_PLUGIN_NAME_MAX];
+    // name's number among the loaded ones of the same name, 1 = not shown,
+    // and where the plain name starts in name
+    uint32_t name_num;
+    size_t name_at;
     // the plugin's node, its audio/MIDI ports are on it
     GRAPH_NODE *node;
     // array of available ports for the plugin
@@ -1220,14 +1224,24 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
     return 0;
 }
 
-// build the display name into plug->name. Called once when the plugin is
-// loaded; plug_plugin_name() just returns the stored string after.
+// build the display name into plug->name, numbered when a loaded plugin has
+// the same name. Called once when the plugin is loaded; plug_plugin_name()
+// just returns the stored string after.
 static void plug_set_display_name(PLUG_PLUG *plug) {
-    if (!plug || !plug->plug)
+    if (!plug || !plug->plug || !plug->plug_data)
         return;
     LilvNode *name_node = lilv_plugin_get_name(plug->plug);
-    snprintf(plug->name, sizeof(plug->name), "%s",
-             lilv_node_as_string(name_node));
+    const char *name = name_node ? lilv_node_as_string(name_node) : "";
+    uint32_t used[MAX_INSTANCES];
+    size_t used_count = 0;
+    for (unsigned int i = 0; i < MAX_INSTANCES; i++) {
+        const PLUG_PLUG *other = &plug->plug_data->plugins[i];
+        if (other != plug && other->plug_instance &&
+            strcmp(other->name + other->name_at, name) == 0)
+            used[used_count++] = other->name_num;
+    }
+    plug->name_num = str_numbered_name(plug->name, sizeof(plug->name), name,
+                                       used, used_count, &plug->name_at);
     lilv_node_free(name_node);
 }
 

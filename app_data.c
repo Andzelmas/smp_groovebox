@@ -45,6 +45,8 @@ typedef struct _app_info {
     // what the graph and the contexts run at, follows the backend
     SAMPLE_T sample_rate;
     uint32_t buffer_size;
+    // graph_generation as of the last "ports changed" check
+    uint64_t graph_generation_seen;
 
     // data event queue (main thread only: produced in app_data_update, drained
     // by app_data_poll_event). Grows instead of dropping - a lost
@@ -243,6 +245,7 @@ enum {
     DATA_LIST_NS_BRANCH = 5, // the category rows (DATA_CHOICE_BRANCH) of every list
     DATA_LIST_NS_LV2_PRESET = 6,
     DATA_LIST_NS_CLAP_PRESET = 7,
+    DATA_LIST_NS_GRAPH_PORTS = 8,
 };
 #define MAKE_LIST_ID(ns, local)                                                \
     (((DataListId)(ns) << CTXID_NS_SHIFT) | ((DataListId)(local) & CTXID_LOCAL_MASK))
@@ -254,14 +257,19 @@ enum {
 // param itself (via list_at's own user_data) chooses the container
 #define LIST_PARAM_CHOICES MAKE_LIST_ID(DATA_LIST_NS_PARAM_CHOICE, 1)
 
-// local part for the DATA_LIST_NS_PORTS namespace. Both are plain static
-// constants (not per-instance). The CONNECT action
-// filters/narrows their *contents* dynamically via `partial`, not by minting
-// a different DataListId per query.
+// local part for the port namespaces: DATA_LIST_NS_PORTS (the backend's) and
+// DATA_LIST_NS_GRAPH_PORTS. Plain static constants (not per-instance). The
+// CONNECT actions narrow their *contents* dynamically via `partial`, not by
+// minting a different DataListId per query.
 enum {
-    LID_PORTS_ANY = 1,
+    LID_PORTS_ANY = 1, // graph: every port
+    LID_PORTS_EXPOSED, // backend: the app's own
     LID_PORTS_PEERS,
 };
+#define LIST_GRAPH_PORTS MAKE_LIST_ID(DATA_LIST_NS_GRAPH_PORTS, LID_PORTS_ANY)
+#define LIST_GRAPH_PEERS MAKE_LIST_ID(DATA_LIST_NS_GRAPH_PORTS, LID_PORTS_PEERS)
+#define LIST_EXTR_PORTS MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_EXPOSED)
+#define LIST_EXTR_PEERS MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_PEERS)
 
 // every loaded plugin's preset list - the plugin in user_data picks whose
 #define LIST_LV2_PRESETS MAKE_LIST_ID(DATA_LIST_NS_LV2_PRESET, 1)
@@ -352,8 +360,9 @@ static size_t cx_param_action_list(void *user_data, DataAction *out,
     return n;
 }
 static size_t cx_param_action_args(void *user_data, DataActionType type,
-                                   DataArgSpec *out, size_t cap) {
+                                   uint32_t id, DataArgSpec *out, size_t cap) {
     (void)user_data;
+    (void)id;
     if (!out || cap < 1)
         return 0;
     if (type == DATA_ACTION_SET_VALUE) {
@@ -713,8 +722,9 @@ static size_t sampler_action_list(void *user_data, DataAction *out,
     return 1;
 }
 static size_t sampler_action_args(void *user_data, DataActionType type,
-                                  DataArgSpec *out, size_t cap) {
+                                  uint32_t id, DataArgSpec *out, size_t cap) {
     (void)user_data;
+    (void)id;
     if (type != DATA_ACTION_ADD_FILE_PATH)
         return 0;
     if (!out || cap < 1)
@@ -843,9 +853,11 @@ static size_t lv2_plugin_action_list(void *user_data, DataAction *out,
     (void)user_data;
     return plugin_action_list(out, cap);
 }
-static size_t lv2_plugin_action_args(void *user_data, DataActionType type,
+static size_t lv2_plugin_action_args(void *user_data,
+                                     DataActionType type, uint32_t id,
                                      DataArgSpec *out, size_t cap) {
     (void)user_data;
+    (void)id;
     return plugin_preset_args(type, LIST_LV2_PRESETS, out, cap);
 }
 static size_t lv2_plugin_list_count(void *user_data, DataListId list,
@@ -953,9 +965,11 @@ static size_t lv2_plugins_action_list(void *user_data, DataAction *out,
         };
     return n;
 }
-static size_t lv2_plugins_action_args(void *user_data, DataActionType type,
+static size_t lv2_plugins_action_args(void *user_data,
+                                      DataActionType type, uint32_t id,
                                       DataArgSpec *out, size_t cap) {
     (void)user_data;
+    (void)id;
     if (type != DATA_ACTION_ADD_CHOICE)
         return 0;
     if (!out || cap < 1)
@@ -1054,9 +1068,11 @@ static size_t clap_plugin_action_list(void *user_data, DataAction *out,
     (void)user_data;
     return plugin_action_list(out, cap);
 }
-static size_t clap_plugin_action_args(void *user_data, DataActionType type,
+static size_t clap_plugin_action_args(void *user_data,
+                                      DataActionType type, uint32_t id,
                                       DataArgSpec *out, size_t cap) {
     (void)user_data;
+    (void)id;
     return plugin_preset_args(type, LIST_CLAP_PRESETS, out, cap);
 }
 static size_t clap_plugin_list_count(void *user_data, DataListId list,
@@ -1167,9 +1183,11 @@ static size_t clap_plugins_action_list(void *user_data, DataAction *out,
         };
     return n;
 }
-static size_t clap_plugins_action_args(void *user_data, DataActionType type,
+static size_t clap_plugins_action_args(void *user_data,
+                                       DataActionType type, uint32_t id,
                                        DataArgSpec *out, size_t cap) {
     (void)user_data;
+    (void)id;
     if (type != DATA_ACTION_ADD_CHOICE)
         return 0;
     if (!out || cap < 1)
@@ -1341,43 +1359,15 @@ static ContextId root_id(void *user_data) {
     return MAKE_ID(DATA_NS_SINGLETON, SID_ROOT);
 }
 
-// DATA_CAP_ACTIONS: the root context hosts the generic bipartite CONNECT
-// action over the backend's ports. Ports are never materialised into the CX
-// tree - these read the port cache the backend keeps, keyed by the identity it
-// minted for each port name.
-
-// the peers a source can be linked to: opposite flow, matching type
-static BackendPortList root_peer_list(const BackendPortInfo *source) {
-    bool want_output = source->flow != PORT_FLOW_OUTPUT;
-    if (source->type == PORT_TYPE_MIDI)
-        return want_output ? BACKEND_PORT_LIST_OUT_MIDI
-                           : BACKEND_PORT_LIST_IN_MIDI;
-    return want_output ? BACKEND_PORT_LIST_OUT_AUDIO
-                       : BACKEND_PORT_LIST_IN_AUDIO;
-}
-
-// the source a peers list hangs off, read from the half-filled request. false
-// when none has been chosen yet, or the chosen one is gone
-static bool root_connect_source(AUDIO_BACKEND *backend,
-                                const DataActionReq *partial,
-                                BackendPortInfo *out) {
-    if (!partial || partial->type != DATA_ACTION_CONNECT)
-        return false;
-    ContextId value = (ContextId)partial->connect.source;
-    if (CTXID_NS(value) != DATA_LIST_NS_PORTS)
-        return false;
-    return audio_backend_port_by_key(backend, value & CTXID_LOCAL_MASK, out);
-}
-
-// our own ports group under the object that registered them; anything else
-// has only its client to go on. Owners register with (namespace, uid), so
-// MAKE_ID(tag, uid) is the owner's own id - which is why those owners'
-// group_key op is simply their id op
-static uint64_t root_port_group_key(const BackendPortInfo *info) {
-    if (info->owner_tag == 0)
-        return MAKE_ID(DATA_NS_JACK_CLIENT, str_hash_fnv1a64(info->client));
-    return MAKE_ID(info->owner_tag, info->owner_uid);
-}
+// DATA_CAP_ACTIONS: the root context hosts two CONNECT actions, told apart by
+// DataAction.id: Connect links the graph's ports, Extr_Connect the exposed
+// ports to other programs' ports. Ports are never materialised into the CX
+// tree - these read the graph and the backend's port cache, each keyed by its
+// own identities.
+enum {
+    ROOT_ACTION_CONNECT = 0,
+    ROOT_ACTION_EXTR_CONNECT,
+};
 
 // the name the tree shows for a port owner, NULL for an unknown one. Owner
 // handles are only reachable by index, so this is a scan
@@ -1422,128 +1412,257 @@ static const char *owner_label(APP_INFO *app_data, uint64_t owner_tag,
     return NULL;
 }
 
-static const char *root_port_group_label(APP_INFO *app_data,
+// Connect: the graph key a peers list hangs off, 0 when no source is chosen
+static uint64_t root_graph_source(const DataActionReq *partial) {
+    if (!partial || partial->type != DATA_ACTION_CONNECT)
+        return 0;
+    ContextId value = (ContextId)partial->connect.source;
+    if (CTXID_NS(value) != DATA_LIST_NS_GRAPH_PORTS)
+        return 0;
+    return value & CTXID_LOCAL_MASK;
+}
+
+// linked_to is the key a row's DATA_CHOICE_LINKED is measured against, 0 for a
+// list with no "linked" concept. Owners add nodes with (namespace, uid), so
+// MAKE_ID(tag, uid) is the owner's own id - its group_key op is its id op
+static void root_graph_choice_fill(APP_INFO *app_data,
+                                   const GraphPortInfo *info,
+                                   uint64_t linked_to, DataChoice *out) {
+    out->value = MAKE_ID(DATA_LIST_NS_GRAPH_PORTS, info->key);
+    out->label = info->name;
+    out->group_key = MAKE_ID(info->owner_tag, info->owner_uid);
+    out->group_label = owner_label(app_data, info->owner_tag, info->owner_uid);
+    out->flags = (linked_to && graph_port_keys_connected(app_data->graph,
+                                                         linked_to, info->key))
+                     ? DATA_CHOICE_LINKED
+                     : 0;
+}
+
+// Extr_Connect: the peers a source can be linked to, opposite flow, matching
+// type
+static BackendPortList root_extr_peer_list(const BackendPortInfo *source) {
+    bool want_output = source->flow != PORT_FLOW_OUTPUT;
+    if (source->type == PORT_TYPE_MIDI)
+        return want_output ? BACKEND_PORT_LIST_OUT_MIDI
+                           : BACKEND_PORT_LIST_IN_MIDI;
+    return want_output ? BACKEND_PORT_LIST_OUT_AUDIO
+                       : BACKEND_PORT_LIST_IN_AUDIO;
+}
+
+// the source a peers list hangs off, read from the half-filled request. false
+// when none has been chosen yet, or the chosen one is gone
+static bool root_extr_source(AUDIO_BACKEND *backend,
+                             const DataActionReq *partial,
+                             BackendPortInfo *out) {
+    if (!partial || partial->type != DATA_ACTION_CONNECT)
+        return false;
+    ContextId value = (ContextId)partial->connect.source;
+    if (CTXID_NS(value) != DATA_LIST_NS_PORTS)
+        return false;
+    return audio_backend_port_by_key(backend, value & CTXID_LOCAL_MASK, out);
+}
+
+// the exposed ports group under their owner, as graph ports do; anything else
+// has only its client to go on
+static uint64_t root_extr_group_key(const BackendPortInfo *info) {
+    if (info->owner_tag == 0)
+        return MAKE_ID(DATA_NS_JACK_CLIENT, str_hash_fnv1a64(info->client));
+    return MAKE_ID(info->owner_tag, info->owner_uid);
+}
+
+static const char *root_extr_group_label(APP_INFO *app_data,
                                          const BackendPortInfo *info) {
     const char *label = owner_label(app_data, info->owner_tag, info->owner_uid);
     return label ? label : info->client;
 }
 
-// linked_to is the key a row's DATA_CHOICE_LINKED is measured against, 0 for a
-// list with no "linked" concept
-static void root_port_choice_fill(APP_INFO *app_data,
+// linked_to as in root_graph_choice_fill. The label skips "client:" - the
+// group has it
+static void root_extr_choice_fill(APP_INFO *app_data,
                                   const BackendPortInfo *info,
                                   uint64_t linked_to, DataChoice *out) {
+    size_t client_len = strlen(info->client);
     out->value = MAKE_ID(DATA_LIST_NS_PORTS, info->key);
-    out->label = info->name;
-    out->group_key = root_port_group_key(info);
-    out->group_label = root_port_group_label(app_data, info);
+    out->label = info->name[client_len] == ':' ? info->name + client_len + 1
+                                                : info->name;
+    out->group_key = root_extr_group_key(info);
+    out->group_label = root_extr_group_label(app_data, info);
     out->flags = (linked_to && audio_backend_port_keys_connected(
                                    app_data->backend, linked_to, info->key))
                      ? DATA_CHOICE_LINKED
                      : 0;
 }
 
-static size_t root_connect_action_list(void *user_data, DataAction *out, size_t cap) {
+static size_t root_action_list(void *user_data, DataAction *out, size_t cap) {
     (void)user_data;
-    if (!out || cap < 1)
+    if (!out)
         return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_CONNECT,
-        .label = "Connect",
-        .tooltip = "Connect or disconnect the backend's ports",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_NORMAL,
-    };
-    return 1;
+    size_t n = 0;
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_CONNECT,
+            .id = ROOT_ACTION_CONNECT,
+            .label = "Connect",
+            .tooltip = "Connect or disconnect the app's own ports",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_CONNECT,
+            .id = ROOT_ACTION_EXTR_CONNECT,
+            .label = "Extr_Connect",
+            .tooltip = "Connect or disconnect the exposed ports to other "
+                       "programs' ports",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    return n;
 }
 
-static size_t root_connect_action_args(void *user_data, DataActionType type,
-                              DataArgSpec *out, size_t cap) {
+static size_t root_action_args(void *user_data, DataActionType type,
+                               uint32_t id, DataArgSpec *out, size_t cap) {
     (void)user_data;
-    if (type != DATA_ACTION_CONNECT)
+    if (type != DATA_ACTION_CONNECT || !out || cap < 2)
         return 0;
-    if (!out || cap < 2)
+    bool graph = id == ROOT_ACTION_CONNECT;
+    if (!graph && id != ROOT_ACTION_EXTR_CONNECT)
         return 0;
     out[0] = (DataArgSpec){
         .name = "source",
         .label = "Port",
         .kind = DATA_ARG_CHOICE,
         .required = true,
-        .list = MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_ANY),
+        .list = graph ? LIST_GRAPH_PORTS : LIST_EXTR_PORTS,
     };
     out[1] = (DataArgSpec){
         .name = "targets",
         .label = "Connect to",
         .kind = DATA_ARG_MULTI_CHOICE,
         .required = true,
-        .list = MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_PEERS),
+        .list = graph ? LIST_GRAPH_PEERS : LIST_EXTR_PEERS,
     };
     return 2;
 }
 
-static size_t root_connect_list_count(void *user_data, DataListId list,
-                                      const DataActionReq *partial,
-                                      uint64_t branch) {
+static size_t root_list_count(void *user_data, DataListId list,
+                              const DataActionReq *partial, uint64_t branch) {
     APP_INFO *app_data = (APP_INFO *)user_data;
-    AUDIO_BACKEND *backend = app_data ? app_data->backend : NULL;
-    if (!backend || branch != 0)
+    if (!app_data || branch != 0)
         return 0;
 
-    if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_ANY))
-        return audio_backend_port_count(backend, BACKEND_PORT_LIST_ALL);
+    if (list == LIST_GRAPH_PORTS)
+        return graph_port_count(app_data->graph, GRAPH_PORT_LIST_ALL);
+    if (list == LIST_GRAPH_PEERS)
+        return graph_peer_count(app_data->graph, root_graph_source(partial));
 
-    if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_PEERS)) {
+    if (list == LIST_EXTR_PORTS)
+        return audio_backend_port_count(app_data->backend,
+                                        BACKEND_PORT_LIST_EXPOSED);
+    if (list == LIST_EXTR_PEERS) {
         BackendPortInfo source;
-        if (!root_connect_source(backend, partial, &source))
+        if (!root_extr_source(app_data->backend, partial, &source))
             return 0;
-        return audio_backend_port_count(backend, root_peer_list(&source));
+        return audio_backend_port_count(app_data->backend,
+                                        root_extr_peer_list(&source));
     }
-
     return 0;
 }
 
-static bool root_connect_list_at(void *user_data, DataListId list,
-                        const DataActionReq *partial, uint64_t branch,
-                        size_t idx, DataChoice *out) {
+static bool root_list_at(void *user_data, DataListId list,
+                         const DataActionReq *partial, uint64_t branch,
+                         size_t idx, DataChoice *out) {
     APP_INFO *app_data = (APP_INFO *)user_data;
-    AUDIO_BACKEND *backend = app_data ? app_data->backend : NULL;
-    if (!backend || branch != 0)
+    if (!app_data || branch != 0)
         return false;
 
-    BackendPortInfo info;
-    if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_ANY)) {
-        if (!audio_backend_port_at(backend, BACKEND_PORT_LIST_ALL, idx, &info))
+    GraphPortInfo graph_info;
+    if (list == LIST_GRAPH_PORTS) {
+        if (!graph_port_at(app_data->graph, GRAPH_PORT_LIST_ALL, idx,
+                           &graph_info))
             return false;
-        root_port_choice_fill(app_data, &info, 0, out);
+        root_graph_choice_fill(app_data, &graph_info, 0, out);
+        return true;
+    }
+    if (list == LIST_GRAPH_PEERS) {
+        // empty until a source is chosen
+        uint64_t source = root_graph_source(partial);
+        if (!graph_peer_at(app_data->graph, source, idx, &graph_info))
+            return false;
+        root_graph_choice_fill(app_data, &graph_info, source, out);
         return true;
     }
 
-    if (list == MAKE_LIST_ID(DATA_LIST_NS_PORTS, LID_PORTS_PEERS)) {
+    BackendPortInfo info;
+    if (list == LIST_EXTR_PORTS) {
+        if (!audio_backend_port_at(app_data->backend, BACKEND_PORT_LIST_EXPOSED,
+                                   idx, &info))
+            return false;
+        root_extr_choice_fill(app_data, &info, 0, out);
+        return true;
+    }
+    if (list == LIST_EXTR_PEERS) {
         // empty until a source is chosen - its flow and type pick the list
         BackendPortInfo source;
-        if (!root_connect_source(backend, partial, &source))
+        if (!root_extr_source(app_data->backend, partial, &source))
             return false;
-        if (!audio_backend_port_at(backend, root_peer_list(&source), idx,
-                                   &info))
+        if (!audio_backend_port_at(app_data->backend,
+                                   root_extr_peer_list(&source), idx, &info))
             return false;
-        root_port_choice_fill(app_data, &info, source.key, out);
+        root_extr_choice_fill(app_data, &info, source.key, out);
         return true;
     }
-
     return false;
 }
 
-static DataActionResult root_connect_action_do(void *user_data,
-                                      const DataActionReq *req,
-                                      ContextId *out_new) {
-    APP_INFO *app_data = (APP_INFO *)user_data;
-    AUDIO_BACKEND *backend = app_data ? app_data->backend : NULL;
-    (void)out_new; // CONNECT creates no new context
-    if (!backend || !req || req->type != DATA_ACTION_CONNECT)
+// every target is checked before any is linked, so a request that is wrong or
+// out of date changes nothing
+static DataActionResult root_graph_connect_do(APP_INFO *app_data,
+                                              const DataActionReq *req) {
+    GRAPH *graph = app_data->graph;
+    ContextId source_val = (ContextId)req->connect.source;
+    if (CTXID_NS(source_val) != DATA_LIST_NS_GRAPH_PORTS)
         return DATA_ACTION_ERR_INVALID;
-    if (!req->connect.targets || req->connect.target_count == 0)
+    GraphPortInfo source;
+    if (!graph_port_by_key(graph, source_val & CTXID_LOCAL_MASK, &source))
+        return DATA_ACTION_ERR_STALE;
+
+    size_t connects = 0;
+    for (size_t i = 0; i < req->connect.target_count; i++) {
+        ContextId target_val = (ContextId)req->connect.targets[i];
+        if (CTXID_NS(target_val) != DATA_LIST_NS_GRAPH_PORTS)
+            return DATA_ACTION_ERR_INVALID;
+        GraphPortInfo target;
+        if (!graph_port_by_key(graph, target_val & CTXID_LOCAL_MASK, &target))
+            return DATA_ACTION_ERR_STALE;
+        // what the peers list leaves out: flow, type, loops, a full MIDI input
+        if (!graph_port_keys_connectable(graph, source.key, target.key))
+            return DATA_ACTION_ERR_INVALID;
+        if (!graph_port_keys_connected(graph, source.key, target.key))
+            connects++;
+    }
+    // each check above counted one new source into a MIDI input. Disconnects
+    // in the same request are not counted
+    if (source.type == PORT_TYPE_MIDI && source.flow == PORT_FLOW_INPUT &&
+        graph_port_connection_count(graph, source.key) + connects >
+            MIDI_BUF_MERGE_MAX)
         return DATA_ACTION_ERR_INVALID;
 
+    bool any_failed = false;
+    for (size_t i = 0; i < req->connect.target_count; i++) {
+        uint64_t target_key = req->connect.targets[i] & CTXID_LOCAL_MASK;
+        int rc = graph_port_keys_connected(graph, source.key, target_key)
+                     ? graph_disconnect_keys(graph, source.key, target_key)
+                     : graph_connect_keys(graph, source.key, target_key);
+        if (rc != 0)
+            any_failed = true;
+    }
+    return any_failed ? DATA_ACTION_ERR_DATA : DATA_ACTION_OK;
+}
+
+static DataActionResult root_extr_connect_do(APP_INFO *app_data,
+                                             const DataActionReq *req) {
+    AUDIO_BACKEND *backend = app_data->backend;
     ContextId source_val = (ContextId)req->connect.source;
     if (CTXID_NS(source_val) != DATA_LIST_NS_PORTS)
         return DATA_ACTION_ERR_INVALID;
@@ -1551,9 +1670,10 @@ static DataActionResult root_connect_action_do(void *user_data,
     if (!audio_backend_port_by_key(backend, source_val & CTXID_LOCAL_MASK,
                                    &source))
         return DATA_ACTION_ERR_STALE;
+    // the source list offers only the exposed ports
+    if (source.owner_tag == 0)
+        return DATA_ACTION_ERR_INVALID;
 
-    // every target is checked before any is linked, so a request that is
-    // wrong or out of date changes nothing
     for (size_t i = 0; i < req->connect.target_count; i++) {
         ContextId target_val = (ContextId)req->connect.targets[i];
         if (CTXID_NS(target_val) != DATA_LIST_NS_PORTS)
@@ -1562,8 +1682,10 @@ static DataActionResult root_connect_action_do(void *user_data,
         if (!audio_backend_port_by_key(backend, target_val & CTXID_LOCAL_MASK,
                                        &target))
             return DATA_ACTION_ERR_STALE;
-        // the peers list only offers opposite flow and matching type
-        if (target.flow == source.flow || target.type != source.type)
+        // the peers list only offers other programs' ports of opposite flow
+        // and matching type
+        if (target.flow == source.flow || target.type != source.type ||
+            target.owner_tag != 0)
             return DATA_ACTION_ERR_INVALID;
     }
 
@@ -1582,16 +1704,32 @@ static DataActionResult root_connect_action_do(void *user_data,
     return any_failed ? DATA_ACTION_ERR_DATA : DATA_ACTION_OK;
 }
 
+static DataActionResult root_action_do(void *user_data,
+                                       const DataActionReq *req,
+                                       ContextId *out_new) {
+    APP_INFO *app_data = (APP_INFO *)user_data;
+    (void)out_new; // CONNECT creates no new context
+    if (!app_data || !req || req->type != DATA_ACTION_CONNECT)
+        return DATA_ACTION_ERR_INVALID;
+    if (!req->connect.targets || req->connect.target_count == 0)
+        return DATA_ACTION_ERR_INVALID;
+    if (req->id == ROOT_ACTION_CONNECT)
+        return root_graph_connect_do(app_data, req);
+    if (req->id == ROOT_ACTION_EXTR_CONNECT)
+        return root_extr_connect_do(app_data, req);
+    return DATA_ACTION_ERR_INVALID;
+}
+
 static const DataOps root_ops = {
     .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
     .id = root_id,
     .child_count = root_child_count,
     .child_at = root_child_at,
-    .action_list = root_connect_action_list,
-    .action_args = root_connect_action_args,
-    .list_count = root_connect_list_count,
-    .list_at = root_connect_list_at,
-    .action_do = root_connect_action_do,
+    .action_list = root_action_list,
+    .action_args = root_action_args,
+    .list_count = root_list_count,
+    .list_at = root_list_at,
+    .action_do = root_action_do,
     .name = root_name,
 };
 
@@ -1623,6 +1761,7 @@ DataObject app_init(void) {
     app_data->event_count = 0;
     app_data->event_read = 0;
     app_data->event_cap = 0;
+    app_data->graph_generation_seen = 0;
 
     /*init the audio backend for the whole program*/
     /*--------------------------------------------------*/
@@ -1818,10 +1957,13 @@ void app_data_update(void *root_user_data) {
                                        clap_plug_plugin_uid(plug)));
     }
 
-    // since the backend's ports are not in CX tree, if they changed, report as
-    // a context data changed event, not a context structure change event
+    // ports are not in the CX tree, so a backend or graph port / edge change is
+    // a data changed event on root, not a structure change
     BackendPortSync port_sync = audio_backend_ports_sync(app_data->backend);
-    if (port_sync.ports || port_sync.connections)
+    uint64_t graph_gen = graph_generation(app_data->graph);
+    bool graph_changed = graph_gen != app_data->graph_generation_seen;
+    app_data->graph_generation_seen = graph_gen;
+    if (port_sync.ports || port_sync.connections || graph_changed)
         app_data_push_event(app_data, DATA_EVENT_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_ROOT));
 

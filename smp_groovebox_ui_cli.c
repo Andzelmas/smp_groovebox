@@ -172,6 +172,7 @@ typedef struct _list_session{
     int kind;
     ContextId context;
     DataActionType type;
+    uint32_t id; // the action's DataAction.id
     const char *label; // the action's label, static in the data layer
     DataArgSpec specs[LIST_MAX_ARG_SPECS];
     int connect_pick;
@@ -931,8 +932,11 @@ static void helper_list_render(LIST_ROWS *rows, const char *header,
         if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
                                       rows->partial, rows->branch, view.rows[r], &row))
             continue;
-        printf("%s%s%s%s\n", r == view.cursor_row ? ">" : "",
-               row.label ? row.label : "?",
+        // the group tells same-named rows apart until one group is shown
+        bool grouped = rows->filter->group == 0 && row.group_key != 0;
+        printf("%s%s%s%s%s%s\n", r == view.cursor_row ? ">" : "",
+               grouped ? (row.group_label ? row.group_label : "?") : "",
+               grouped ? ": " : "", row.label ? row.label : "?",
                (row.flags & DATA_CHOICE_BRANCH) ? "/" : "",
                (row.flags & DATA_CHOICE_LINKED) ? " [connected]" : "");
     }
@@ -966,9 +970,10 @@ static void helper_action_result_msg(DataActionResult result, const char *label,
 
 // a 0-arg action (REMOVE, REFRESH): nothing to collect, just execute.
 static ContextId helper_action_do_direct(UI_LAYER *ui_layer, ContextId context,
-                                         DataActionType type, const char *label,
-                                         char *msg, size_t msg_cap) {
-    DataActionReq req = {.type = type};
+                                         const DataAction *action,
+                                         const char *label, char *msg,
+                                         size_t msg_cap) {
+    DataActionReq req = {.type = action->type, .id = action->id};
     ContextId out_new = CONTEXT_ID_INVALID;
     DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
     helper_action_result_msg(result, label, msg, msg_cap);
@@ -978,7 +983,7 @@ static ContextId helper_action_do_direct(UI_LAYER *ui_layer, ContextId context,
 // adjust a value (of a parameter for example) by adjust_value
 // if adjust_value is 0, will ask for user input for the adjust_value
 static ContextId helper_action_do_adjust_value(UI_LAYER *ui_layer, ContextId context,
-                                       DataActionType type, int adjust_value, const DataArgSpec *spec,
+                                       const DataAction *action, int adjust_value, const DataArgSpec *spec,
                                        const char *label, char *msg, size_t msg_cap) {
     int value = adjust_value;
     if (value == 0) {
@@ -990,7 +995,8 @@ static ContextId helper_action_do_adjust_value(UI_LAYER *ui_layer, ContextId con
             return CONTEXT_ID_INVALID;
     }
 
-    DataActionReq req = {.type = type, .adjust_value.step = value};
+    DataActionReq req = {
+        .type = action->type, .id = action->id, .adjust_value.step = value};
     ContextId out_new = CONTEXT_ID_INVALID;
     DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
     helper_action_result_msg(result, label, msg, msg_cap);
@@ -1014,10 +1020,11 @@ static bool helper_action_do_adjust_value_direct(UI_LAYER* ui_layer, ContextId c
         if (cur_action.type == DATA_ACTION_ADJUST_VALUE) {
             DataArgSpec specs[ACTION_ARG_COUNT];
             size_t arguments = ui_layer_context_action_args(
-                ui_layer, context, cur_action.type, specs, ACTION_ARG_COUNT);
+                ui_layer, context, cur_action.type, cur_action.id, specs,
+                ACTION_ARG_COUNT);
             if (arguments != 1)
                 return false;
-            helper_action_do_adjust_value(ui_layer, context, cur_action.type,
+            helper_action_do_adjust_value(ui_layer, context, &cur_action,
                                           adjust_value, &specs[0],
                                           cur_action.label, msg, msg_cap);
             return true;
@@ -1029,7 +1036,7 @@ static bool helper_action_do_adjust_value_direct(UI_LAYER* ui_layer, ContextId c
 
 // set value (of a parameter for example) using user intput
 static ContextId helper_action_do_set_value(UI_LAYER *ui_layer, ContextId context,
-                                       DataActionType type, const DataArgSpec *spec,
+                                       const DataAction *action, const DataArgSpec *spec,
                                        const char *label, char *msg, size_t msg_cap) {
     double value = 0.0;
     enterCookedMode();
@@ -1039,7 +1046,8 @@ static ContextId helper_action_do_set_value(UI_LAYER *ui_layer, ContextId contex
     if(scan_err <= 0)
         return CONTEXT_ID_INVALID;
 
-    DataActionReq req = {.type = type, .set_value.value = value};
+    DataActionReq req = {
+        .type = action->type, .id = action->id, .set_value.value = value};
     ContextId out_new = CONTEXT_ID_INVALID;
     DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
     helper_action_result_msg(result, label, msg, msg_cap);
@@ -1048,7 +1056,7 @@ static ContextId helper_action_do_set_value(UI_LAYER *ui_layer, ContextId contex
 
 // single PATH arg (ADD_FILE_PATH): cooked-mode text entry.
 static ContextId helper_action_do_path(UI_LAYER *ui_layer, ContextId context,
-                                       DataActionType type, const DataArgSpec *spec,
+                                       const DataAction *action, const DataArgSpec *spec,
                                        const char *label, char *msg, size_t msg_cap) {
     char path_buf[512];
     enterCookedMode();
@@ -1064,7 +1072,8 @@ static ContextId helper_action_do_path(UI_LAYER *ui_layer, ContextId context,
     if (len > 0 && path_buf[len - 1] == '\n')
         path_buf[len - 1] = '\0';
 
-    DataActionReq req = {.type = type, .add_file_path.path = path_buf};
+    DataActionReq req = {
+        .type = action->type, .id = action->id, .add_file_path.path = path_buf};
     ContextId out_new = CONTEXT_ID_INVALID;
     DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
     helper_action_result_msg(result, label, msg, msg_cap);
@@ -1072,14 +1081,16 @@ static ContextId helper_action_do_path(UI_LAYER *ui_layer, ContextId context,
 }
 
 static void helper_list_session_start(LIST_SESSION *session, int kind,
-                                      ContextId context, DataActionType type,
+                                      ContextId context,
+                                      const DataAction *action,
                                       const char *label,
                                       const DataArgSpec *specs,
                                       size_t spec_count) {
     *session = (LIST_SESSION){0};
     session->kind = kind;
     session->context = context;
-    session->type = type;
+    session->type = action->type;
+    session->id = action->id;
     session->label = label;
     for (size_t i = 0; i < spec_count && i < LIST_MAX_ARG_SPECS; i++)
         session->specs[i] = specs[i];
@@ -1090,7 +1101,7 @@ static void helper_list_session_start(LIST_SESSION *session, int kind,
 // when that context declares a group the list has
 static void helper_list_session_scope(UI_LAYER *ui_layer, LIST_SESSION *session,
                                       ContextId from) {
-    DataActionReq partial = {.type = session->type};
+    DataActionReq partial = {.type = session->type, .id = session->id};
     LIST_FILTER none = {0};
     LIST_ROWS rows = {ui_layer, session->context, session->specs[0].list,
                       &partial, 0, &none};
@@ -1209,7 +1220,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
     const DataArgSpec *spec = &session->specs[which];
     LIST_CURSOR *cur = &session->cursors[which];
     LIST_FILTER *filter = &session->filters[which];
-    DataActionReq partial = {.type = session->type};
+    DataActionReq partial = {.type = session->type, .id = session->id};
     if (picking_targets)
         partial.connect.source = session->source_value;
     LIST_ROWS rows = {ui_layer, session->context, spec->list, &partial,
@@ -1289,7 +1300,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return true;
     }
 
-    DataActionReq req = {.type = session->type};
+    DataActionReq req = {.type = session->type, .id = session->id};
     uint64_t target_value = picked.value;
     if (session->kind == LIST_SESSION_CONNECT) {
         req.connect.source = session->source_value;
@@ -1319,46 +1330,47 @@ static bool helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
         return false;
 
     ContextId context = chosen->actions_context;
-    DataActionType type = chosen->action.type;
-    const char *label = chosen->action.label ? chosen->action.label : "action";
+    const DataAction *action = &chosen->action;
+    DataActionType type = action->type;
+    const char *label = action->label ? action->label : "action";
 
     DataArgSpec specs[ACTION_ARG_COUNT];
-    size_t arg_count = ui_layer_context_action_args(ui_layer, context, type,
-                                                     specs, ACTION_ARG_COUNT);
+    size_t arg_count = ui_layer_context_action_args(
+        ui_layer, context, type, action->id, specs, ACTION_ARG_COUNT);
 
     if (type == DATA_ACTION_CONNECT) {
         if (arg_count < 2) {
             snprintf(msg, msg_cap, "%s: misconfigured.", label);
             return false;
         }
-        helper_list_session_start(session, LIST_SESSION_CONNECT, context, type,
-                                  label, specs, 2);
+        helper_list_session_start(session, LIST_SESSION_CONNECT, context,
+                                  action, label, specs, 2);
         helper_list_session_scope(ui_layer, session, scope_from);
         return true;
     }
     if (type == DATA_ACTION_ADJUST_VALUE){
-        helper_action_do_adjust_value(ui_layer, context, type, 0, &specs[0],
+        helper_action_do_adjust_value(ui_layer, context, action, 0, &specs[0],
                                       label, msg, msg_cap);
         return false;
     }
     if (type == DATA_ACTION_SET_VALUE){
-        helper_action_do_set_value(ui_layer, context, type, &specs[0], label,
+        helper_action_do_set_value(ui_layer, context, action, &specs[0], label,
                                    msg, msg_cap);
         return false;
     }
     if (arg_count == 0) {
-        helper_action_do_direct(ui_layer, context, type, label, msg, msg_cap);
+        helper_action_do_direct(ui_layer, context, action, label, msg, msg_cap);
         return false;
     }
     if (arg_count == 1 && specs[0].kind == DATA_ARG_PATH) {
         printf("\n-- %s --\n", label);
-        helper_action_do_path(ui_layer, context, type, &specs[0], label, msg,
+        helper_action_do_path(ui_layer, context, action, &specs[0], label, msg,
                               msg_cap);
         return false;
     }
     if (arg_count == 1 && specs[0].kind == DATA_ARG_CHOICE) {
-        helper_list_session_start(session, LIST_SESSION_CHOICE, context, type,
-                                  label, specs, 1);
+        helper_list_session_start(session, LIST_SESSION_CHOICE, context,
+                                  action, label, specs, 1);
         helper_list_session_scope(ui_layer, session, scope_from);
         return true;
     }

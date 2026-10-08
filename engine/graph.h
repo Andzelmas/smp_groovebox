@@ -88,6 +88,12 @@ bool graph_port_keys_connected(const GRAPH *graph, uint64_t key_a,
 // whether graph_connect_keys takes the pair, true when already connected
 bool graph_port_keys_connectable(const GRAPH *graph, uint64_t key_a,
                                  uint64_t key_b);
+// the ports graph_connect_keys takes with the one named by source_key, linked
+// ones included, in list order. Empty for an unknown source. One cached list,
+// rebuilt when the source or the graph generation changes
+size_t graph_peer_count(GRAPH *graph, uint64_t source_key);
+bool graph_peer_at(GRAPH *graph, uint64_t source_key, size_t idx,
+                   GraphPortInfo *out);
 // an edge from an output to an input of the same type, either order. Refused
 // when it closes a loop (a node feeding itself, directly or through others) or
 // gives a MIDI input more than MIDI_BUF_MERGE_MAX sources. 0 on success or

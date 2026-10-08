@@ -79,8 +79,9 @@ struct DataOps {
     // DATA_CAP_ACTIONS - see data_actions.h for the flow and struct docs.
     // fill *out with up to cap available actions for this object.
     size_t (*action_list)(void *user_data, DataAction *out, size_t cap);
-    // fill *out with up to cap argument specs the given action needs.
-    size_t (*action_args)(void *user_data, DataActionType type,
+    // fill *out with up to cap argument specs the given action (type, id)
+    // needs.
+    size_t (*action_args)(void *user_data, DataActionType type, uint32_t id,
                           DataArgSpec *out, size_t cap);
     // how many options `list` currently has (list is a DataArgSpec.list value
     // returned by action_args - the caller forwards it unchanged). `partial`
@@ -183,11 +184,11 @@ static inline size_t data_action_list(const DataObject *obj, DataAction *out,
 }
 
 static inline size_t data_action_args(const DataObject *obj,
-                                      DataActionType type, DataArgSpec *out,
-                                      size_t cap) {
+                                      DataActionType type, uint32_t id,
+                                      DataArgSpec *out, size_t cap) {
     if (!data_obj_has(obj, DATA_CAP_ACTIONS) || !obj->ops->action_args)
         return 0;
-    return obj->ops->action_args(obj->user_data, type, out, cap);
+    return obj->ops->action_args(obj->user_data, type, id, out, cap);
 }
 
 static inline size_t data_list_count(const DataObject *obj, DataListId list,

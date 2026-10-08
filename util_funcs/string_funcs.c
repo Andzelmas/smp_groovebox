@@ -2,6 +2,7 @@
 #include "../types.h"
 #include <dirent.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,32 @@ uint64_t str_hash_fnv1a64(const char *s) {
     }
     return h;
 }
+
+uint32_t str_numbered_name(char *out, size_t cap, const char *name,
+                           const uint32_t *used, size_t used_count,
+                           size_t *name_at) {
+    // the lowest number none of used has
+    uint32_t num = 1;
+    for (bool taken = true; taken;) {
+        taken = false;
+        for (size_t i = 0; i < used_count && !taken; i++)
+            taken = used[i] == num;
+        if (taken)
+            num++;
+    }
+    size_t at = 0;
+    if (out && cap > 0) {
+        int len = num > 1 ? snprintf(out, cap, "%u ", (unsigned)num) : 0;
+        at = len > 0 ? (size_t)len : 0;
+        if (at >= cap)
+            at = cap - 1;
+        snprintf(out + at, cap - at, "%s", name ? name : "");
+    }
+    if (name_at)
+        *name_at = at;
+    return num;
+}
+
 
 void str_combine_str_int(char **string_in, int num) {
     char *ret_string = NULL;
