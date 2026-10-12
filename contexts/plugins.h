@@ -1,5 +1,6 @@
 #pragma once
 #include "../engine/graph.h"
+#include "../engine/transport.h"
 #include "../structs.h"
 #include "../util_funcs/tree_index.h"
 #include "params.h"
@@ -21,11 +22,10 @@ typedef struct _plug_evbuf_impl PLUG_EVBUF;
 typedef struct _plug_evbuf_iterator_impl PLUG_EVBUF_ITERATOR;
 
 // inititialize the plugin host data. A plugin is a node of graph, owned by
-// (owner_tag, the plugin's uid). transport is for app_jack_return_transport_rt,
-// until 2T
+// (owner_tag, the plugin's uid). time:Position follows transport
 PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
-                     plug_status_t *plug_errors, GRAPH *graph, void *transport,
-                     uint64_t owner_tag);
+                     plug_status_t *plug_errors, GRAPH *graph,
+                     TRANSPORT *transport, uint64_t owner_tag);
 
 // Scans the installed plugins and (re)builds the list of them on plug_data.
 // Safe to call again while plugins are loaded. A plugin keeps its key across

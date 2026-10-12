@@ -539,6 +539,17 @@ int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
     return 0;
 }
 
+int param_send_value_rt(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return -1;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_rt)
+        return -1;
+    PRM_PARAM_RT *cur_param = param_container->rt_params[val_id];
+    if (!cur_param)
+        return -1;
+    return param_rt_send(param_container, val_id, cur_param) ? 0 : -1;
+}
+
 void param_rt_resend(PRM_CONTAIN *param_container) {
     if (!param_container || !param_container->rt_resend)
         return;
@@ -848,7 +859,7 @@ const char *param_get_value_as_string(PRM_CONTAIN *param_container,
                                       int val_id, PARAM_T value) {
     if (!param_container)
         return NULL;
-    // no owner-supplied formatter - format the raw value as a plain number,
+    // no owner-supplied formatter - format the given value as a plain number,
     // decimal count derived from this param's own increment
     if (!param_container->user_data.user_data ||
         !param_container->user_data.val_to_string) {

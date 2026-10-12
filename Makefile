@@ -29,7 +29,7 @@ SCAN_C = contexts/clap_scan.c contexts/clap_ext/clap_ext_preset_factory.c
 #util functions
 UTIL_FUNCS = util_funcs/wav_funcs.c util_funcs/math_funcs.c util_funcs/string_funcs.c util_funcs/ring_buffer.c util_funcs/log_funcs.c util_funcs/osc_wavelookup.c util_funcs/uniform_buffer.c util_funcs/midi_buf.c util_funcs/path_funcs.c util_funcs/hash_table.c util_funcs/intern_table.c util_funcs/tree_index.c
 #the audio engine, knows no backend
-ENGINE = engine/graph.c
+ENGINE = engine/graph.c engine/transport.c
 #the audio backend (backend/audio_backend.h), one picked here
 BACKEND = backend/jack_backend.c
 #additional sources

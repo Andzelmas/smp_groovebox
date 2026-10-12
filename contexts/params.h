@@ -59,7 +59,8 @@ typedef struct _params_container PRM_CONTAIN;
 // val_to_string: writes a display string for a param's value - the owner
 // decides the whole presentation (plain number, dB, True/False, a choice
 // label, anything). May be NULL, in which case param_get_value_as_string
-// writes nothing and returns 0. Use only on [main-thread] 
+// formats the value as a plain number, decimals from the param's increment.
+// Use only on [main-thread]
 typedef struct _params_cont_user_data {
     void *user_data;
     PARAM_T (*build_value)(const void *user_data, int val_id, PARAM_T raw_val,
@@ -162,6 +163,12 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params);
 // has the value then, and param_rt_resend sends it later.
 int param_set_value_rt(PRM_CONTAIN *param_container, int val_id,
                        PARAM_T set_to);
+
+// [audio-thread] send the rt value to the ui side even though it did not
+// change - for an owner whose ui value an older message may have overwritten
+// (a ui edit the owner applied as is). -1 on error or a full queue, which
+// param_rt_resend sends later
+int param_send_value_rt(PRM_CONTAIN *param_container, int val_id);
 
 // [audio-thread] send the values a full rt_to_ui queue refused, once there is
 // room. Call once per cycle from an owner that cannot ask its source for the

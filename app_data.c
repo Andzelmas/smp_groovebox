@@ -6,6 +6,7 @@
 #include "app_data.h"
 #include "backend/audio_backend.h"
 #include "engine/graph.h"
+#include "engine/transport.h"
 // string functions
 #include "contexts/clap_plugins.h"
 #include "contexts/plugins.h"
@@ -27,10 +28,14 @@
 typedef struct _app_info {
     // the smapler data
     SMP_INFO *smp_data;
-    // the audio backend, also the transport (temporeraly) 
+    // the audio backend
     AUDIO_BACKEND *backend;
     // the routing of every port, run by trk_audio_process_rt
     GRAPH *graph;
+    // the clock, advanced by trk_audio_process_rt before the graph
+    TRANSPORT *transport;
+    // transport_rolling as of the last app_data_update
+    bool rolling_seen;
     // plugin data
     PLUG_INFO *plug_data;
     // CLAP plugin data
@@ -98,6 +103,7 @@ static int clean_memory(APP_INFO *app_data) {
     // stops the process callback, removes its endpoint nodes
     audio_backend_clean(app_data->backend);
     graph_free(app_data->graph);
+    transport_clean(app_data->transport);
 
     // clean the app_data
     context_sub_clean(app_data->control_data);
@@ -182,6 +188,8 @@ static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
     if (read_err == -1)
         return -1;
 
+    // the position every node reads this cycle
+    transport_cycle_rt(app_data->transport, nframes);
     // every node in edge order, the backend's endpoints included
     graph_process_rt(app_data->graph, nframes);
     return 0;
@@ -607,12 +615,12 @@ static bool cx_param_cat_child_at(void *user_data, size_t idx,
                              param_category_uid(container, cat_id), idx, out);
 }
 
-// the Trk container: constant name, its params as children.
+// the Trk container: constant name, the transport's params as children.
 static size_t trk_child_count(void *user_data) {
-    return cx_param_level_count(app_jack_trk_param_container(user_data), 0);
+    return cx_param_level_count(transport_param_container(user_data), 0);
 }
 static bool trk_child_at(void *user_data, size_t idx, DataObject *out) {
-    return cx_param_level_at(app_jack_trk_param_container(user_data), 0, idx,
+    return cx_param_level_at(transport_param_container(user_data), 0, idx,
                              out);
 }
 static const char *trk_name(void *user_data) {
@@ -1344,7 +1352,7 @@ static bool root_child_at(void *user_data, size_t idx, DataObject *out) {
         return true;
     case 4:
         out->ops = &trk_ops;
-        out->user_data = app_data->backend;
+        out->user_data = app_data->transport;
         return true;
     default:
         return false;
@@ -1363,10 +1371,12 @@ static ContextId root_id(void *user_data) {
 // DataAction.id: Connect links the graph's ports, Extr_Connect the exposed
 // ports to other programs' ports. Ports are never materialised into the CX
 // tree - these read the graph and the backend's port cache, each keyed by its
-// own identities.
+// own identities. Play and Stop are the transport's COMMANDs.
 enum {
     ROOT_ACTION_CONNECT = 0,
     ROOT_ACTION_EXTR_CONNECT,
+    ROOT_ACTION_PLAY,
+    ROOT_ACTION_STOP,
 };
 
 // the name the tree shows for a port owner, NULL for an unknown one. Owner
@@ -1494,8 +1504,8 @@ static void root_extr_choice_fill(APP_INFO *app_data,
 }
 
 static size_t root_action_list(void *user_data, DataAction *out, size_t cap) {
-    (void)user_data;
-    if (!out)
+    APP_INFO *app_data = (APP_INFO *)user_data;
+    if (!app_data || !out)
         return 0;
     size_t n = 0;
     if (n < cap)
@@ -1514,6 +1524,24 @@ static size_t root_action_list(void *user_data, DataAction *out, size_t cap) {
             .label = "Extr_Connect",
             .tooltip = "Connect or disconnect the exposed ports to other "
                        "programs' ports",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_COMMAND,
+            .id = ROOT_ACTION_PLAY,
+            .label = "Play",
+            .tooltip = "Start the transport",
+            .enabled = !transport_rolling(app_data->transport),
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_COMMAND,
+            .id = ROOT_ACTION_STOP,
+            .label = "Stop",
+            .tooltip = "Stop the transport, when stopped go back to the start",
             .enabled = true,
             .style = DATA_ACTION_STYLE_NORMAL,
         };
@@ -1708,8 +1736,20 @@ static DataActionResult root_action_do(void *user_data,
                                        const DataActionReq *req,
                                        ContextId *out_new) {
     APP_INFO *app_data = (APP_INFO *)user_data;
-    (void)out_new; // CONNECT creates no new context
-    if (!app_data || !req || req->type != DATA_ACTION_CONNECT)
+    (void)out_new; // none of these creates a context
+    if (!app_data || !req)
+        return DATA_ACTION_ERR_INVALID;
+    if (req->type == DATA_ACTION_COMMAND) {
+        int rc = -1;
+        if (req->id == ROOT_ACTION_PLAY)
+            rc = transport_play(app_data->transport);
+        else if (req->id == ROOT_ACTION_STOP)
+            rc = transport_stop(app_data->transport);
+        else
+            return DATA_ACTION_ERR_INVALID;
+        return rc == 0 ? DATA_ACTION_OK : DATA_ACTION_ERR_DATA;
+    }
+    if (req->type != DATA_ACTION_CONNECT)
         return DATA_ACTION_ERR_INVALID;
     if (!req->connect.targets || req->connect.target_count == 0)
         return DATA_ACTION_ERR_INVALID;
@@ -1753,6 +1793,8 @@ DataObject app_init(void) {
     app_data->smp_data = NULL;
     app_data->backend = NULL;
     app_data->graph = NULL;
+    app_data->transport = NULL;
+    app_data->rolling_seen = false;
     app_data->plug_data = NULL;
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
@@ -1784,6 +1826,11 @@ DataObject app_init(void) {
         clean_memory(app_data);
         return invalid;
     }
+    app_data->transport = transport_init(samplerate);
+    if (!app_data->transport) {
+        clean_memory(app_data);
+        return invalid;
+    }
     // now activate the backend, it will launch the rt thread
     // (trk_audio_process_rt function) but app_data->is_processing == 0, so the
     // graph will not run, only app_data sys messages (to start the
@@ -1807,7 +1854,7 @@ DataObject app_init(void) {
     plug_status_t plug_errors = 0;
     app_data->plug_data =
         plug_init(buffer_size, samplerate, &plug_errors, app_data->graph,
-                  app_data->backend, DATA_NS_LV2_PLUG);
+                  app_data->transport, DATA_NS_LV2_PLUG);
     if (!app_data->plug_data) {
         clean_memory(app_data);
         return invalid;
@@ -1828,7 +1875,7 @@ DataObject app_init(void) {
 
     // initiate the Synth data
     app_data->synth_data = synth_init(samplerate, 1, app_data->graph,
-                                      app_data->backend, DATA_NS_SYNTH_OSC);
+                                      app_data->transport, DATA_NS_SYNTH_OSC);
     if (!app_data->synth_data) {
         clean_memory(app_data);
         return invalid;
@@ -1902,6 +1949,8 @@ static void app_audio_config_update(APP_INFO *app_data) {
     if (graph_max_buffer_size_set(app_data->graph, buffer_size) != 0)
         log_append_logfile("Graph buffers stay at the old size\n");
     smp_sample_rate_set(app_data->smp_data, sample_rate);
+    if (transport_sample_rate_set(app_data->transport, sample_rate) != 0)
+        log_append_logfile("Transport stays at the old sample rate\n");
     if (synth_sample_rate_set(app_data->synth_data, sample_rate) != 0)
         log_append_logfile("Synth stays at the old sample rate\n");
     plug_audio_config_set(app_data->plug_data, sample_rate, buffer_size);
@@ -1917,6 +1966,7 @@ void app_data_update(void *root_user_data) {
     context_sub_process_ui(app_data->control_data);
     // read messages for jack from rt thread on [main-thread]
     app_jack_read_rt_to_ui_messages(app_data->backend);
+    transport_update(app_data->transport);
     // read messages from rt thread on [main-thread] for CLAP plugins
     clap_read_rt_to_ui_messages(app_data->clap_plug_data);
     // read messages from the rt thread on the [main-thread] for lv2 plugins
@@ -1963,14 +2013,19 @@ void app_data_update(void *root_user_data) {
     uint64_t graph_gen = graph_generation(app_data->graph);
     bool graph_changed = graph_gen != app_data->graph_generation_seen;
     app_data->graph_generation_seen = graph_gen;
-    if (port_sync.ports || port_sync.connections || graph_changed)
+    // root's Play is enabled only while stopped
+    bool rolling = transport_rolling(app_data->transport);
+    bool rolling_changed = rolling != app_data->rolling_seen;
+    app_data->rolling_seen = rolling;
+    if (port_sync.ports || port_sync.connections || graph_changed ||
+        rolling_changed)
         app_data_push_event(app_data, DATA_EVENT_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_ROOT));
 
     // param value/name/flag changes, after the structure events above so a
     // just added param already has its context
-    app_data_push_param_changes(
-        app_data, app_jack_trk_param_container(app_data->backend));
+    app_data_push_param_changes(app_data,
+                                transport_param_container(app_data->transport));
     for (unsigned int i = 0;; i++) {
         void *smp = smp_sample_return(app_data->smp_data, i);
         if (!smp)

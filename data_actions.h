@@ -33,6 +33,8 @@ typedef enum {
     DATA_ACTION_ADJUST_VALUE, // move by a signed step COUNT, not a raw value
     DATA_ACTION_SET_CHOICE,   // set to a value picked from a named list
     DATA_ACTION_REFRESH,      // refresh the context (for example refresh contexts lists)
+    DATA_ACTION_COMMAND,      // do it now, no payload - the (type, id) pair
+                               // says what (Play, Stop)
 } DataActionType;
 
 typedef enum {
@@ -128,6 +130,7 @@ typedef struct {
         struct {
             int step; // signed step count, sign maps to Increase/Decrease
         } adjust_value;
-        // DATA_ACTION_REMOVE, DATA_ACTION_REFRESH: no payload
+        // DATA_ACTION_REMOVE, DATA_ACTION_REFRESH, DATA_ACTION_COMMAND: no
+        // payload
     };
 } DataActionReq;

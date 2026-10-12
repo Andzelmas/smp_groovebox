@@ -1,7 +1,6 @@
 #include <jack/jack.h>
 #include <jack/midiport.h>
 #include <jack/types.h>
-#include <math.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -16,8 +15,6 @@
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/midi_buf.h"
 #include "jack_funcs.h"
-// the maximum number of bars there can be
-#define MAX_BARS 1000
 
 // the exposed ports, flow as JACK sees it: an input feeds the graph through
 // the "in" node's output of the same name, an output takes the sum of the "out"
@@ -35,22 +32,6 @@ static const struct {
     {"midi_out", PORT_TYPE_MIDI, PORT_FLOW_OUTPUT},
 };
 #define EXPOSED_COUNT (sizeof(exposed_defs) / sizeof(exposed_defs[0]))
-
-// this module's own id space for the transport params, passed to
-// param_add_param as owner_id. Source-defined, so it is stable across runs and
-// is what a saved value gets matched back by - never a positional index. 0
-// stays reserved for "no owner id".
-enum trkParamId {
-    TRK_PARAM_NONE = 0,
-    TRK_PARAM_TEMPO,
-    TRK_PARAM_BAR,
-    TRK_PARAM_BEAT,
-    TRK_PARAM_TICK,
-    TRK_PARAM_PLAY,
-    TRK_PARAM_BPB,
-    TRK_PARAM_BEAT_TYPE,
-    TRK_PARAM_COUNT
-};
 
 // one cached port. conn_first/conn_count index the flat adjacency array
 typedef struct _jack_port_rec {
@@ -91,18 +72,6 @@ typedef struct _audio_backend {
     // notification thread
     atomic_uint sample_rate;
     atomic_uint buffer_size;
-    // parameters for the general song track settings, like current bar, beat
-    // also play, stop etc.
-    PRM_CONTAIN *trk_params;
-    // val_ids of the transport params, captured from param_add_param at init.
-    // The [audio-thread] transport code indexes params constantly, so resolve
-    // the mapping once, here, instead of a param_find_owner_id per access.
-    // indexed by trkParamId, so TRK_PARAM_NONE's slot is unused
-    int trk_val[TRK_PARAM_COUNT];
-    // rt tick var, that goes from 0 to RT_CYCLES, rt thread will send info to
-    // ui thread only when rt tick var is 0 should only be touched on
-    // [audio-thread]
-    int rt_tick;
     // control_data for sys messages, for jack currently only uses the
     // [thread-safe] messaging system, since this does not have any subcontexts
     CXCONTROL *control_data;
@@ -551,13 +520,7 @@ bool audio_backend_port_keys_connected(JACK_INFO *jack_data, uint64_t key_a,
 static int sample_rate_change(jack_nframes_t new_sample_rate, void *arg);
 static int buffer_size_change(jack_nframes_t new_buffer_size, void *arg);
 static int jack_process_rt(jack_nframes_t nframes, void *arg);
-static void timebbt_callback_rt(jack_transport_state_t state,
-                                jack_nframes_t nframes, jack_position_t *pos,
-                                int new_pos, void *arg);
-static void app_jack_update_transport_from_params_rt(JACK_INFO *jack_data);
 
-// ticks per beat, since user should not set these anyway
-double time_ticks_per_beat = 1920.0;
 static int app_jack_sys_send_msg(void *user_data, const char *msg) {
     // TODO for future proof, now is not used
     (void)user_data;
@@ -625,45 +588,6 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
     jack_options_t options = JackNullOption;
     jack_status_t status = 0;
 
-    // initialize the general song trk parameters like current bar, beat, play
-    // etc.
-    jack_data->trk_params = params_init_param_container(NULL);
-    // uid 0 - params.c mints; owner_id is this module's own enum. Keep the
-    // returned val_ids: the transport code on [audio-thread] indexes by them.
-    jack_data->trk_val[TRK_PARAM_TEMPO] =
-        param_add_param(jack_data->trk_params, "Tempo", 100, 10, 500, 1, 0,
-                        TRK_PARAM_TEMPO, 0, 0, NULL);
-    jack_data->trk_val[TRK_PARAM_BAR] =
-        param_add_param(jack_data->trk_params, "Bar", 1, 1, MAX_BARS, 1, 0,
-                        TRK_PARAM_BAR, 0, 0, NULL);
-    jack_data->trk_val[TRK_PARAM_BEAT] =
-        param_add_param(jack_data->trk_params, "Beat", 1, 1, 16, 1, 0,
-                        TRK_PARAM_BEAT, 0, 0, NULL);
-    jack_data->trk_val[TRK_PARAM_TICK] = param_add_param(
-        jack_data->trk_params, "Tick", 0, 0, 2000,
-        floor(time_ticks_per_beat / 4), 0, TRK_PARAM_TICK, 0, 0, NULL);
-    jack_data->trk_val[TRK_PARAM_PLAY] =
-        param_add_param(jack_data->trk_params, "Play", 0, 0, 1, 1, 0,
-                        TRK_PARAM_PLAY, 0, 0, NULL);
-    jack_data->trk_val[TRK_PARAM_BPB] =
-        param_add_param(jack_data->trk_params, "BPB", 4, 2, 16, 1, 0,
-                        TRK_PARAM_BPB, 0, 0, NULL);
-    jack_data->trk_val[TRK_PARAM_BEAT_TYPE] =
-        param_add_param(jack_data->trk_params, "Beat_Type", 4, 2, 16, 1, 0,
-                        TRK_PARAM_BEAT_TYPE, 0, 0, NULL);
-    // a failed add returns -1, which would silently index out of range on the
-    //[audio-thread] later - refuse to start instead
-    if (!jack_data->trk_params) {
-        audio_backend_clean(jack_data);
-        return NULL;
-    }
-    for (int i = TRK_PARAM_NONE + 1; i < TRK_PARAM_COUNT; i++) {
-        if (jack_data->trk_val[i] < 0) {
-            audio_backend_clean(jack_data);
-            return NULL;
-        }
-    }
-
     // open client connection
     jack_data->client =
         jack_client_open(client_name, options & status, server_name);
@@ -681,11 +605,6 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
                                   jack_data);
     jack_set_buffer_size_callback(jack_data->client, buffer_size_change,
                                   jack_data);
-
-    // set the callback function that updates the *pos struct that holds beat,
-    // bar, tick etc information
-    jack_set_timebase_callback(jack_data->client, 0, timebbt_callback_rt,
-                               jack_data);
 
     // call this function whenever any port is registered or unregistered
     // anywhere on the system (not just this client's own ports) - must be
@@ -710,80 +629,17 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
     return jack_data;
 }
 
-// return the transport param container, NULL on error
-PRM_CONTAIN *app_jack_trk_param_container(void *jack_data_handle) {
-    JACK_INFO *jack_data = (JACK_INFO *)jack_data_handle;
-    if (!jack_data)
-        return NULL;
-    return jack_data->trk_params;
-}
-
 int app_jack_read_ui_to_rt_messages(JACK_INFO *jack_data) {
     if (!jack_data)
         return -1;
-    // update the rt_tick
-    jack_data->rt_tick += 1;
-    if (jack_data->rt_tick > RT_CYCLES)
-        jack_data->rt_tick = 0;
-
     context_sub_process_rt(jack_data->control_data);
-
-    // read the param ui_to_rt messages and set the parameter values
-    param_msgs_process(jack_data->trk_params, 1);
-
-    // if rt params just got new parameter values from the ui they will be just
-    // changed in that case jack will create a new transport object and request
-    // a transport change
-    app_jack_update_transport_from_params_rt(jack_data);
-    // now update the bar, beat, tick and is playing parameters from the jack
-    // transport for [audio-thread] and [main-thread] update the params on
-    // [audio-thread] in rt_tick (as slow as ui [main-thread] params) since the
-    // params will only be used to set anything if the user changes some of them
-    // on the [main-thread] all other contexts gets the real time beats, ticks
-    // and other transport vars from the jack_transport_query function in the
-    // app_jack_return_transport_rt function
-    if (jack_data->rt_tick == 0) {
-        jack_position_t pos;
-        jack_transport_state_t state =
-            jack_transport_query(jack_data->client, &pos);
-        unsigned int pos_ready = 1;
-        if (!pos.valid)
-            pos_ready = 0;
-        if (pos.valid != JackPositionBBT)
-            pos_ready = 0;
-        if (pos_ready == 1) {
-            if (state == JackTransportRolling) {
-                // param_set_value_rt does not mark these changed, so
-                // app_jack_update_transport_from_params_rt will not create a
-                // new transport object from them. get the bars
-                param_set_value_rt(jack_data->trk_params,
-                                   jack_data->trk_val[TRK_PARAM_BAR], (float)pos.bar);
-                // get the beat
-                param_set_value_rt(jack_data->trk_params,
-                                   jack_data->trk_val[TRK_PARAM_BEAT], (float)pos.beat);
-                // get the tick
-                param_set_value_rt(jack_data->trk_params,
-                                   jack_data->trk_val[TRK_PARAM_TICK], (float)pos.tick);
-            }
-            // get the isPlaying state even if the Jack transport head is not
-            // rolling
-            param_set_value_rt(jack_data->trk_params, jack_data->trk_val[TRK_PARAM_PLAY],
-                               (float)state);
-        }
-    }
-    param_rt_resend(jack_data->trk_params);
     return 0;
 }
 
 int app_jack_read_rt_to_ui_messages(JACK_INFO *jack_data) {
     if (!jack_data)
         return -1;
-
     context_sub_process_ui(jack_data->control_data);
-
-    // read the param rt_to_ui messages and set the parameter values
-    param_msgs_process(jack_data->trk_params, 0);
-
     return 0;
 }
 
@@ -1016,212 +872,9 @@ void audio_backend_clean(AUDIO_BACKEND *jack_data) {
     // the graph outlives the backend
     graph_node_remove(jack_data->graph, jack_data->in_node);
     graph_node_remove(jack_data->graph, jack_data->out_node);
-    // clean the general parameters
-    if (jack_data->trk_params)
-        param_clean_param_container(jack_data->trk_params);
-
     context_sub_clean(jack_data->control_data);
     ports_cache_clear(jack_data);
     intern_clean(&jack_data->idents);
     port_owners_clean(jack_data);
     free(jack_data);
-}
-
-static int app_jack_transport(JACK_INFO *jack_data,
-                              unsigned int transport_type) {
-    int ret_int = -1;
-    if (!jack_data)
-        return -1;
-    if (transport_type == 0) {
-        jack_transport_stop(jack_data->client);
-        return 0;
-    }
-    if (transport_type == 1) {
-        jack_transport_start(jack_data->client);
-        return 0;
-    }
-
-    return ret_int;
-}
-
-static void timebbt_callback_rt(jack_transport_state_t state,
-                                jack_nframes_t nframes, jack_position_t *pos,
-                                int new_pos, void *arg) {
-    (void)state;
-    // the struct will be used to get a struct from the circle buffer for the
-    // time_beats_per_bar and such
-    JACK_INFO *jack_data = (JACK_INFO *)arg;
-    if (!jack_data)
-        return;
-    // minutes since frame 0
-    double min;
-    // ticks since frame 0
-    long abs_tick;
-    // beats since frame 0
-    long abs_beat;
-    // bars since frame 0, with remainder
-    // TODO now, not used, because of drift debugging
-    //  double abs_bars;
-    // only calculate the beats and bars from frames on the first run of this
-    // function
-    if (new_pos && pos->valid != JackPositionBBT) {
-        PRM_CONTAIN *transport_cntr = jack_data->trk_params;
-        pos->valid = JackPositionBBT;
-        pos->beats_per_bar = 4;
-        pos->beats_per_bar =
-            param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_BPB], 1);
-        pos->beat_type = 4;
-        pos->beat_type =
-            param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_BEAT_TYPE], 1);
-
-        pos->ticks_per_beat = time_ticks_per_beat;
-        // get the bpm
-        pos->beats_per_minute = 120;
-        pos->beats_per_minute =
-            param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_TEMPO], 1);
-
-        // Compute the *pos members from frame
-        min = pos->frame / ((double)pos->frame_rate * 60.0);
-        abs_tick = min * pos->beats_per_minute * pos->ticks_per_beat;
-        abs_beat = abs_tick / pos->ticks_per_beat;
-
-        pos->bar = abs_beat / pos->beats_per_bar;
-        pos->beat = abs_beat - (pos->bar * pos->beats_per_bar) + 1;
-        pos->tick = abs_tick - (abs_beat * pos->ticks_per_beat);
-        pos->bar_start_tick =
-            pos->bar * pos->beats_per_bar * pos->ticks_per_beat;
-        pos->bar++;
-
-    } else {
-        // if new pos is not requested add the ticks each cycle
-        // TODO now tick drifts so bars and beats are calculated not from ticks,
-        // need to figure out how to calculate from ticks and not drift
-        if (!new_pos) {
-            pos->tick += (nframes * pos->ticks_per_beat *
-                          pos->beats_per_minute / (pos->frame_rate * 60));
-        }
-        double bpm_sec = (double)pos->beats_per_minute / 60.0;
-        double secs = (double)pos->frame / (double)pos->frame_rate;
-        double beats = bpm_sec * secs;
-        double bar = beats / (double)pos->beats_per_bar;
-        pos->bar = (unsigned int)bar;
-        // pos->bar += 1;
-        double beat_frac = bar - (unsigned int)bar;
-        double beat_div = 1.0 / (double)pos->beats_per_bar;
-        pos->beat = (unsigned int)(beat_frac / beat_div);
-        pos->beat += 1;
-        if (pos->beat == 1) {
-            pos->bar_start_tick += (pos->beats_per_bar * pos->ticks_per_beat);
-        }
-        while (pos->tick >= pos->ticks_per_beat) {
-            pos->tick -= pos->ticks_per_beat;
-            /*
-            if(++pos->beat > pos->beats_per_bar){
-                pos->beat = 1;
-                ++pos->bar;
-                pos->bar_start_tick += (pos->beats_per_bar *
-            pos->ticks_per_beat);
-            }
-            */
-        }
-    }
-
-    // if the bar exceed the max number of bars available in song stop
-    if (pos->bar > MAX_BARS) {
-        pos->bar = MAX_BARS;
-        pos->tick = 0;
-        pos->beat = 1;
-        app_jack_transport(jack_data, 0);
-    }
-}
-
-static void app_jack_update_transport_from_params_rt(JACK_INFO *jack_data) {
-    if (!jack_data)
-        return;
-
-    PRM_CONTAIN *transport_cntr = jack_data->trk_params;
-    if (!transport_cntr)
-        return;
-
-    // check if any parameters have changed
-    int params_changed = param_get_if_any_changed_rt(transport_cntr);
-    if (params_changed != 1)
-        return;
-
-    // get the current pos of transport
-    jack_position_t old_pos;
-    jack_transport_query(jack_data->client, &old_pos);
-
-    // create the new pos
-    jack_position_t new_pos;
-    new_pos.valid = JackPositionBBT;
-    new_pos.frame_rate = old_pos.frame_rate;
-
-    new_pos.beats_per_minute =
-        param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_TEMPO], 1);
-    new_pos.beats_per_bar =
-        param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_BPB], 1);
-
-    new_pos.bar = param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_BAR], 1);
-    new_pos.beat = param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_BEAT], 1);
-    if (new_pos.beat > new_pos.beats_per_bar) {
-        new_pos.beat = 1;
-        new_pos.bar += 1;
-    }
-
-    new_pos.tick = param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_TICK], 1);
-
-    new_pos.beat_type =
-        param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_BEAT_TYPE], 1);
-    new_pos.ticks_per_beat = time_ticks_per_beat;
-
-    // first calculate how many beats from frame 0, with remainder
-    double seconds_passed =
-        (((new_pos.bar) * new_pos.beats_per_bar) + (new_pos.beat - 1)) +
-        (new_pos.tick / new_pos.ticks_per_beat);
-    // now calculate how many seconds has passed since frame 0
-    seconds_passed = (seconds_passed / new_pos.beats_per_minute) * 60;
-    // now calculate the new frames since frame 0
-    jack_nframes_t frame = ceil(seconds_passed * old_pos.frame_rate);
-    new_pos.frame = frame;
-
-    float play = param_get_value(transport_cntr, jack_data->trk_val[TRK_PARAM_PLAY], 1);
-    app_jack_transport(jack_data, (int)play);
-
-    jack_transport_reposition(jack_data->client, &new_pos);
-}
-
-int app_jack_return_transport_rt(void *audio_client, int32_t *cur_bar,
-                                 int32_t *cur_beat, int32_t *cur_tick,
-                                 SAMPLE_T *ticks_per_beat,
-                                 NFRAMES_T *total_frames, float *bpm,
-                                 float *beat_type, float *beats_per_bar) {
-    if (!audio_client)
-        return -1;
-    JACK_INFO *jack_data = (JACK_INFO *)audio_client;
-    if (!jack_data)
-        return -1;
-
-    int isPlaying = 0;
-
-    jack_position_t pos;
-    jack_transport_state_t state =
-        jack_transport_query(jack_data->client, &pos);
-    if (state != JackTransportStopped)
-        isPlaying = 1;
-
-    if (pos.valid)
-        *total_frames = pos.frame;
-
-    if (pos.valid != JackPositionBBT)
-        return -1;
-    *bpm = pos.beats_per_minute;
-    *beat_type = pos.beat_type;
-    *beats_per_bar = pos.beats_per_bar;
-    *cur_bar = pos.bar;
-    *cur_beat = pos.beat;
-    *cur_tick = pos.tick;
-    *ticks_per_beat = (SAMPLE_T)pos.ticks_per_beat;
-
-    return isPlaying;
 }

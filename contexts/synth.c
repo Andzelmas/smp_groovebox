@@ -1,5 +1,4 @@
 #include "synth.h"
-#include "../backend/jack_funcs.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/math_funcs.h"
 #include "../util_funcs/midi_buf.h"
@@ -200,8 +199,8 @@ typedef struct _synth_data {
     // how many oscilators we have
     size_t num_osc;
     GRAPH *graph;
-    // for app_jack_return_transport_rt, until 2T
-    void *transport;
+    // the clock the metronome follows, read on [audio-thread]
+    TRANSPORT *transport;
     // paired with an oscillator's uid as its node's owner
     uint64_t owner_tag;
     // this is control for [audio-thread] and [main-thread] sys communication:
@@ -284,9 +283,11 @@ static PARAM_T synth_osc_build_value(const void *user_data, int val_id,
     if (!osc->synth_data)
         return raw_val;
 
-    // A / D / R (params 6, 7, 9): exponential time mapping, same curve table
-    // and same fit_range round-trip param_get_value used to do internally
-    if (val_id == 6 || val_id == 7 || val_id == 9) {
+    // A / D / R: exponential time mapping, same curve table and same
+    // fit_range round-trip param_get_value used to do internally
+    if (val_id == osc->val_id[SYNTH_PARAM_ATTACK] ||
+        val_id == osc->val_id[SYNTH_PARAM_DECAY] ||
+        val_id == osc->val_id[SYNTH_PARAM_RELEASE]) {
         if (!osc->synth_data->amp_to_exp)
             return raw_val;
         PARAM_T val_norm = fit_range(SYNTH_ADSR_TIME_MAX, SYNTH_ADSR_TIME_MIN,
@@ -300,7 +301,7 @@ static PARAM_T synth_osc_build_value(const void *user_data, int val_id,
     // Amp: smoothed so a fast knob turn doesn't click - only ever
     // read this way on [audio-thread] (rt_params == 1), matching every
     // existing param_get_value call site for this param
-    if (val_id == 0 && rt_params == 1) {
+    if (val_id == osc->val_id[SYNTH_PARAM_AMP] && rt_params == 1) {
         if (!osc->amp_smooth)
             return raw_val;
         return math_ramp_val_get_value(osc->amp_smooth, raw_val);
@@ -309,11 +310,69 @@ static PARAM_T synth_osc_build_value(const void *user_data, int val_id,
     return raw_val;
 }
 
+// the decimals that show a step of inc: the smallest d where inc * 10^d is
+// whole, at most 6 - params.c's default format
+static int synth_decimals_for_inc(PARAM_T inc) {
+    if (inc <= 0)
+        return 2;
+    PARAM_T abs_inc = fabs(inc);
+    for (int d = 0; d <= 6; d++) {
+        PARAM_T scaled = abs_inc * pow(10, d);
+        if (fabs(scaled - round(scaled)) < 1e-6)
+            return d;
+    }
+    return 6;
+}
+
+// display text for one of this oscillator's params, value as
+// synth_osc_build_value made it: A/D/R as a time, Table as the wave's name, the
+// rest a plain number. [main-thread]
+static unsigned int synth_osc_val_to_string(const void *user_data, int val_id,
+                                            PARAM_T value, char *ret_string,
+                                            uint32_t string_len) {
+    const SYNTH_OSC *osc = (const SYNTH_OSC *)user_data;
+    if (!osc || !ret_string || string_len == 0)
+        return 0;
+    int written = 0;
+    if (val_id == osc->val_id[SYNTH_PARAM_ATTACK] ||
+        val_id == osc->val_id[SYNTH_PARAM_DECAY] ||
+        val_id == osc->val_id[SYNTH_PARAM_RELEASE]) {
+        // the curve keeps most of the range short
+        if (value < 0.01)
+            written =
+                snprintf(ret_string, string_len, "%.2f ms", value * 1000.0);
+        else if (value < 1.0)
+            written =
+                snprintf(ret_string, string_len, "%.1f ms", value * 1000.0);
+        else
+            written = snprintf(ret_string, string_len, "%.2f s", value);
+    } else if (val_id == osc->val_id[SYNTH_PARAM_TABLE]) {
+        // matched exactly, as synth_play_osc_rt picks the table
+        const char *wave = NULL;
+        if (value == SIN_WAVETABLE)
+            wave = "Sin";
+        if (value == TRIANGLE_WAVETABLE)
+            wave = "Triangle";
+        if (value == SAW_WAVETABLE)
+            wave = "Saw";
+        if (value == SQUARE_WAVETABLE)
+            wave = "Square";
+        written = wave ? snprintf(ret_string, string_len, "%s", wave)
+                       : snprintf(ret_string, string_len, "%g", value);
+    } else {
+        int decimals =
+            synth_decimals_for_inc(param_get_increment(osc->params, val_id));
+        written = snprintf(ret_string, string_len, "%.*f", decimals, value);
+    }
+    return written > 0 ? 1 : 0;
+}
+
 // the oscillator's node and its ports
 static int synth_osc_ports_create(SYNTH_DATA *synth_data, SYNTH_OSC *osc);
 
 SYNTH_DATA *synth_init(SAMPLE_T sample_rate, unsigned int with_metronome,
-                       GRAPH *graph, void *transport, uint64_t owner_tag) {
+                       GRAPH *graph, TRANSPORT *transport,
+                       uint64_t owner_tag) {
 
     SYNTH_DATA *synth_data = (SYNTH_DATA *)malloc(sizeof(SYNTH_DATA));
     if (!synth_data)
@@ -548,10 +607,10 @@ SYNTH_DATA *synth_init(SAMPLE_T sample_rate, unsigned int with_metronome,
         // synth_osc_build_value
         cur_osc->amp_smooth =
             math_ramp_val_init(fabs(1.0 - 0.00001), SYNTH_AMP_INTERP_SAMPLES);
-        PRM_CONT_USER_DATA osc_params_user_data = {.user_data = (void *)cur_osc,
-                                                   .build_value =
-                                                       synth_osc_build_value,
-                                                   .val_to_string = NULL};
+        PRM_CONT_USER_DATA osc_params_user_data = {
+            .user_data = (void *)cur_osc,
+            .build_value = synth_osc_build_value,
+            .val_to_string = synth_osc_val_to_string};
         cur_osc->params = params_init_param_container(&osc_params_user_data);
         // uid 0 - params.c mints; owner_id is this module's own enum
         cur_osc->val_id[SYNTH_PARAM_AMP] =
@@ -972,21 +1031,14 @@ static int synth_metronome_process_rt(SYNTH_DATA *synth_data,
                                       SYNTH_OSC *metro_osc, NFRAMES_T nframes) {
     if (!metro_osc)
         return -1;
-    int32_t bar = 1;
-    int32_t beat = 1;
-    int32_t tick = 0;
-    SAMPLE_T ticks_per_beat = 0;
-    NFRAMES_T total_frames = 0;
-    float bpm = 0;
-    float beat_type = 0;
-    float beats_per_bar = 0;
-    int playhead = app_jack_return_transport_rt(
-        synth_data->transport, &bar, &beat, &tick, &ticks_per_beat,
-        &total_frames, &bpm, &beat_type, &beats_per_bar);
-    if (playhead == 0) {
+    const TRANSPORT_POS *pos = transport_get_rt(synth_data->transport);
+    if (pos && !pos->rolling) {
         synth_stop_osc_rt(metro_osc, 127, 0, 1);
     }
-    if (playhead == 1) {
+    if (pos && pos->rolling) {
+        TRANSPORT_BBT bbt;
+        transport_bbt(pos, pos->beat, &bbt);
+        int beat = (int)bbt.beat + 1;
         // calculate if we need to trigger the metronome oscillator
         unsigned int play_osc = 0;
         if (metro_osc->trig != beat) {
