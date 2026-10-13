@@ -1,12 +1,17 @@
 #include "transport.h"
 #include <math.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include "../types.h"
 #include "../util_funcs/ring_buffer.h"
 
 #define TRANSPORT_BAR_MAX 99999
 #define TRANSPORT_CMD_QUEUE 32
+#define TRANSPORT_REQ_QUEUE 64
+// beats a followed beat may differ from where the music so far puts it before
+// it is a jump - tick rounding and a tempo change inside a cycle stay below
+#define TRANSPORT_FOLLOW_SLACK 0.0625
 
 // owner ids of the Trk params: source-defined, so a saved value can be matched
 // back by them, never a positional index. 0 stays "no owner id"
@@ -18,6 +23,7 @@ enum trkParamId {
     TRK_PARAM_TICK,
     TRK_PARAM_BPB,
     TRK_PARAM_BEAT_TYPE,
+    TRK_PARAM_SYNC,
     TRK_PARAM_COUNT
 };
 
@@ -38,10 +44,16 @@ struct _transport {
     int val[TRK_PARAM_COUNT];
     // [main-thread] -> [audio-thread]
     RING_BUFFER *cmds;
+    // [audio-thread] -> [main-thread]: requests for the server
+    RING_BUFFER *reqs;
     // written by [audio-thread] every cycle, read by [main-thread]
     atomic_bool rolling_seen;
+    // the same: another program's music is followed
+    atomic_bool music_seen;
     // [main-thread]: the BPB Beat's range was last set for
     PARAM_T beat_range_bpb;
+    // [main-thread]: the music_seen the readonly flags were last set for
+    bool music_flags;
     // the rest is [audio-thread]'s. pos is the clock itself; its derived
     // fields are refreshed at the end of transport_cycle_rt
     TRANSPORT_POS pos;
@@ -49,6 +61,8 @@ struct _transport {
     NFRAMES_T advance;
     // the last rolling cycle's grid_to, unless a locate came after it
     double grid_last;
+    // the last cycle followed the server
+    bool synced;
     bool grid_jump;
     unsigned int display_cycles;
     uint64_t display_seq;
@@ -59,26 +73,14 @@ double transport_beat_at(const TRANSPORT_POS *pos, int64_t frame) {
            (double)(frame - pos->anchor_frame) * pos->beats_per_frame;
 }
 
-void transport_bbt(const TRANSPORT_POS *pos, double beat, TRANSPORT_BBT *out) {
-    double bpb = pos->bpb ? (double)pos->bpb : 1.0;
+void transport_music(const TRANSPORT_POS *pos, double beat,
+                     POSITION_MUSIC *out) {
+    double bpb = pos->music.bpb >= 1 ? pos->music.bpb : 1.0;
     int64_t bars = (int64_t)floor((beat - pos->meter_beat) / bpb);
-    double start = pos->meter_beat + (double)bars * bpb;
-    double in_bar = beat - start;
-    // a guard: with bar lines on whole beats the quotient never rounds up
-    // onto one, a bar line from elsewhere (T2 Follow) might
-    if (in_bar < 0)
-        in_bar = 0;
-    uint32_t in_beat = (uint32_t)in_bar;
-    if (in_beat >= (uint32_t)bpb)
-        in_beat = (uint32_t)bpb - 1;
-    uint32_t tick =
-        (uint32_t)((in_bar - (double)in_beat) * TRANSPORT_TICKS_PER_BEAT);
-    if (tick >= TRANSPORT_TICKS_PER_BEAT)
-        tick = TRANSPORT_TICKS_PER_BEAT - 1;
+    *out = pos->music;
+    out->beat = beat;
     out->bar = pos->meter_bar + bars;
-    out->beat = in_beat;
-    out->tick = tick;
-    out->bar_start_beat = start;
+    out->bar_start_beat = pos->meter_beat + (double)bars * bpb;
 }
 
 TRANSPORT_GRID transport_grid(const TRANSPORT_POS *pos, double step) {
@@ -126,23 +128,54 @@ static void clock_reanchor(TRANSPORT_POS *pos) {
 }
 
 static void clock_rate_set(TRANSPORT_POS *pos) {
-    pos->beats_per_frame = pos->bpm / (60.0 * (double)pos->rate);
+    pos->beats_per_frame = pos->music.bpm / (60.0 * (double)pos->rate);
 }
 
-static void clock_locate(TRANSPORT *transport, double beat) {
-    TRANSPORT_POS *pos = &transport->pos;
-    if (!(beat > 0))
-        beat = 0;
+// frame is at beat from here on
+static void pos_anchor(TRANSPORT_POS *pos, int64_t frame, double beat) {
     // one meter for the whole song: bars before the anchor are in it too
     if (beat < pos->meter_beat) {
         pos->meter_bar = 0;
         pos->meter_beat = 0;
     }
-    pos->frame = (int64_t)llround(beat / pos->beats_per_frame);
-    pos->anchor_frame = pos->frame;
+    pos->frame = frame;
+    pos->anchor_frame = frame;
     pos->anchor_beat = beat;
-    pos->seq++;
+}
+
+static void clock_anchor(TRANSPORT *transport, int64_t frame, double beat) {
+    pos_anchor(&transport->pos, frame, beat);
+    transport->pos.seq++;
     transport->grid_jump = true;
+}
+
+// beat's frame at the current tempo from 0
+static int64_t clock_frame_of(const TRANSPORT_POS *pos, double beat) {
+    return (int64_t)llround(beat / pos->beats_per_frame);
+}
+
+static void clock_locate(TRANSPORT *transport, double beat) {
+    if (!(beat > 0))
+        beat = 0;
+    clock_anchor(transport, clock_frame_of(&transport->pos, beat), beat);
+}
+
+// lost when the queue is full - the ui asked faster than it takes them
+static void clock_request(TRANSPORT *transport, TransportReqKind kind,
+                          int64_t frame) {
+    TRANSPORT_REQ req = {.kind = kind, .frame = frame};
+    ring_buffer_write(transport->reqs, &req, sizeof(req));
+}
+
+// synced, a jump is the server's to make
+static void clock_jump(TRANSPORT *transport, double beat, bool synced) {
+    if (!(beat > 0))
+        beat = 0;
+    if (synced)
+        clock_request(transport, TRANSPORT_REQ_LOCATE,
+                      clock_frame_of(&transport->pos, beat));
+    else
+        clock_locate(transport, beat);
 }
 
 // a changed param's new value, rt side. false when the ui did not change it
@@ -155,7 +188,8 @@ static bool trk_param_changed(TRANSPORT *transport, int param, PARAM_T *out) {
 }
 
 // Bar / Beat edits: only the edited field of the exact position changes
-static void clock_field_locate(TRANSPORT *transport) {
+static void clock_field_locate(TRANSPORT *transport, bool synced,
+                               bool music) {
     PARAM_T bar_val = 0;
     PARAM_T beat_val = 0;
     bool bar_changed = trk_param_changed(transport, TRK_PARAM_BAR, &bar_val);
@@ -163,38 +197,51 @@ static void clock_field_locate(TRANSPORT *transport) {
     if (!bar_changed && !beat_changed)
         return;
     TRANSPORT_POS *pos = &transport->pos;
-    double beat = transport_beat_at(pos, pos->frame);
-    TRANSPORT_BBT now;
-    transport_bbt(pos, beat, &now);
-    double in_beat = beat - now.bar_start_beat - (double)now.beat;
+    POSITION_MUSIC now;
+    transport_music(pos, transport_beat_at(pos, pos->frame), &now);
+    uint32_t now_beat = 0;
+    position_bbt(&now, TRANSPORT_TICKS_PER_BEAT, &now_beat, NULL);
+    double in_beat = now.beat - now.bar_start_beat - (double)now_beat;
     int64_t bar = bar_changed ? (int64_t)bar_val - 1 : now.bar;
-    int64_t in_bar = beat_changed ? (int64_t)beat_val - 1 : (int64_t)now.beat;
-    if (in_bar >= (int64_t)pos->bpb)
-        in_bar = (int64_t)pos->bpb - 1;
+    int64_t in_bar = beat_changed ? (int64_t)beat_val - 1 : (int64_t)now_beat;
+    if (in_bar >= (int64_t)pos->music.bpb)
+        in_bar = (int64_t)pos->music.bpb - 1;
     if (in_bar < 0)
         in_bar = 0;
-    if (bar < pos->meter_bar) {
+    // at once even when synced: the jump is counted in the new numbering.
+    // Followed music keeps its own bar lines
+    if (bar < pos->meter_bar && !music) {
         pos->meter_bar = 0;
         pos->meter_beat = 0;
+        pos->seq++;
     }
-    clock_locate(transport, pos->meter_beat +
-                                (double)(bar - pos->meter_bar) * pos->bpb +
-                                (double)in_bar + in_beat);
+    double bars = (double)(bar - pos->meter_bar) * pos->music.bpb;
+    clock_jump(transport, pos->meter_beat + bars + (double)in_bar + in_beat,
+               synced);
 }
 
-static void clock_commands(TRANSPORT *transport) {
+static void clock_commands(TRANSPORT *transport, bool synced) {
     TRANSPORT_POS *pos = &transport->pos;
     TRANSPORT_CMD cmd;
     while (ring_buffer_read(transport->cmds, &cmd, sizeof(cmd)) == 1) {
         switch (cmd.kind) {
         case TRANSPORT_CMD_PLAY:
-            if (!pos->rolling) {
-                pos->rolling = true;
-                pos->seq++;
+            if (pos->rolling)
+                break;
+            if (synced) {
+                clock_request(transport, TRANSPORT_REQ_START, 0);
+                break;
             }
+            pos->rolling = true;
+            pos->seq++;
             break;
         case TRANSPORT_CMD_STOP:
-            if (pos->rolling) {
+            if (synced) {
+                clock_request(transport,
+                              pos->rolling ? TRANSPORT_REQ_STOP
+                                           : TRANSPORT_REQ_LOCATE,
+                              0);
+            } else if (pos->rolling) {
                 pos->rolling = false;
                 pos->seq++;
             } else {
@@ -213,51 +260,93 @@ static void clock_commands(TRANSPORT *transport) {
     }
 }
 
-// tempo and meter edits, before the Bar/Beat ones so those use the new meter
-static void clock_params(TRANSPORT *transport) {
+// tempo and meter edits, before the Bar/Beat ones so those use the new meter.
+// Taken but not applied while another program's music is followed
+static void clock_params(TRANSPORT *transport, bool synced, bool music) {
     TRANSPORT_POS *pos = &transport->pos;
     PARAM_T val = 0;
-    if (trk_param_changed(transport, TRK_PARAM_TEMPO, &val)) {
+    if (trk_param_changed(transport, TRK_PARAM_TEMPO, &val) && !music) {
         // bar/beat stay continuous, frames keep counting
         clock_reanchor(pos);
-        pos->bpm = val;
+        pos->music.bpm = val;
         clock_rate_set(pos);
         pos->seq++;
     }
-    if (trk_param_changed(transport, TRK_PARAM_BPB, &val)) {
+    if (trk_param_changed(transport, TRK_PARAM_BPB, &val) && !music) {
         // from the current bar's start: the running bar takes the new length
-        TRANSPORT_BBT now;
-        transport_bbt(pos, transport_beat_at(pos, pos->frame), &now);
+        POSITION_MUSIC now;
+        transport_music(pos, transport_beat_at(pos, pos->frame), &now);
         pos->meter_bar = now.bar;
         pos->meter_beat = now.bar_start_beat;
-        pos->bpb = (uint32_t)val;
+        pos->music.bpb = floor(val);
         pos->seq++;
     }
-    if (trk_param_changed(transport, TRK_PARAM_BEAT_TYPE, &val)) {
-        pos->beat_type = (uint32_t)val;
+    if (trk_param_changed(transport, TRK_PARAM_BEAT_TYPE, &val) && !music) {
+        pos->music.beat_type = floor(val);
         pos->seq++;
     }
-    clock_field_locate(transport);
+    clock_field_locate(transport, synced, music);
+}
+
+// the server's rolling and frame. A locate by someone, or Sync just turned on,
+// anchors at the current tempo from 0 as our own locates; any other frame the
+// mapping already covers
+static void clock_follow(TRANSPORT *transport, const POSITION_SERVER *server) {
+    TRANSPORT_POS *pos = &transport->pos;
+    if (server->located || !transport->synced)
+        clock_anchor(transport, server->frame,
+                     (double)server->frame * pos->beats_per_frame);
+    else
+        pos->frame = server->frame;
+    if (server->rolling != pos->rolling) {
+        pos->rolling = server->rolling;
+        pos->seq++;
+    }
+}
+
+// another program's music: this cycle's frame is at its beat, its tempo and
+// meter (in whole beats, as ours), its bar's start a bar line
+static void clock_music(TRANSPORT *transport, const POSITION_MUSIC *music) {
+    TRANSPORT_POS *pos = &transport->pos;
+    double bpb = round(music->bpb);
+    double beat_type = round(music->beat_type);
+    if (fabs(music->beat - transport_beat_at(pos, pos->frame)) >
+        TRANSPORT_FOLLOW_SLACK) {
+        pos->seq++;
+        transport->grid_jump = true;
+    } else if (music->bpm != pos->music.bpm || bpb != pos->music.bpb ||
+               beat_type != pos->music.beat_type) {
+        pos->seq++;
+    }
+    pos->music.bpm = music->bpm;
+    clock_rate_set(pos);
+    pos->music.bpb = bpb;
+    pos->music.beat_type = beat_type;
+    pos->anchor_frame = pos->frame;
+    pos->anchor_beat = music->beat;
+    pos->meter_bar = music->bar;
+    pos->meter_beat = music->bar_start_beat;
 }
 
 // the derived fields of pos, for a cycle of nframes
 static void clock_derive(TRANSPORT *transport, NFRAMES_T nframes) {
     TRANSPORT_POS *pos = &transport->pos;
     pos->nframes = nframes;
-    pos->beat = transport_beat_at(pos, pos->frame);
-    TRANSPORT_BBT now;
-    transport_bbt(pos, pos->beat, &now);
-    pos->bar = now.bar;
-    pos->bar_start_beat = now.bar_start_beat;
+    POSITION_MUSIC now;
+    transport_music(pos, transport_beat_at(pos, pos->frame), &now);
+    pos->music = now;
     if (!pos->rolling || nframes == 0) {
-        pos->grid_from = pos->beat;
-        pos->grid_to = pos->beat;
+        pos->grid_from = now.beat;
+        pos->grid_to = now.beat;
         return;
     }
     // a locate starts the grid at its beat, a point there included
-    pos->grid_from = transport->grid_jump ? nextafter(pos->beat, -INFINITY)
+    pos->grid_from = transport->grid_jump ? nextafter(now.beat, -INFINITY)
                                           : transport->grid_last;
     pos->grid_to = transport_beat_at(pos, pos->frame + (int64_t)nframes - 1);
+    // a followed beat can start a hair behind the last cycle's end
+    if (pos->grid_to < pos->grid_from)
+        pos->grid_to = pos->grid_from;
     transport->grid_last = pos->grid_to;
     transport->grid_jump = false;
 }
@@ -274,37 +363,77 @@ static void display_set(TRANSPORT *transport, int param, PARAM_T value,
         param_set_value_rt(transport->params, val_id, value);
 }
 
-// Bar/Beat/Tick shown to the ui at its pace, and at once after a jump. Not
-// marked changed, so it never reads back as a locate
-static void clock_display(TRANSPORT *transport) {
+// Bar/Beat/Tick (and followed tempo and meter) shown to the ui at its pace,
+// and at once after a jump. Not marked changed, so it never reads back as an
+// edit
+static void clock_display(TRANSPORT *transport, bool music) {
     TRANSPORT_POS *pos = &transport->pos;
     bool jumped = pos->seq != transport->display_seq;
     if (++transport->display_cycles < RT_CYCLES && !jumped)
         return;
     transport->display_cycles = 0;
     transport->display_seq = pos->seq;
-    TRANSPORT_BBT now;
-    transport_bbt(pos, pos->beat, &now);
-    display_set(transport, TRK_PARAM_BAR, (PARAM_T)(now.bar + 1), jumped);
-    display_set(transport, TRK_PARAM_BEAT, (PARAM_T)(now.beat + 1), jumped);
-    display_set(transport, TRK_PARAM_TICK, (PARAM_T)now.tick, jumped);
+    uint32_t beat = 0;
+    uint32_t tick = 0;
+    position_bbt(&pos->music, TRANSPORT_TICKS_PER_BEAT, &beat, &tick);
+    display_set(transport, TRK_PARAM_BAR, (PARAM_T)(pos->music.bar + 1),
+                jumped);
+    display_set(transport, TRK_PARAM_BEAT, (PARAM_T)(beat + 1), jumped);
+    display_set(transport, TRK_PARAM_TICK, (PARAM_T)tick, jumped);
+    if (!music)
+        return;
+    PRM_CONTAIN *params = transport->params;
+    param_set_value_rt(params, transport->val[TRK_PARAM_TEMPO], pos->music.bpm);
+    param_set_value_rt(params, transport->val[TRK_PARAM_BPB], pos->music.bpb);
+    param_set_value_rt(params, transport->val[TRK_PARAM_BEAT_TYPE],
+                       pos->music.beat_type);
 }
 
-void transport_cycle_rt(TRANSPORT *transport, NFRAMES_T nframes) {
+void transport_cycle_rt(TRANSPORT *transport, NFRAMES_T nframes,
+                        const POSITION_SERVER *server) {
     if (!transport)
         return;
     TRANSPORT_POS *pos = &transport->pos;
     pos->frame += transport->advance;
     transport->advance = 0;
     param_msgs_process(transport->params, 1);
-    clock_commands(transport);
-    clock_params(transport);
+    int sync = (int)param_get_value(transport->params,
+                                    transport->val[TRK_PARAM_SYNC], 1);
+    const POSITION_SERVER *synced = sync != TRANSPORT_SYNC_OFF ? server : NULL;
+    bool music = synced && synced->has_music &&
+                 position_music_valid(&synced->music);
+    if (synced)
+        clock_follow(transport, synced);
+    transport->synced = synced != NULL;
+    if (music)
+        clock_music(transport, &synced->music);
+    clock_commands(transport, synced != NULL);
+    clock_params(transport, synced != NULL, music);
     clock_derive(transport, nframes);
-    clock_display(transport);
+    clock_display(transport, music);
     param_rt_resend(transport->params);
     atomic_store(&transport->rolling_seen, pos->rolling);
+    atomic_store(&transport->music_seen, music);
     if (pos->rolling)
         transport->advance = nframes;
+}
+
+bool transport_request_take(TRANSPORT *transport, TRANSPORT_REQ *out) {
+    if (!transport || !out)
+        return false;
+    return ring_buffer_read(transport->reqs, out, sizeof(*out)) == 1;
+}
+
+void transport_music_at_rt(TRANSPORT *transport, int64_t frame,
+                           POSITION_MUSIC *out) {
+    if (!transport || !out)
+        return;
+    TRANSPORT_POS at = transport->pos;
+    int64_t end = at.frame + (at.rolling ? (int64_t)at.nframes : 0);
+    // as the next cycle will anchor it
+    if (frame < at.frame || frame > end)
+        pos_anchor(&at, frame, (double)frame * at.beats_per_frame);
+    transport_music(&at, transport_beat_at(&at, frame), out);
 }
 
 const TRANSPORT_POS *transport_get_rt(TRANSPORT *transport) {
@@ -313,15 +442,37 @@ const TRANSPORT_POS *transport_get_rt(TRANSPORT *transport) {
     return &transport->pos;
 }
 
+// Sync by name, the rest plain numbers. [main-thread]
+static unsigned int trk_val_to_string(const void *user_data, int val_id,
+                                      PARAM_T value, char *ret_string,
+                                      uint32_t string_len) {
+    const TRANSPORT *transport = (const TRANSPORT *)user_data;
+    if (!transport || !ret_string || string_len == 0)
+        return 0;
+    static const char *const sync_names[] = {"Off", "Follow", "Lead"};
+    int written = 0;
+    if (val_id == transport->val[TRK_PARAM_SYNC] && value >= 0 &&
+        value <= TRANSPORT_SYNC_LEAD)
+        written =
+            snprintf(ret_string, string_len, "%s", sync_names[(int)value]);
+    else
+        written = snprintf(ret_string, string_len, "%g", value);
+    return written > 0 ? 1 : 0;
+}
+
 TRANSPORT *transport_init(SAMPLE_T rate) {
     if (!(rate > 0))
         return NULL;
     TRANSPORT *transport = (TRANSPORT *)calloc(1, sizeof(TRANSPORT));
     if (!transport)
         return NULL;
-    transport->params = params_init_param_container(NULL);
+    PRM_CONT_USER_DATA params_user_data = {
+        .user_data = transport, .val_to_string = trk_val_to_string};
+    transport->params = params_init_param_container(&params_user_data);
     transport->cmds = ring_buffer_init(sizeof(TRANSPORT_CMD), TRANSPORT_CMD_QUEUE);
-    if (!transport->params || !transport->cmds) {
+    transport->reqs =
+        ring_buffer_init(sizeof(TRANSPORT_REQ), TRANSPORT_REQ_QUEUE);
+    if (!transport->params || !transport->cmds || !transport->reqs) {
         transport_clean(transport);
         return NULL;
     }
@@ -337,9 +488,12 @@ TRANSPORT *transport_init(SAMPLE_T rate) {
         param_add_param(params, "Tick", 0, 0, TRANSPORT_TICKS_PER_BEAT - 1, 1,
                         0, TRK_PARAM_TICK, PARAM_FLAG_READONLY, 0, NULL);
     transport->val[TRK_PARAM_BPB] = param_add_param(
-        params, "BPB", 4, 2, 16, 1, 0, TRK_PARAM_BPB, 0, 0, NULL);
+        params, "BPB", 4, 1, 16, 1, 0, TRK_PARAM_BPB, 0, 0, NULL);
     transport->val[TRK_PARAM_BEAT_TYPE] = param_add_param(
         params, "Beat_Type", 4, 2, 16, 1, 0, TRK_PARAM_BEAT_TYPE, 0, 0, NULL);
+    transport->val[TRK_PARAM_SYNC] = param_add_param(
+        params, "Sync", TRANSPORT_SYNC_OFF, TRANSPORT_SYNC_OFF,
+        TRANSPORT_SYNC_LEAD, 1, 0, TRK_PARAM_SYNC, PARAM_FLAG_ENUM, 0, NULL);
     // a failed add is -1, which the rt side would index with
     for (int i = TRK_PARAM_NONE + 1; i < TRK_PARAM_COUNT; i++) {
         if (transport->val[i] < 0) {
@@ -349,11 +503,12 @@ TRANSPORT *transport_init(SAMPLE_T rate) {
     }
     transport->beat_range_bpb = 4;
     atomic_init(&transport->rolling_seen, false);
+    atomic_init(&transport->music_seen, false);
 
     TRANSPORT_POS *pos = &transport->pos;
-    pos->bpm = 100;
-    pos->bpb = 4;
-    pos->beat_type = 4;
+    pos->music.bpm = 100;
+    pos->music.bpb = 4;
+    pos->music.beat_type = 4;
     pos->rate = rate;
     clock_rate_set(pos);
     // consumers start at 0 = nothing seen yet
@@ -370,6 +525,8 @@ void transport_clean(TRANSPORT *transport) {
         param_clean_param_container(transport->params);
     if (transport->cmds)
         ring_buffer_clean(transport->cmds);
+    if (transport->reqs)
+        ring_buffer_clean(transport->reqs);
     free(transport);
 }
 
@@ -377,6 +534,20 @@ PRM_CONTAIN *transport_param_container(TRANSPORT *transport) {
     if (!transport)
         return NULL;
     return transport->params;
+}
+
+TransportSync transport_sync(TRANSPORT *transport) {
+    if (!transport)
+        return TRANSPORT_SYNC_OFF;
+    return (TransportSync)(int)param_get_value(
+        transport->params, transport->val[TRK_PARAM_SYNC], 0);
+}
+
+int transport_sync_set(TRANSPORT *transport, TransportSync sync) {
+    if (!transport)
+        return -1;
+    return param_set_value(transport->params, transport->val[TRK_PARAM_SYNC],
+                           (PARAM_T)sync, NULL, Operation_SetValue);
 }
 
 static int transport_cmd_send(TRANSPORT *transport, TransportCmdKind kind,
@@ -412,6 +583,21 @@ void transport_update(TRANSPORT *transport) {
         return;
     PRM_CONTAIN *params = transport->params;
     param_msgs_process(params, 0);
+    // another program's tempo and meter are not ours to edit
+    bool music = atomic_load(&transport->music_seen);
+    if (music != transport->music_flags) {
+        static const int followed[] = {TRK_PARAM_TEMPO, TRK_PARAM_BPB,
+                                       TRK_PARAM_BEAT_TYPE};
+        for (size_t i = 0; i < sizeof(followed) / sizeof(followed[0]); i++) {
+            int val_id = transport->val[followed[i]];
+            uint32_t flags = param_get_flags(params, val_id);
+            flags = music ? flags | PARAM_FLAG_READONLY
+                          : flags & ~(uint32_t)PARAM_FLAG_READONLY;
+            param_set_value(params, val_id, (PARAM_T)flags, NULL,
+                            Operation_SetFlags);
+        }
+        transport->music_flags = music;
+    }
     PARAM_T bpb = param_get_value(params, transport->val[TRK_PARAM_BPB], 0);
     if (bpb == transport->beat_range_bpb)
         return;

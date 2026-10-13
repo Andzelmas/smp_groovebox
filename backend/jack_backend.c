@@ -1,6 +1,7 @@
 #include <jack/jack.h>
 #include <jack/midiport.h>
 #include <jack/types.h>
+#include <math.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -32,6 +33,11 @@ static const struct {
     {"midi_out", PORT_TYPE_MIDI, PORT_FLOW_OUTPUT},
 };
 #define EXPOSED_COUNT (sizeof(exposed_defs) / sizeof(exposed_defs[0]))
+// the tick resolution the app leads with
+#define JACK_TICKS_PER_BEAT 1920
+// rolling reads in a row, and at least a tenth of a second, a BBT may stay
+// the same while the frame moves before it counts as frozen
+#define MUSIC_FROZEN_READS 3
 
 // one cached port. conn_first/conn_count index the flat adjacency array
 typedef struct _jack_port_rec {
@@ -107,6 +113,47 @@ typedef struct _audio_backend {
     // every port name seen this session, keyed for the whole session so a key
     // keeps meaning the same port across rebuilds. The slot is its record index
     INTERN_TABLE idents;
+    // what the timebase callback asks on [audio-thread], set on
+    // [main-thread]
+    _Atomic(BackendTransportLeadFn) lead_fn;
+    _Atomic(void *) lead_arg;
+    // [main-thread] -> [audio-thread]: bit 0 leading, the rest bumped by
+    // every audio_backend_transport_lead, so a new lead is judged afresh
+    atomic_uint lead_state;
+    // timebase callbacks so far. JACK calls its timebase master after every
+    // rolling cycle, so a rolling cycle without a call means another program
+    // took the lead
+    atomic_uint lead_calls;
+    // [audio-thread] -> [main-thread]: the lead_state another program took
+    // the lead in
+    atomic_uint lead_lost_state;
+    // [audio-thread], jack_process_rt's: the server's transport as this cycle's
+    // process sees it, the server's cycle clock and the system time it
+    // started at, and whether the transport jumped since
+    // audio_backend_transport_read_rt last looked
+    jack_transport_state_t cycle_state;
+    jack_position_t cycle_pos;
+    jack_nframes_t cycle_clock;
+    jack_time_t cycle_usecs;
+    bool cycle_timed;
+    bool cycle_seen;
+    bool located;
+    // [audio-thread]: whether the BBT is another program's live music. A
+    // leader that moves to another driver leaves its record behind, frozen
+    // - so is the one we find after we move. The last valid BBT read and how
+    // long it stayed the same while rolling
+    bool music_live;
+    bool music_seen;
+    double music_beat;
+    jack_nframes_t music_frame;
+    unsigned int music_frozen_reads;
+    uint64_t music_frozen_frames;
+    // [audio-thread], audio_backend_transport_read_rt's (a driver change
+    // clears lead_call_due)
+    unsigned int lead_state_seen;
+    unsigned int lead_calls_seen;
+    bool lead_call_due;
+    bool lead_lost;
 } JACK_INFO;
 
 static void port_owner_add(JACK_INFO *jack_data, const char *port_name,
@@ -521,6 +568,75 @@ static int sample_rate_change(jack_nframes_t new_sample_rate, void *arg);
 static int buffer_size_change(jack_nframes_t new_buffer_size, void *arg);
 static int jack_process_rt(jack_nframes_t nframes, void *arg);
 
+// Starting does not move the frame yet
+static bool transport_state_rolling(jack_transport_state_t state) {
+    return state == JackTransportRolling || state == JackTransportLooping;
+}
+
+// whether someone located the transport between two process calls, elapsed
+// server frames apart: it moved back, or on by more than the elapsed frames.
+// The server's own steps stay inside - a stop goes back to the last rolling
+// cycle's start, a start may count its Starting cycle again or hold the frame
+// a few rolling cycles (pipewire-jack). Without same_clock the elapsed frames
+// mean nothing, any move is a jump
+static bool transport_located(jack_nframes_t from, jack_nframes_t to,
+                              jack_nframes_t elapsed, bool same_clock) {
+    // unsigned: a frame or clock wrapping around stays exact, a step back is
+    // huge
+    jack_nframes_t moved = to - from;
+    if (!same_clock)
+        return moved != 0;
+    return moved > elapsed;
+}
+
+// [audio-thread] this cycle's server transport, and whether it jumped since
+// the last cycle we saw
+static void transport_cycle_take_rt(JACK_INFO *jack_data,
+                                    jack_nframes_t nframes) {
+    jack_position_t pos;
+    jack_transport_state_t state =
+        jack_transport_query(jack_data->client, &pos);
+    // the cycle clock counts the cycles the server skipped calling us too
+    jack_nframes_t clock = 0;
+    jack_time_t usecs = 0;
+    jack_time_t next_usecs = 0;
+    float period = 0;
+    bool timed = jack_get_cycle_times(jack_data->client, &clock, &usecs,
+                                      &next_usecs, &period) == 0;
+    if (!timed)
+        clock = jack_last_frame_time(jack_data->client);
+    if (jack_data->cycle_seen) {
+        jack_nframes_t elapsed = clock - jack_data->cycle_clock;
+        // pipewire-jack moves clients between drivers, each with its own
+        // clock and transport: the clock then disagrees with the system time.
+        // The slack keeps a sample rate change the same clock
+        bool same_clock = true;
+        unsigned int rate = atomic_load(&jack_data->sample_rate);
+        if (timed && jack_data->cycle_timed && rate > 0) {
+            double by_time =
+                (double)(usecs - jack_data->cycle_usecs) * rate * 1e-6;
+            same_clock = fabs(by_time - (double)elapsed) <=
+                         (double)elapsed / 2 + (double)nframes;
+        }
+        if (transport_located(jack_data->cycle_pos.frame, pos.frame, elapsed,
+                              same_clock))
+            jack_data->located = true;
+        // another driver: its BBT has to show it is live. Our lead moves with
+        // us, but the move may cost a timebase call - no lost lead
+        if (!same_clock) {
+            jack_data->music_live = false;
+            jack_data->music_seen = false;
+            jack_data->lead_call_due = false;
+        }
+    }
+    jack_data->cycle_state = state;
+    jack_data->cycle_pos = pos;
+    jack_data->cycle_clock = clock;
+    jack_data->cycle_usecs = usecs;
+    jack_data->cycle_timed = timed;
+    jack_data->cycle_seen = true;
+}
+
 static int app_jack_sys_send_msg(void *user_data, const char *msg) {
     // TODO for future proof, now is not used
     (void)user_data;
@@ -573,6 +689,13 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
     // start dirty so the first sync builds the cache
     atomic_init(&jack_data->ports_changed, true);
     atomic_init(&jack_data->connections_changed, true);
+    atomic_init(&jack_data->lead_fn, NULL);
+    atomic_init(&jack_data->lead_arg, NULL);
+    atomic_init(&jack_data->lead_state, 0);
+    atomic_init(&jack_data->lead_calls, 0);
+    atomic_init(&jack_data->lead_lost_state, 0);
+    // a program that exits takes its record with it
+    jack_data->music_live = true;
 
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
@@ -768,6 +891,7 @@ static bool endpoint_out_process_rt(void *arg, NFRAMES_T nframes) {
 // buffers)
 static int jack_process_rt(jack_nframes_t nframes, void *arg) {
     JACK_INFO *jack_data = (JACK_INFO *)arg;
+    transport_cycle_take_rt(jack_data, nframes);
     for (size_t i = 0; i < EXPOSED_COUNT; i++) {
         if (exposed_defs[i].flow != PORT_FLOW_OUTPUT)
             continue;
@@ -844,6 +968,186 @@ int audio_backend_connect_keys(JACK_INFO *jack_data, uint64_t key_a,
 int audio_backend_disconnect_keys(JACK_INFO *jack_data, uint64_t key_a,
                                   uint64_t key_b) {
     return port_keys_link(jack_data, key_a, key_b, false);
+}
+
+// [audio-thread] whether this read's BBT (valid, at beat) is live music: it
+// changes while the frame rolls on. One that stays the same a few reads (the
+// server can show a BBT a cycle late) over a tenth of a second (a slow tempo
+// moves less than a tick per small cycle) is a frozen record until it moves
+static bool music_live_rt(JACK_INFO *jack_data, bool valid, bool rolling,
+                          jack_nframes_t frame, double beat) {
+    if (!valid) {
+        jack_data->music_seen = false;
+        return false;
+    }
+    if (rolling && jack_data->music_seen && frame != jack_data->music_frame) {
+        if (beat != jack_data->music_beat) {
+            jack_data->music_live = true;
+            jack_data->music_frozen_reads = 0;
+            jack_data->music_frozen_frames = 0;
+        } else {
+            jack_data->music_frozen_reads++;
+            jack_data->music_frozen_frames +=
+                (jack_nframes_t)(frame - jack_data->music_frame);
+            if (jack_data->music_frozen_reads >= MUSIC_FROZEN_READS &&
+                jack_data->music_frozen_frames * 10 >=
+                    atomic_load(&jack_data->sample_rate))
+                jack_data->music_live = false;
+        }
+    }
+    jack_data->music_seen = true;
+    jack_data->music_beat = beat;
+    jack_data->music_frame = frame;
+    return jack_data->music_live;
+}
+
+bool audio_backend_transport_read_rt(JACK_INFO *jack_data,
+                                     POSITION_SERVER *out) {
+    if (!jack_data || !jack_data->client || !out)
+        return false;
+    const jack_position_t *pos = &jack_data->cycle_pos;
+    bool rolling = transport_state_rolling(jack_data->cycle_state);
+    unsigned int lead_state = atomic_load(&jack_data->lead_state);
+    bool leading = lead_state & 1;
+    unsigned int calls =
+        atomic_load_explicit(&jack_data->lead_calls, memory_order_relaxed);
+    if (!leading || lead_state != jack_data->lead_state_seen ||
+        calls != jack_data->lead_calls_seen)
+        jack_data->lead_lost = false;
+    else if (jack_data->lead_call_due && !jack_data->lead_lost) {
+        jack_data->lead_lost = true;
+        atomic_store(&jack_data->lead_lost_state, lead_state);
+    }
+    jack_data->lead_state_seen = lead_state;
+    jack_data->lead_calls_seen = calls;
+    jack_data->lead_call_due = leading && rolling;
+
+    *out = (POSITION_SERVER){
+        .rolling = rolling, .frame = pos->frame, .located = jack_data->located};
+    jack_data->located = false;
+    // ticks_per_beat set, so the BBT converts
+    POSITION_MUSIC music = {0};
+    bool valid = (pos->valid & JackPositionBBT) && pos->ticks_per_beat > 0;
+    if (valid) {
+        double bar_start_beat = pos->bar_start_tick / pos->ticks_per_beat;
+        music = (POSITION_MUSIC){
+            .beat = bar_start_beat + (double)(pos->beat - 1) +
+                    (double)pos->tick / pos->ticks_per_beat,
+            .bar = (int64_t)pos->bar - 1,
+            .bar_start_beat = bar_start_beat,
+            .bpm = pos->beats_per_minute,
+            .bpb = pos->beats_per_bar,
+            .beat_type = pos->beat_type,
+        };
+        valid = position_music_valid(&music);
+    }
+    // tracked while we lead too, so a takeover finds it live
+    bool live =
+        music_live_rt(jack_data, valid, rolling, pos->frame, music.beat);
+    // our own BBT is no music to follow
+    if (!live || (leading && !jack_data->lead_lost))
+        return true;
+    out->has_music = true;
+    out->music = music;
+    return true;
+}
+
+// not on [audio-thread]: pipewire-jack's start and stop lock its thread loop
+int audio_backend_transport_start(JACK_INFO *jack_data) {
+    if (!jack_data || !jack_data->client)
+        return -1;
+    jack_transport_start(jack_data->client);
+    return 0;
+}
+
+int audio_backend_transport_stop(JACK_INFO *jack_data) {
+    if (!jack_data || !jack_data->client)
+        return -1;
+    jack_transport_stop(jack_data->client);
+    return 0;
+}
+
+int audio_backend_transport_locate(JACK_INFO *jack_data, int64_t frame) {
+    if (!jack_data || !jack_data->client || frame < 0 || frame > UINT32_MAX)
+        return -1;
+    return jack_transport_locate(jack_data->client, (jack_nframes_t)frame);
+}
+
+// [audio-thread] right after process, while this client is the timebase
+// master: the BBT of the frame the server shows it with
+static void jack_timebase_rt(jack_transport_state_t state,
+                             jack_nframes_t nframes, jack_position_t *pos,
+                             int new_pos, void *arg) {
+    (void)new_pos;
+    JACK_INFO *jack_data = (JACK_INFO *)arg;
+    atomic_fetch_add_explicit(&jack_data->lead_calls, 1, memory_order_relaxed);
+    BackendTransportLeadFn fn = atomic_load(&jack_data->lead_fn);
+    if (!fn)
+        return;
+    // pipewire-jack gives this cycle's frame but shows the BBT with the next
+    // cycle's - answered for that one. JACK2 gives the next frame already
+    int64_t frame = pos->frame;
+    if (state == JackTransportRolling &&
+        pos->frame == jack_data->cycle_pos.frame)
+        frame += nframes;
+    POSITION_MUSIC music = {0};
+    fn(atomic_load(&jack_data->lead_arg), frame, &music);
+    if (!position_music_valid(&music))
+        return;
+    uint32_t beat = 0;
+    uint32_t tick = 0;
+    position_bbt(&music, JACK_TICKS_PER_BEAT, &beat, &tick);
+    pos->valid =
+        (jack_position_bits_t)((pos->valid | JackPositionBBT) &
+                               ~JackBBTFrameOffset);
+    pos->bar = (int32_t)(music.bar + 1);
+    pos->beat = (int32_t)beat + 1;
+    pos->tick = (int32_t)tick;
+    pos->bar_start_tick = music.bar_start_beat * JACK_TICKS_PER_BEAT;
+    pos->beats_per_bar = (float)music.bpb;
+    pos->beat_type = (float)music.beat_type;
+    pos->ticks_per_beat = JACK_TICKS_PER_BEAT;
+    pos->beats_per_minute = music.bpm;
+    pos->bbt_offset = 0;
+}
+
+int audio_backend_transport_lead(JACK_INFO *jack_data,
+                                 BackendTransportLeadFn fn, void *arg) {
+    if (!jack_data || !jack_data->client)
+        return -1;
+    unsigned int next = (atomic_load(&jack_data->lead_state) | 1) + 1;
+    if (!fn) {
+        // released first, so the server stops showing our BBT before a cycle
+        // can take it for another program's. Fails when another program took
+        // the lead - nothing to release then
+        if (atomic_load(&jack_data->lead_state) & 1)
+            jack_release_timebase(jack_data->client);
+        atomic_store(&jack_data->lead_state, next);
+        atomic_store(&jack_data->lead_fn, NULL);
+        return 0;
+    }
+    // before the server can call back
+    atomic_store(&jack_data->lead_arg, arg);
+    atomic_store(&jack_data->lead_fn, fn);
+    // unconditional: takes the lead from another program
+    if (jack_set_timebase_callback(jack_data->client, 0, jack_timebase_rt,
+                                   jack_data) != 0) {
+        atomic_store(&jack_data->lead_state, next);
+        atomic_store(&jack_data->lead_fn, NULL);
+        return -1;
+    }
+    // the server calls back from the next cycle on
+    atomic_store(&jack_data->lead_state, next | 1);
+    return 0;
+}
+
+bool audio_backend_transport_lead_lost(JACK_INFO *jack_data) {
+    if (!jack_data)
+        return false;
+    // a verdict on an earlier lead never matches
+    unsigned int lead_state = atomic_load(&jack_data->lead_state);
+    return (lead_state & 1) &&
+           atomic_load(&jack_data->lead_lost_state) == lead_state;
 }
 
 // JACK's notification thread. [main-thread] follows the value in app_data

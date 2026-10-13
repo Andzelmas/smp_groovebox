@@ -1036,9 +1036,9 @@ static int synth_metronome_process_rt(SYNTH_DATA *synth_data,
         synth_stop_osc_rt(metro_osc, 127, 0, 1);
     }
     if (pos && pos->rolling) {
-        TRANSPORT_BBT bbt;
-        transport_bbt(pos, pos->beat, &bbt);
-        int beat = (int)bbt.beat + 1;
+        uint32_t in_bar = 0;
+        position_bbt(&pos->music, TRANSPORT_TICKS_PER_BEAT, &in_bar, NULL);
+        int beat = (int)in_bar + 1;
         // calculate if we need to trigger the metronome oscillator
         unsigned int play_osc = 0;
         if (metro_osc->trig != beat) {

@@ -1,5 +1,6 @@
 #pragma once
 #include "../engine/graph.h"
+#include "../engine/position.h"
 #include "../structs.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -7,7 +8,7 @@
 
 // The audio backend, picked at compile time (jack_backend.c). Only app_data uses
 // it. It runs the process callback; its exposed ports are graph endpoint nodes,
-// every other port belongs to the graph. All [main-thread]
+// every other port belongs to the graph. [main-thread] unless noted
 typedef struct _audio_backend AUDIO_BACKEND;
 
 // process runs on [audio-thread] once activated, with arg. The exposed outputs
@@ -83,3 +84,26 @@ int audio_backend_connect_keys(AUDIO_BACKEND *backend, uint64_t key_a,
                                uint64_t key_b);
 int audio_backend_disconnect_keys(AUDIO_BACKEND *backend, uint64_t key_a,
                                   uint64_t key_b);
+
+// The server's transport: rolling and frame shared by every program on it,
+// the musical position (tempo, meter, bar/beat) given by the one leading it.
+
+// [audio-thread] inside process. false when the backend has no server
+// transport
+bool audio_backend_transport_read_rt(AUDIO_BACKEND *backend,
+                                     POSITION_SERVER *out);
+// requests, applied by the server in a cycle or two. 0 on success
+int audio_backend_transport_start(AUDIO_BACKEND *backend);
+int audio_backend_transport_stop(AUDIO_BACKEND *backend);
+int audio_backend_transport_locate(AUDIO_BACKEND *backend, int64_t frame);
+// fills out: the musical position at frame
+typedef void (*BackendTransportLeadFn)(void *arg, int64_t frame,
+                                       POSITION_MUSIC *out);
+// lead the server's musical position: fn(arg, ...) is called on
+// [audio-thread] right after process whenever the server needs it. NULL stops
+// leading. arg must outlive the backend or the next call. 0 on success
+int audio_backend_transport_lead(AUDIO_BACKEND *backend,
+                                 BackendTransportLeadFn fn, void *arg);
+// another program took the lead the last audio_backend_transport_lead gave.
+// Seen once the transport rolls
+bool audio_backend_transport_lead_lost(AUDIO_BACKEND *backend);

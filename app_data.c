@@ -36,6 +36,8 @@ typedef struct _app_info {
     TRANSPORT *transport;
     // transport_rolling as of the last app_data_update
     bool rolling_seen;
+    // the Sync the backend was last told to lead for
+    TransportSync sync_seen;
     // plugin data
     PLUG_INFO *plug_data;
     // CLAP plugin data
@@ -170,6 +172,12 @@ static int app_read_rt_messages(APP_INFO *app_data) {
     return 0;
 }
 
+// BackendTransportLeadFn, arg the TRANSPORT. [audio-thread] after the cycle
+static void app_transport_lead_rt(void *arg, int64_t frame,
+                                  POSITION_MUSIC *out) {
+    transport_music_at_rt((TRANSPORT *)arg, frame, out);
+}
+
 // The callback function sent to the audio backend (at this time to jack)
 // The audio processing happens here, only realtime functions are allowed here
 static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
@@ -189,7 +197,11 @@ static int trk_audio_process_rt(NFRAMES_T nframes, void *arg) {
         return -1;
 
     // the position every node reads this cycle
-    transport_cycle_rt(app_data->transport, nframes);
+    POSITION_SERVER server;
+    bool has_server =
+        audio_backend_transport_read_rt(app_data->backend, &server);
+    transport_cycle_rt(app_data->transport, nframes,
+                       has_server ? &server : NULL);
     // every node in edge order, the backend's endpoints included
     graph_process_rt(app_data->graph, nframes);
     return 0;
@@ -1795,6 +1807,7 @@ DataObject app_init(void) {
     app_data->graph = NULL;
     app_data->transport = NULL;
     app_data->rolling_seen = false;
+    app_data->sync_seen = TRANSPORT_SYNC_OFF;
     app_data->plug_data = NULL;
     app_data->clap_plug_data = NULL;
     app_data->synth_data = NULL;
@@ -1958,6 +1971,50 @@ static void app_audio_config_update(APP_INFO *app_data) {
                                buffer_size, buffer_size);
 }
 
+// the clock's requests to the server's transport
+static void app_transport_requests(APP_INFO *app_data) {
+    TRANSPORT_REQ req;
+    while (transport_request_take(app_data->transport, &req)) {
+        switch (req.kind) {
+        case TRANSPORT_REQ_START:
+            audio_backend_transport_start(app_data->backend);
+            break;
+        case TRANSPORT_REQ_STOP:
+            audio_backend_transport_stop(app_data->backend);
+            break;
+        case TRANSPORT_REQ_LOCATE:
+            audio_backend_transport_locate(app_data->backend, req.frame);
+            break;
+        }
+    }
+}
+
+// lead the server's musical position while Sync is Lead. Sync turns Follow
+// when that fails or another program takes the lead
+static void app_transport_sync_update(APP_INFO *app_data) {
+    TransportSync sync = transport_sync(app_data->transport);
+    if (sync == TRANSPORT_SYNC_LEAD &&
+        app_data->sync_seen == TRANSPORT_SYNC_LEAD &&
+        audio_backend_transport_lead_lost(app_data->backend)) {
+        log_append_logfile("Another program leads the server's transport\n");
+        transport_sync_set(app_data->transport, TRANSPORT_SYNC_FOLLOW);
+        sync = TRANSPORT_SYNC_FOLLOW;
+    }
+    if (sync == app_data->sync_seen)
+        return;
+    app_data->sync_seen = sync;
+    bool lead = sync == TRANSPORT_SYNC_LEAD;
+    if (audio_backend_transport_lead(app_data->backend,
+                                     lead ? app_transport_lead_rt : NULL,
+                                     lead ? app_data->transport : NULL) == 0)
+        return;
+    log_append_logfile("Could not lead the server's transport\n");
+    if (!lead)
+        return;
+    transport_sync_set(app_data->transport, TRANSPORT_SYNC_FOLLOW);
+    app_data->sync_seen = TRANSPORT_SYNC_FOLLOW;
+}
+
 void app_data_update(void *root_user_data) {
     if (!root_user_data)
         return;
@@ -1967,6 +2024,8 @@ void app_data_update(void *root_user_data) {
     // read messages for jack from rt thread on [main-thread]
     app_jack_read_rt_to_ui_messages(app_data->backend);
     transport_update(app_data->transport);
+    app_transport_requests(app_data);
+    app_transport_sync_update(app_data);
     // read messages from rt thread on [main-thread] for CLAP plugins
     clap_read_rt_to_ui_messages(app_data->clap_plug_data);
     // read messages from the rt thread on the [main-thread] for lv2 plugins
