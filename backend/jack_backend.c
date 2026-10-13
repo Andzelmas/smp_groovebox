@@ -964,6 +964,22 @@ static bool music_live_rt(JACK_INFO *jack_data, bool valid, bool rolling,
     return jack_data->music_live;
 }
 
+// the BBT's bar start in beats. JACK does not document bar_start_tick; taken as
+// the ticks from the song start, bar 1 at 0 - so each bar before is 1..1024
+// beats (position_music_valid). Outside that, the bars before count at the
+// current meter. Bars below 1 are taken as is
+static double bbt_bar_start_beat(const jack_position_t *pos) {
+    double beat = pos->bar_start_tick / pos->ticks_per_beat;
+    if (pos->bar < 1)
+        return beat;
+    double bars_before = (double)pos->bar - 1;
+    // a tick of slack for rounding
+    if (beat >= bars_before - 1.0 / pos->ticks_per_beat &&
+        beat <= bars_before * 1024)
+        return beat;
+    return bars_before * round(pos->beats_per_bar);
+}
+
 bool audio_backend_transport_read_rt(JACK_INFO *jack_data,
                                      POSITION_SERVER *out) {
     if (!jack_data || !jack_data->client || !out)
@@ -992,7 +1008,7 @@ bool audio_backend_transport_read_rt(JACK_INFO *jack_data,
     POSITION_MUSIC music = {0};
     bool valid = (pos->valid & JackPositionBBT) && pos->ticks_per_beat > 0;
     if (valid) {
-        double bar_start_beat = pos->bar_start_tick / pos->ticks_per_beat;
+        double bar_start_beat = bbt_bar_start_beat(pos);
         music = (POSITION_MUSIC){
             .beat = bar_start_beat + (double)(pos->beat - 1) +
                     (double)pos->tick / pos->ticks_per_beat,
