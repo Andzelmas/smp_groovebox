@@ -10,12 +10,9 @@
 #include <threads.h>
 // my libraries
 #include "audio_backend.h"
-#include "../contexts/context_control.h"
 #include "../types.h"
 #include "../util_funcs/intern_table.h"
-#include "../util_funcs/log_funcs.h"
 #include "../util_funcs/midi_buf.h"
-#include "jack_funcs.h"
 
 // the exposed ports, flow as JACK sees it: an input feeds the graph through
 // the "in" node's output of the same name, an output takes the sum of the "out"
@@ -78,9 +75,6 @@ typedef struct _audio_backend {
     // notification thread
     atomic_uint sample_rate;
     atomic_uint buffer_size;
-    // control_data for sys messages, for jack currently only uses the
-    // [thread-safe] messaging system, since this does not have any subcontexts
-    CXCONTROL *control_data;
     // set (true) by app_jack_port_registration_cb, on JACK's own notification
     // thread, whenever a port is registered/unregistered anywhere on the
     // system (not just by this client) - read-and-cleared by
@@ -637,13 +631,6 @@ static void transport_cycle_take_rt(JACK_INFO *jack_data,
     jack_data->cycle_seen = true;
 }
 
-static int app_jack_sys_send_msg(void *user_data, const char *msg) {
-    // TODO for future proof, now is not used
-    (void)user_data;
-    log_append_logfile("%s", msg);
-    return 0;
-}
-
 // JACK notification-thread callbacks (see jack_set_port_registration_callback /
 // jack_set_port_connect_callback below). JACK's own docs say these run on a
 // separate non-RT thread, not [audio-thread] and not [main-thread] - so these
@@ -697,16 +684,6 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
     // a program that exits takes its record with it
     jack_data->music_live = true;
 
-    CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
-    CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
-    ui_funcs_struct.send_msg = app_jack_sys_send_msg;
-    jack_data->control_data =
-        context_sub_init(rt_funcs_struct, ui_funcs_struct);
-    if (!jack_data->control_data) {
-        audio_backend_clean(jack_data);
-        return NULL;
-    }
-
     jack_status_t *server_name = NULL;
     jack_options_t options = JackNullOption;
     jack_status_t status = 0;
@@ -750,20 +727,6 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
                  jack_get_buffer_size(jack_data->client));
 
     return jack_data;
-}
-
-int app_jack_read_ui_to_rt_messages(JACK_INFO *jack_data) {
-    if (!jack_data)
-        return -1;
-    context_sub_process_rt(jack_data->control_data);
-    return 0;
-}
-
-int app_jack_read_rt_to_ui_messages(JACK_INFO *jack_data) {
-    if (!jack_data)
-        return -1;
-    context_sub_process_ui(jack_data->control_data);
-    return 0;
 }
 
 // port_type PORT_TYPE_AUDIO or PORT_TYPE_MIDI, flow PORT_FLOW_*
@@ -1176,7 +1139,6 @@ void audio_backend_clean(AUDIO_BACKEND *jack_data) {
     // the graph outlives the backend
     graph_node_remove(jack_data->graph, jack_data->in_node);
     graph_node_remove(jack_data->graph, jack_data->out_node);
-    context_sub_clean(jack_data->control_data);
     ports_cache_clear(jack_data);
     intern_clean(&jack_data->idents);
     port_owners_clean(jack_data);

@@ -15,7 +15,6 @@
 // math helper functions
 #include "contexts/context_control.h"
 #include "contexts/params.h"
-#include "backend/jack_funcs.h"
 #include "util_funcs/log_funcs.h"
 #include "util_funcs/math_funcs.h"
 #include "util_funcs/ring_buffer.h"
@@ -155,8 +154,6 @@ static int app_read_rt_messages(APP_INFO *app_data) {
     if (app_data->is_processing == 0)
         return 1;
 
-    // read the jack inner messages on the [audio-thread]
-    app_jack_read_ui_to_rt_messages(app_data->backend);
     // read the CLAP plugins inner messages on the [audio-thread]
     if (clap_read_ui_to_rt_messages(app_data->clap_plug_data) != 0)
         return -1;
@@ -1878,7 +1875,7 @@ DataObject app_init(void) {
     clap_plug_status_t clap_plug_errors = 0;
     app_data->clap_plug_data =
         clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors,
-                       app_data->graph, DATA_NS_CLAP_PLUG);
+                       app_data->graph, app_data->transport, DATA_NS_CLAP_PLUG);
     if (!(app_data->clap_plug_data)) {
         clean_memory(app_data);
         return invalid;
@@ -2021,8 +2018,6 @@ void app_data_update(void *root_user_data) {
     APP_INFO *app_data = (APP_INFO *)root_user_data;
     // read app_data messages from [audio-thread] on the [main-thread]
     context_sub_process_ui(app_data->control_data);
-    // read messages for jack from rt thread on [main-thread]
-    app_jack_read_rt_to_ui_messages(app_data->backend);
     transport_update(app_data->transport);
     app_transport_requests(app_data);
     app_transport_sync_update(app_data);

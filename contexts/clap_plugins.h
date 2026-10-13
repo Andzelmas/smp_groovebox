@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include "../engine/graph.h"
+#include "../engine/transport.h"
 #include "../structs.h"
 #include "../util_funcs/tree_index.h"
 #include "params.h"
@@ -41,11 +42,11 @@ int clap_plug_preset_load(void *plug, uint64_t key);
 //--------------------------------------------------
 
 // initiate the main plugin data struct. A plugin is a node of graph, owned by
-// (owner_tag, the plugin's uid)
+// (owner_tag, the plugin's uid). clap_process.transport follows transport
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error, GRAPH *graph,
-                               uint64_t owner_tag);
+                               TRANSPORT *transport, uint64_t owner_tag);
 
 // [main-thread] the values plugins are activated with. Every activated plugin
 // restarts with them. A plugin runs nothing for nframes outside [min, max].

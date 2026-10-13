@@ -116,11 +116,6 @@ typedef struct _synth_osc {
     // back pointer to the owning synth, so an oscillator handle carries its
     // context (used as the DataObject user_data for a single oscillator)
     SYNTH_DATA *synth_data;
-    // trigger, that can be used to track various oscillator behaviour
-    // for example for metronome osc this is used to test if the oscillator
-    // needs to be played starts at -1, when the osc is initialized for the
-    // first time
-    int trig;
     // name of the osc that will be returned to the ui
     char *name;
     // the voice array for the oscillator
@@ -499,7 +494,6 @@ SYNTH_DATA *synth_init(SAMPLE_T sample_rate, unsigned int with_metronome,
         cur_osc->saw_osc = synth_data->saw_osc;
         cur_osc->sin_osc = synth_data->sin_osc;
         cur_osc->id = i;
-        cur_osc->trig = -1;
         cur_osc->last_voice = 0;
         cur_osc->num_ports = 0;
         cur_osc->params = NULL;
@@ -1026,37 +1020,33 @@ static void synth_stop_osc_rt(SYNTH_OSC *osc, MIDI_DATA_T vel, MIDI_DATA_T note,
     }
 }
 
-// one segment, triggered at frame 0 from the transport
-static int synth_metronome_process_rt(SYNTH_DATA *synth_data,
-                                      SYNTH_OSC *metro_osc, NFRAMES_T nframes) {
-    if (!metro_osc)
-        return -1;
+// a click on every beat of the transport's grid, at its frame, accented on a
+// bar's first beat. Stopped, the voices are released
+static void synth_metronome_process_rt(SYNTH_DATA *synth_data,
+                                       SYNTH_OSC *metro_osc,
+                                       NFRAMES_T nframes) {
     const TRANSPORT_POS *pos = transport_get_rt(synth_data->transport);
-    if (pos && !pos->rolling) {
+    if (pos && !pos->rolling)
         synth_stop_osc_rt(metro_osc, 127, 0, 1);
-    }
+    NFRAMES_T start = 0;
     if (pos && pos->rolling) {
-        uint32_t in_bar = 0;
-        position_bbt(&pos->music, TRANSPORT_TICKS_PER_BEAT, &in_bar, NULL);
-        int beat = (int)in_bar + 1;
-        // calculate if we need to trigger the metronome oscillator
-        unsigned int play_osc = 0;
-        if (metro_osc->trig != beat) {
-            metro_osc->trig = beat;
-            play_osc = 1;
-        }
-
-        if (play_osc == 1) {
-            MIDI_DATA_T pitch = 60;
-            if (beat == 1)
-                pitch = 72;
-            synth_play_osc_rt(metro_osc, 127, pitch, beat);
+        TRANSPORT_GRID grid = transport_grid(pos, 1.0);
+        NFRAMES_T offset = 0;
+        int64_t idx = 0;
+        while (transport_grid_next(&grid, &offset, &idx)) {
+            if (offset > start) {
+                synth_process_osc_voices(synth_data, metro_osc, start, offset);
+                start = offset;
+            }
+            POSITION_MUSIC at;
+            transport_music(pos, (double)idx, &at);
+            uint32_t in_bar = 0;
+            position_bbt(&at, TRANSPORT_TICKS_PER_BEAT, &in_bar, NULL);
+            synth_play_osc_rt(metro_osc, 127, in_bar == 0 ? 72 : 60,
+                              in_bar + 1);
         }
     }
-
-    synth_process_osc_voices(synth_data, metro_osc, 0, nframes);
-
-    return 0;
+    synth_process_osc_voices(synth_data, metro_osc, start, nframes);
 }
 
 // render up to each MIDI event, then apply it - every event acts at its frame

@@ -305,6 +305,11 @@ typedef struct _plug_plug {
     uint32_t num_property_params;
     // do we need to update, after a preset loading for example
     bool request_update;
+    // [audio-thread] the transport seq the plugin last got time:Position for
+    // (0 = never) and the frame its own count expects next. [main-thread]
+    // zeroes pos_seq only before the plugin is in the graph or while stopped
+    uint64_t pos_seq;
+    int64_t pos_frame_next;
     // atom forge for types and general convenience
     LV2_Atom_Forge forge;
     PLUG_CONTROL **controls;   // parameters (properties and port controls)
@@ -346,14 +351,6 @@ typedef struct _plug_info {
     uint64_t owner_tag;
     // the available plugins list struct
     PLUGIN_LIST plugin_list;
-    // transport information, mainly to compare if position info changed and if
-    // there is a need to send new position info to the plugin SHOULD only be
-    // touched by the [audio-thread]
-    bool isPlaying; // is the tranport playing
-    int64_t posFrame; // the position frame
-    double bpm;
-    double bpb;
-    double beat_type;
     // this is control for [audio-thread] and [main-thread] sys communication
     // (wait for a plugin pause etc.)
     CXCONTROL *control_data;
@@ -801,11 +798,6 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
     plug_data->block_length = (uint32_t)block_length;
     plug_data->midi_buf_size = (size_t)DEFAULT_MIDI_BUF_SIZE;
     plug_data->buffer_size = plug_data->midi_buf_size * N_BUFFER_CYCLES;
-    plug_data->posFrame = 0;
-    plug_data->bpm = 120.0;
-    plug_data->bpb = 4;
-    plug_data->beat_type = 4;
-    plug_data->isPlaying = false;
     plug_data->plugin_list.plugin_list_count = 0;
     plug_data->plugin_list.plugin_list = NULL;
 
@@ -1518,6 +1510,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     // registered under it as their owner, so it has to exist before any of
     // them. A slot keeps its last uid until this reassigns it
     plug->uid = ++plug_data->next_plug_uid;
+    plug->pos_seq = 0;
 
     plug->plug = plugin;
 
@@ -1888,8 +1881,10 @@ static int plug_reinstantiate(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
     }
     lilv_instance_activate(plug->plug_instance);
     plug->plug_instance_activated = 1;
-    // its property params are read back from the new instance
+    // its property params are read back from the new instance, which knows
+    // no position yet
     plug->request_update = true;
+    plug->pos_seq = 0;
     return 0;
 }
 
@@ -2144,6 +2139,37 @@ int plug_stop_and_remove_plug(void *plug) {
     return plug_remove_plug(cur_plug->plug_data, cur_plug->id);
 }
 
+// [audio-thread] the cycle's position as a time:Position object in buf, which
+// 256 bytes hold. NULL when buf is too small
+static const LV2_Atom *plug_position_forge_rt(PLUG_PLUG *plug,
+                                              const TRANSPORT_POS *tr,
+                                              uint8_t *buf, uint32_t size) {
+    const PLUG_URIDS *urids = plug->urids;
+    LV2_Atom_Forge *forge = &plug->forge;
+    lv2_atom_forge_set_buffer(forge, buf, size);
+    LV2_Atom_Forge_Frame frame;
+    if (!lv2_atom_forge_object(forge, &frame, 0, urids->time_Position))
+        return NULL;
+    lv2_atom_forge_key(forge, urids->time_frame);
+    lv2_atom_forge_long(forge, tr->frame);
+    lv2_atom_forge_key(forge, urids->time_speed);
+    lv2_atom_forge_float(forge, tr->rolling ? 1.0f : 0.0f);
+    lv2_atom_forge_key(forge, urids->time_bar);
+    lv2_atom_forge_long(forge, tr->music.bar);
+    lv2_atom_forge_key(forge, urids->time_barBeat);
+    lv2_atom_forge_float(forge,
+                         (float)(tr->music.beat - tr->music.bar_start_beat));
+    lv2_atom_forge_key(forge, urids->time_beatUnit);
+    lv2_atom_forge_int(forge, (int32_t)tr->music.beat_type);
+    lv2_atom_forge_key(forge, urids->time_beatsPerBar);
+    lv2_atom_forge_float(forge, (float)tr->music.bpb);
+    lv2_atom_forge_key(forge, urids->time_beatsPerMinute);
+    if (!lv2_atom_forge_float(forge, (float)tr->music.bpm))
+        return NULL;
+    lv2_atom_forge_pop(forge, &frame);
+    return (const LV2_Atom *)buf;
+}
+
 bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     PLUG_PLUG *plug = (PLUG_PLUG *)plug_ptr;
     if (!plug)
@@ -2160,6 +2186,21 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     // change, until the new instance
     if (nframes != plug_data->block_length)
         return false;
+
+    // time:Position for every input event port, after a jump or when the frame
+    // is not where the plugin's own count puts it (a server can hold its frame
+    // a few cycles after a start)
+    uint8_t pos_buf[256];
+    const LV2_Atom *lv2_pos = NULL;
+    const TRANSPORT_POS *tr = transport_get_rt(plug_data->transport);
+    if (tr) {
+        if (tr->seq != plug->pos_seq || tr->frame != plug->pos_frame_next)
+            lv2_pos =
+                plug_position_forge_rt(plug, tr, pos_buf, sizeof(pos_buf));
+        plug->pos_seq = tr->seq;
+        plug->pos_frame_next =
+            tr->rolling ? tr->frame + (int64_t)nframes : tr->frame;
+    }
 
     //----------------------------------------------------------------------------------------------------
     // first connect the ports for processing
@@ -2189,53 +2230,9 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
                 plug_evbuf_write(&iter_buf, 0, 0, get->type, get->size,
                                  LV2_ATOM_BODY_CONST(get));
             }
-            // send plugin the transport information
-            const TRANSPORT_POS *tr = transport_get_rt(plug_data->transport);
-            if (tr) {
-                bool pos_change = (tr->rolling != plug_data->isPlaying ||
-                                   tr->frame != plug_data->posFrame ||
-                                   tr->music.bpm != plug_data->bpm ||
-                                   tr->music.bpb != plug_data->bpb ||
-                                   tr->music.beat_type != plug_data->beat_type);
-                if (pos_change) {
-                    // if transport position changed from the last time
-                    // write an atom into the input event port for the
-                    // plugin
-                    uint8_t pos_buf[256];
-                    LV2_Atom *lv2_pos = (LV2_Atom *)pos_buf;
-                    LV2_Atom_Forge *forge = &plug->forge;
-                    lv2_atom_forge_set_buffer(forge, pos_buf, sizeof(pos_buf));
-                    LV2_Atom_Forge_Frame frame;
-                    lv2_atom_forge_object(forge, &frame, 0,
-                                          plug->urids->time_Position);
-                    lv2_atom_forge_key(forge, plug->urids->time_frame);
-                    lv2_atom_forge_long(forge, tr->frame);
-                    lv2_atom_forge_key(forge, plug->urids->time_speed);
-                    lv2_atom_forge_float(forge, tr->rolling ? 1.0 : 0.0);
-                    lv2_atom_forge_key(forge, plug->urids->time_barBeat);
-                    lv2_atom_forge_float(forge,
-                                         (float)(tr->music.beat -
-                                                 tr->music.bar_start_beat));
-                    lv2_atom_forge_key(forge, plug->urids->time_bar);
-                    lv2_atom_forge_long(forge, tr->music.bar);
-                    lv2_atom_forge_key(forge, plug->urids->time_beatUnit);
-                    lv2_atom_forge_int(forge, (int32_t)tr->music.beat_type);
-                    lv2_atom_forge_key(forge, plug->urids->time_beatsPerBar);
-                    lv2_atom_forge_float(forge, (float)tr->music.bpb);
-                    lv2_atom_forge_key(forge, plug->urids->time_beatsPerMinute);
-                    lv2_atom_forge_float(forge, (float)tr->music.bpm);
-                    // write the atom to the atom input port
-                    plug_evbuf_write(&iter_buf, 0, 0, lv2_pos->type,
-                                     lv2_pos->size, LV2_ATOM_BODY(lv2_pos));
-                }
-                // update the plug_data transports for next cycle comparison
-                plug_data->posFrame =
-                    tr->rolling ? tr->frame + (int64_t)nframes : tr->frame;
-                plug_data->bpm = tr->music.bpm;
-                plug_data->bpb = tr->music.bpb;
-                plug_data->beat_type = tr->music.beat_type;
-                plug_data->isPlaying = tr->rolling;
-            }
+            if (lv2_pos)
+                plug_evbuf_write(&iter_buf, 0, 0, lv2_pos->type, lv2_pos->size,
+                                 LV2_ATOM_BODY_CONST(lv2_pos));
         }
         if (cur_port->type == PORT_TYPE_EVENT &&
             cur_port->flow == PORT_FLOW_OUTPUT) {

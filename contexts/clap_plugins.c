@@ -243,6 +243,8 @@ typedef struct _clap_plug_info {
     clap_host_preset_load_t ext_preset_load; // struct that holds functions for
                                              // the preset-load extension
     GRAPH *graph;
+    // the clock clap_process.transport comes from, read on [audio-thread]
+    TRANSPORT *transport;
     // paired with a plugin's uid as its node's owner
     uint64_t owner_tag;
 } CLAP_PLUG_INFO;
@@ -1840,7 +1842,7 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error, GRAPH *graph,
-                               uint64_t owner_tag) {
+                               TRANSPORT *transport, uint64_t owner_tag) {
     if (!graph)
         return NULL;
     // clap_plug_init is called on [main-thread]
@@ -1853,6 +1855,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     }
     memset(plug_data, '\0', sizeof(*plug_data));
     plug_data->graph = graph;
+    plug_data->transport = transport;
     plug_data->owner_tag = owner_tag;
     plug_data->clap_plugin_list.plugin_list = NULL;
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
@@ -2929,8 +2932,6 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
     ub_list_reset(ub_in);
     // the params go first, at frame 0
     int not_quiet = clap_input_events_params_add(plug, ub_in);
-    // TODO how to add transport events so everything is sorted by the frames
-    // offset?
 
     CLAP_PLUG_NOTE_PORT *note_ports = &(plug->input_note_ports);
     if (note_ports->ports_count == 0)
@@ -2953,6 +2954,38 @@ static int clap_input_events_prepare(CLAP_PLUG_INFO *plug_data,
     return not_quiet;
 }
 
+// [audio-thread] the cycle's position at its first frame, in quarter notes as
+// CLAP hosts and plugins count them
+static void clap_transport_rt(const TRANSPORT_POS *pos,
+                              clap_event_transport_t *out) {
+    double quarters = 4.0 / pos->music.beat_type;
+    uint32_t flags = CLAP_TRANSPORT_HAS_TEMPO |
+                     CLAP_TRANSPORT_HAS_BEATS_TIMELINE |
+                     CLAP_TRANSPORT_HAS_SECONDS_TIMELINE |
+                     CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+    if (pos->rolling)
+        flags |= CLAP_TRANSPORT_IS_PLAYING;
+    *out = (clap_event_transport_t){
+        .header = {.size = sizeof(*out),
+                   .time = 0,
+                   .space_id = CLAP_CORE_EVENT_SPACE_ID,
+                   .type = CLAP_EVENT_TRANSPORT,
+                   .flags = 0},
+        .flags = flags,
+        .song_pos_beats = llround(pos->music.beat * quarters *
+                                  (double)CLAP_BEATTIME_FACTOR),
+        .song_pos_seconds = llround((double)pos->frame / pos->rate *
+                                    (double)CLAP_SECTIME_FACTOR),
+        .tempo = pos->music.bpm * quarters,
+        .tempo_inc = 0,
+        .bar_start = llround(pos->music.bar_start_beat * quarters *
+                             (double)CLAP_BEATTIME_FACTOR),
+        .bar_number = (int32_t)pos->music.bar,
+        .tsig_num = (uint16_t)pos->music.bpb,
+        .tsig_denom = (uint16_t)pos->music.beat_type,
+    };
+}
+
 bool clap_plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)plug_ptr;
     if (!plug)
@@ -2969,7 +3002,11 @@ bool clap_plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     clap_process_t _process = {0};
     _process.steady_time = -1;
     _process.frames_count = nframes;
-    _process.transport = NULL;
+    clap_event_transport_t transport;
+    const TRANSPORT_POS *pos = transport_get_rt(plug_data->transport);
+    if (pos)
+        clap_transport_rt(pos, &transport);
+    _process.transport = pos ? &transport : NULL;
 
     // copy the graph input buffers to clap input audio buffers
     int in_audio_not_quiet =
