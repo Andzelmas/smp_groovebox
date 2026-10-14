@@ -163,16 +163,17 @@ static GraphPortList port_list(unsigned int type, unsigned int flow) {
 
 // the interned name of a port, malloced. '/' never occurs in the hex fields,
 // so it is unique per (owner, name)
-static char *port_ident(const GRAPH_NODE *node, const char *name) {
-    int len = snprintf(NULL, 0, "%" PRIx64 "/%" PRIx64 "/%s", node->owner_tag,
-                       node->owner_uid, name);
+static char *port_ident(uint64_t owner_tag, uint64_t owner_uid,
+                        const char *name) {
+    int len = snprintf(NULL, 0, "%" PRIx64 "/%" PRIx64 "/%s", owner_tag,
+                       owner_uid, name);
     if (len < 0)
         return NULL;
     char *ident = malloc((size_t)len + 1);
     if (!ident)
         return NULL;
-    snprintf(ident, (size_t)len + 1, "%" PRIx64 "/%" PRIx64 "/%s",
-             node->owner_tag, node->owner_uid, name);
+    snprintf(ident, (size_t)len + 1, "%" PRIx64 "/%" PRIx64 "/%s", owner_tag,
+             owner_uid, name);
     return ident;
 }
 
@@ -464,7 +465,7 @@ GRAPH_PORT *graph_port_create(GRAPH *graph, GRAPH_NODE *node,
         return NULL;
     if (flow != PORT_FLOW_INPUT && flow != PORT_FLOW_OUTPUT)
         return NULL;
-    char *ident = port_ident(node, name);
+    char *ident = port_ident(node->owner_tag, node->owner_uid, name);
     if (!ident)
         return NULL;
     uint64_t key = 0;
@@ -522,8 +523,9 @@ int graph_port_rename(GRAPH *graph, GRAPH_PORT *port, const char *name) {
         return -1;
     if (strcmp(port->name, name) == 0)
         return 0;
-    char *old_ident = port_ident(port->node, port->name);
-    char *new_ident = port_ident(port->node, name);
+    const GRAPH_NODE *node = port->node;
+    char *old_ident = port_ident(node->owner_tag, node->owner_uid, port->name);
+    char *new_ident = port_ident(node->owner_tag, node->owner_uid, name);
     char *name_copy = strdup(name);
     int result = -1;
     if (!old_ident || !new_ident || !name_copy)
@@ -577,6 +579,18 @@ bool graph_port_by_key(const GRAPH *graph, uint64_t key, GraphPortInfo *out) {
         return false;
     port_info_fill(port, out);
     return true;
+}
+
+uint64_t graph_port_find(const GRAPH *graph, uint64_t owner_tag,
+                         uint64_t owner_uid, const char *name) {
+    if (!graph || !name)
+        return 0;
+    char *ident = port_ident(owner_tag, owner_uid, name);
+    if (!ident)
+        return 0;
+    uint64_t key = intern_find(&graph->idents, ident);
+    free(ident);
+    return key && port_by_key(graph, key) ? key : 0;
 }
 
 size_t graph_port_connection_count(const GRAPH *graph, uint64_t key) {

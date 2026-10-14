@@ -6,6 +6,7 @@
 #include "app_data.h"
 #include "backend/audio_backend.h"
 #include "engine/graph.h"
+#include "engine/midi_clock.h"
 #include "engine/transport.h"
 // string functions
 #include "contexts/clap_plugins.h"
@@ -33,6 +34,8 @@ typedef struct _app_info {
     GRAPH *graph;
     // the clock, advanced by trk_audio_process_rt before the graph
     TRANSPORT *transport;
+    // MIDI clock out of the transport, a graph node
+    MIDI_CLOCK *midi_clock;
     // transport_rolling as of the last app_data_update
     bool rolling_seen;
     // the Sync the backend was last told to lead for
@@ -104,6 +107,7 @@ static int clean_memory(APP_INFO *app_data) {
     // stops the process callback, removes its endpoint nodes
     audio_backend_clean(app_data->backend);
     graph_free(app_data->graph);
+    midi_clock_clean(app_data->midi_clock);
     transport_clean(app_data->transport);
 
     // clean the app_data
@@ -1426,6 +1430,8 @@ static const char *owner_label(APP_INFO *app_data, uint64_t owner_tag,
             return sampler_name(NULL);
         if (owner_uid == SID_ROOT)
             return root_name(NULL);
+        if (owner_uid == SID_TRK)
+            return trk_name(NULL);
         break;
     }
     return NULL;
@@ -1803,6 +1809,7 @@ DataObject app_init(void) {
     app_data->backend = NULL;
     app_data->graph = NULL;
     app_data->transport = NULL;
+    app_data->midi_clock = NULL;
     app_data->rolling_seen = false;
     app_data->sync_seen = TRANSPORT_SYNC_OFF;
     app_data->plug_data = NULL;
@@ -1829,7 +1836,8 @@ DataObject app_init(void) {
     app_data->buffer_size = buffer_size;
     app_data->sample_rate = samplerate;
     app_data->graph = graph_new(buffer_size);
-    // the exposed ports (master_in/out, midi_in/out) group under the root
+    // the exposed ports (master_in/out, midi_in/out, midi_clock_out) group
+    // under the root
     if (!app_data->graph ||
         audio_backend_endpoints_add(app_data->backend, app_data->graph,
                                     DATA_NS_SINGLETON, SID_ROOT) != 0) {
@@ -1890,6 +1898,21 @@ DataObject app_init(void) {
         clean_memory(app_data);
         return invalid;
     }
+    // the transport's MIDI clock, pre-wired to the exposed midi_clock_out
+    app_data->midi_clock = midi_clock_init(
+        app_data->graph, app_data->transport, DATA_NS_SINGLETON, SID_TRK);
+    if (!app_data->midi_clock) {
+        clean_memory(app_data);
+        return invalid;
+    }
+    if (graph_connect_keys(
+            app_data->graph,
+            graph_port_find(app_data->graph, DATA_NS_SINGLETON, SID_TRK,
+                            MIDI_CLOCK_PORT_NAME),
+            graph_port_find(app_data->graph, DATA_NS_SINGLETON, SID_ROOT,
+                            AUDIO_BACKEND_MIDI_CLOCK_OUT)) != 0)
+        log_append_logfile("Could not connect the MIDI clock to %s\n",
+                           AUDIO_BACKEND_MIDI_CLOCK_OUT);
     // the first cycle already runs a plan with every node
     if (graph_plan_update(app_data->graph) != 0) {
         clean_memory(app_data);
@@ -2111,6 +2134,9 @@ void app_stop_and_clean(void *root_user_data) {
     if (!root_user_data)
         return;
     APP_INFO *app_data = (APP_INFO *)root_user_data;
+    // the clock's slave hears Stop while the graph still runs - the cycle
+    // that pushes it ends before the stop's cycle starts
+    midi_clock_halt(app_data->midi_clock);
     context_sub_wait_for_stop(app_data->control_data, root_user_data);
 
     clean_memory(app_data);

@@ -23,6 +23,9 @@ void audio_backend_clean(AUDIO_BACKEND *backend);
 SAMPLE_T audio_backend_sample_rate(AUDIO_BACKEND *backend);
 uint32_t audio_backend_buffer_size(AUDIO_BACKEND *backend);
 
+// the exposed MIDI output for MIDI clock, an input of the "out" node
+#define AUDIO_BACKEND_MIDI_CLOCK_OUT "midi_clock_out"
+
 // registers the exposed ports, as two nodes of graph owned by (owner_tag,
 // owner_uid): "in" - outputs the backend fills, "out" - inputs whose sums it
 // takes. Before activate, once. 0 on success

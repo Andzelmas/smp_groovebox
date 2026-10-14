@@ -79,6 +79,9 @@ size_t graph_port_count(const GRAPH *graph, GraphPortList list);
 bool graph_port_at(const GRAPH *graph, GraphPortList list, size_t idx,
                    GraphPortInfo *out);
 bool graph_port_by_key(const GRAPH *graph, uint64_t key, GraphPortInfo *out);
+// the key of the owner's port of that name, 0 when there is none
+uint64_t graph_port_find(const GRAPH *graph, uint64_t owner_tag,
+                         uint64_t owner_uid, const char *name);
 // ports the one named by key is connected to, in connection order
 size_t graph_port_connection_count(const GRAPH *graph, uint64_t key);
 bool graph_port_connection_at(const GRAPH *graph, uint64_t key, size_t idx,

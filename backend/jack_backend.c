@@ -28,6 +28,7 @@ static const struct {
     {"master_out_L", PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT},
     {"master_out_R", PORT_TYPE_AUDIO, PORT_FLOW_OUTPUT},
     {"midi_out", PORT_TYPE_MIDI, PORT_FLOW_OUTPUT},
+    {AUDIO_BACKEND_MIDI_CLOCK_OUT, PORT_TYPE_MIDI, PORT_FLOW_OUTPUT},
 };
 #define EXPOSED_COUNT (sizeof(exposed_defs) / sizeof(exposed_defs[0]))
 // the tick resolution the app leads with
