@@ -456,6 +456,13 @@ void graph_node_remove(GRAPH *graph, GRAPH_NODE *node) {
     graph->generation++;
 }
 
+void graph_node_latency_set(GRAPH *graph, GRAPH_NODE *node, uint32_t frames) {
+    if (!graph || !node || node->latency == frames)
+        return;
+    node->latency = frames;
+    graph->generation++;
+}
+
 GRAPH_PORT *graph_port_create(GRAPH *graph, GRAPH_NODE *node,
                               unsigned int type, unsigned int flow,
                               const char *name) {

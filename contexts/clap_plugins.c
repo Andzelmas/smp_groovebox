@@ -78,10 +78,11 @@ enum {
     CLAP_PLUG_REQ_RESTART = 1U << 1,
     CLAP_PLUG_REQ_PROCESS = 1U << 2,
     CLAP_PLUG_REQ_FLUSH = 1U << 3,
+    CLAP_PLUG_REQ_LATENCY = 1U << 4,
     // not a plugin request - set by the host when the ui side missed values
     // from the plugin or after a preset load, so they are read again from
     // the plugin
-    CLAP_PLUG_REQ_SYNC_VALUES = 1U << 4,
+    CLAP_PLUG_REQ_SYNC_VALUES = 1U << 5,
 };
 
 // plugin list item - from this struct a clap plugin can be loaded
@@ -178,6 +179,8 @@ typedef struct _clap_plug_plug {
     CLAP_PLUG_INFO *plug_data;  // CLAP_PLUG_INFO struct address for convenience
     // the plugin's node, its audio and note ports are on it
     GRAPH_NODE *node;
+    // [main-thread] frames, as the node has it
+    uint32_t latency;
     // CLAP_PLUG_PORT holds the graph ports and the clap_audio_buffer_t
     // arrays, to send to plugin process function
     CLAP_PLUG_PORT input_ports;
@@ -242,6 +245,7 @@ typedef struct _clap_plug_info {
         ext_params; // struct that holds functions for the params extension
     clap_host_preset_load_t ext_preset_load; // struct that holds functions for
                                              // the preset-load extension
+    clap_host_latency_t ext_latency;
     GRAPH *graph;
     // the clock clap_process.transport comes from, read on [audio-thread]
     TRANSPORT *transport;
@@ -1379,6 +1383,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     clap_plug_note_ports_destroy(plug_data, &(plug->output_note_ports));
     graph_node_remove(plug_data->graph, plug->node);
     plug->node = NULL;
+    plug->latency = 0;
     // clean the event structs
     clap_input_events_t *in_events = &(plug->input_events);
     ub_clean((UB_EVENT *)in_events->ctx);
@@ -1476,6 +1481,9 @@ static const void *clap_plug_get_extension(const clap_host_t *host,
         strcmp(ex_id, CLAP_EXT_PRESET_LOAD_COMPAT) == 0) {
         return &(plug_data->ext_preset_load);
     }
+    if (strcmp(ex_id, CLAP_EXT_LATENCY) == 0) {
+        return &(plug_data->ext_latency);
+    }
     // if there is no extension implemented that the plugin needs send the name
     // of the extension to the ui
     context_sub_send_msg(plug_data->control_data, (void *)plug_data,
@@ -1483,6 +1491,30 @@ static const void *clap_plug_get_extension(const clap_host_t *host,
                          "%s asked for ext %s\n", plug->plug_path, ex_id);
 
     return NULL;
+}
+
+// latency extension, allowed only inside activate() - the activate path reads
+// the latency anyway, the request covers plugins calling it while active
+static void clap_plug_ext_latency_changed(const clap_host_t *host) {
+    if (!is_main_thread)
+        return;
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!plug)
+        return;
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_LATENCY);
+}
+
+// [main-thread] on an activated (or activating) plugin: its latency to the
+// node, 0 without the extension
+static void clap_plug_latency_update(CLAP_PLUG_PLUG *plug) {
+    const clap_plugin_latency_t *ext =
+        plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_LATENCY);
+    uint32_t latency = (ext && ext->get) ? ext->get(plug->plug_inst) : 0;
+    if (latency == plug->latency)
+        return;
+    plug->latency = latency;
+    graph_node_latency_set(plug->plug_data->graph, plug->node, latency);
+    log_append_logfile("%s: latency %u frames\n", plug->name, latency);
 }
 
 static int clap_plug_activate_start_processing(void *user_data) {
@@ -1510,6 +1542,8 @@ static int clap_plug_activate_start_processing(void *user_data) {
                                        plug_data->max_buffer_size)) {
             return -1;
         }
+        // the plan update below takes it
+        clap_plug_latency_update(plug);
     }
     plug->plug_inst_activated = 1;
     // its first cycle already runs a plan with its ports
@@ -1728,6 +1762,10 @@ static void clap_plug_requests_process(CLAP_PLUG_PLUG *plug) {
     // process() calls, so flush() here
     if ((reqs & CLAP_PLUG_REQ_FLUSH) != 0 && plug->plug_inst_activated == 0)
         clap_plug_params_flush_inactive(plug, true);
+    // a restart read it in activate, an inactive plugin's next activate does
+    if ((reqs & CLAP_PLUG_REQ_LATENCY) != 0 &&
+        (reqs & CLAP_PLUG_REQ_RESTART) == 0 && plug->plug_inst_activated == 1)
+        clap_plug_latency_update(plug);
     // after the queued (older) values were applied by the caller
     if ((reqs & CLAP_PLUG_REQ_SYNC_VALUES) != 0)
         clap_plug_params_sync_values(plug);
@@ -1913,6 +1951,8 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     // preset-load extension
     plug_data->ext_preset_load.loaded = clap_ext_preset_load_on_load;
     plug_data->ext_preset_load.on_error = clap_ext_preset_load_on_error;
+    // latency extension
+    plug_data->ext_latency.changed = clap_plug_ext_latency_changed;
 
     // init the plugins array
     plug_data->plugins_dirty = false;

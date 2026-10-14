@@ -45,7 +45,7 @@ GRAPH *graph_new(uint32_t max_buffer_size);
 // graph_process_rt must not run any more
 void graph_free(GRAPH *graph);
 
-// bumped by every change to nodes, ports or edges
+// bumped by every change to nodes (latency too), ports or edges
 uint64_t graph_generation(const GRAPH *graph);
 
 // new audio buffers of max_buffer_size frames for every port, used from the
@@ -62,6 +62,9 @@ GRAPH_NODE *graph_node_add(GRAPH *graph, uint64_t owner_tag,
 // its ports and their edges go with it. The plan running may call process
 // until a newer one is acked - stop the owner first, keep user_data valid
 void graph_node_remove(GRAPH *graph, GRAPH_NODE *node);
+// the node's processing latency, 0 for a new node. A change bumps the
+// generation
+void graph_node_latency_set(GRAPH *graph, GRAPH_NODE *node, uint32_t frames);
 
 // type PORT_TYPE_AUDIO or PORT_TYPE_MIDI, flow PORT_FLOW_INPUT or
 // PORT_FLOW_OUTPUT. name is copied, unique among the ports of the node's

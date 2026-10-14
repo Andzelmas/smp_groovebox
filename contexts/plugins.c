@@ -105,7 +105,6 @@ typedef struct _plug_nodes {
     LilvNode *lv2_maximum;
     LilvNode *lv2_minimum;
     LilvNode *lv2_name;
-    LilvNode *lv2_reportsLatency;
     LilvNode *lv2_sampleRate;
     LilvNode *lv2_symbol;
     LilvNode *lv2_toggled;
@@ -271,6 +270,13 @@ typedef struct _plug_plug {
     size_t name_at;
     // the plugin's node, its audio/MIDI ports are on it
     GRAPH_NODE *node;
+    // the latency output control port's index, -1 when none
+    int latency_port;
+    // its value after each run(), written by [audio-thread] (by [main-thread]
+    // only while the plugin is stopped). 0 until the first run
+    atomic_uint latency_rt;
+    // [main-thread] frames, as the node has it
+    uint32_t latency;
     // array of available ports for the plugin
     PLUG_PORT *ports;
     // how many ports do we have on plugin
@@ -507,6 +513,9 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     cur_plug->controls = NULL;
     cur_plug->num_controls = 0;
     cur_plug->control_in = -1;
+    cur_plug->latency_port = -1;
+    atomic_store(&cur_plug->latency_rt, 0U);
+    cur_plug->latency = 0;
     cur_plug->request_update = false;
     cur_plug->safe_restore = false;
     cur_plug->plug = NULL;
@@ -654,7 +663,6 @@ static void plug_init_nodes(LilvWorld *const world, PLUG_NODES *const nodes) {
     nodes->lv2_maximum = lilv_new_uri(world, LV2_CORE__maximum);
     nodes->lv2_minimum = lilv_new_uri(world, LV2_CORE__minimum);
     nodes->lv2_name = lilv_new_uri(world, LV2_CORE__name);
-    nodes->lv2_reportsLatency = lilv_new_uri(world, LV2_CORE__reportsLatency);
     nodes->lv2_sampleRate = lilv_new_uri(world, LV2_CORE__sampleRate);
     nodes->lv2_symbol = lilv_new_uri(world, LV2_CORE__symbol);
     nodes->lv2_toggled = lilv_new_uri(world, LV2_CORE__toggled);
@@ -828,6 +836,9 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
         plug->num_controls = 0;
         plug->request_update = false;
         plug->control_in = -1;
+        plug->latency_port = -1;
+        atomic_init(&plug->latency_rt, 0U);
+        plug->latency = 0;
         plug->plug_params = NULL;
         plug->safe_restore = false;
         plug->id = i;
@@ -1204,6 +1215,13 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
         if (!cur_plug->plug_instance)
             continue;
         param_msgs_process(cur_plug->plug_params, 0);
+        uint32_t latency = atomic_load(&cur_plug->latency_rt);
+        if (latency != cur_plug->latency) {
+            cur_plug->latency = latency;
+            graph_node_latency_set(plug_data->graph, cur_plug->node, latency);
+            log_append_logfile("%s: latency %u frames\n", cur_plug->name,
+                               latency);
+        }
         for (uint32_t j = 0; cur_plug->ports && j < cur_plug->num_ports; j++) {
             PLUG_PORT *port = &(cur_plug->ports[j]);
             uint32_t dropped = atomic_exchange(&port->seq_dropped, 0U);
@@ -1964,7 +1982,6 @@ static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         plug->map.handle, lilv_node_as_string(plug_data->nodes.atom_Sequence));
     //--------------------------------------------------
     // initialize the ports
-    // TODO now ignores the latency port
     plug->num_ports = lilv_plugin_get_num_ports(plug->plug);
     plug->ports = (PLUG_PORT *)calloc(plug->num_ports, sizeof(PLUG_PORT));
     if (plug->ports == NULL) {
@@ -2096,6 +2113,15 @@ static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         }
     }
     plug_ports_connect(plug);
+    // lv2:reportsLatency or the lv2:latency designation
+    plug->latency_port = -1;
+    if (lilv_plugin_has_latency(plug->plug)) {
+        uint32_t index = lilv_plugin_get_latency_port_index(plug->plug);
+        if (index < plug->num_ports &&
+            plug->ports[index].type == PORT_TYPE_CONTROL &&
+            plug->ports[index].flow == PORT_FLOW_OUTPUT)
+            plug->latency_port = (int)index;
+    }
     // find the controling port index
     const LilvPort *control_input = lilv_plugin_get_port_by_designation(
         plug->plug, plug_data->nodes.lv2_InputPort,
@@ -2168,6 +2194,15 @@ static const LV2_Atom *plug_position_forge_rt(PLUG_PLUG *plug,
         return NULL;
     lv2_atom_forge_pop(forge, &frame);
     return (const LV2_Atom *)buf;
+}
+
+// a latency port's value in whole frames, NaN and below 1 as 0
+static uint32_t plug_latency_frames(float value) {
+    if (!(value >= 1.0f))
+        return 0;
+    if (value >= (float)UINT32_MAX)
+        return UINT32_MAX;
+    return (uint32_t)value;
 }
 
 bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
@@ -2330,6 +2365,10 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     //----------------------------------------------------------------------------------------------------
     // now run the plugin for nframes
     plug_run_rt(plug, nframes);
+    if (plug->latency_port >= 0)
+        atomic_store(&plug->latency_rt,
+                     plug_latency_frames(
+                         plug->ports[plug->latency_port].control));
 
     //----------------------------------------------------------------------------------------------------
     // now update the output ports and any output controls (ui)
