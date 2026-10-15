@@ -132,7 +132,8 @@ MIDI_CLOCK *midi_clock_init(GRAPH *graph, TRANSPORT *transport,
     atomic_init(&clock->halt, false);
     atomic_init(&clock->halted, false);
     GRAPH_NODE *node = graph_node_add(graph, owner_tag, owner_uid,
-                                      midi_clock_process_rt, clock);
+                                      GRAPH_NODE_PLAIN, midi_clock_process_rt,
+                                      clock);
     if (node)
         clock->port = graph_port_create(graph, node, PORT_TYPE_MIDI,
                                         PORT_FLOW_OUTPUT, MIDI_CLOCK_PORT_NAME);

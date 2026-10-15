@@ -2565,8 +2565,9 @@ uint32_t clap_plug_load_and_activate(void *plugin_item) {
     // from as early as init - so it has to exist before anything else runs.
     // A slot keeps its last uid until this reassigns it
     plug->uid = ++plug_data->next_plug_uid;
-    plug->node = graph_node_add(plug_data->graph, plug_data->owner_tag,
-                                plug->uid, clap_plug_plugin_process_rt, plug);
+    plug->node =
+        graph_node_add(plug_data->graph, plug_data->owner_tag, plug->uid,
+                       GRAPH_NODE_PLAIN, clap_plug_plugin_process_rt, plug);
     if (!plug->node)
         return 0;
 

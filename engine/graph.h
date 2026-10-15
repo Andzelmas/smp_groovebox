@@ -16,6 +16,22 @@ typedef struct _graph_port GRAPH_PORT;
 // true = wrote its outputs this cycle, false = the plan zeroes / empties them
 typedef bool (*GRAPH_PROCESS_FN)(void *user_data, NFRAMES_T nframes);
 
+// what a node is to the graph. CAPTURE and PLAYBACK are the backend's
+// endpoints: a capture node's outputs bring audio / MIDI in from outside the
+// graph, a playback node's inputs take it out. A capture node has no inputs,
+// a playback node no outputs
+typedef enum {
+    GRAPH_NODE_PLAIN = 0,
+    GRAPH_NODE_CAPTURE,
+    GRAPH_NODE_PLAYBACK,
+} GraphNodeKind;
+
+// frames, the shortest and the longest of the paths it covers
+typedef struct {
+    uint32_t min;
+    uint32_t max;
+} GraphLatencyRange;
+
 // which list to read. ALL is every port; the others are the ports a source of
 // the opposite flow and the same type can be connected to
 typedef enum {
@@ -57,8 +73,8 @@ int graph_max_buffer_size_set(GRAPH *graph, uint32_t max_buffer_size);
 // neither, it hands them back on its ports' GraphPortInfo. Both must be final,
 // owner_tag non-zero. Nodes may share an owner. process may be NULL
 GRAPH_NODE *graph_node_add(GRAPH *graph, uint64_t owner_tag,
-                           uint64_t owner_uid, GRAPH_PROCESS_FN process,
-                           void *user_data);
+                           uint64_t owner_uid, GraphNodeKind kind,
+                           GRAPH_PROCESS_FN process, void *user_data);
 // its ports and their edges go with it. The plan running may call process
 // until a newer one is acked - stop the owner first, keep user_data valid
 void graph_node_remove(GRAPH *graph, GRAPH_NODE *node);
@@ -68,7 +84,7 @@ void graph_node_latency_set(GRAPH *graph, GRAPH_NODE *node, uint32_t frames);
 
 // type PORT_TYPE_AUDIO or PORT_TYPE_MIDI, flow PORT_FLOW_INPUT or
 // PORT_FLOW_OUTPUT. name is copied, unique among the ports of the node's
-// owner. NULL on failure or a taken name
+// owner. NULL on failure, a taken name or a flow the node's kind has not
 GRAPH_PORT *graph_port_create(GRAPH *graph, GRAPH_NODE *node,
                               unsigned int type, unsigned int flow,
                               const char *name);
@@ -113,6 +129,16 @@ int graph_disconnect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b);
 // them. Call regularly. -1 when the build failed - the old plan stays, the
 // next call retries
 int graph_plan_update(GRAPH *graph);
+
+// as of the newest plan: the node latencies summed along each path from
+// `from`, a capture node's output, to `to`, a playback node's input - the
+// nodes between them. from NULL: the paths starting at a node without
+// connected inputs that is no capture node, that node counted; to NULL: the
+// paths ending at one without connected outputs that is no playback node,
+// counted too. Unconnected ports join no path. false when there is none
+bool graph_latency_path(const GRAPH *graph, const GRAPH_PORT *from,
+                        const GRAPH_PORT *to, GraphLatencyRange *out);
+
 // [audio-thread] one cycle of the newest plan: the nodes in edge order, each
 // once its inputs are ready. Runs nothing for nframes > the max_buffer_size
 // the plan was built with

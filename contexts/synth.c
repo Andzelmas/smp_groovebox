@@ -649,7 +649,8 @@ SYNTH_DATA *synth_init(SAMPLE_T sample_rate, unsigned int with_metronome,
 
 static int synth_osc_ports_create(SYNTH_DATA *synth_data, SYNTH_OSC *osc) {
     osc->node = graph_node_add(synth_data->graph, synth_data->owner_tag,
-                               synth_osc_uid(osc), synth_osc_process_rt, osc);
+                               synth_osc_uid(osc), GRAPH_NODE_PLAIN,
+                               synth_osc_process_rt, osc);
     if (!osc->node)
         return -1;
     for (unsigned int i = 0; i < osc->num_ports; i++) {

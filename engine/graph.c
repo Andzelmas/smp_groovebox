@@ -30,11 +30,15 @@ struct _graph_port {
     // removed: freed once the ack reaches free_at
     GRAPH_PORT *retired_next;
     unsigned int free_at;
+    // latency_walk scratch: the range of the paths it counts that reach here
+    GraphLatencyRange walk;
+    bool walk_reached;
 };
 
 struct _graph_node {
     uint64_t owner_tag;
     uint64_t owner_uid;
+    GraphNodeKind kind;
     GRAPH_PROCESS_FN process;
     void *user_data;
     uint32_t latency; // frames
@@ -65,6 +69,18 @@ typedef struct {
     size_t out_count;
 } PLAN_NODE;
 
+// a plan port's latency over every path through it: capture since the paths
+// started, playback until they end
+typedef struct {
+    GraphLatencyRange capture;
+    GraphLatencyRange playback;
+} PLAN_LATENCY;
+
+typedef struct {
+    GraphLatencyRange range; // 0 when not reached
+    bool reached;            // any path
+} LATENCY_PATH;
+
 // what graph_process_rt runs, never changed once published. Buffers are
 // copied in, [audio-thread] touches no GRAPH_PORT field but the rt slot
 typedef struct _graph_plan GRAPH_PLAN;
@@ -79,6 +95,17 @@ struct _graph_plan {
     // what an input without sources reads
     SAMPLE_T *silence;
     MIDI_BUF *midi_empty;
+    // [main-thread] only, by ports index
+    PLAN_LATENCY *latency;
+    // [main-thread] only: the capture nodes' outputs, the playback nodes'
+    // inputs and the paths between them - ep_from_count + 1 rows of
+    // ep_to_count + 1, the last row from no capture port, the last column to
+    // no playback port
+    GRAPH_PORT **ep_from;
+    size_t ep_from_count;
+    GRAPH_PORT **ep_to;
+    size_t ep_to_count;
+    LATENCY_PATH *ep_paths;
     // [main-thread], once replaced: freed when the ack reaches free_at
     GRAPH_PLAN *retired_next;
     unsigned int free_at;
@@ -258,6 +285,10 @@ static void plan_free(GRAPH_PLAN *plan) {
     free(plan->ports);
     free(plan->audio_srcs);
     free(plan->midi_srcs);
+    free(plan->latency);
+    free(plan->ep_from);
+    free(plan->ep_to);
+    free(plan->ep_paths);
     free(plan);
 }
 
@@ -410,9 +441,9 @@ int graph_max_buffer_size_set(GRAPH *graph, uint32_t max_buffer_size) {
 }
 
 GRAPH_NODE *graph_node_add(GRAPH *graph, uint64_t owner_tag,
-                           uint64_t owner_uid, GRAPH_PROCESS_FN process,
-                           void *user_data) {
-    if (!graph || owner_tag == 0)
+                           uint64_t owner_uid, GraphNodeKind kind,
+                           GRAPH_PROCESS_FN process, void *user_data) {
+    if (!graph || owner_tag == 0 || kind > GRAPH_NODE_PLAYBACK)
         return NULL;
     if (graph->node_count == graph->node_max) {
         size_t new_max = graph->node_max ? graph->node_max * 2 : 8;
@@ -428,6 +459,7 @@ GRAPH_NODE *graph_node_add(GRAPH *graph, uint64_t owner_tag,
         return NULL;
     node->owner_tag = owner_tag;
     node->owner_uid = owner_uid;
+    node->kind = kind;
     node->process = process;
     node->user_data = user_data;
     graph->nodes[graph->node_count++] = node;
@@ -471,6 +503,9 @@ GRAPH_PORT *graph_port_create(GRAPH *graph, GRAPH_NODE *node,
     if (type != PORT_TYPE_AUDIO && type != PORT_TYPE_MIDI)
         return NULL;
     if (flow != PORT_FLOW_INPUT && flow != PORT_FLOW_OUTPUT)
+        return NULL;
+    if ((node->kind == GRAPH_NODE_CAPTURE && flow == PORT_FLOW_INPUT) ||
+        (node->kind == GRAPH_NODE_PLAYBACK && flow == PORT_FLOW_OUTPUT))
         return NULL;
     char *ident = port_ident(node->owner_tag, node->owner_uid, name);
     if (!ident)
@@ -827,6 +862,109 @@ static PLAN_PORT *plan_port_fill(PLAN_PORT *plan_port, GRAPH_PORT *port) {
     return plan_port;
 }
 
+static uint32_t latency_add(uint32_t a, uint32_t b) {
+    return a > UINT32_MAX - b ? UINT32_MAX : a + b;
+}
+
+// widen *range to cover add, or start it with add
+static void latency_join(GraphLatencyRange *range, bool *reached,
+                         GraphLatencyRange add) {
+    if (!*reached) {
+        *range = add;
+        *reached = true;
+        return;
+    }
+    if (add.min < range->min)
+        range->min = add.min;
+    if (add.max > range->max)
+        range->max = add.max;
+}
+
+// which paths a latency walk counts: all, the ones from (to) its origin port,
+// or the ones that start (end) at no endpoint
+typedef enum { WALK_ALL, WALK_ORIGIN, WALK_NO_ENDPOINT } LatencyWalk;
+
+// sets every port's walk: capture (order) the latency since its paths
+// started, playback (reversed, flows swapped) until they end. A node's inputs
+// join their sources' ranges, its outputs get the joined inputs + its latency.
+// A node without connected inputs starts paths at 0, if `paths` counts them.
+// The origin port starts its own at 0
+static void latency_walk(GRAPH_NODE **order, size_t n, bool playback,
+                         LatencyWalk paths, const GRAPH_PORT *origin) {
+    unsigned int near = playback ? PORT_FLOW_OUTPUT : PORT_FLOW_INPUT;
+    GraphNodeKind endpoint =
+        playback ? GRAPH_NODE_PLAYBACK : GRAPH_NODE_CAPTURE;
+    for (size_t i = 0; i < n; i++) {
+        GRAPH_NODE *node = order[playback ? n - 1 - i : i];
+        GraphLatencyRange in = {0, 0};
+        bool reached = false;
+        bool connected = false;
+        for (size_t p = 0; p < node->port_count; p++) {
+            GRAPH_PORT *port = node->ports[p];
+            if (port->flow != near)
+                continue;
+            port->walk_reached = false;
+            // the peers' nodes came earlier in the walk
+            for (size_t e = 0; e < port->peer_count; e++) {
+                const GRAPH_PORT *peer = port->peers[e];
+                connected = true;
+                if (peer->walk_reached)
+                    latency_join(&port->walk, &port->walk_reached, peer->walk);
+            }
+            if (port->walk_reached)
+                latency_join(&in, &reached, port->walk);
+        }
+        if (!connected)
+            reached = paths == WALK_ALL ||
+                      (paths == WALK_NO_ENDPOINT && node->kind != endpoint);
+        GraphLatencyRange far = {latency_add(in.min, node->latency),
+                                 latency_add(in.max, node->latency)};
+        for (size_t p = 0; p < node->port_count; p++) {
+            GRAPH_PORT *port = node->ports[p];
+            if (port->flow == near)
+                continue;
+            port->walk_reached = reached || port == origin;
+            port->walk = port == origin ? (GraphLatencyRange){0, 0} : far;
+        }
+    }
+}
+
+static LATENCY_PATH latency_walked(const GRAPH_PORT *port) {
+    LATENCY_PATH path = {.reached = port->walk_reached};
+    if (port->walk_reached)
+        path.range = port->walk;
+    return path;
+}
+
+// plan->latency and plan->ep_paths, walked in the plan's node order
+static void plan_latency_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n,
+                               size_t port_total) {
+    latency_walk(order, n, false, WALK_ALL, NULL);
+    for (size_t i = 0; i < port_total; i++)
+        plan->latency[i].capture = latency_walked(plan->ports[i].port).range;
+    latency_walk(order, n, true, WALK_ALL, NULL);
+    for (size_t i = 0; i < port_total; i++)
+        plan->latency[i].playback = latency_walked(plan->ports[i].port).range;
+
+    size_t cols = plan->ep_to_count + 1;
+    for (size_t r = 0; r <= plan->ep_from_count; r++) {
+        if (r < plan->ep_from_count)
+            latency_walk(order, n, false, WALK_ORIGIN, plan->ep_from[r]);
+        else
+            latency_walk(order, n, false, WALK_NO_ENDPOINT, NULL);
+        for (size_t c = 0; c < plan->ep_to_count; c++)
+            plan->ep_paths[r * cols + c] = latency_walked(plan->ep_to[c]);
+    }
+    // the same paths from the other end give the same sums, only the ones
+    // ending at no playback port are left
+    latency_walk(order, n, true, WALK_NO_ENDPOINT, NULL);
+    for (size_t r = 0; r < plan->ep_from_count; r++)
+        plan->ep_paths[r * cols + cols - 1] = latency_walked(plan->ep_from[r]);
+    // from none to none: not asked for
+    plan->ep_paths[plan->ep_from_count * cols + cols - 1] =
+        (LATENCY_PATH){.reached = false};
+}
+
 // nodes in edge order (Kahn, ties in add order), per node its ports, per input
 // its sources. NULL on allocation failure
 static GRAPH_PLAN *plan_build(GRAPH *graph) {
@@ -834,10 +972,17 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
     size_t port_total = 0;
     size_t audio_total = 0;
     size_t midi_total = 0;
+    size_t from_total = 0;
+    size_t to_total = 0;
     for (size_t i = 0; i < n; i++) {
         GRAPH_NODE *node = graph->nodes[i];
         node->pending = 0;
         port_total += node->port_count;
+        // the endpoints' ports have one flow
+        if (node->kind == GRAPH_NODE_CAPTURE)
+            from_total += node->port_count;
+        else if (node->kind == GRAPH_NODE_PLAYBACK)
+            to_total += node->port_count;
         for (size_t p = 0; p < node->port_count; p++) {
             GRAPH_PORT *port = node->ports[p];
             if (port->flow != PORT_FLOW_INPUT)
@@ -858,9 +1003,17 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
             malloc(sizeof(SAMPLE_T *) * (audio_total ? audio_total : 1));
         plan->midi_srcs =
             malloc(sizeof(MIDI_BUF *) * (midi_total ? midi_total : 1));
+        plan->latency =
+            malloc(sizeof(PLAN_LATENCY) * (port_total ? port_total : 1));
+        plan->ep_from =
+            malloc(sizeof(GRAPH_PORT *) * (from_total ? from_total : 1));
+        plan->ep_to = malloc(sizeof(GRAPH_PORT *) * (to_total ? to_total : 1));
+        plan->ep_paths =
+            malloc(sizeof(LATENCY_PATH) * (from_total + 1) * (to_total + 1));
     }
     if (!plan || !order || !plan->nodes || !plan->ports || !plan->audio_srcs ||
-        !plan->midi_srcs)
+        !plan->midi_srcs || !plan->latency || !plan->ep_from || !plan->ep_to ||
+        !plan->ep_paths)
         goto fail;
 
     // the queue doubles as the order
@@ -900,6 +1053,8 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
             if (port->flow != PORT_FLOW_INPUT)
                 continue;
             PLAN_PORT *in = plan_port_fill(&plan->ports[port_i++], port);
+            if (node->kind == GRAPH_NODE_PLAYBACK)
+                plan->ep_to[plan->ep_to_count++] = port;
             bool audio = port->type == PORT_TYPE_AUDIO;
             in->src_first = audio ? audio_i : midi_i;
             in->src_count = port->peer_count;
@@ -912,8 +1067,12 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
         }
         plan_node->in_count = port_i - plan_node->port_first;
         for (size_t p = 0; p < node->port_count; p++) {
-            if (node->ports[p]->flow == PORT_FLOW_OUTPUT)
-                plan_port_fill(&plan->ports[port_i++], node->ports[p]);
+            GRAPH_PORT *port = node->ports[p];
+            if (port->flow != PORT_FLOW_OUTPUT)
+                continue;
+            plan_port_fill(&plan->ports[port_i++], port);
+            if (node->kind == GRAPH_NODE_CAPTURE)
+                plan->ep_from[plan->ep_from_count++] = port;
         }
         plan_node->out_count =
             port_i - plan_node->port_first - plan_node->in_count;
@@ -922,6 +1081,7 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
     plan->max_frames = graph->max_buffer_size;
     plan->silence = graph->silence;
     plan->midi_empty = graph->midi_empty;
+    plan_latency_build(plan, order, n, port_total);
     free(order);
     return plan;
 fail:
@@ -949,6 +1109,38 @@ int graph_plan_update(GRAPH *graph) {
         graph->retired_plans = old;
     }
     return 0;
+}
+
+// an endpoint port's row / column, the last one for NULL. false when it is none
+static bool ep_index(GRAPH_PORT *const *ports, size_t count,
+                     const GRAPH_PORT *port, size_t *out) {
+    *out = count;
+    if (!port)
+        return true;
+    for (size_t i = 0; i < count; i++) {
+        if (ports[i] == port) {
+            *out = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool graph_latency_path(const GRAPH *graph, const GRAPH_PORT *from,
+                        const GRAPH_PORT *to, GraphLatencyRange *out) {
+    if (!graph || !out)
+        return false;
+    // [main-thread] publishes the plans, nothing frees the newest
+    const GRAPH_PLAN *plan = atomic_load(&graph->plan);
+    size_t r, c;
+    if (!plan || !ep_index(plan->ep_from, plan->ep_from_count, from, &r) ||
+        !ep_index(plan->ep_to, plan->ep_to_count, to, &c))
+        return false;
+    const LATENCY_PATH *path = &plan->ep_paths[r * (plan->ep_to_count + 1) + c];
+    if (!path->reached)
+        return false;
+    *out = path->range;
+    return true;
 }
 
 // the input's rt slot: silence / empty, its one source, or the sum of 2+

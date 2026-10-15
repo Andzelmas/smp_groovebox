@@ -1972,8 +1972,9 @@ static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         return -1;
     if (!plug)
         return -1;
-    plug->node = graph_node_add(plug_data->graph, plug_data->owner_tag,
-                                plug->uid, plug_plugin_process_rt, plug);
+    plug->node =
+        graph_node_add(plug_data->graph, plug_data->owner_tag, plug->uid,
+                       GRAPH_NODE_PLAIN, plug_plugin_process_rt, plug);
     if (!plug->node)
         return -1;
     const LV2_URID atom_Chunk = plug->map.map(

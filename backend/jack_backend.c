@@ -875,10 +875,12 @@ int audio_backend_endpoints_add(AUDIO_BACKEND *jack_data, GRAPH *graph,
     if (!jack_data || !graph || jack_data->graph)
         return -1;
     jack_data->graph = graph;
-    jack_data->in_node = graph_node_add(graph, owner_tag, owner_uid,
-                                        endpoint_in_process_rt, jack_data);
-    jack_data->out_node = graph_node_add(graph, owner_tag, owner_uid,
-                                         endpoint_out_process_rt, jack_data);
+    jack_data->in_node =
+        graph_node_add(graph, owner_tag, owner_uid, GRAPH_NODE_CAPTURE,
+                       endpoint_in_process_rt, jack_data);
+    jack_data->out_node =
+        graph_node_add(graph, owner_tag, owner_uid, GRAPH_NODE_PLAYBACK,
+                       endpoint_out_process_rt, jack_data);
     if (!jack_data->in_node || !jack_data->out_node)
         return -1;
     for (size_t i = 0; i < EXPOSED_COUNT; i++) {

@@ -282,7 +282,7 @@ SMP_INFO* smp_init(SAMPLE_T samplerate, smp_status_t *status,
 
 static int smp_ports_create(SMP_INFO* smp_data){
     smp_data->node = graph_node_add(smp_data->graph, smp_data->owner_tag, smp_data->owner_uid,
-				    smp_process_rt, smp_data);
+				    GRAPH_NODE_PLAIN, smp_process_rt, smp_data);
     if(!smp_data->node)return -1;
     for(unsigned int i = 0; i < smp_data->num_ports; i++){
 	SMP_PORT* cur_port = &(smp_data->ports[i]);

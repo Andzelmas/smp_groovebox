@@ -27,8 +27,9 @@ uint32_t audio_backend_buffer_size(AUDIO_BACKEND *backend);
 #define AUDIO_BACKEND_MIDI_CLOCK_OUT "midi_clock_out"
 
 // registers the exposed ports, as two nodes of graph owned by (owner_tag,
-// owner_uid): "in" - outputs the backend fills, "out" - inputs whose sums it
-// takes. Before activate, once. 0 on success
+// owner_uid): "in" (GRAPH_NODE_CAPTURE) - outputs the backend fills, "out"
+// (GRAPH_NODE_PLAYBACK) - inputs whose sums it takes. Before activate, once. 0
+// on success
 int audio_backend_endpoints_add(AUDIO_BACKEND *backend, GRAPH *graph,
                                 uint64_t owner_tag, uint64_t owner_uid);
 
