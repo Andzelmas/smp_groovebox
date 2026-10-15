@@ -464,8 +464,9 @@ static void app_intrf_process_data_events(APP_INTRF *app_intrf) {
             app_intrf_cx_resync(app_intrf, cx);
             break;
         case DATA_EVENT_CHANGED:
-            // presentation-only (name/value); nothing structural. forward it so
-            // ui views can refresh what they draw for this context.
+            // presentation-only (name/value/latency); nothing structural.
+            // forward it so ui views can refresh what they draw for this
+            // context.
             app_intrf_emit(app_intrf, CX_CHANGED, cx->data_id,
                            cx->cx_parent ? cx->cx_parent->data_id
                                          : CONTEXT_ID_NULL,
@@ -657,6 +658,15 @@ uint64_t nav_cx_group_key(APP_INTRF* app_intrf, ContextId context){
     if(!cx)
         return 0;
     return data_group_key(&cx->data);
+}
+
+uint32_t nav_cx_latency(APP_INTRF* app_intrf, ContextId context){
+    if(!app_intrf || context == CONTEXT_ID_NULL)
+        return 0;
+    CX* cx = ht_get(app_intrf->cx_hashtable, context);
+    if(!cx)
+        return 0;
+    return data_latency(&cx->data);
 }
 
 // ACTIONS - pure pass-throughs: resolve context to its CX, call through to

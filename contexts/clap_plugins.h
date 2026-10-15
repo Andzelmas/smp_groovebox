@@ -98,6 +98,11 @@ const char *clap_plug_plugin_name(void *plug);
 // never reused for a different plugin.
 uint32_t clap_plug_plugin_uid(void *plug);
 
+// [main-thread] the plugin's latency in frames, 0 for none or on error
+uint32_t clap_plug_plugin_latency(void *plug);
+// [main-thread] did the latency change since the last call
+bool clap_plug_plugin_latency_changed(void *plug);
+
 // return if the plugins array is dirty - if it changed
 bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data);
 

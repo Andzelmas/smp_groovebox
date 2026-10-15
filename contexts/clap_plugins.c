@@ -181,6 +181,8 @@ typedef struct _clap_plug_plug {
     GRAPH_NODE *node;
     // [main-thread] frames, as the node has it
     uint32_t latency;
+    // [main-thread] latency changed, see clap_plug_plugin_latency_changed
+    bool latency_changed;
     // CLAP_PLUG_PORT holds the graph ports and the clap_audio_buffer_t
     // arrays, to send to plugin process function
     CLAP_PLUG_PORT input_ports;
@@ -1384,6 +1386,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     graph_node_remove(plug_data->graph, plug->node);
     plug->node = NULL;
     plug->latency = 0;
+    plug->latency_changed = false;
     // clean the event structs
     clap_input_events_t *in_events = &(plug->input_events);
     ub_clean((UB_EVENT *)in_events->ctx);
@@ -1513,6 +1516,7 @@ static void clap_plug_latency_update(CLAP_PLUG_PLUG *plug) {
     if (latency == plug->latency)
         return;
     plug->latency = latency;
+    plug->latency_changed = true;
     graph_node_latency_set(plug->plug_data->graph, plug->node, latency);
     log_append_logfile("%s: latency %u frames\n", plug->name, latency);
 }
@@ -2747,6 +2751,22 @@ uint32_t clap_plug_plugin_uid(void *plug) {
     if (!cur_plug)
         return 0;
     return cur_plug->uid;
+}
+
+uint32_t clap_plug_plugin_latency(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return 0;
+    return cur_plug->latency;
+}
+
+bool clap_plug_plugin_latency_changed(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return false;
+    bool changed = cur_plug->latency_changed;
+    cur_plug->latency_changed = false;
+    return changed;
 }
 
 // return this plugin instance's own param container, NULL on error/none yet

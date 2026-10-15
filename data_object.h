@@ -32,6 +32,8 @@ typedef enum {
     DATA_CAP_HIDDEN = 1 << 4,
     // group_key
     DATA_CAP_GROUP = 1 << 5,
+    // latency
+    DATA_CAP_LATENCY = 1 << 6,
 } DataCapabilities;
 
 struct DataOps {
@@ -75,6 +77,10 @@ struct DataOps {
     // the DataChoice.group_key this object stands for. 0 when it stands for
     // none
     uint64_t (*group_key)(void *user_data);
+
+    // DATA_CAP_LATENCY
+    // the processing latency this object adds, in frames. 0 for none
+    uint32_t (*latency)(void *user_data);
 
     // DATA_CAP_ACTIONS - see data_actions.h for the flow and struct docs.
     // fill *out with up to cap available actions for this object.
@@ -169,6 +175,12 @@ static inline uint64_t data_group_key(const DataObject *obj) {
     if (!data_obj_has(obj, DATA_CAP_GROUP) || !obj->ops->group_key)
         return 0;
     return obj->ops->group_key(obj->user_data);
+}
+
+static inline uint32_t data_latency(const DataObject *obj) {
+    if (!data_obj_has(obj, DATA_CAP_LATENCY) || !obj->ops->latency)
+        return 0;
+    return obj->ops->latency(obj->user_data);
 }
 static inline ContextId data_id(const DataObject *obj) {
     if (!data_obj_valid(obj) || !obj->ops->id)

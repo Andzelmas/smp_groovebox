@@ -921,15 +921,16 @@ static DataActionResult lv2_plugin_action_do(void *user_data,
     return plugin_preset_loaded(
         plug_plugin_preset_load(user_data, value & CTXID_LOCAL_MASK));
 }
-// plug_plugin_name already matches DataOps.name (const char *(*)(void *))
+// plug_plugin_name/_latency already match DataOps.name/latency
 static const DataOps lv2_plugin_ops = {
-    .capabilities =
-        DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS | DATA_CAP_GROUP,
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS |
+                    DATA_CAP_GROUP | DATA_CAP_LATENCY,
     .id = lv2_plugin_id,
     .group_key = lv2_plugin_id,
     .child_count = lv2_plugin_child_count,
     .child_at = lv2_plugin_child_at,
     .name = plug_plugin_name,
+    .latency = plug_plugin_latency,
     .action_list = lv2_plugin_action_list,
     .action_args = lv2_plugin_action_args,
     .list_count = lv2_plugin_list_count,
@@ -1137,15 +1138,16 @@ static DataActionResult clap_plugin_action_do(void *user_data,
     return plugin_preset_loaded(
         clap_plug_preset_load(user_data, value & CTXID_LOCAL_MASK));
 }
-// clap_plug_plugin_name already matches DataOps.name (const char *(*)(void *))
+// clap_plug_plugin_name/_latency already match DataOps.name/latency
 static const DataOps clap_plugin_ops = {
-    .capabilities =
-        DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS | DATA_CAP_GROUP,
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS |
+                    DATA_CAP_GROUP | DATA_CAP_LATENCY,
     .id = clap_plugin_id,
     .group_key = clap_plugin_id,
     .child_count = clap_plugin_child_count,
     .child_at = clap_plugin_child_at,
     .name = clap_plug_plugin_name,
+    .latency = clap_plug_plugin_latency,
     .action_list = clap_plugin_action_list,
     .action_args = clap_plugin_action_args,
     .list_count = clap_plugin_list_count,
@@ -2102,8 +2104,8 @@ void app_data_update(void *root_user_data) {
         app_data_push_event(app_data, DATA_EVENT_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_ROOT));
 
-    // param value/name/flag changes, after the structure events above so a
-    // just added param already has its context
+    // param value/name/flag and plugin latency changes, after the structure
+    // events above so a just added param or plugin already has its context
     app_data_push_param_changes(app_data,
                                 transport_param_container(app_data->transport));
     for (unsigned int i = 0;; i++) {
@@ -2118,6 +2120,9 @@ void app_data_update(void *root_user_data) {
             break;
         app_data_push_param_changes(app_data,
                                     plug_plugin_param_container(plug));
+        if (plug_plugin_latency_changed(plug))
+            app_data_push_event(app_data, DATA_EVENT_CHANGED,
+                                lv2_plugin_id(plug));
     }
     for (unsigned int i = 0;; i++) {
         void *plug = clap_plug_plugin_return(app_data->clap_plug_data, i);
@@ -2125,6 +2130,9 @@ void app_data_update(void *root_user_data) {
             break;
         app_data_push_param_changes(app_data,
                                     clap_plug_plugin_param_container(plug));
+        if (clap_plug_plugin_latency_changed(plug))
+            app_data_push_event(app_data, DATA_EVENT_CHANGED,
+                                clap_plugin_id(plug));
     }
     size_t osc_count = synth_return_osc_num(app_data->synth_data);
     for (unsigned int i = 0; i < osc_count; i++)

@@ -32,6 +32,7 @@ typedef struct _context_intrf_info{
     size_t child_count;
     bool is_hidden; //is this context hidden (as informed by the data layer)
     const char* value; //value of a context with a value, BORROWED
+    uint32_t latency; // frames the context adds, 0 for none
 } CONTEXT_INTRF_INFO;
 
 // what a window is built over: count raw items, of which shown() says which
@@ -214,6 +215,7 @@ static bool helper_context_info_get( UI_LAYER *ui_layer, ContextId context, CONT
     info->child_count = ui_layer_context_children_count(ui_layer, context);
     info->value = ui_layer_context_value_as_string(ui_layer, context);
     info->is_hidden = ui_layer_context_is_hidden(ui_layer, context);
+    info->latency = ui_layer_context_latency(ui_layer, context);
 
     return true;
 }
@@ -1509,6 +1511,8 @@ int main() {
                     printf(">%s", child_info.name);
                 else
                     printf("%s", child_info.name);
+                if (child_info.latency > 0)
+                    printf(" (latency %u)", child_info.latency);
                 child_info.value ? printf(" --- %s\n", child_info.value)
                                  : printf("\n");
             }

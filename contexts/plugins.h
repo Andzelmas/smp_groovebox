@@ -87,6 +87,11 @@ const char *plug_plugin_name(void *plug);
 // never reused for a different plugin.
 uint32_t plug_plugin_uid(void *plug);
 
+// [main-thread] the plugin's latency in frames, 0 for none or on error
+uint32_t plug_plugin_latency(void *plug);
+// [main-thread] did the latency change since the last call
+bool plug_plugin_latency_changed(void *plug);
+
 // return this plugin instance's own param container, NULL on error/none yet
 PRM_CONTAIN *plug_plugin_param_container(void *plug);
 

@@ -277,6 +277,8 @@ typedef struct _plug_plug {
     atomic_uint latency_rt;
     // [main-thread] frames, as the node has it
     uint32_t latency;
+    // [main-thread] latency changed, see plug_plugin_latency_changed
+    bool latency_changed;
     // array of available ports for the plugin
     PLUG_PORT *ports;
     // how many ports do we have on plugin
@@ -516,6 +518,7 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     cur_plug->latency_port = -1;
     atomic_store(&cur_plug->latency_rt, 0U);
     cur_plug->latency = 0;
+    cur_plug->latency_changed = false;
     cur_plug->request_update = false;
     cur_plug->safe_restore = false;
     cur_plug->plug = NULL;
@@ -839,6 +842,7 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
         plug->latency_port = -1;
         atomic_init(&plug->latency_rt, 0U);
         plug->latency = 0;
+        plug->latency_changed = false;
         plug->plug_params = NULL;
         plug->safe_restore = false;
         plug->id = i;
@@ -1218,6 +1222,7 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
         uint32_t latency = atomic_load(&cur_plug->latency_rt);
         if (latency != cur_plug->latency) {
             cur_plug->latency = latency;
+            cur_plug->latency_changed = true;
             graph_node_latency_set(plug_data->graph, cur_plug->node, latency);
             log_append_logfile("%s: latency %u frames\n", cur_plug->name,
                                latency);
@@ -1713,6 +1718,22 @@ uint32_t plug_plugin_uid(void *plug) {
     if (!cur_plug)
         return 0;
     return cur_plug->uid;
+}
+
+uint32_t plug_plugin_latency(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return 0;
+    return cur_plug->latency;
+}
+
+bool plug_plugin_latency_changed(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return false;
+    bool changed = cur_plug->latency_changed;
+    cur_plug->latency_changed = false;
+    return changed;
 }
 
 PRM_CONTAIN *plug_plugin_param_container(void *plug) {

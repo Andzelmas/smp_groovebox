@@ -66,6 +66,8 @@ const char* nav_cx_value_as_string(APP_INTRF* app_intrf, ContextId context);
 bool nav_cx_is_hidden(APP_INTRF* app_intrf, ContextId context);
 // the list group this context stands for, 0 for none
 uint64_t nav_cx_group_key(APP_INTRF* app_intrf, ContextId context);
+// the latency the context adds in frames, 0 for none
+uint32_t nav_cx_latency(APP_INTRF* app_intrf, ContextId context);
 
 // ACTIONS - see data_actions.h for the full contract and struct docs. Three
 // step flow, every buffer caller-owned (stack array or a single struct),
