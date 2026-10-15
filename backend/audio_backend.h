@@ -32,6 +32,11 @@ uint32_t audio_backend_buffer_size(AUDIO_BACKEND *backend);
 // on success
 int audio_backend_endpoints_add(AUDIO_BACKEND *backend, GRAPH *graph,
                                 uint64_t owner_tag, uint64_t owner_uid);
+// reports the latency on the exposed ports: the graph's newest plan
+// (graph_latency_path) plus what the other programs' ports linked to them
+// report. Call after graph_plan_update. true when a report was capped since
+// the last call - a loop through another program
+bool audio_backend_latency_update(AUDIO_BACKEND *backend);
 
 // The exposed ports and the ports outside the app they can link to. A backend
 // without other programs lists only its own.

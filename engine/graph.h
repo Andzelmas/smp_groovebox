@@ -32,6 +32,12 @@ typedef struct {
     uint32_t max;
 } GraphLatencyRange;
 
+// frames, over the paths it covers. Not reached: no path
+typedef struct {
+    GraphLatencyRange range;
+    bool reached;
+} GraphLatencyPath;
+
 // which list to read. ALL is every port; the others are the ports a source of
 // the opposite flow and the same type can be connected to
 typedef enum {
@@ -138,6 +144,9 @@ int graph_plan_update(GRAPH *graph);
 // counted too. Unconnected ports join no path. false when there is none
 bool graph_latency_path(const GRAPH *graph, const GRAPH_PORT *from,
                         const GRAPH_PORT *to, GraphLatencyRange *out);
+
+// widen path to cover range, or start it with range
+void graph_latency_join(GraphLatencyPath *path, GraphLatencyRange range);
 
 // [audio-thread] one cycle of the newest plan: the nodes in edge order, each
 // once its inputs are ready. Runs nothing for nframes > the max_buffer_size

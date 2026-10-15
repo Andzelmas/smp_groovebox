@@ -2,12 +2,12 @@
 #include <jack/midiport.h>
 #include <jack/types.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <threads.h>
 // my libraries
 #include "audio_backend.h"
 #include "../types.h"
@@ -36,6 +36,16 @@ static const struct {
 // rolling reads in a row, and at least a tenth of a second, a BBT may stay
 // the same while the frame moves before it counts as frozen
 #define MUSIC_FROZEN_READS 3
+// frames a reported latency is capped at. A loop through another program
+// (master_out -> it -> master_in) grows it on every recompute
+#define LATENCY_MAX (1U << 18)
+
+// the graph's paths between the exposed ports, [from][to] by exposed_defs
+// index - an input to an output. EXPOSED_COUNT: none, a path that starts /
+// ends inside the graph
+typedef struct {
+    GraphLatencyPath path[EXPOSED_COUNT + 1][EXPOSED_COUNT + 1];
+} LATENCY_TABLE;
 
 // one cached port. conn_first/conn_count index the flat adjacency array
 typedef struct _jack_port_rec {
@@ -149,6 +159,13 @@ typedef struct _audio_backend {
     unsigned int lead_calls_seen;
     bool lead_call_due;
     bool lead_lost;
+    // [main-thread] writes it, latency_report copies it, both under
+    // latency_lock - never held across a JACK call. A pthread mutex
+    LATENCY_TABLE latency_table;
+    pthread_mutex_t latency_lock;
+    bool latency_lock_made;
+    // latency_report capped a range since audio_backend_latency_update looked
+    atomic_bool latency_capped;
 } JACK_INFO;
 
 static void port_owner_add(JACK_INFO *jack_data, const char *port_name,
@@ -344,7 +361,7 @@ static void ports_rebuild(JACK_INFO *jack_data) {
             jack_data->port_count - jack_data->list_first[l];
     }
     for (size_t q = 0; q < BACKEND_PORT_LIST_COUNT - 1; q++)
-        free(queried[q]);
+        jack_free(queried[q]);
 }
 
 // index of the cached port with this key, port_count when there is none
@@ -416,7 +433,7 @@ static void connections_rebuild(JACK_INFO *jack_data) {
                 size_t new_max = edge_max ? edge_max * 2 : 32;
                 size_t *grown = realloc(edges, sizeof(size_t) * 2 * new_max);
                 if (!grown) {
-                    free(peers);
+                    jack_free(peers);
                     goto done;
                 }
                 edges = grown;
@@ -426,7 +443,7 @@ static void connections_rebuild(JACK_INFO *jack_data) {
             edges[edge_count * 2 + 1] = j;
             edge_count++;
         }
-        free(peers);
+        jack_free(peers);
     }
     conns_pack(jack_data, edges, edge_count);
 done:
@@ -561,6 +578,7 @@ bool audio_backend_port_keys_connected(JACK_INFO *jack_data, uint64_t key_a,
 
 static int sample_rate_change(jack_nframes_t new_sample_rate, void *arg);
 static int buffer_size_change(jack_nframes_t new_buffer_size, void *arg);
+static void latency_report(jack_latency_callback_mode_t mode, void *arg);
 static int jack_process_rt(jack_nframes_t nframes, void *arg);
 
 // Starting does not move the frame yet
@@ -682,8 +700,14 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
     atomic_init(&jack_data->lead_state, 0);
     atomic_init(&jack_data->lead_calls, 0);
     atomic_init(&jack_data->lead_lost_state, 0);
+    atomic_init(&jack_data->latency_capped, false);
     // a program that exits takes its record with it
     jack_data->music_live = true;
+    if (pthread_mutex_init(&jack_data->latency_lock, NULL) != 0) {
+        audio_backend_clean(jack_data);
+        return NULL;
+    }
+    jack_data->latency_lock_made = true;
 
     jack_status_t *server_name = NULL;
     jack_options_t options = JackNullOption;
@@ -720,6 +744,10 @@ AUDIO_BACKEND *audio_backend_init(void *arg, const char *client_name,
     // a rename is its own notification, not a register/unregister pair
     jack_set_port_rename_callback(jack_data->client, app_jack_port_rename_cb,
                                   jack_data);
+    // the graph's latency on the exposed ports. pipewire-jack also calls it on
+    // every link change, while a connect callback is set - a peer at 0 joins
+    // or leaves a range without changing a latency
+    jack_set_latency_callback(jack_data->client, latency_report, jack_data);
 
     // the callbacks keep them current from activate on
     atomic_store(&jack_data->sample_rate,
@@ -1132,6 +1160,130 @@ bool audio_backend_transport_lead_lost(JACK_INFO *jack_data) {
            atomic_load(&jack_data->lead_lost_state) == lead_state;
 }
 
+// a + b, at most LATENCY_MAX
+static uint32_t latency_add_capped(JACK_INFO *jack_data, uint32_t a,
+                                   uint32_t b) {
+    if (a <= LATENCY_MAX && b <= LATENCY_MAX - a)
+        return a + b;
+    atomic_store(&jack_data->latency_capped, true);
+    return LATENCY_MAX;
+}
+
+// [latency_report] the ranges the other programs' ports linked to the exposed
+// port at idx give in mode. Each peer's own: pipewire-jack merges the exposed
+// port's links field by field, quanta apart from frames, too wide
+static GraphLatencyPath latency_foreign(JACK_INFO *jack_data, size_t idx,
+                                        jack_latency_callback_mode_t mode) {
+    GraphLatencyPath foreign = {.reached = false};
+    if (!jack_data->exposed_ports[idx])
+        return foreign;
+    // jack_port_get_all_connections is not allowed in callbacks
+    const char **peers =
+        jack_port_get_connections(jack_data->exposed_ports[idx]);
+    if (!peers)
+        return foreign;
+    for (size_t i = 0; peers[i]; i++) {
+        jack_port_t *peer = jack_port_by_name(jack_data->client, peers[i]);
+        if (!peer)
+            continue;
+        jack_latency_range_t range;
+        jack_port_get_latency_range(peer, mode, &range);
+        graph_latency_join(&foreign, (GraphLatencyRange){range.min, range.max});
+    }
+    jack_free(peers);
+    return foreign;
+}
+
+// JACK's latency callback, on its notification thread (pipewire-jack's holds
+// the lock its process trylocks - process skips the cycles this takes).
+// Capture sets the exposed outputs, playback the exposed inputs: each path
+// from / to the other side plus the range linked there, and the paths
+// starting / ending inside the graph. An exposed port linked to nothing joins
+// no range
+static void latency_report(jack_latency_callback_mode_t mode, void *arg) {
+    JACK_INFO *jack_data = (JACK_INFO *)arg;
+    LATENCY_TABLE table;
+    pthread_mutex_lock(&jack_data->latency_lock);
+    table = jack_data->latency_table;
+    pthread_mutex_unlock(&jack_data->latency_lock);
+    bool capture = mode == JackCaptureLatency;
+    unsigned int set_flow = capture ? PORT_FLOW_OUTPUT : PORT_FLOW_INPUT;
+    GraphLatencyPath foreign[EXPOSED_COUNT];
+    for (size_t i = 0; i < EXPOSED_COUNT; i++) {
+        foreign[i] = (GraphLatencyPath){.reached = false};
+        if (exposed_defs[i].flow != set_flow)
+            foreign[i] = latency_foreign(jack_data, i, mode);
+    }
+    for (size_t s = 0; s < EXPOSED_COUNT; s++) {
+        if (exposed_defs[s].flow != set_flow || !jack_data->exposed_ports[s])
+            continue;
+        GraphLatencyPath sum = {.reached = false};
+        // o: the path's other end, EXPOSED_COUNT = inside the graph
+        for (size_t o = 0; o <= EXPOSED_COUNT; o++) {
+            const GraphLatencyPath *path =
+                capture ? &table.path[o][s] : &table.path[s][o];
+            if (!path->reached)
+                continue;
+            GraphLatencyRange outside = {0, 0};
+            if (o < EXPOSED_COUNT) {
+                if (!foreign[o].reached)
+                    continue;
+                outside = foreign[o].range;
+            }
+            GraphLatencyRange total = {
+                latency_add_capped(jack_data, outside.min, path->range.min),
+                latency_add_capped(jack_data, outside.max, path->range.max)};
+            graph_latency_join(&sum, total);
+        }
+        jack_latency_range_t range = {0, 0};
+        if (sum.reached)
+            range = (jack_latency_range_t){sum.range.min, sum.range.max};
+        jack_port_set_latency_range(jack_data->exposed_ports[s], mode, &range);
+    }
+}
+
+static bool latency_paths_equal(const GraphLatencyPath *a,
+                                const GraphLatencyPath *b) {
+    if (a->reached != b->reached)
+        return false;
+    return !a->reached ||
+           (a->range.min == b->range.min && a->range.max == b->range.max);
+}
+
+bool audio_backend_latency_update(JACK_INFO *jack_data) {
+    if (!jack_data || !jack_data->client || !jack_data->graph)
+        return false;
+    LATENCY_TABLE table;
+    bool changed = false;
+    for (size_t f = 0; f <= EXPOSED_COUNT; f++) {
+        for (size_t t = 0; t <= EXPOSED_COUNT; t++) {
+            GraphLatencyPath *path = &table.path[f][t];
+            *path = (GraphLatencyPath){.reached = false};
+            if ((f < EXPOSED_COUNT &&
+                 exposed_defs[f].flow != PORT_FLOW_INPUT) ||
+                (t < EXPOSED_COUNT && exposed_defs[t].flow != PORT_FLOW_OUTPUT))
+                continue;
+            path->reached = graph_latency_path(
+                jack_data->graph,
+                f < EXPOSED_COUNT ? jack_data->exposed_graph_ports[f] : NULL,
+                t < EXPOSED_COUNT ? jack_data->exposed_graph_ports[t] : NULL,
+                &path->range);
+            // the only writer, no lock to read
+            if (!latency_paths_equal(path,
+                                     &jack_data->latency_table.path[f][t]))
+                changed = true;
+        }
+    }
+    if (changed) {
+        pthread_mutex_lock(&jack_data->latency_lock);
+        jack_data->latency_table = table;
+        pthread_mutex_unlock(&jack_data->latency_lock);
+        // never from a callback
+        jack_recompute_total_latencies(jack_data->client);
+    }
+    return atomic_exchange(&jack_data->latency_capped, false);
+}
+
 // JACK's notification thread. [main-thread] follows the value in app_data
 static int sample_rate_change(jack_nframes_t new_sample_rate, void *arg) {
     JACK_INFO *jack_data = (JACK_INFO *)arg;
@@ -1161,5 +1313,7 @@ void audio_backend_clean(AUDIO_BACKEND *jack_data) {
     ports_cache_clear(jack_data);
     intern_clean(&jack_data->idents);
     port_owners_clean(jack_data);
+    if (jack_data->latency_lock_made)
+        pthread_mutex_destroy(&jack_data->latency_lock);
     free(jack_data);
 }

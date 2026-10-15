@@ -30,9 +30,8 @@ struct _graph_port {
     // removed: freed once the ack reaches free_at
     GRAPH_PORT *retired_next;
     unsigned int free_at;
-    // latency_walk scratch: the range of the paths it counts that reach here
-    GraphLatencyRange walk;
-    bool walk_reached;
+    // latency_walk scratch: the paths it counts that reach here
+    GraphLatencyPath walk;
 };
 
 struct _graph_node {
@@ -76,11 +75,6 @@ typedef struct {
     GraphLatencyRange playback;
 } PLAN_LATENCY;
 
-typedef struct {
-    GraphLatencyRange range; // 0 when not reached
-    bool reached;            // any path
-} LATENCY_PATH;
-
 // what graph_process_rt runs, never changed once published. Buffers are
 // copied in, [audio-thread] touches no GRAPH_PORT field but the rt slot
 typedef struct _graph_plan GRAPH_PLAN;
@@ -105,7 +99,7 @@ struct _graph_plan {
     size_t ep_from_count;
     GRAPH_PORT **ep_to;
     size_t ep_to_count;
-    LATENCY_PATH *ep_paths;
+    GraphLatencyPath *ep_paths;
     // [main-thread], once replaced: freed when the ack reaches free_at
     GRAPH_PLAN *retired_next;
     unsigned int free_at;
@@ -866,18 +860,16 @@ static uint32_t latency_add(uint32_t a, uint32_t b) {
     return a > UINT32_MAX - b ? UINT32_MAX : a + b;
 }
 
-// widen *range to cover add, or start it with add
-static void latency_join(GraphLatencyRange *range, bool *reached,
-                         GraphLatencyRange add) {
-    if (!*reached) {
-        *range = add;
-        *reached = true;
+void graph_latency_join(GraphLatencyPath *path, GraphLatencyRange range) {
+    if (!path->reached) {
+        path->range = range;
+        path->reached = true;
         return;
     }
-    if (add.min < range->min)
-        range->min = add.min;
-    if (add.max > range->max)
-        range->max = add.max;
+    if (range.min < path->range.min)
+        path->range.min = range.min;
+    if (range.max > path->range.max)
+        path->range.max = range.max;
 }
 
 // which paths a latency walk counts: all, the ones from (to) its origin port,
@@ -896,43 +888,44 @@ static void latency_walk(GRAPH_NODE **order, size_t n, bool playback,
         playback ? GRAPH_NODE_PLAYBACK : GRAPH_NODE_CAPTURE;
     for (size_t i = 0; i < n; i++) {
         GRAPH_NODE *node = order[playback ? n - 1 - i : i];
-        GraphLatencyRange in = {0, 0};
-        bool reached = false;
+        GraphLatencyPath in = {.reached = false};
         bool connected = false;
         for (size_t p = 0; p < node->port_count; p++) {
             GRAPH_PORT *port = node->ports[p];
             if (port->flow != near)
                 continue;
-            port->walk_reached = false;
+            port->walk.reached = false;
             // the peers' nodes came earlier in the walk
             for (size_t e = 0; e < port->peer_count; e++) {
                 const GRAPH_PORT *peer = port->peers[e];
                 connected = true;
-                if (peer->walk_reached)
-                    latency_join(&port->walk, &port->walk_reached, peer->walk);
+                if (peer->walk.reached)
+                    graph_latency_join(&port->walk, peer->walk.range);
             }
-            if (port->walk_reached)
-                latency_join(&in, &reached, port->walk);
+            if (port->walk.reached)
+                graph_latency_join(&in, port->walk.range);
         }
         if (!connected)
-            reached = paths == WALK_ALL ||
-                      (paths == WALK_NO_ENDPOINT && node->kind != endpoint);
-        GraphLatencyRange far = {latency_add(in.min, node->latency),
-                                 latency_add(in.max, node->latency)};
+            in.reached = paths == WALK_ALL ||
+                         (paths == WALK_NO_ENDPOINT && node->kind != endpoint);
+        GraphLatencyRange far = {latency_add(in.range.min, node->latency),
+                                 latency_add(in.range.max, node->latency)};
         for (size_t p = 0; p < node->port_count; p++) {
             GRAPH_PORT *port = node->ports[p];
             if (port->flow == near)
                 continue;
-            port->walk_reached = reached || port == origin;
-            port->walk = port == origin ? (GraphLatencyRange){0, 0} : far;
+            port->walk.reached = in.reached || port == origin;
+            port->walk.range = port == origin ? (GraphLatencyRange){0, 0} : far;
         }
     }
 }
 
-static LATENCY_PATH latency_walked(const GRAPH_PORT *port) {
-    LATENCY_PATH path = {.reached = port->walk_reached};
-    if (port->walk_reached)
-        path.range = port->walk;
+// range 0 when not reached: latency_walk resets only reached, an unreached
+// port keeps an earlier walk's range
+static GraphLatencyPath latency_walked(const GRAPH_PORT *port) {
+    GraphLatencyPath path = {.reached = port->walk.reached};
+    if (port->walk.reached)
+        path.range = port->walk.range;
     return path;
 }
 
@@ -962,7 +955,7 @@ static void plan_latency_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n,
         plan->ep_paths[r * cols + cols - 1] = latency_walked(plan->ep_from[r]);
     // from none to none: not asked for
     plan->ep_paths[plan->ep_from_count * cols + cols - 1] =
-        (LATENCY_PATH){.reached = false};
+        (GraphLatencyPath){.reached = false};
 }
 
 // nodes in edge order (Kahn, ties in add order), per node its ports, per input
@@ -1008,8 +1001,8 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
         plan->ep_from =
             malloc(sizeof(GRAPH_PORT *) * (from_total ? from_total : 1));
         plan->ep_to = malloc(sizeof(GRAPH_PORT *) * (to_total ? to_total : 1));
-        plan->ep_paths =
-            malloc(sizeof(LATENCY_PATH) * (from_total + 1) * (to_total + 1));
+        plan->ep_paths = malloc(sizeof(GraphLatencyPath) * (from_total + 1) *
+                                (to_total + 1));
     }
     if (!plan || !order || !plan->nodes || !plan->ports || !plan->audio_srcs ||
         !plan->midi_srcs || !plan->latency || !plan->ep_from || !plan->ep_to ||
@@ -1136,7 +1129,8 @@ bool graph_latency_path(const GRAPH *graph, const GRAPH_PORT *from,
     if (!plan || !ep_index(plan->ep_from, plan->ep_from_count, from, &r) ||
         !ep_index(plan->ep_to, plan->ep_to_count, to, &c))
         return false;
-    const LATENCY_PATH *path = &plan->ep_paths[r * (plan->ep_to_count + 1) + c];
+    const GraphLatencyPath *path =
+        &plan->ep_paths[r * (plan->ep_to_count + 1) + c];
     if (!path->reached)
         return false;
     *out = path->range;

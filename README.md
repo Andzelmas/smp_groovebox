@@ -1,4 +1,9 @@
 # smp_groovebox
+
+## Notes when refactor finished
+Latency is not calculated correctly if the external output ports are connected to the external input ports - a feedback loop is formed.
+Also, latency is incorrect if a program connected to the external ports does not report it's latency (has no latency callback function).
+
 ## Still early development. Some parts of code can change completely.
 ## Simple groovebox for linux based systems. Works on rpi too.
 Check out https://brumakes.com/programming.php for development blog and some videos.

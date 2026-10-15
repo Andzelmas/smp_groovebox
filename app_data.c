@@ -2057,6 +2057,9 @@ void app_data_update(void *root_user_data) {
     // publish what the contexts changed in the graph, free what the audio
     // thread no longer runs
     graph_plan_update(app_data->graph);
+    if (audio_backend_latency_update(app_data->backend))
+        log_append_logfile("Exposed port latency capped - a loop through "
+                           "another program?\n");
     graph_midi_drops_take(app_data->graph, app_log_midi_drops, app_data);
 
     // now that all rt->ui messages are drained, turn each module's "my contents
