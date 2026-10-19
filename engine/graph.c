@@ -19,7 +19,7 @@ struct _graph_port {
     unsigned int type;
     unsigned int flow;
     // by type. An output's, written by its node; an input's from its 2nd
-    // source on, the sum
+    // source or a delayed one on, the sum
     SAMPLE_T *buffer;   // max_buffer_size frames
     MIDI_BUF *midi_buf; // MIDI_PORT_BUF_SIZE bytes
     // [audio-thread] the cycle's buffer, by type, set by the plan before the
@@ -35,6 +35,8 @@ struct _graph_port {
     unsigned int free_at;
     // latency_walk scratch: the paths it counts that reach here
     GraphLatencyPath walk;
+    // plan_lines_build scratch: its index in the newest plan's ports
+    size_t plan_index;
 };
 
 struct _graph_node {
@@ -85,6 +87,17 @@ typedef struct {
     uint32_t needed; // frames
 } PLAN_CLAMP;
 
+// an audio edge's delay, shared by the plans that keep the edge with it. Only
+// one of them runs at a time
+typedef struct {
+    const GRAPH_PORT *from; // the edge's source
+    uint32_t delay;         // frames, > 0
+    uint32_t len;           // frames buf holds, delay + max_frames at least
+    unsigned int plans;     // [main-thread] holding it, freed at 0
+    uint32_t pos;           // [audio-thread] where the next frame goes
+    SAMPLE_T buf[];         // [audio-thread]
+} DELAY_LINE;
+
 // what graph_process_rt runs, never changed once published. Buffers are
 // copied in, [audio-thread] touches no GRAPH_PORT field but the rt slot
 typedef struct _graph_plan GRAPH_PLAN;
@@ -94,10 +107,14 @@ struct _graph_plan {
     PLAN_NODE *nodes;    // edge order
     size_t node_count;
     PLAN_PORT *ports;
+    size_t port_count;
     SAMPLE_T **audio_srcs;
+    size_t audio_src_count;
     // frames, per audio_srcs entry: lines the source up with its node's
     // latest audio edge
     uint32_t *audio_delays;
+    // per audio_srcs entry, NULL without a delay. [audio-thread] feeds them
+    DELAY_LINE **audio_lines;
     MIDI_BUF **midi_srcs;
     // what an input without sources reads
     SAMPLE_T *silence;
@@ -290,13 +307,21 @@ static void port_retire(GRAPH *graph, GRAPH_PORT *port) {
     graph->retired_ports = port;
 }
 
+static void line_release(DELAY_LINE *line) {
+    if (line && --line->plans == 0)
+        free(line);
+}
+
 static void plan_free(GRAPH_PLAN *plan) {
     if (!plan)
         return;
+    for (size_t i = 0; plan->audio_lines && i < plan->audio_src_count; i++)
+        line_release(plan->audio_lines[i]);
     free(plan->nodes);
     free(plan->ports);
     free(plan->audio_srcs);
     free(plan->audio_delays);
+    free(plan->audio_lines);
     free(plan->midi_srcs);
     free(plan->latency);
     free(plan->ep_from);
@@ -1011,6 +1036,65 @@ static void plan_delays_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n) {
     }
 }
 
+// the line the newest plan has for the edge src -> in, when its delay is the
+// same and it has room for max_frames
+static DELAY_LINE *line_kept(const GRAPH_PLAN *old, const GRAPH_PORT *in,
+                             const GRAPH_PORT *src, uint32_t delay,
+                             uint32_t max_frames) {
+    // the index is stale for a port the old plan does not have
+    if (!old || in->plan_index >= old->port_count ||
+        old->ports[in->plan_index].port != in)
+        return NULL;
+    const PLAN_PORT *old_in = &old->ports[in->plan_index];
+    for (size_t e = 0; e < old_in->src_count; e++) {
+        DELAY_LINE *line = old->audio_lines[old_in->src_first + e];
+        if (line && line->from == src && line->delay == delay &&
+            line->len - delay >= max_frames)
+            return line;
+    }
+    return NULL;
+}
+
+// a line per delayed audio edge, kept from the newest plan or a silent new
+// one. An input with one reads through its own buffer. false on allocation
+// failure
+static bool plan_lines_build(GRAPH *graph, GRAPH_PLAN *plan) {
+    const GRAPH_PLAN *old = atomic_load(&graph->plan);
+    // a port removed since is freed only once this plan is acked
+    for (size_t i = 0; old && i < old->port_count; i++)
+        old->ports[i].port->plan_index = i;
+    for (size_t i = 0; i < plan->port_count; i++) {
+        PLAN_PORT *in = &plan->ports[i];
+        if (in->type != PORT_TYPE_AUDIO)
+            continue;
+        for (size_t e = 0; e < in->src_count; e++) {
+            size_t s = in->src_first + e;
+            uint32_t delay = plan->audio_delays[s];
+            if (delay == 0)
+                continue;
+            // the old plans do not read a buffer they did not have
+            if (!input_sum_reserve(graph, in->port))
+                return false;
+            in->buffer = in->port->buffer;
+            const GRAPH_PORT *src = in->port->peers[e];
+            DELAY_LINE *line =
+                line_kept(old, in->port, src, delay, plan->max_frames);
+            if (!line) {
+                uint32_t len = delay + plan->max_frames;
+                line = calloc(1, sizeof(DELAY_LINE) + sizeof(SAMPLE_T) * len);
+                if (!line)
+                    return false;
+                line->from = src;
+                line->delay = delay;
+                line->len = len;
+            }
+            line->plans++;
+            plan->audio_lines[s] = line;
+        }
+    }
+    return true;
+}
+
 // nodes in edge order (Kahn, ties in add order), per node its ports, per input
 // its sources. NULL on allocation failure
 static GRAPH_PLAN *plan_build(GRAPH *graph) {
@@ -1049,6 +1133,9 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
             malloc(sizeof(SAMPLE_T *) * (audio_total ? audio_total : 1));
         plan->audio_delays =
             malloc(sizeof(uint32_t) * (audio_total ? audio_total : 1));
+        plan->audio_lines =
+            calloc(audio_total ? audio_total : 1, sizeof(DELAY_LINE *));
+        plan->audio_src_count = audio_total;
         plan->clamps =
             malloc(sizeof(PLAN_CLAMP) * (audio_total ? audio_total : 1));
         plan->midi_srcs =
@@ -1062,8 +1149,9 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
                                 (to_total + 1));
     }
     if (!plan || !order || !plan->nodes || !plan->ports || !plan->audio_srcs ||
-        !plan->audio_delays || !plan->clamps || !plan->midi_srcs ||
-        !plan->latency || !plan->ep_from || !plan->ep_to || !plan->ep_paths)
+        !plan->audio_delays || !plan->audio_lines || !plan->clamps ||
+        !plan->midi_srcs || !plan->latency || !plan->ep_from || !plan->ep_to ||
+        !plan->ep_paths)
         goto fail;
 
     // the queue doubles as the order
@@ -1128,10 +1216,13 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
             port_i - plan_node->port_first - plan_node->in_count;
     }
     plan->node_count = n;
+    plan->port_count = port_total;
     plan->max_frames = graph->max_buffer_size;
     plan->silence = graph->silence;
     plan->midi_empty = graph->midi_empty;
     plan_delays_build(plan, order, n);
+    if (!plan_lines_build(graph, plan))
+        goto fail;
     plan_latency_build(plan, order, n, port_total);
     free(order);
     return plan;
@@ -1195,20 +1286,52 @@ bool graph_latency_path(const GRAPH *graph, const GRAPH_PORT *from,
     return true;
 }
 
-// the input's rt slot: silence / empty, its one source, or the sum of 2+
+// dst = src, or dst += src
+static void frames_put(SAMPLE_T *dst, const SAMPLE_T *src, NFRAMES_T nframes,
+                       bool add) {
+    if (!add) {
+        memcpy(dst, src, sizeof(SAMPLE_T) * nframes);
+        return;
+    }
+    for (NFRAMES_T f = 0; f < nframes; f++)
+        dst[f] += src[f];
+}
+
+// [audio-thread] src goes in, the frames from delay ago come out into dst, or
+// are added to it. Written first: a delay under nframes reads some of src
+static void line_run_rt(DELAY_LINE *line, const SAMPLE_T *src, SAMPLE_T *dst,
+                        NFRAMES_T nframes, bool add) {
+    uint32_t len = line->len;
+    uint32_t head = len - line->pos < nframes ? len - line->pos : nframes;
+    memcpy(&line->buf[line->pos], src, sizeof(SAMPLE_T) * head);
+    memcpy(line->buf, &src[head], sizeof(SAMPLE_T) * (nframes - head));
+    uint32_t r = line->pos >= line->delay ? line->pos - line->delay
+                                          : line->pos + len - line->delay;
+    head = len - r < nframes ? len - r : nframes;
+    frames_put(dst, &line->buf[r], head, add);
+    frames_put(&dst[head], line->buf, nframes - head, add);
+    line->pos += nframes;
+    if (line->pos >= len)
+        line->pos -= len;
+}
+
+// the input's rt slot: silence / empty, its one undelayed source, or the sum
+// of its sources, each through its line if it has one
 static void plan_input_rt(const GRAPH_PLAN *plan, const PLAN_PORT *in,
                           NFRAMES_T nframes) {
     if (in->type == PORT_TYPE_AUDIO) {
         SAMPLE_T *const *srcs = &plan->audio_srcs[in->src_first];
+        DELAY_LINE *const *lines = &plan->audio_lines[in->src_first];
         SAMPLE_T *buf = plan->silence;
-        if (in->src_count == 1) {
+        if (in->src_count == 1 && !lines[0]) {
             buf = srcs[0];
-        } else if (in->src_count > 1) {
+        } else if (in->src_count > 0) {
             buf = in->buffer;
-            memcpy(buf, srcs[0], sizeof(SAMPLE_T) * nframes);
-            for (size_t s = 1; s < in->src_count; s++) {
-                for (NFRAMES_T f = 0; f < nframes; f++)
-                    buf[f] += srcs[s][f];
+            for (size_t s = 0; s < in->src_count; s++) {
+                if (lines[s])
+                    line_run_rt(lines[s], srcs[s], buf, nframes, s > 0);
+                else
+                    frames_put(buf, srcs[s], nframes, s > 0);
             }
         }
         in->port->rt_buffer = buf;

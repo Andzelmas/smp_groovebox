@@ -168,7 +168,8 @@ void graph_delay_clamps_take(GRAPH *graph, GRAPH_CLAMPS_FN fn, void *arg);
 
 // [audio-thread] inside its node's process: the port's buffer this cycle,
 // NULL for the other type. An input's is read-only: silence / empty without
-// sources, the source's own with one, their sum with 2+. A MIDI output is
-// cleared for nframes before the node runs
+// sources, the source's own with one undelayed, else their sum - an audio
+// source through its edge's compensation delay. A MIDI output is cleared for
+// nframes before the node runs
 SAMPLE_T *graph_port_audio_rt(const GRAPH_PORT *port);
 MIDI_BUF *graph_port_midi_rt(const GRAPH_PORT *port);
