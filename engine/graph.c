@@ -166,6 +166,8 @@ struct _graph {
     // port's view index
     INTERN_TABLE idents;
     uint64_t generation;
+    // latency compensation: off, every edge delay is 0
+    bool compensate;
     // graph_peer_*: the ports connect takes with peer_view_source, as of
     // peer_view_generation. Source 0 = nothing built
     GRAPH_PORT **peer_view;
@@ -532,6 +534,13 @@ void graph_node_latency_set(GRAPH *graph, GRAPH_NODE *node, uint32_t frames) {
     if (!graph || !node || node->latency == frames)
         return;
     node->latency = frames;
+    graph->generation++;
+}
+
+void graph_compensation_set(GRAPH *graph, bool on) {
+    if (!graph || graph->compensate == on)
+        return;
+    graph->compensate = on;
     graph->generation++;
 }
 
@@ -1161,7 +1170,7 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
         plan->audio_srcs =
             malloc(sizeof(SAMPLE_T *) * (audio_total ? audio_total : 1));
         plan->audio_delays =
-            malloc(sizeof(uint32_t) * (audio_total ? audio_total : 1));
+            calloc(audio_total ? audio_total : 1, sizeof(uint32_t));
         plan->audio_lines =
             calloc(audio_total ? audio_total : 1, sizeof(DELAY_LINE *));
         plan->audio_src_count = audio_total;
@@ -1249,7 +1258,8 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
     plan->max_frames = graph->max_buffer_size;
     plan->silence = graph->silence;
     plan->midi_empty = graph->midi_empty;
-    plan_delays_build(plan, order, n);
+    if (graph->compensate)
+        plan_delays_build(plan, order, n);
     if (!plan_lines_build(graph, plan))
         goto fail;
     plan_latency_build(plan, order, n, port_total);

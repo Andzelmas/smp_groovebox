@@ -24,6 +24,7 @@ enum trkParamId {
     TRK_PARAM_BPB,
     TRK_PARAM_BEAT_TYPE,
     TRK_PARAM_SYNC,
+    TRK_PARAM_PDC,
     TRK_PARAM_COUNT
 };
 
@@ -442,7 +443,7 @@ const TRANSPORT_POS *transport_get_rt(TRANSPORT *transport) {
     return &transport->pos;
 }
 
-// Sync by name, the rest plain numbers. [main-thread]
+// Sync and PDC by name, the rest plain numbers. [main-thread]
 static unsigned int trk_val_to_string(const void *user_data, int val_id,
                                       PARAM_T value, char *ret_string,
                                       uint32_t string_len) {
@@ -450,11 +451,15 @@ static unsigned int trk_val_to_string(const void *user_data, int val_id,
     if (!transport || !ret_string || string_len == 0)
         return 0;
     static const char *const sync_names[] = {"Off", "Follow", "Lead"};
+    static const char *const pdc_names[] = {"Off", "On"};
     int written = 0;
     if (val_id == transport->val[TRK_PARAM_SYNC] && value >= 0 &&
         value <= TRANSPORT_SYNC_LEAD)
         written =
             snprintf(ret_string, string_len, "%s", sync_names[(int)value]);
+    else if (val_id == transport->val[TRK_PARAM_PDC] && value >= 0 &&
+             value <= 1)
+        written = snprintf(ret_string, string_len, "%s", pdc_names[(int)value]);
     else
         written = snprintf(ret_string, string_len, "%g", value);
     return written > 0 ? 1 : 0;
@@ -494,6 +499,8 @@ TRANSPORT *transport_init(SAMPLE_T rate) {
     transport->val[TRK_PARAM_SYNC] = param_add_param(
         params, "Sync", TRANSPORT_SYNC_OFF, TRANSPORT_SYNC_OFF,
         TRANSPORT_SYNC_LEAD, 1, 0, TRK_PARAM_SYNC, PARAM_FLAG_ENUM, 0, NULL);
+    transport->val[TRK_PARAM_PDC] = param_add_param(
+        params, "PDC", 0, 0, 1, 1, 0, TRK_PARAM_PDC, PARAM_FLAG_ENUM, 0, NULL);
     // a failed add is -1, which the rt side would index with
     for (int i = TRK_PARAM_NONE + 1; i < TRK_PARAM_COUNT; i++) {
         if (transport->val[i] < 0) {
@@ -548,6 +555,13 @@ int transport_sync_set(TRANSPORT *transport, TransportSync sync) {
         return -1;
     return param_set_value(transport->params, transport->val[TRK_PARAM_SYNC],
                            (PARAM_T)sync, NULL, Operation_SetValue);
+}
+
+bool transport_pdc(TRANSPORT *transport) {
+    if (!transport)
+        return false;
+    return param_get_value(transport->params, transport->val[TRK_PARAM_PDC],
+                           0) != 0;
 }
 
 static int transport_cmd_send(TRANSPORT *transport, TransportCmdKind kind,

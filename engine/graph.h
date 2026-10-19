@@ -87,6 +87,9 @@ void graph_node_remove(GRAPH *graph, GRAPH_NODE *node);
 // the node's processing latency, 0 for a new node. A change bumps the
 // generation
 void graph_node_latency_set(GRAPH *graph, GRAPH_NODE *node, uint32_t frames);
+// whether the edges get latency compensation delays, off for a new graph. A
+// change bumps the generation
+void graph_compensation_set(GRAPH *graph, bool on);
 
 // type PORT_TYPE_AUDIO or PORT_TYPE_MIDI, flow PORT_FLOW_INPUT or
 // PORT_FLOW_OUTPUT. name is copied, unique among the ports of the node's

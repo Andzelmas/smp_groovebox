@@ -2069,6 +2069,7 @@ void app_data_update(void *root_user_data) {
     // context
     synth_read_rt_to_ui_messages(app_data->synth_data);
     app_audio_config_update(app_data);
+    graph_compensation_set(app_data->graph, transport_pdc(app_data->transport));
     // publish what the contexts changed in the graph, free what the audio
     // thread no longer runs
     graph_plan_update(app_data->graph);

@@ -73,14 +73,16 @@ typedef struct _transport_req {
 TRANSPORT *transport_init(SAMPLE_T rate);
 // transport_cycle_rt must not run any more
 void transport_clean(TRANSPORT *transport);
-// the Trk params: Tempo, Bar, Beat, Tick (readonly), BPB, Beat_Type, Sync. A
-// Bar or Beat edit locates, changing only that field of the current position.
-// Tempo, BPB and Beat_Type are readonly while another program leads
+// the Trk params: Tempo, Bar, Beat, Tick (readonly), BPB, Beat_Type, Sync,
+// PDC. A Bar or Beat edit locates, changing only that field of the current
+// position. Tempo, BPB and Beat_Type are readonly while another program leads
 PRM_CONTAIN *transport_param_container(TRANSPORT *transport);
 // the Sync param's ui value
 TransportSync transport_sync(TRANSPORT *transport);
 // sets the Sync param as a ui edit does. -1 on failure
 int transport_sync_set(TRANSPORT *transport, TransportSync sync);
+// the PDC param's ui value: whether the graph compensates latency. Off at init
+bool transport_pdc(TRANSPORT *transport);
 // the next request for the server, in order. false when there is none
 bool transport_request_take(TRANSPORT *transport, TRANSPORT_REQ *out);
 // applied at the next cycle start - while synced, as requests for the server.
