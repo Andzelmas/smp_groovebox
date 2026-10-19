@@ -16,6 +16,8 @@ int ub_push(UB_EVENT* ub_ev, const void* const source, uint32_t source_size);
 //add an item of size bytes and return its address for the caller to fill,
 //NULL when it does not fit or size is 0
 void* ub_push_reserve(UB_EVENT* ub_ev, uint32_t size);
+//1 when ub_push_reserve would take an item of size bytes now, else 0
+int ub_fits(UB_EVENT* ub_ev, uint32_t size);
 //get the size of the idx item in the ub_ev->event_list, on error will return 0
 uint32_t ub_item_get_size(UB_EVENT* ub_ev, uint32_t idx);
 //get the item count in the ub_ev->event_list

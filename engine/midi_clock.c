@@ -28,21 +28,47 @@ struct _midi_clock {
     GRAPH_PORT *port;
     // [audio-thread]'s once a plan runs the node: whether the last cycle
     // rolled and its grid_to; whether the slave was told to run; a run waiting
-    // for its 16th - its SPP (-1 = Start) and beat
+    // for its 16th - its SPP (-1 = Start) and beat; its edge's delay and, from
+    // the cycle's start, the frames until what it pushed has left that
     bool rolling;
     double grid_to;
     bool running;
     bool pending;
     int64_t pending_spp;
     double pending_beat;
+    uint32_t delay;
+    uint32_t held;
     // [main-thread] -> [audio-thread]: send nothing more; [audio-thread] ->
-    // [main-thread]: done, a running slave got its Stop
+    // [main-thread]: done, a slave that may run got its Stop
     atomic_bool halt;
     atomic_bool halted;
 };
 
-static void msg_push_rt(MIDI_BUF *out, NFRAMES_T offset, uint8_t status) {
-    midi_buf_push(out, offset, &status, 1);
+static void clock_push_rt(MIDI_CLOCK *clock, MIDI_BUF *out, NFRAMES_T offset,
+                          const uint8_t *msg, uint32_t size) {
+    midi_buf_push(out, offset, msg, size);
+    uint32_t left = offset + clock->delay + 1;
+    if (left > clock->held)
+        clock->held = left;
+}
+
+static void msg_push_rt(MIDI_CLOCK *clock, MIDI_BUF *out, NFRAMES_T offset,
+                        uint8_t status) {
+    clock_push_rt(clock, out, offset, &status, 1);
+}
+
+// the edge's delay drops what it holds, a slave that may run hears Stop at
+// once. Nothing else this cycle - it would skip the delay too
+static void clock_flush_rt(MIDI_CLOCK *clock, MIDI_BUF *out) {
+    graph_port_midi_flush_rt(clock->port);
+    // a Stop still held may be dropped
+    if (clock->running || clock->held > 0) {
+        uint8_t stop = MIDI_CLOCK_MSG_STOP;
+        midi_buf_push(out, 0, &stop, 1);
+    }
+    clock->running = false;
+    clock->pending = false;
+    clock->held = 0;
 }
 
 // a run from grid index first goes on at the next 16th: Start at the song
@@ -66,40 +92,44 @@ static void clock_run_rt(MIDI_CLOCK *clock, MIDI_BUF *out, NFRAMES_T offset) {
     clock->pending = false;
     clock->running = true;
     if (clock->pending_spp < 0) {
-        msg_push_rt(out, offset, MIDI_CLOCK_MSG_START);
+        msg_push_rt(clock, out, offset, MIDI_CLOCK_MSG_START);
         return;
     }
     uint32_t wrapped = (uint32_t)(clock->pending_spp % MIDI_CLOCK_SPP_WRAP);
     uint8_t msg[3] = {MIDI_CLOCK_MSG_SPP, wrapped & 0x7F, wrapped >> 7};
-    midi_buf_push(out, offset, msg, 3);
-    msg_push_rt(out, offset, MIDI_CLOCK_MSG_CONTINUE);
+    clock_push_rt(clock, out, offset, msg, 3);
+    msg_push_rt(clock, out, offset, MIDI_CLOCK_MSG_CONTINUE);
 }
 
-// [audio-thread] GRAPH_PROCESS_FN
-static bool midi_clock_process_rt(void *arg, NFRAMES_T nframes) {
-    (void)nframes;
-    MIDI_CLOCK *clock = (MIDI_CLOCK *)arg;
+static void clock_cycle_rt(MIDI_CLOCK *clock) {
     MIDI_BUF *out = graph_port_midi_rt(clock->port);
+    uint32_t delay = graph_port_delay_rt(clock->port);
+    bool delay_changed = delay != clock->delay;
+    clock->delay = delay;
     if (atomic_load(&clock->halt)) {
-        if (clock->running)
-            msg_push_rt(out, 0, MIDI_CLOCK_MSG_STOP);
-        clock->running = false;
-        clock->pending = false;
+        clock_flush_rt(clock, out);
         atomic_store(&clock->halted, true);
-        return true;
+        return;
     }
     const TRANSPORT_POS *pos = transport_get_rt(clock->transport);
+    // a new delay re-syncs a rolling slave as a jump: stopped now, the run
+    // goes on at a 16th from the next cycle
+    if (delay_changed && pos->rolling && clock->rolling) {
+        clock_flush_rt(clock, out);
+        clock->rolling = false;
+        return;
+    }
     // the grid ranges of a run join, so a gap is a locate
     bool jumped =
         pos->rolling && clock->rolling && pos->grid_from != clock->grid_to;
     if ((jumped || !pos->rolling) && clock->running) {
-        msg_push_rt(out, 0, MIDI_CLOCK_MSG_STOP);
+        msg_push_rt(clock, out, 0, MIDI_CLOCK_MSG_STOP);
         clock->running = false;
     }
     if (!pos->rolling) {
         clock->rolling = false;
         clock->pending = false;
-        return true;
+        return;
     }
     // beats are beat_type notes
     double step = pos->music.beat_type / (4.0 * MIDI_CLOCK_PER_QUARTER);
@@ -114,10 +144,17 @@ static bool midi_clock_process_rt(void *arg, NFRAMES_T nframes) {
                 continue;
             clock_run_rt(clock, out, offset);
         }
-        msg_push_rt(out, offset, MIDI_CLOCK_MSG_TICK);
+        msg_push_rt(clock, out, offset, MIDI_CLOCK_MSG_TICK);
     }
     clock->rolling = true;
     clock->grid_to = pos->grid_to;
+}
+
+// [audio-thread] GRAPH_PROCESS_FN
+static bool midi_clock_process_rt(void *arg, NFRAMES_T nframes) {
+    MIDI_CLOCK *clock = (MIDI_CLOCK *)arg;
+    clock_cycle_rt(clock);
+    clock->held = clock->held > nframes ? clock->held - nframes : 0;
     return true;
 }
 

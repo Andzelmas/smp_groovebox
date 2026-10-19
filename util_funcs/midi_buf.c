@@ -72,6 +72,12 @@ bool midi_buf_push(MIDI_BUF *buf, uint32_t frame, const uint8_t *data,
     return true;
 }
 
+bool midi_buf_fits(const MIDI_BUF *buf, uint32_t size) {
+    if (!buf || size > UINT32_MAX - sizeof(MIDI_ITEM))
+        return false;
+    return ub_fits(buf->ub, (uint32_t)sizeof(MIDI_ITEM) + size);
+}
+
 uint32_t midi_buf_count(const MIDI_BUF *buf) {
     if (!buf)
         return 0;

@@ -10,6 +10,14 @@
 
 // frames, the longest delay an edge gets
 #define COMP_MAX (1U << 18)
+// bytes a MIDI line holds. A short message takes 16: the fastest clock (400 a
+// second, 500 bpm in halves) over COMP_MAX frames fits down to 6.4 kHz, a full
+// cycle's buffer on top
+#define MIDI_LINE_BYTES (COMP_MAX + 2 * MIDI_PORT_BUF_SIZE)
+// a MIDI line's records start on it
+#define MIDI_REC_ALIGN 8
+// a record's size: the rest of the ring is unused, the next is at 0
+#define MIDI_REC_SKIP UINT32_MAX
 
 // heap record, never moves while it exists
 struct _graph_port {
@@ -26,8 +34,11 @@ struct _graph_port {
     // node runs - what graph_port_*_rt return
     SAMPLE_T *rt_buffer;
     MIDI_BUF *rt_midi_buf;
-    // [audio-thread] the plan's latency for it, set with the rt buffer
+    // [audio-thread] the plan's latency and largest edge delay for it, set
+    // with the rt buffer; a MIDI output's, whether its lines flush this cycle
     GraphLatencyRange rt_latency;
+    uint32_t rt_delay;
+    bool rt_flush;
     // an endpoint's latency outside the graph, see graph_endpoint_latency_set
     GraphLatencyPath outside;
     // the other end of each edge, in connection order
@@ -40,7 +51,7 @@ struct _graph_port {
     // latency_walk scratch: the paths it counts that reach here
     GraphLatencyPath walk;
     // its index in a plan's ports: plan_lines_build sets the newest plan's,
-    // plan_latency_build the one it builds
+    // plan_delays_build and plan_latency_build the one they build
     size_t plan_index;
 };
 
@@ -70,6 +81,8 @@ typedef struct {
     size_t src_count;
     // frames: an input's since the audio interface, an output's until it
     GraphLatencyRange latency;
+    // frames, the largest delay on its edges
+    uint32_t delay;
 } PLAN_PORT;
 
 typedef struct {
@@ -80,7 +93,7 @@ typedef struct {
     size_t out_count;
 } PLAN_NODE;
 
-// an audio edge whose delay was clamped at COMP_MAX
+// an edge whose delay was clamped at COMP_MAX
 typedef struct {
     GRAPH_PORT *from;
     GRAPH_PORT *to;
@@ -97,6 +110,30 @@ typedef struct {
     uint32_t pos;           // [audio-thread] where the next frame goes
     SAMPLE_T buf[];         // [audio-thread]
 } DELAY_LINE;
+
+// a held MIDI event in a MIDI_LINE's ring, its bytes right after it
+typedef struct {
+    uint32_t due;  // the line's frame it goes out at
+    uint32_t size; // or MIDI_REC_SKIP
+} MIDI_REC;
+
+// a MIDI edge's delay, shared by the plans that keep the edge, at any delay -
+// what it holds goes out at the delay it was pushed with. Only one of the plans
+// runs at a time
+typedef struct {
+    const GRAPH_PORT *from; // the edge's source
+    unsigned int plans;     // [main-thread] holding it, freed at 0
+    MIDI_BUF *out; // [audio-thread] the cycle's due events
+    // events the full ring refused: [audio-thread] counts, [main-thread] takes
+    atomic_uint dropped;
+    // [audio-thread]: frames run (wraps), the ring's oldest record, where the
+    // next goes, bytes in use
+    uint32_t now;
+    uint32_t head;
+    uint32_t tail;
+    uint32_t used;
+    uint8_t ring[]; // MIDI_LINE_BYTES
+} MIDI_LINE;
 
 // what graph_process_rt runs, never changed once published. Buffers are
 // copied in, [audio-thread] touches no GRAPH_PORT field but the rt slot
@@ -116,6 +153,12 @@ struct _graph_plan {
     // per audio_srcs entry, NULL without a delay. [audio-thread] feeds them
     DELAY_LINE **audio_lines;
     MIDI_BUF **midi_srcs;
+    size_t midi_src_count;
+    // per midi_srcs entry: a MIDI edge into a playback node leaves with the
+    // node's latest audio edge
+    uint32_t *midi_delays;
+    // per midi_srcs entry, NULL without a delay or a line kept for the edge
+    MIDI_LINE **midi_lines;
     // what an input without sources reads
     SAMPLE_T *silence;
     MIDI_BUF *midi_empty;
@@ -312,17 +355,42 @@ static void line_release(DELAY_LINE *line) {
         free(line);
 }
 
+static MIDI_LINE *midi_line_new(const GRAPH_PORT *from) {
+    MIDI_LINE *line = calloc(1, sizeof(MIDI_LINE) + MIDI_LINE_BYTES);
+    if (!line)
+        return NULL;
+    line->out = midi_buf_new(MIDI_PORT_BUF_SIZE);
+    if (!line->out) {
+        free(line);
+        return NULL;
+    }
+    line->from = from;
+    atomic_init(&line->dropped, 0U);
+    return line;
+}
+
+static void midi_line_release(MIDI_LINE *line) {
+    if (!line || --line->plans != 0)
+        return;
+    midi_buf_free(line->out);
+    free(line);
+}
+
 static void plan_free(GRAPH_PLAN *plan) {
     if (!plan)
         return;
     for (size_t i = 0; plan->audio_lines && i < plan->audio_src_count; i++)
         line_release(plan->audio_lines[i]);
+    for (size_t i = 0; plan->midi_lines && i < plan->midi_src_count; i++)
+        midi_line_release(plan->midi_lines[i]);
     free(plan->nodes);
     free(plan->ports);
     free(plan->audio_srcs);
     free(plan->audio_delays);
     free(plan->audio_lines);
     free(plan->midi_srcs);
+    free(plan->midi_delays);
+    free(plan->midi_lines);
     free(plan->ep_from);
     free(plan->ep_to);
     free(plan->ep_paths);
@@ -943,16 +1011,22 @@ static GraphLatencyRange range_add(GraphLatencyRange range, uint32_t frames) {
                                latency_add(range.max, frames)};
 }
 
+// an input's per source delays, by its type
+static uint32_t *plan_delays(const GRAPH_PLAN *plan, const PLAN_PORT *in) {
+    return in->type == PORT_TYPE_AUDIO ? &plan->audio_delays[in->src_first]
+                                       : &plan->midi_delays[in->src_first];
+}
+
 // the delay plan gives the edge src -> in, found among in's sources. in's
 // plan_index is its index in plan
 static uint32_t edge_delay(const GRAPH_PLAN *plan, const GRAPH_PORT *src,
                            const GRAPH_PORT *in) {
-    if (!plan || in->type != PORT_TYPE_AUDIO)
+    if (!plan)
         return 0;
     const PLAN_PORT *plan_in = &plan->ports[in->plan_index];
     for (size_t e = 0; e < plan_in->src_count; e++) {
         if (in->peers[e] == src)
-            return plan->audio_delays[plan_in->src_first + e];
+            return plan_delays(plan, plan_in)[e];
     }
     return 0;
 }
@@ -1066,14 +1140,18 @@ static void plan_latency_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n,
 }
 
 // per audio edge T - arrival, T the latest arrival over the node's audio
-// edges. An arrival is the capture walk's longest path: the latest over the
-// node's connected inputs, MIDI too, + its latency. Walked without the delays:
-// solved here, they would leave it as it is
+// edges; a MIDI edge into a playback node too (0 when it arrives later), the
+// other MIDI edges none. An arrival is the capture walk's longest path: the
+// latest over the node's connected inputs, MIDI too, + its latency. Walked
+// without the delays: solved here, they would leave it as it is. Each port
+// gets its largest edge delay
 static void plan_delays_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n) {
     latency_walk(NULL, order, n, false, WALK_ALL, NULL);
+    for (size_t i = 0; i < plan->port_count; i++)
+        plan->ports[i].port->plan_index = i;
     for (size_t i = 0; i < plan->node_count; i++) {
         const PLAN_NODE *node = &plan->nodes[i];
-        const PLAN_PORT *ins = &plan->ports[node->port_first];
+        PLAN_PORT *ins = &plan->ports[node->port_first];
         uint32_t t = 0;
         for (size_t p = 0; p < node->in_count; p++) {
             uint32_t arrival = latency_walked(ins[p].port).range.max;
@@ -1081,22 +1159,38 @@ static void plan_delays_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n) {
                 t = arrival;
         }
         for (size_t p = 0; p < node->in_count; p++) {
-            const PLAN_PORT *in = &ins[p];
-            if (in->type != PORT_TYPE_AUDIO)
+            PLAN_PORT *in = &ins[p];
+            if (in->type != PORT_TYPE_AUDIO &&
+                in->port->node->kind != GRAPH_NODE_PLAYBACK)
                 continue;
             for (size_t e = 0; e < in->src_count; e++) {
                 GRAPH_PORT *src = in->port->peers[e];
-                uint32_t needed = t - latency_walked(src).range.max;
-                uint32_t *delay = &plan->audio_delays[in->src_first + e];
+                uint32_t arrival = latency_walked(src).range.max;
+                uint32_t needed = t > arrival ? t - arrival : 0;
+                uint32_t *delay = &plan_delays(plan, in)[e];
                 *delay = needed;
-                if (needed <= COMP_MAX)
-                    continue;
-                *delay = COMP_MAX;
-                plan->clamps[plan->clamp_count++] =
-                    (PLAN_CLAMP){src, in->port, needed};
+                if (needed > COMP_MAX) {
+                    *delay = COMP_MAX;
+                    plan->clamps[plan->clamp_count++] =
+                        (PLAN_CLAMP){src, in->port, needed};
+                }
+                PLAN_PORT *out = &plan->ports[src->plan_index];
+                if (*delay > in->delay)
+                    in->delay = *delay;
+                if (*delay > out->delay)
+                    out->delay = *delay;
             }
         }
     }
+}
+
+// in in the newest plan, NULL when it has not the port
+static const PLAN_PORT *old_input(const GRAPH_PLAN *old, const GRAPH_PORT *in) {
+    // the index is stale for a port the old plan does not have
+    if (!old || in->plan_index >= old->port_count ||
+        old->ports[in->plan_index].port != in)
+        return NULL;
+    return &old->ports[in->plan_index];
 }
 
 // the line the newest plan has for the edge src -> in, when its delay is the
@@ -1104,12 +1198,8 @@ static void plan_delays_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n) {
 static DELAY_LINE *line_kept(const GRAPH_PLAN *old, const GRAPH_PORT *in,
                              const GRAPH_PORT *src, uint32_t delay,
                              uint32_t max_frames) {
-    // the index is stale for a port the old plan does not have
-    if (!old || in->plan_index >= old->port_count ||
-        old->ports[in->plan_index].port != in)
-        return NULL;
-    const PLAN_PORT *old_in = &old->ports[in->plan_index];
-    for (size_t e = 0; e < old_in->src_count; e++) {
+    const PLAN_PORT *old_in = old_input(old, in);
+    for (size_t e = 0; old_in && e < old_in->src_count; e++) {
         DELAY_LINE *line = old->audio_lines[old_in->src_first + e];
         if (line && line->from == src && line->delay == delay &&
             line->len - delay >= max_frames)
@@ -1118,9 +1208,42 @@ static DELAY_LINE *line_kept(const GRAPH_PLAN *old, const GRAPH_PORT *in,
     return NULL;
 }
 
+// the MIDI line the newest plan has for the edge src -> in, at any delay
+static MIDI_LINE *midi_line_kept(const GRAPH_PLAN *old, const GRAPH_PORT *in,
+                                 const GRAPH_PORT *src) {
+    const PLAN_PORT *old_in = old_input(old, in);
+    for (size_t e = 0; old_in && e < old_in->src_count; e++) {
+        MIDI_LINE *line = old->midi_lines[old_in->src_first + e];
+        if (line && line->from == src)
+            return line;
+    }
+    return NULL;
+}
+
+// a MIDI edge's line: kept from the newest plan while the edge lasts, so what
+// it holds still goes out, else an empty new one for a delay. false on
+// allocation failure
+static bool plan_midi_lines_build(const GRAPH_PLAN *old, GRAPH_PLAN *plan,
+                                  const PLAN_PORT *in) {
+    for (size_t e = 0; e < in->src_count; e++) {
+        size_t s = in->src_first + e;
+        const GRAPH_PORT *src = in->port->peers[e];
+        MIDI_LINE *line = midi_line_kept(old, in->port, src);
+        if (!line && plan->midi_delays[s] == 0)
+            continue;
+        if (!line)
+            line = midi_line_new(src);
+        if (!line)
+            return false;
+        line->plans++;
+        plan->midi_lines[s] = line;
+    }
+    return true;
+}
+
 // a line per delayed audio edge, kept from the newest plan or a silent new
-// one. An input with one reads through its own buffer. false on allocation
-// failure
+// one. An input with one reads through its own buffer. The MIDI edges' lines.
+// false on allocation failure
 static bool plan_lines_build(GRAPH *graph, GRAPH_PLAN *plan) {
     const GRAPH_PLAN *old = atomic_load(&graph->plan);
     // a port removed since is freed only once this plan is acked
@@ -1128,8 +1251,11 @@ static bool plan_lines_build(GRAPH *graph, GRAPH_PLAN *plan) {
         old->ports[i].port->plan_index = i;
     for (size_t i = 0; i < plan->port_count; i++) {
         PLAN_PORT *in = &plan->ports[i];
-        if (in->type != PORT_TYPE_AUDIO)
+        if (in->type != PORT_TYPE_AUDIO) {
+            if (!plan_midi_lines_build(old, plan, in))
+                return false;
             continue;
+        }
         for (size_t e = 0; e < in->src_count; e++) {
             size_t s = in->src_first + e;
             uint32_t delay = plan->audio_delays[s];
@@ -1199,10 +1325,16 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
         plan->audio_lines =
             calloc(audio_total ? audio_total : 1, sizeof(DELAY_LINE *));
         plan->audio_src_count = audio_total;
+        size_t edge_total = audio_total + midi_total;
         plan->clamps =
-            malloc(sizeof(PLAN_CLAMP) * (audio_total ? audio_total : 1));
+            malloc(sizeof(PLAN_CLAMP) * (edge_total ? edge_total : 1));
         plan->midi_srcs =
             malloc(sizeof(MIDI_BUF *) * (midi_total ? midi_total : 1));
+        plan->midi_delays =
+            calloc(midi_total ? midi_total : 1, sizeof(uint32_t));
+        plan->midi_lines =
+            calloc(midi_total ? midi_total : 1, sizeof(MIDI_LINE *));
+        plan->midi_src_count = midi_total;
         plan->ep_from =
             malloc(sizeof(GRAPH_PORT *) * (from_total ? from_total : 1));
         plan->ep_to = malloc(sizeof(GRAPH_PORT *) * (to_total ? to_total : 1));
@@ -1211,7 +1343,8 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
     }
     if (!plan || !order || !plan->nodes || !plan->ports || !plan->audio_srcs ||
         !plan->audio_delays || !plan->audio_lines || !plan->clamps ||
-        !plan->midi_srcs || !plan->ep_from || !plan->ep_to || !plan->ep_paths)
+        !plan->midi_srcs || !plan->midi_delays || !plan->midi_lines ||
+        !plan->ep_from || !plan->ep_to || !plan->ep_paths)
         goto fail;
 
     // the queue doubles as the order
@@ -1376,11 +1509,87 @@ static void line_run_rt(DELAY_LINE *line, const SAMPLE_T *src, SAMPLE_T *dst,
         line->pos -= len;
 }
 
+static uint32_t midi_rec_len(uint32_t size) {
+    uint32_t len = (uint32_t)sizeof(MIDI_REC) + size;
+    return (len + MIDI_REC_ALIGN - 1) & ~(uint32_t)(MIDI_REC_ALIGN - 1);
+}
+
+// [audio-thread] a record at the tail, or at 0 after a skip record when the
+// rest of the ring is too short. false when full. A record start leaves room
+// for a skip record: MIDI_REC fits MIDI_REC_ALIGN
+static bool midi_line_put_rt(MIDI_LINE *line, uint32_t due,
+                             const uint8_t *data, uint32_t size) {
+    uint32_t len = midi_rec_len(size);
+    uint32_t rest = MIDI_LINE_BYTES - line->tail;
+    if ((len > rest ? rest + len : len) > MIDI_LINE_BYTES - line->used)
+        return false;
+    if (len > rest) {
+        MIDI_REC skip = {0, MIDI_REC_SKIP};
+        memcpy(&line->ring[line->tail], &skip, sizeof(skip));
+        line->used += rest;
+        line->tail = 0;
+    }
+    MIDI_REC rec = {due, size};
+    memcpy(&line->ring[line->tail], &rec, sizeof(rec));
+    memcpy(&line->ring[line->tail + sizeof(rec)], data, size);
+    line->tail = (line->tail + len) % MIDI_LINE_BYTES;
+    line->used += len;
+    return true;
+}
+
+// [audio-thread] src's events go in delay frames later, the due ones come out
+// into the line's buffer, returned - what it has no room for in the next
+// cycle. The ring keeps the push order: after a delay change one due before
+// the newest held waits for it, late, and goes out with it. A flush of the
+// source drops what the line holds and sends src through undelayed
+static MIDI_BUF *midi_line_run_rt(MIDI_LINE *line, const MIDI_BUF *src,
+                                  uint32_t delay, NFRAMES_T nframes) {
+    if (line->from->rt_flush) {
+        line->used = 0;
+        delay = 0;
+    }
+    if (line->used == 0)
+        line->head = line->tail = 0;
+    MIDI_BUF_ITER it = midi_buf_iter(src);
+    MIDI_EVENT ev;
+    while (midi_buf_next(&it, &ev)) {
+        if (!midi_line_put_rt(line, line->now + ev.frame + delay, ev.data,
+                              ev.size))
+            atomic_fetch_add(&line->dropped, 1);
+    }
+    midi_buf_clear(line->out, nframes);
+    while (line->used > 0) {
+        MIDI_REC rec;
+        memcpy(&rec, &line->ring[line->head], sizeof(rec));
+        if (rec.size == MIDI_REC_SKIP) {
+            line->used -= MIDI_LINE_BYTES - line->head;
+            line->head = 0;
+            continue;
+        }
+        // late behind a later one or a full cycle: at the first frame, the
+        // buffer moves it up behind the one before. A held due lies within
+        // COMP_MAX and a few cycles of now, so the wrap compares
+        uint32_t frame =
+            (int32_t)(rec.due - line->now) < 0 ? 0 : rec.due - line->now;
+        // a full cycle holds the rest back for the next
+        if (frame >= nframes || !midi_buf_fits(line->out, rec.size))
+            break;
+        midi_buf_push(line->out, frame, &line->ring[line->head + sizeof(rec)],
+                      rec.size);
+        uint32_t len = midi_rec_len(rec.size);
+        line->head = (line->head + len) % MIDI_LINE_BYTES;
+        line->used -= len;
+    }
+    line->now += nframes;
+    return line->out;
+}
+
 // the input's rt slots: silence / empty, its one undelayed source, or the sum
 // of its sources, each through its line if it has one
 static void plan_input_rt(const GRAPH_PLAN *plan, const PLAN_PORT *in,
                           NFRAMES_T nframes) {
     in->port->rt_latency = in->latency;
+    in->port->rt_delay = in->delay;
     if (in->type == PORT_TYPE_AUDIO) {
         SAMPLE_T *const *srcs = &plan->audio_srcs[in->src_first];
         DELAY_LINE *const *lines = &plan->audio_lines[in->src_first];
@@ -1399,15 +1608,24 @@ static void plan_input_rt(const GRAPH_PLAN *plan, const PLAN_PORT *in,
         in->port->rt_buffer = buf;
         return;
     }
-    MIDI_BUF *const *srcs = &plan->midi_srcs[in->src_first];
+    // connect takes no more sources
+    MIDI_BUF *heard[MIDI_BUF_MERGE_MAX];
+    uint32_t n = in->src_count < MIDI_BUF_MERGE_MAX ? (uint32_t)in->src_count
+                                                    : MIDI_BUF_MERGE_MAX;
+    for (uint32_t s = 0; s < n; s++) {
+        size_t i = in->src_first + s;
+        MIDI_LINE *line = plan->midi_lines[i];
+        heard[s] = line ? midi_line_run_rt(line, plan->midi_srcs[i],
+                                           plan->midi_delays[i], nframes)
+                        : plan->midi_srcs[i];
+    }
     MIDI_BUF *buf = plan->midi_empty;
-    if (in->src_count == 1) {
-        buf = srcs[0];
-    } else if (in->src_count > 1) {
+    if (n == 1) {
+        buf = heard[0];
+    } else if (n > 1) {
         buf = in->midi_buf;
         midi_buf_clear(buf, nframes);
-        midi_buf_merge(buf, (const MIDI_BUF *const *)srcs,
-                       (uint32_t)in->src_count);
+        midi_buf_merge(buf, (const MIDI_BUF *const *)heard, n);
     }
     in->port->rt_midi_buf = buf;
 }
@@ -1426,6 +1644,8 @@ void graph_process_rt(GRAPH *graph, NFRAMES_T nframes) {
             plan_input_rt(plan, &ins[p], nframes);
         for (size_t p = 0; p < node->out_count; p++) {
             outs[p].port->rt_latency = outs[p].latency;
+            outs[p].port->rt_delay = outs[p].delay;
+            outs[p].port->rt_flush = false;
             if (outs[p].type == PORT_TYPE_AUDIO) {
                 outs[p].port->rt_buffer = outs[p].buffer;
                 continue;
@@ -1458,6 +1678,27 @@ void graph_midi_drops_take(GRAPH *graph, GRAPH_DROPS_FN fn, void *arg) {
         port_info_fill(port, &info);
         fn(arg, &info, dropped);
     }
+    // the MIDI lines', on their edge's input. A change since may have freed a
+    // removed node its ports point to - their counts wait
+    const GRAPH_PLAN *plan = atomic_load(&graph->plan);
+    if (!plan || graph->plan_built_from != graph->generation)
+        return;
+    for (size_t i = 0; i < plan->port_count; i++) {
+        const PLAN_PORT *in = &plan->ports[i];
+        if (in->type != PORT_TYPE_MIDI)
+            continue;
+        uint32_t dropped = 0;
+        for (size_t e = 0; e < in->src_count; e++) {
+            MIDI_LINE *line = plan->midi_lines[in->src_first + e];
+            if (line)
+                dropped += atomic_exchange(&line->dropped, 0U);
+        }
+        if (dropped == 0)
+            continue;
+        GraphPortInfo info;
+        port_info_fill(in->port, &info);
+        fn(arg, &info, dropped);
+    }
 }
 
 void graph_delay_clamps_take(GRAPH *graph, GRAPH_CLAMPS_FN fn, void *arg) {
@@ -1488,4 +1729,14 @@ MIDI_BUF *graph_port_midi_rt(const GRAPH_PORT *port) {
 
 GraphLatencyRange graph_port_latency_rt(const GRAPH_PORT *port) {
     return port ? port->rt_latency : (GraphLatencyRange){0, 0};
+}
+
+uint32_t graph_port_delay_rt(const GRAPH_PORT *port) {
+    return port ? port->rt_delay : 0;
+}
+
+void graph_port_midi_flush_rt(GRAPH_PORT *port) {
+    // only a MIDI source's is read, by its edges' lines
+    if (port)
+        port->rt_flush = true;
 }

@@ -113,6 +113,9 @@ void midi_buf_clear(MIDI_BUF *buf, uint32_t nframes);
 // the push order. A note-on with velocity 0 is stored as a note-off
 bool midi_buf_push(MIDI_BUF *buf, uint32_t frame, const uint8_t *data,
                    uint32_t size);
+// whether a message of size bytes has room now. Room only - push still checks
+// the frame and the message
+bool midi_buf_fits(const MIDI_BUF *buf, uint32_t size);
 
 uint32_t midi_buf_count(const MIDI_BUF *buf);
 

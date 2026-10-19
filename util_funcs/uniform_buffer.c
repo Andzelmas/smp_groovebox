@@ -47,14 +47,25 @@ UB_EVENT* ub_init(uint32_t total_size, uint32_t num_of_items){
     return ub_ev;
 }
 
-void* ub_push_reserve(UB_EVENT* ub_ev, uint32_t size){
-    if(!ub_ev)return NULL;
-    if(size == 0)return NULL;
-    if(ub_ev->items >= ub_ev->total_items)return NULL;
+//the offset an item of size bytes would get, UINT64_MAX when it does not fit
+static uint64_t ub_item_offset(const UB_EVENT* ub_ev, uint32_t size){
+    if(!ub_ev)return UINT64_MAX;
+    if(size == 0)return UINT64_MAX;
+    if(ub_ev->items >= ub_ev->total_items)return UINT64_MAX;
 
     //64 bit so neither the rounding nor the sum can wrap
     uint64_t offset = ((uint64_t)ub_ev->current_size + UB_ALIGN - 1) & ~(uint64_t)(UB_ALIGN - 1);
-    if(offset + size > ub_ev->total_size)return NULL;
+    if(offset + size > ub_ev->total_size)return UINT64_MAX;
+    return offset;
+}
+
+int ub_fits(UB_EVENT* ub_ev, uint32_t size){
+    return ub_item_offset(ub_ev, size) != UINT64_MAX;
+}
+
+void* ub_push_reserve(UB_EVENT* ub_ev, uint32_t size){
+    uint64_t offset = ub_item_offset(ub_ev, size);
+    if(offset == UINT64_MAX)return NULL;
 
     uint32_t idx = ub_ev->items;
     ub_ev->item_addr[idx] = (uint32_t)offset;

@@ -87,8 +87,9 @@ void graph_node_remove(GRAPH *graph, GRAPH_NODE *node);
 // the node's processing latency, 0 for a new node. A change bumps the
 // generation
 void graph_node_latency_set(GRAPH *graph, GRAPH_NODE *node, uint32_t frames);
-// whether the edges get latency compensation delays, off for a new graph. A
-// change bumps the generation
+// whether the edges get latency compensation delays, off for a new graph: the
+// audio edges, and the MIDI edges into a playback node. A change bumps the
+// generation
 void graph_compensation_set(GRAPH *graph, bool on);
 // an endpoint port's latency outside the graph: a capture node output's since
 // the audio interface, a playback node input's until it. Not reached (a new
@@ -163,14 +164,14 @@ void graph_latency_join(GraphLatencyPath *path, GraphLatencyRange range);
 // the plan was built with
 void graph_process_rt(GRAPH *graph, NFRAMES_T nframes);
 
-// fn gets each MIDI port whose buffer dropped events since the last call
+// fn gets each MIDI port whose buffer dropped events since the last call; an
+// input also for the compensation delays of its edges
 typedef void (*GRAPH_DROPS_FN)(void *arg, const GraphPortInfo *port,
                                uint32_t dropped);
 void graph_midi_drops_take(GRAPH *graph, GRAPH_DROPS_FN fn, void *arg);
 
-// fn gets each audio edge of a newly built plan whose latency compensation
-// delay was clamped: needed frames, held at max. Once per plan, after
-// graph_plan_update
+// fn gets each edge of a newly built plan whose latency compensation delay was
+// clamped: needed frames, held at max. Once per plan, after graph_plan_update
 typedef void (*GRAPH_CLAMPS_FN)(void *arg, const GraphPortInfo *from,
                                 const GraphPortInfo *to, uint32_t needed,
                                 uint32_t max);
@@ -178,9 +179,9 @@ void graph_delay_clamps_take(GRAPH *graph, GRAPH_CLAMPS_FN fn, void *arg);
 
 // [audio-thread] inside its node's process: the port's buffer this cycle,
 // NULL for the other type. An input's is read-only: silence / empty without
-// sources, the source's own with one undelayed, else their sum - an audio
-// source through its edge's compensation delay. A MIDI output is cleared for
-// nframes before the node runs
+// sources, the source's own with one undelayed, else their sum - a source
+// through its edge's compensation delay. A MIDI output is cleared for nframes
+// before the node runs
 SAMPLE_T *graph_port_audio_rt(const GRAPH_PORT *port);
 MIDI_BUF *graph_port_midi_rt(const GRAPH_PORT *port);
 // [audio-thread] inside its node's process, as of the plan running: an input's
@@ -189,3 +190,11 @@ MIDI_BUF *graph_port_midi_rt(const GRAPH_PORT *port);
 // path from (to) a node without connected inputs (outputs) that is no endpoint
 // starts (ends) at 0. {0, 0} without a path
 GraphLatencyRange graph_port_latency_rt(const GRAPH_PORT *port);
+// [audio-thread] inside its node's process, as of the plan running: the
+// largest compensation delay on the port's edges, frames
+uint32_t graph_port_delay_rt(const GRAPH_PORT *port);
+// [audio-thread] inside its node's process, on a MIDI output: its edges'
+// compensation delays drop the events they hold, this cycle's go through
+// undelayed. A MIDI delay keeps what it holds across a change of it; this
+// drops it
+void graph_port_midi_flush_rt(GRAPH_PORT *port);
