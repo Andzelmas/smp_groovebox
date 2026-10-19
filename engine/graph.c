@@ -35,7 +35,8 @@ struct _graph_port {
     unsigned int free_at;
     // latency_walk scratch: the paths it counts that reach here
     GraphLatencyPath walk;
-    // plan_lines_build scratch: its index in the newest plan's ports
+    // its index in a plan's ports: plan_lines_build sets the newest plan's,
+    // plan_latency_build the one it builds
     size_t plan_index;
 };
 
@@ -917,17 +918,38 @@ void graph_latency_join(GraphLatencyPath *path, GraphLatencyRange range) {
         path->range.max = range.max;
 }
 
+static GraphLatencyRange range_add(GraphLatencyRange range, uint32_t frames) {
+    return (GraphLatencyRange){latency_add(range.min, frames),
+                               latency_add(range.max, frames)};
+}
+
+// the delay plan gives the edge src -> in, found among in's sources. in's
+// plan_index is its index in plan
+static uint32_t edge_delay(const GRAPH_PLAN *plan, const GRAPH_PORT *src,
+                           const GRAPH_PORT *in) {
+    if (!plan || in->type != PORT_TYPE_AUDIO)
+        return 0;
+    const PLAN_PORT *plan_in = &plan->ports[in->plan_index];
+    for (size_t e = 0; e < plan_in->src_count; e++) {
+        if (in->peers[e] == src)
+            return plan->audio_delays[plan_in->src_first + e];
+    }
+    return 0;
+}
+
 // which paths a latency walk counts: all, the ones from (to) its origin port,
 // or the ones that start (end) at no endpoint
 typedef enum { WALK_ALL, WALK_ORIGIN, WALK_NO_ENDPOINT } LatencyWalk;
 
 // sets every port's walk: capture (order) the latency since its paths
 // started, playback (reversed, flows swapped) until they end. A node's inputs
-// join their sources' ranges, its outputs get the joined inputs + its latency.
-// A node without connected inputs starts paths at 0, if `paths` counts them.
-// The origin port starts its own at 0
-static void latency_walk(GRAPH_NODE **order, size_t n, bool playback,
-                         LatencyWalk paths, const GRAPH_PORT *origin) {
+// join their sources' ranges + the edges' delays in plan (NULL: none), its
+// outputs get the joined inputs + its latency. A node without connected
+// inputs starts paths at 0, if `paths` counts them. The origin port starts its
+// own at 0
+static void latency_walk(const GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n,
+                         bool playback, LatencyWalk paths,
+                         const GRAPH_PORT *origin) {
     unsigned int near = playback ? PORT_FLOW_OUTPUT : PORT_FLOW_INPUT;
     GraphNodeKind endpoint =
         playback ? GRAPH_NODE_PLAYBACK : GRAPH_NODE_CAPTURE;
@@ -944,8 +966,12 @@ static void latency_walk(GRAPH_NODE **order, size_t n, bool playback,
             for (size_t e = 0; e < port->peer_count; e++) {
                 const GRAPH_PORT *peer = port->peers[e];
                 connected = true;
-                if (peer->walk.reached)
-                    graph_latency_join(&port->walk, peer->walk.range);
+                if (!peer->walk.reached)
+                    continue;
+                uint32_t delay = playback ? edge_delay(plan, port, peer)
+                                          : edge_delay(plan, peer, port);
+                graph_latency_join(&port->walk,
+                                   range_add(peer->walk.range, delay));
             }
             if (port->walk.reached)
                 graph_latency_join(&in, port->walk.range);
@@ -953,8 +979,7 @@ static void latency_walk(GRAPH_NODE **order, size_t n, bool playback,
         if (!connected)
             in.reached = paths == WALK_ALL ||
                          (paths == WALK_NO_ENDPOINT && node->kind != endpoint);
-        GraphLatencyRange far = {latency_add(in.range.min, node->latency),
-                                 latency_add(in.range.max, node->latency)};
+        GraphLatencyRange far = range_add(in.range, node->latency);
         for (size_t p = 0; p < node->port_count; p++) {
             GRAPH_PORT *port = node->ports[p];
             if (port->flow == near)
@@ -974,28 +999,31 @@ static GraphLatencyPath latency_walked(const GRAPH_PORT *port) {
     return path;
 }
 
-// plan->latency and plan->ep_paths, walked in the plan's node order
+// plan->latency and plan->ep_paths, walked in the plan's node order, its
+// delays counted
 static void plan_latency_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n,
                                size_t port_total) {
-    latency_walk(order, n, false, WALK_ALL, NULL);
+    for (size_t i = 0; i < port_total; i++)
+        plan->ports[i].port->plan_index = i;
+    latency_walk(plan, order, n, false, WALK_ALL, NULL);
     for (size_t i = 0; i < port_total; i++)
         plan->latency[i].capture = latency_walked(plan->ports[i].port).range;
-    latency_walk(order, n, true, WALK_ALL, NULL);
+    latency_walk(plan, order, n, true, WALK_ALL, NULL);
     for (size_t i = 0; i < port_total; i++)
         plan->latency[i].playback = latency_walked(plan->ports[i].port).range;
 
     size_t cols = plan->ep_to_count + 1;
     for (size_t r = 0; r <= plan->ep_from_count; r++) {
         if (r < plan->ep_from_count)
-            latency_walk(order, n, false, WALK_ORIGIN, plan->ep_from[r]);
+            latency_walk(plan, order, n, false, WALK_ORIGIN, plan->ep_from[r]);
         else
-            latency_walk(order, n, false, WALK_NO_ENDPOINT, NULL);
+            latency_walk(plan, order, n, false, WALK_NO_ENDPOINT, NULL);
         for (size_t c = 0; c < plan->ep_to_count; c++)
             plan->ep_paths[r * cols + c] = latency_walked(plan->ep_to[c]);
     }
     // the same paths from the other end give the same sums, only the ones
     // ending at no playback port are left
-    latency_walk(order, n, true, WALK_NO_ENDPOINT, NULL);
+    latency_walk(plan, order, n, true, WALK_NO_ENDPOINT, NULL);
     for (size_t r = 0; r < plan->ep_from_count; r++)
         plan->ep_paths[r * cols + cols - 1] = latency_walked(plan->ep_from[r]);
     // from none to none: not asked for
@@ -1005,9 +1033,10 @@ static void plan_latency_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n,
 
 // per audio edge T - arrival, T the latest arrival over the node's audio
 // edges. An arrival is the capture walk's longest path: the latest over the
-// node's connected inputs, MIDI too, + its latency
+// node's connected inputs, MIDI too, + its latency. Walked without the delays:
+// solved here, they would leave it as it is
 static void plan_delays_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n) {
-    latency_walk(order, n, false, WALK_ALL, NULL);
+    latency_walk(NULL, order, n, false, WALK_ALL, NULL);
     for (size_t i = 0; i < plan->node_count; i++) {
         const PLAN_NODE *node = &plan->nodes[i];
         const PLAN_PORT *ins = &plan->ports[node->port_first];

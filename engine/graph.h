@@ -136,12 +136,13 @@ int graph_disconnect_keys(GRAPH *graph, uint64_t key_a, uint64_t key_b);
 // next call retries
 int graph_plan_update(GRAPH *graph);
 
-// as of the newest plan: the node latencies summed along each path from
-// `from`, a capture node's output, to `to`, a playback node's input - the
-// nodes between them. from NULL: the paths starting at a node without
-// connected inputs that is no capture node, that node counted; to NULL: the
-// paths ending at one without connected outputs that is no playback node,
-// counted too. Unconnected ports join no path. false when there is none
+// as of the newest plan: the node latencies and the edges' compensation delays
+// summed along each path from `from`, a capture node's output, to `to`, a
+// playback node's input - the nodes between them. from NULL: the paths
+// starting at a node without connected inputs that is no capture node, that
+// node counted; to NULL: the paths ending at one without connected outputs
+// that is no playback node, counted too. Unconnected ports join no path. false
+// when there is none
 bool graph_latency_path(const GRAPH *graph, const GRAPH_PORT *from,
                         const GRAPH_PORT *to, GraphLatencyRange *out);
 
