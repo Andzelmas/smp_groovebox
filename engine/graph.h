@@ -90,6 +90,12 @@ void graph_node_latency_set(GRAPH *graph, GRAPH_NODE *node, uint32_t frames);
 // whether the edges get latency compensation delays, off for a new graph. A
 // change bumps the generation
 void graph_compensation_set(GRAPH *graph, bool on);
+// an endpoint port's latency outside the graph: a capture node output's since
+// the audio interface, a playback node input's until it. Not reached (a new
+// port's): linked to nothing outside, its paths count for no port. Only
+// graph_port_latency_rt uses it. A change bumps the generation
+void graph_endpoint_latency_set(GRAPH *graph, GRAPH_PORT *port,
+                                GraphLatencyPath outside);
 
 // type PORT_TYPE_AUDIO or PORT_TYPE_MIDI, flow PORT_FLOW_INPUT or
 // PORT_FLOW_OUTPUT. name is copied, unique among the ports of the node's
@@ -177,3 +183,9 @@ void graph_delay_clamps_take(GRAPH *graph, GRAPH_CLAMPS_FN fn, void *arg);
 // nframes before the node runs
 SAMPLE_T *graph_port_audio_rt(const GRAPH_PORT *port);
 MIDI_BUF *graph_port_midi_rt(const GRAPH_PORT *port);
+// [audio-thread] inside its node's process, as of the plan running: an input's
+// latency since the audio interface, an output's until it - the endpoints'
+// outside latency + the node latencies and compensation delays on the way. A
+// path from (to) a node without connected inputs (outputs) that is no endpoint
+// starts (ends) at 0. {0, 0} without a path
+GraphLatencyRange graph_port_latency_rt(const GRAPH_PORT *port);

@@ -122,6 +122,8 @@ typedef struct _clap_plug_port_graph {
 typedef struct _clap_plug_port {
     uint32_t ports_count;
     CLAP_PLUG_PORT_GRAPH *graph_port_array;
+    // [audio-thread] sets each latency before process, [main-thread] makes and
+    // changes them only while the plugin is not activated
     clap_audio_buffer_t *audio_ports;
     // what each channel buffer holds, 0 when not allocated
     uint32_t frames;
@@ -2785,6 +2787,24 @@ bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data) {
     return is_dirty;
 }
 
+// [audio-thread] each port's latency from / to the audio interface, the
+// longest over its channels
+static void clap_ports_latency_rt(CLAP_PLUG_PORT *ports) {
+    if (!ports->audio_ports || !ports->graph_port_array)
+        return;
+    for (uint32_t port = 0; port < ports->ports_count; port++) {
+        const CLAP_PLUG_PORT_GRAPH *graph = &ports->graph_port_array[port];
+        uint32_t latency = 0;
+        for (uint32_t chan = 0;
+             graph->graph_ports && chan < graph->channel_count; chan++) {
+            uint32_t max = graph_port_latency_rt(graph->graph_ports[chan]).max;
+            if (max > latency)
+                latency = max;
+        }
+        ports->audio_ports[port].latency = latency;
+    }
+}
+
 // return -1 on error, return 0 if successful but the output was quiet and
 // return 1 if successful and the output not quiet
 static int clap_prepare_input_ports(CLAP_PLUG_INFO *plug_data,
@@ -2806,7 +2826,6 @@ static int clap_prepare_input_ports(CLAP_PLUG_INFO *plug_data,
         CLAP_PLUG_PORT_GRAPH cur_port_graph =
             input_ports->graph_port_array[port];
         clap_audio_buffer_t cur_clap_port = input_ports->audio_ports[port];
-        // TODO nothing is done with the latency property
         uint32_t channels = cur_port_graph.channel_count;
         for (uint32_t chan = 0; chan < channels; chan++) {
             const SAMPLE_T *graph_buffer = NULL;
@@ -2856,7 +2875,6 @@ static int clap_prepare_output_ports(CLAP_PLUG_INFO *plug_data,
             output_ports->graph_port_array[port];
         clap_audio_buffer_t clap_port = output_ports->audio_ports[port];
         uint32_t channels = cur_port_graph.channel_count;
-        // TODO nothing is done with the latency property
         for (uint32_t chan = 0; chan < channels; chan++) {
             SAMPLE_T *clap_buffer = NULL;
 #if SAMPLE_T_AS_DOUBLE == 1
@@ -3069,6 +3087,8 @@ bool clap_plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
         clap_transport_rt(pos, &transport);
     _process.transport = pos ? &transport : NULL;
 
+    clap_ports_latency_rt(&(plug->input_ports));
+    clap_ports_latency_rt(&(plug->output_ports));
     // copy the graph input buffers to clap input audio buffers
     int in_audio_not_quiet =
         clap_prepare_input_ports(plug_data, &(plug->input_ports), nframes);

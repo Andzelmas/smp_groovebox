@@ -162,6 +162,9 @@ typedef struct _audio_backend {
     // [main-thread] writes it, latency_report copies it, both under
     // latency_lock - never held across a JACK call. A pthread mutex
     LATENCY_TABLE latency_table;
+    // by exposed_defs index, what latency_foreign last read: latency_report
+    // writes them, [main-thread] copies them, under latency_lock
+    GraphLatencyPath latency_outside[EXPOSED_COUNT];
     pthread_mutex_t latency_lock;
     bool latency_lock_made;
     // latency_report capped a range since audio_backend_latency_update looked
@@ -1214,6 +1217,12 @@ static void latency_report(jack_latency_callback_mode_t mode, void *arg) {
         if (exposed_defs[i].flow != set_flow)
             foreign[i] = latency_foreign(jack_data, i, mode);
     }
+    pthread_mutex_lock(&jack_data->latency_lock);
+    for (size_t i = 0; i < EXPOSED_COUNT; i++) {
+        if (exposed_defs[i].flow != set_flow)
+            jack_data->latency_outside[i] = foreign[i];
+    }
+    pthread_mutex_unlock(&jack_data->latency_lock);
     for (size_t s = 0; s < EXPOSED_COUNT; s++) {
         if (exposed_defs[s].flow != set_flow || !jack_data->exposed_ports[s])
             continue;
@@ -1253,6 +1262,16 @@ static bool latency_paths_equal(const GraphLatencyPath *a,
 bool audio_backend_latency_update(JACK_INFO *jack_data) {
     if (!jack_data || !jack_data->client || !jack_data->graph)
         return false;
+    GraphLatencyPath outside[EXPOSED_COUNT];
+    // per element: TSan does not see the reads of a memcpy GCC inlines
+    pthread_mutex_lock(&jack_data->latency_lock);
+    for (size_t i = 0; i < EXPOSED_COUNT; i++)
+        outside[i] = jack_data->latency_outside[i];
+    pthread_mutex_unlock(&jack_data->latency_lock);
+    for (size_t i = 0; i < EXPOSED_COUNT; i++)
+        graph_endpoint_latency_set(jack_data->graph,
+                                   jack_data->exposed_graph_ports[i],
+                                   outside[i]);
     LATENCY_TABLE table;
     bool changed = false;
     for (size_t f = 0; f <= EXPOSED_COUNT; f++) {
