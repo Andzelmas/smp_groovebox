@@ -158,6 +158,14 @@ typedef void (*GRAPH_DROPS_FN)(void *arg, const GraphPortInfo *port,
                                uint32_t dropped);
 void graph_midi_drops_take(GRAPH *graph, GRAPH_DROPS_FN fn, void *arg);
 
+// fn gets each audio edge of a newly built plan whose latency compensation
+// delay was clamped: needed frames, held at max. Once per plan, after
+// graph_plan_update
+typedef void (*GRAPH_CLAMPS_FN)(void *arg, const GraphPortInfo *from,
+                                const GraphPortInfo *to, uint32_t needed,
+                                uint32_t max);
+void graph_delay_clamps_take(GRAPH *graph, GRAPH_CLAMPS_FN fn, void *arg);
+
 // [audio-thread] inside its node's process: the port's buffer this cycle,
 // NULL for the other type. An input's is read-only: silence / empty without
 // sources, the source's own with one, their sum with 2+. A MIDI output is

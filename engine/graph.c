@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+// frames, the longest delay an edge gets
+#define COMP_MAX (1U << 18)
+
 // heap record, never moves while it exists
 struct _graph_port {
     GRAPH_NODE *node;
@@ -75,6 +78,13 @@ typedef struct {
     GraphLatencyRange playback;
 } PLAN_LATENCY;
 
+// an audio edge whose delay was clamped at COMP_MAX
+typedef struct {
+    GRAPH_PORT *from;
+    GRAPH_PORT *to;
+    uint32_t needed; // frames
+} PLAN_CLAMP;
+
 // what graph_process_rt runs, never changed once published. Buffers are
 // copied in, [audio-thread] touches no GRAPH_PORT field but the rt slot
 typedef struct _graph_plan GRAPH_PLAN;
@@ -85,6 +95,9 @@ struct _graph_plan {
     size_t node_count;
     PLAN_PORT *ports;
     SAMPLE_T **audio_srcs;
+    // frames, per audio_srcs entry: lines the source up with its node's
+    // latest audio edge
+    uint32_t *audio_delays;
     MIDI_BUF **midi_srcs;
     // what an input without sources reads
     SAMPLE_T *silence;
@@ -100,6 +113,9 @@ struct _graph_plan {
     GRAPH_PORT **ep_to;
     size_t ep_to_count;
     GraphLatencyPath *ep_paths;
+    // [main-thread] only
+    PLAN_CLAMP *clamps;
+    size_t clamp_count;
     // [main-thread], once replaced: freed when the ack reaches free_at
     GRAPH_PLAN *retired_next;
     unsigned int free_at;
@@ -147,6 +163,8 @@ struct _graph {
     GRAPH_PLAN *retired_plans;
     GRAPH_PORT *retired_ports;
     RETIRED_BUFS *retired_bufs;
+    // the plan gen graph_delay_clamps_take last reported
+    unsigned int clamps_taken;
 };
 
 // grow a port array to hold one more, false on allocation failure
@@ -278,11 +296,13 @@ static void plan_free(GRAPH_PLAN *plan) {
     free(plan->nodes);
     free(plan->ports);
     free(plan->audio_srcs);
+    free(plan->audio_delays);
     free(plan->midi_srcs);
     free(plan->latency);
     free(plan->ep_from);
     free(plan->ep_to);
     free(plan->ep_paths);
+    free(plan->clamps);
     free(plan);
 }
 
@@ -958,6 +978,39 @@ static void plan_latency_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n,
         (GraphLatencyPath){.reached = false};
 }
 
+// per audio edge T - arrival, T the latest arrival over the node's audio
+// edges. An arrival is the capture walk's longest path: the latest over the
+// node's connected inputs, MIDI too, + its latency
+static void plan_delays_build(GRAPH_PLAN *plan, GRAPH_NODE **order, size_t n) {
+    latency_walk(order, n, false, WALK_ALL, NULL);
+    for (size_t i = 0; i < plan->node_count; i++) {
+        const PLAN_NODE *node = &plan->nodes[i];
+        const PLAN_PORT *ins = &plan->ports[node->port_first];
+        uint32_t t = 0;
+        for (size_t p = 0; p < node->in_count; p++) {
+            uint32_t arrival = latency_walked(ins[p].port).range.max;
+            if (ins[p].type == PORT_TYPE_AUDIO && arrival > t)
+                t = arrival;
+        }
+        for (size_t p = 0; p < node->in_count; p++) {
+            const PLAN_PORT *in = &ins[p];
+            if (in->type != PORT_TYPE_AUDIO)
+                continue;
+            for (size_t e = 0; e < in->src_count; e++) {
+                GRAPH_PORT *src = in->port->peers[e];
+                uint32_t needed = t - latency_walked(src).range.max;
+                uint32_t *delay = &plan->audio_delays[in->src_first + e];
+                *delay = needed;
+                if (needed <= COMP_MAX)
+                    continue;
+                *delay = COMP_MAX;
+                plan->clamps[plan->clamp_count++] =
+                    (PLAN_CLAMP){src, in->port, needed};
+            }
+        }
+    }
+}
+
 // nodes in edge order (Kahn, ties in add order), per node its ports, per input
 // its sources. NULL on allocation failure
 static GRAPH_PLAN *plan_build(GRAPH *graph) {
@@ -994,6 +1047,10 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
         plan->ports = malloc(sizeof(PLAN_PORT) * (port_total ? port_total : 1));
         plan->audio_srcs =
             malloc(sizeof(SAMPLE_T *) * (audio_total ? audio_total : 1));
+        plan->audio_delays =
+            malloc(sizeof(uint32_t) * (audio_total ? audio_total : 1));
+        plan->clamps =
+            malloc(sizeof(PLAN_CLAMP) * (audio_total ? audio_total : 1));
         plan->midi_srcs =
             malloc(sizeof(MIDI_BUF *) * (midi_total ? midi_total : 1));
         plan->latency =
@@ -1005,8 +1062,8 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
                                 (to_total + 1));
     }
     if (!plan || !order || !plan->nodes || !plan->ports || !plan->audio_srcs ||
-        !plan->midi_srcs || !plan->latency || !plan->ep_from || !plan->ep_to ||
-        !plan->ep_paths)
+        !plan->audio_delays || !plan->clamps || !plan->midi_srcs ||
+        !plan->latency || !plan->ep_from || !plan->ep_to || !plan->ep_paths)
         goto fail;
 
     // the queue doubles as the order
@@ -1074,6 +1131,7 @@ static GRAPH_PLAN *plan_build(GRAPH *graph) {
     plan->max_frames = graph->max_buffer_size;
     plan->silence = graph->silence;
     plan->midi_empty = graph->midi_empty;
+    plan_delays_build(plan, order, n);
     plan_latency_build(plan, order, n, port_total);
     free(order);
     return plan;
@@ -1213,6 +1271,24 @@ void graph_midi_drops_take(GRAPH *graph, GRAPH_DROPS_FN fn, void *arg) {
         GraphPortInfo info;
         port_info_fill(port, &info);
         fn(arg, &info, dropped);
+    }
+}
+
+void graph_delay_clamps_take(GRAPH *graph, GRAPH_CLAMPS_FN fn, void *arg) {
+    if (!graph || !fn)
+        return;
+    const GRAPH_PLAN *plan = atomic_load(&graph->plan);
+    // a change since may have freed a removed node its ports point to - the
+    // next plan reports
+    if (!plan || plan->gen == graph->clamps_taken ||
+        graph->plan_built_from != graph->generation)
+        return;
+    graph->clamps_taken = plan->gen;
+    for (size_t i = 0; i < plan->clamp_count; i++) {
+        GraphPortInfo from, to;
+        port_info_fill(plan->clamps[i].from, &from);
+        port_info_fill(plan->clamps[i].to, &to);
+        fn(arg, &from, &to, plan->clamps[i].needed, COMP_MAX);
     }
 }
 

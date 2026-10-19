@@ -1967,6 +1967,19 @@ static void app_log_midi_drops(void *arg, const GraphPortInfo *port,
                        port->name, dropped);
 }
 
+static void app_log_delay_clamp(void *arg, const GraphPortInfo *from,
+                                const GraphPortInfo *to, uint32_t needed,
+                                uint32_t max) {
+    APP_INFO *app_data = (APP_INFO *)arg;
+    const char *from_owner =
+        owner_label(app_data, from->owner_tag, from->owner_uid);
+    const char *to_owner = owner_label(app_data, to->owner_tag, to->owner_uid);
+    log_append_logfile("%s %s -> %s %s: needs a %u frame delay, clamped at "
+                       "%u\n",
+                       from_owner ? from_owner : "?", from->name,
+                       to_owner ? to_owner : "?", to->name, needed, max);
+}
+
 // follow the backend's sample rate and buffer size. The plan and the plugins
 // guard the sizes they were set up for, so the order is free; the graph goes
 // first so the plugins' restarts already publish its new buffers
@@ -2059,6 +2072,7 @@ void app_data_update(void *root_user_data) {
     // publish what the contexts changed in the graph, free what the audio
     // thread no longer runs
     graph_plan_update(app_data->graph);
+    graph_delay_clamps_take(app_data->graph, app_log_delay_clamp, app_data);
     if (audio_backend_latency_update(app_data->backend))
         log_append_logfile("Exposed port latency capped - a loop through "
                            "another program?\n");
