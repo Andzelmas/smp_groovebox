@@ -50,6 +50,8 @@ extern char **environ;
 
 // how many clap plugins can there be in the plugin array
 #define MAX_INSTANCES 5
+// how many fds one plugin can register through posix-fd-support
+#define CLAP_PLUG_FDS_MAX 16
 
 // size of the single plugin display name buffer (CLAP_PLUG_PLUG.name). Internal
 // to this module - the name leaves as a const char* so callers need no matching
@@ -202,6 +204,11 @@ typedef struct _clap_plug_plug {
     // first browse (see clap_plug_presets_get)
     TREE_INDEX *presets;
     bool presets_built;
+    // [main-thread] the fds registered through posix-fd-support. A free slot
+    // has fd -1, fds_count is one past the last used slot
+    struct pollfd fds[CLAP_PLUG_FDS_MAX];
+    clap_posix_fd_flags_t fd_flags[CLAP_PLUG_FDS_MAX];
+    uint32_t fds_count;
     // CLAP_PLUG_REQ_* bits, set from any thread
     atomic_uint requests;
     // events the input event list had no room for, taken on [main-thread]
@@ -250,6 +257,7 @@ typedef struct _clap_plug_info {
     clap_host_preset_load_t ext_preset_load; // struct that holds functions for
                                              // the preset-load extension
     clap_host_latency_t ext_latency;
+    clap_host_posix_fd_support_t ext_posix_fd;
     GRAPH *graph;
     // the clock clap_process.transport comes from, read on [audio-thread]
     TRANSPORT *transport;
@@ -1363,6 +1371,8 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
         }
         plug->plug_inst = NULL;
     }
+    // after destroy(), which may still unregister them
+    plug->fds_count = 0;
     // requests and drops left by the destroyed instance must not reach the
     // next plugin loaded into this slot
     atomic_store(&plug->requests, 0U);
@@ -1489,6 +1499,9 @@ static const void *clap_plug_get_extension(const clap_host_t *host,
     if (strcmp(ex_id, CLAP_EXT_LATENCY) == 0) {
         return &(plug_data->ext_latency);
     }
+    if (strcmp(ex_id, CLAP_EXT_POSIX_FD_SUPPORT) == 0) {
+        return &(plug_data->ext_posix_fd);
+    }
     // if there is no extension implemented that the plugin needs send the name
     // of the extension to the ui
     context_sub_send_msg(plug_data->control_data, (void *)plug_data,
@@ -1521,6 +1534,100 @@ static void clap_plug_latency_update(CLAP_PLUG_PLUG *plug) {
     plug->latency_changed = true;
     graph_node_latency_set(plug->plug_data->graph, plug->node, latency);
     log_append_logfile("%s: latency %u frames\n", plug->name, latency);
+}
+
+// the slot fd is registered in, -1 if none
+static int clap_plug_fd_slot(const CLAP_PLUG_PLUG *plug, int fd) {
+    for (uint32_t i = 0; i < plug->fds_count; i++) {
+        if (plug->fds[i].fd == fd)
+            return (int)i;
+    }
+    return -1;
+}
+
+static short clap_plug_fd_poll_events(clap_posix_fd_flags_t flags) {
+    short events = 0;
+    if ((flags & CLAP_POSIX_FD_READ) != 0)
+        events |= POLLIN;
+    if ((flags & CLAP_POSIX_FD_WRITE) != 0)
+        events |= POLLOUT;
+    return events;
+}
+
+// posix-fd-support extension, [main-thread] only
+static bool clap_plug_ext_register_fd(const clap_host_t *host, int fd,
+                                      clap_posix_fd_flags_t flags) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!is_main_thread || !plug || fd < 0 || clap_plug_fd_slot(plug, fd) != -1)
+        return false;
+    uint32_t slot = 0;
+    while (slot < plug->fds_count && plug->fds[slot].fd >= 0)
+        slot++;
+    if (slot == CLAP_PLUG_FDS_MAX)
+        return false;
+    // revents cleared - a slot reused inside on_fd keeps no stale poll result
+    plug->fds[slot] = (struct pollfd){
+        .fd = fd, .events = clap_plug_fd_poll_events(flags), .revents = 0};
+    plug->fd_flags[slot] = flags;
+    if (slot == plug->fds_count)
+        plug->fds_count++;
+    return true;
+}
+
+static bool clap_plug_ext_modify_fd(const clap_host_t *host, int fd,
+                                    clap_posix_fd_flags_t flags) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!is_main_thread || !plug || fd < 0)
+        return false;
+    int slot = clap_plug_fd_slot(plug, fd);
+    if (slot == -1)
+        return false;
+    plug->fds[slot].events = clap_plug_fd_poll_events(flags);
+    plug->fd_flags[slot] = flags;
+    return true;
+}
+
+// leaves a tombstone, since on_fd may call it while the dispatch walks the
+// slots
+static bool clap_plug_ext_unregister_fd(const clap_host_t *host, int fd) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!is_main_thread || !plug || fd < 0)
+        return false;
+    int slot = clap_plug_fd_slot(plug, fd);
+    if (slot == -1)
+        return false;
+    plug->fds[slot].fd = -1;
+    while (plug->fds_count > 0 && plug->fds[plug->fds_count - 1].fd < 0)
+        plug->fds_count--;
+    return true;
+}
+
+// [main-thread] on_fd for each ready fd. on_fd may change the table, so every
+// slot is checked again before its call
+static void clap_plug_fds_dispatch(CLAP_PLUG_PLUG *plug) {
+    uint32_t count = plug->fds_count;
+    if (count == 0 || poll(plug->fds, count, 0) <= 0)
+        return;
+    const clap_plugin_posix_fd_support_t *ext = plug->plug_inst->get_extension(
+        plug->plug_inst, CLAP_EXT_POSIX_FD_SUPPORT);
+    if (!ext || !ext->on_fd)
+        return;
+    for (uint32_t i = 0; i < count; i++) {
+        const struct pollfd *pfd = &(plug->fds[i]);
+        if (pfd->fd < 0)
+            continue;
+        // a hangup or an error wakes the reader and writer too, so they see it
+        clap_posix_fd_flags_t flags = 0;
+        if ((pfd->revents & (POLLIN | POLLHUP | POLLERR)) != 0)
+            flags |= CLAP_POSIX_FD_READ;
+        if ((pfd->revents & (POLLOUT | POLLERR)) != 0)
+            flags |= CLAP_POSIX_FD_WRITE;
+        if ((pfd->revents & (POLLERR | POLLHUP | POLLNVAL)) != 0)
+            flags |= CLAP_POSIX_FD_ERROR;
+        flags &= plug->fd_flags[i];
+        if (flags != 0)
+            ext->on_fd(plug->plug_inst, pfd->fd, flags);
+    }
 }
 
 static int clap_plug_activate_start_processing(void *user_data) {
@@ -1874,6 +1981,8 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
         if (out_dropped > 0)
             log_append_logfile("%s: %u output events dropped\n",
                                cur_plug->name, out_dropped);
+        // before the requests, so the ones on_fd makes are handled this cycle
+        clap_plug_fds_dispatch(cur_plug);
         clap_plug_requests_process(cur_plug);
         // host side flush - send the param changes to a plugin that is not
         // activated, since it gets no process() calls
@@ -1959,6 +2068,10 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     plug_data->ext_preset_load.on_error = clap_ext_preset_load_on_error;
     // latency extension
     plug_data->ext_latency.changed = clap_plug_ext_latency_changed;
+    // posix-fd-support extension
+    plug_data->ext_posix_fd.register_fd = clap_plug_ext_register_fd;
+    plug_data->ext_posix_fd.modify_fd = clap_plug_ext_modify_fd;
+    plug_data->ext_posix_fd.unregister_fd = clap_plug_ext_unregister_fd;
 
     // init the plugins array
     plug_data->plugins_dirty = false;
