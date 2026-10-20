@@ -52,6 +52,8 @@ extern char **environ;
 #define MAX_INSTANCES 5
 // how many fds one plugin can register through posix-fd-support
 #define CLAP_PLUG_FDS_MAX 16
+// how many timers one plugin can register through timer-support
+#define CLAP_PLUG_TIMERS_MAX 16
 
 // size of the single plugin display name buffer (CLAP_PLUG_PLUG.name). Internal
 // to this module - the name leaves as a const char* so callers need no matching
@@ -131,6 +133,14 @@ typedef struct _clap_plug_port {
     uint32_t frames;
 } CLAP_PLUG_PORT;
 
+// a timer registered through timer-support, id CLAP_INVALID_ID = free slot
+typedef struct _clap_plug_timer {
+    clap_id id;
+    uint32_t period_ms;
+    // CLOCK_MONOTONIC ms
+    uint64_t next_due;
+} CLAP_PLUG_TIMER;
+
 // note port struct holds the graph ports and info about the ports
 typedef struct _clap_plug_note_port {
     uint32_t ports_count;
@@ -209,6 +219,11 @@ typedef struct _clap_plug_plug {
     struct pollfd fds[CLAP_PLUG_FDS_MAX];
     clap_posix_fd_flags_t fd_flags[CLAP_PLUG_FDS_MAX];
     uint32_t fds_count;
+    // [main-thread] the timers registered through timer-support, timers_count
+    // is one past the last used slot
+    CLAP_PLUG_TIMER timers[CLAP_PLUG_TIMERS_MAX];
+    uint32_t timers_count;
+    clap_id next_timer_id;
     // CLAP_PLUG_REQ_* bits, set from any thread
     atomic_uint requests;
     // events the input event list had no room for, taken on [main-thread]
@@ -258,6 +273,7 @@ typedef struct _clap_plug_info {
                                              // the preset-load extension
     clap_host_latency_t ext_latency;
     clap_host_posix_fd_support_t ext_posix_fd;
+    clap_host_timer_support_t ext_timer;
     GRAPH *graph;
     // the clock clap_process.transport comes from, read on [audio-thread]
     TRANSPORT *transport;
@@ -1373,6 +1389,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     }
     // after destroy(), which may still unregister them
     plug->fds_count = 0;
+    plug->timers_count = 0;
     // requests and drops left by the destroyed instance must not reach the
     // next plugin loaded into this slot
     atomic_store(&plug->requests, 0U);
@@ -1502,6 +1519,9 @@ static const void *clap_plug_get_extension(const clap_host_t *host,
     if (strcmp(ex_id, CLAP_EXT_POSIX_FD_SUPPORT) == 0) {
         return &(plug_data->ext_posix_fd);
     }
+    if (strcmp(ex_id, CLAP_EXT_TIMER_SUPPORT) == 0) {
+        return &(plug_data->ext_timer);
+    }
     // if there is no extension implemented that the plugin needs send the name
     // of the extension to the ui
     context_sub_send_msg(plug_data->control_data, (void *)plug_data,
@@ -1627,6 +1647,79 @@ static void clap_plug_fds_dispatch(CLAP_PLUG_PLUG *plug) {
         flags &= plug->fd_flags[i];
         if (flags != 0)
             ext->on_fd(plug->plug_inst, pfd->fd, flags);
+    }
+}
+
+static uint64_t clap_now_ms(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
+}
+
+// timer-support extension, [main-thread] only
+static bool clap_plug_ext_register_timer(const clap_host_t *host,
+                                         uint32_t period_ms,
+                                         clap_id *timer_id) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!is_main_thread || !plug || !timer_id)
+        return false;
+    uint32_t slot = 0;
+    while (slot < plug->timers_count &&
+           plug->timers[slot].id != CLAP_INVALID_ID)
+        slot++;
+    if (slot == CLAP_PLUG_TIMERS_MAX)
+        return false;
+    // at least 1 ms, so a timer is never due in the pass that registered it
+    uint32_t period = period_ms > 0 ? period_ms : 1;
+    plug->timers[slot] = (CLAP_PLUG_TIMER){.id = plug->next_timer_id++,
+                                           .period_ms = period,
+                                           .next_due = clap_now_ms() + period};
+    if (slot == plug->timers_count)
+        plug->timers_count++;
+    *timer_id = plug->timers[slot].id;
+    return true;
+}
+
+// leaves a tombstone, since on_timer may call it while the dispatch walks the
+// slots
+static bool clap_plug_ext_unregister_timer(const clap_host_t *host,
+                                           clap_id timer_id) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!is_main_thread || !plug || timer_id == CLAP_INVALID_ID)
+        return false;
+    for (uint32_t i = 0; i < plug->timers_count; i++) {
+        if (plug->timers[i].id != timer_id)
+            continue;
+        plug->timers[i].id = CLAP_INVALID_ID;
+        while (plug->timers_count > 0 &&
+               plug->timers[plug->timers_count - 1].id == CLAP_INVALID_ID)
+            plug->timers_count--;
+        return true;
+    }
+    return false;
+}
+
+// [main-thread] on_timer for each due timer, so the resolution is how often
+// this is called. on_timer may change the table, so every slot is checked
+// again before its call
+static void clap_plug_timers_dispatch(CLAP_PLUG_PLUG *plug) {
+    uint32_t count = plug->timers_count;
+    if (count == 0)
+        return;
+    const clap_plugin_timer_support_t *ext =
+        plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_TIMER_SUPPORT);
+    if (!ext || !ext->on_timer)
+        return;
+    uint64_t now = clap_now_ms();
+    for (uint32_t i = 0; i < count; i++) {
+        CLAP_PLUG_TIMER *timer = &(plug->timers[i]);
+        if (timer->id == CLAP_INVALID_ID || timer->next_due > now)
+            continue;
+        timer->next_due += timer->period_ms;
+        // missed periods are skipped, not caught up
+        if (timer->next_due <= now)
+            timer->next_due = now + timer->period_ms;
+        ext->on_timer(plug->plug_inst, timer->id);
     }
 }
 
@@ -1981,8 +2074,10 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
         if (out_dropped > 0)
             log_append_logfile("%s: %u output events dropped\n",
                                cur_plug->name, out_dropped);
-        // before the requests, so the ones on_fd makes are handled this cycle
+        // before the requests, so the ones on_fd and on_timer make are handled
+        // this cycle
         clap_plug_fds_dispatch(cur_plug);
+        clap_plug_timers_dispatch(cur_plug);
         clap_plug_requests_process(cur_plug);
         // host side flush - send the param changes to a plugin that is not
         // activated, since it gets no process() calls
@@ -2072,6 +2167,9 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     plug_data->ext_posix_fd.register_fd = clap_plug_ext_register_fd;
     plug_data->ext_posix_fd.modify_fd = clap_plug_ext_modify_fd;
     plug_data->ext_posix_fd.unregister_fd = clap_plug_ext_unregister_fd;
+    // timer-support extension
+    plug_data->ext_timer.register_timer = clap_plug_ext_register_timer;
+    plug_data->ext_timer.unregister_timer = clap_plug_ext_unregister_timer;
 
     // init the plugins array
     plug_data->plugins_dirty = false;
@@ -2217,13 +2315,6 @@ static bool clap_scan_find_scanner(char *out, size_t out_len) {
     return access(out, X_OK) == 0;
 }
 
-static int clap_scan_ms_since(const struct timespec *start) {
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (int)((now.tv_sec - start->tv_sec) * 1000 +
-                 (now.tv_nsec - start->tv_nsec) / 1000000);
-}
-
 // runs the scanner with argv (argv[0] is its path) and returns everything it
 // printed (NULL when nothing), its length in *out_len. A scanner that hangs is
 // killed after timeout_ms, keeping what it printed so far. Output past
@@ -2270,10 +2361,9 @@ static char *clap_scan_run(char *const argv[], int timeout_ms,
     size_t len = 0;
     size_t cap = 0;
     bool ended = false;
-    struct timespec start;
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    uint64_t start = clap_now_ms();
     for (;;) {
-        int left_ms = timeout_ms - clap_scan_ms_since(&start);
+        int left_ms = timeout_ms - (int)(clap_now_ms() - start);
         struct pollfd pfd = {.fd = fds[0], .events = POLLIN};
         int ready = left_ms > 0 ? poll(&pfd, 1, left_ms) : 0;
         if (ready < 0 && errno == EINTR)
