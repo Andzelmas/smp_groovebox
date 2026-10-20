@@ -34,12 +34,12 @@ bool app_data_poll_event(void *root_user_data, DataEvent *out);
 // root DataObject's user_data (APP_INFO*).
 void app_data_update(void *root_user_data);
 
-// 2d wake fd: an epoll fd combining every CLAP plugin's registered fd/timer
-// (through clap_plug_wake_fd) with a periodic rt->ui timerfd of period_ms (0
-// = no periodic tick). -1 if it could not be made. Built on first call; a
-// later call only rearms the periodic timerfd to a new period_ms. Readable ->
-// call app_data_update (never read this fd itself - app_data_update drains
-// whatever needs draining).
+// optional wake fd: an epoll fd combining every CLAP plugin's registered
+// fd/timer (through clap_plug_wake_fd) with a periodic rt->ui timerfd of
+// period_ms (0 = no periodic tick). -1 if it could not be made. Built on
+// first call; a later call only rearms the periodic timerfd to a new
+// period_ms. Readable -> call app_data_update (never read this fd itself -
+// app_data_update drains whatever needs draining).
 int app_data_wake_fd(void *root_user_data, uint32_t period_ms);
 
 // pause the [audio-thread] processing with a mutex and clean memory of the

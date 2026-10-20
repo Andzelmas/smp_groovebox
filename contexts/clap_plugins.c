@@ -141,8 +141,8 @@ typedef struct _clap_plug_timer {
     uint32_t period_ms;
     // CLOCK_MONOTONIC ms
     uint64_t next_due;
-    // mirrors period_ms for the wake epoll set (2d), -1 if it could not be
-    // made - the next_due dispatch above still works without it
+    // mirrors period_ms for the wake epoll set, -1 if it could not be made -
+    // the next_due dispatch above still works without it
     int timerfd;
 } CLAP_PLUG_TIMER;
 
@@ -285,7 +285,7 @@ typedef struct _clap_plug_info {
     // paired with a plugin's uid as its node's owner
     uint64_t owner_tag;
     // [main-thread] epoll fd every plugin's registered fds and timerfds are
-    // mirrored into (2d), -1 if it could not be made
+    // mirrored into, -1 if it could not be made
     int wake_epoll_fd;
 } CLAP_PLUG_INFO;
 
@@ -1376,7 +1376,7 @@ static void clap_plug_deactivate(CLAP_PLUG_PLUG *plug) {
     plug->plug_inst->deactivate(plug->plug_inst);
 }
 
-// epoll_ctl on the shared wake set (2d), used for both plugin fds and timerfds.
+// epoll_ctl on the shared wake set, used for both plugin fds and timerfds.
 // Best-effort: a failure here never fails the CLAP extension call, the
 // poll()-based dispatch below (clap_plug_fds_dispatch/clap_plug_timers_dispatch)
 // drives on_fd/on_timer regardless of whether the wake set has this fd.

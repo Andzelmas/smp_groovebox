@@ -28,7 +28,7 @@ void app_intrf_destroy(APP_INTRF *app_intrf);
 // all the contexts still represent valid data
 void nav_update(APP_INTRF *app_intrf);
 
-// optional wake fd (2d): an epoll fd that goes readable whenever nav_update
+// optional wake fd: an epoll fd that goes readable whenever nav_update
 // has work to do (a CLAP plugin's fd/timer, or the periodic rt->ui timerfd
 // armed to period_ms - 0 disarms it). -1 if it could not be made. A UI may
 // ignore this and just call nav_update on its own tick instead. Level-
