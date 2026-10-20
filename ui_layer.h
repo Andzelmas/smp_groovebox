@@ -120,6 +120,14 @@ size_t ui_layer_target_list_remove_id(UI_TARGET_LIST* targets, ContextId id);
 // user should call this each cycle
 void ui_layer_update_cycle(UI_LAYER* ui_layer);
 
+// optional wake fd: an epoll fd that goes readable whenever
+// ui_layer_update_cycle has work to do - -1 if none (the feature is
+// unavailable; the UI must keep ticking on its own). period_ms arms the
+// fd's own fallback tick (0 = none), for a UI with no other cadence of its
+// own; a later call only changes that period. Level-triggered: wait on it
+// and call ui_layer_update_cycle, never read the fd itself.
+int ui_layer_wake_fd(UI_LAYER *ui_layer, uint32_t period_ms);
+
 // return the root context ContextId
 ContextId ui_layer_state_root_return(UI_LAYER* ui_layer);
 

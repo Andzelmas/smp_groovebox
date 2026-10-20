@@ -76,6 +76,8 @@ typedef struct _app_intrf {
     // destroy the whole data. root_user_data is the root DataObject's
     // user_data. Used when closing the app
     void (*data_destroy)(void *root_user_data);
+    // the wake fd, see nav_wake_fd
+    int (*wake_fd)(void *root_user_data, uint32_t period_ms);
 
     // context layer change log (see cx_events.h). cx_seq is the last assigned
     // sequence number (0 = nothing emitted); the slot for sequence s is
@@ -264,6 +266,7 @@ APP_INTRF *app_intrf_init() {
     app_intrf->data_update = app_data_update;
     app_intrf->data_poll_event = app_data_poll_event;
     app_intrf->data_destroy = app_stop_and_clean;
+    app_intrf->wake_fd = app_data_wake_fd;
     //--------------------------------------------------
     app_intrf->cx_hashtable = ht_create(32);
     if(!app_intrf->cx_hashtable){
@@ -506,6 +509,12 @@ void app_intrf_destroy(APP_INTRF *app_intrf) {
 // functions for the ui layer
 void nav_update(APP_INTRF *app_intrf) {
     app_intrf_sync(app_intrf);
+}
+
+int nav_wake_fd(APP_INTRF *app_intrf, uint32_t period_ms) {
+    if (!app_intrf || !app_intrf->wake_fd)
+        return -1;
+    return app_intrf->wake_fd(app_intrf->main_user_data, period_ms);
 }
 
 ContextId nav_cx_root_return(APP_INTRF* app_intrf){

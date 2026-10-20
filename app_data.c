@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
+#include <sys/timerfd.h>
+#include <unistd.h>
 // my libraries
 #include "app_data.h"
 #include "backend/audio_backend.h"
@@ -64,6 +67,13 @@ typedef struct _app_info {
     size_t event_count; // events pushed since the queue was last empty
     size_t event_read;  // next event to read
     size_t event_cap;
+
+    // wake fd: a top-level epoll composing clap_plug_data's own wake fd
+    // (its plugins' posix-fd/timer fds) with a periodic rt->ui timerfd, for a
+    // UI that wants to sleep instead of ticking. -1 until first asked for.
+    int wake_epoll_fd;
+    int rt_ui_timerfd;
+    uint32_t rt_ui_period_ms; // last period asked for, 0 = disarmed
 } APP_INFO;
 
 // push one event, growing the queue if it is full
@@ -113,6 +123,10 @@ static int clean_memory(APP_INFO *app_data) {
     // clean the app_data
     context_sub_clean(app_data->control_data);
     free(app_data->events);
+    if (app_data->rt_ui_timerfd >= 0)
+        close(app_data->rt_ui_timerfd);
+    if (app_data->wake_epoll_fd >= 0)
+        close(app_data->wake_epoll_fd);
     if (app_data)
         free(app_data);
 
@@ -1823,6 +1837,9 @@ DataObject app_init(void) {
     app_data->event_read = 0;
     app_data->event_cap = 0;
     app_data->graph_generation_seen = 0;
+    app_data->wake_epoll_fd = -1;
+    app_data->rt_ui_timerfd = -1;
+    app_data->rt_ui_period_ms = 0;
 
     /*init the audio backend for the whole program*/
     /*--------------------------------------------------*/
@@ -2050,10 +2067,53 @@ static void app_transport_sync_update(APP_INFO *app_data) {
     app_data->sync_seen = TRANSPORT_SYNC_FOLLOW;
 }
 
+int app_data_wake_fd(void *root_user_data, uint32_t period_ms) {
+    if (!root_user_data)
+        return -1;
+    APP_INFO *app_data = (APP_INFO *)root_user_data;
+    if (app_data->wake_epoll_fd < 0) {
+        app_data->wake_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+        if (app_data->wake_epoll_fd < 0)
+            return -1;
+        int clap_fd = clap_plug_wake_fd(app_data->clap_plug_data);
+        if (clap_fd >= 0) {
+            struct epoll_event ev = {.events = EPOLLIN};
+            ev.data.fd = clap_fd;
+            epoll_ctl(app_data->wake_epoll_fd, EPOLL_CTL_ADD, clap_fd, &ev);
+        }
+        app_data->rt_ui_timerfd =
+            timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+        if (app_data->rt_ui_timerfd >= 0) {
+            struct epoll_event ev = {.events = EPOLLIN};
+            ev.data.fd = app_data->rt_ui_timerfd;
+            epoll_ctl(app_data->wake_epoll_fd, EPOLL_CTL_ADD,
+                     app_data->rt_ui_timerfd, &ev);
+        }
+    }
+    if (app_data->rt_ui_timerfd >= 0 &&
+        period_ms != app_data->rt_ui_period_ms) {
+        struct itimerspec spec = {
+            .it_value = {.tv_sec = period_ms / 1000,
+                        .tv_nsec = (long)(period_ms % 1000) * 1000000L},
+            .it_interval = {.tv_sec = period_ms / 1000,
+                           .tv_nsec = (long)(period_ms % 1000) * 1000000L}};
+        timerfd_settime(app_data->rt_ui_timerfd, 0, &spec, NULL);
+        app_data->rt_ui_period_ms = period_ms;
+    }
+    return app_data->wake_epoll_fd;
+}
+
 void app_data_update(void *root_user_data) {
     if (!root_user_data)
         return;
     APP_INFO *app_data = (APP_INFO *)root_user_data;
+    // drain the periodic rt->ui timerfd - level-triggered, so leaving it
+    // unread would keep the wake epoll fd readable forever. One read empties
+    // the whole count and resets it to 0.
+    if (app_data->rt_ui_timerfd >= 0) {
+        uint64_t expirations;
+        read(app_data->rt_ui_timerfd, &expirations, sizeof(expirations));
+    }
     // read app_data messages from [audio-thread] on the [main-thread]
     context_sub_process_ui(app_data->control_data);
     transport_update(app_data->transport);

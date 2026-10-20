@@ -71,6 +71,9 @@ typedef struct _views_sync{
     // it invalid
     ContextId *main_current;
     ContextId id_root;
+    // ui_layer_wake_fd(ui_layer, INPUT_WAIT_TICK_MS), requested once at
+    // startup; -1 if unavailable - helper_input_wait falls back to ticking
+    int wake_fd;
 } VIEWS_SYNC;
 
 // one (context, action) pair still reachable this drill round, plus where in
@@ -1172,13 +1175,19 @@ static bool helper_views_reconcile(const VIEWS_SYNC *sync) {
     return redraw;
 }
 
-// wait for a key, pulling fresh data every INPUT_WAIT_TICK_MS meanwhile.
+// wait for a key, pulling fresh data meanwhile - woken by sync->wake_fd when
+// it is available, else by polling every INPUT_WAIT_TICK_MS as before.
 // Returns the key, or INPUT_WAIT_REDRAW as soon as a view shows a change
 static int helper_input_wait(const VIEWS_SYNC *sync) {
-    struct pollfd stdin_poll = {.fd = STDIN_FILENO, .events = POLLIN};
+    struct pollfd fds[2] = {{.fd = STDIN_FILENO, .events = POLLIN},
+                            {.fd = sync->wake_fd, .events = POLLIN}};
+    int nfds = sync->wake_fd >= 0 ? 2 : 1;
+    // the wake fd's own armed timer covers the periodic tick now - no need
+    // for poll() to also time out
+    int timeout = sync->wake_fd >= 0 ? -1 : INPUT_WAIT_TICK_MS;
     while (1) {
-        int ready = poll(&stdin_poll, 1, INPUT_WAIT_TICK_MS);
-        if (ready > 0)
+        int ready = poll(fds, nfds, timeout);
+        if (ready > 0 && (fds[0].revents & POLLIN))
             return getchar();
         // poll itself failed - fall back to simply blocking for the key
         if (ready < 0 && errno != EINTR)
@@ -1431,7 +1440,8 @@ int main() {
     // what the input wait keeps up to date while no key is pressed
     const VIEWS_SYNC views_sync = {ui_layer, states_all, STATES_COUNT,
                                    state_main, &state_main_context_current,
-                                   id_root};
+                                   id_root,
+                                   ui_layer_wake_fd(ui_layer, INPUT_WAIT_TICK_MS)};
 
     while (1) {
         // erase the terminal

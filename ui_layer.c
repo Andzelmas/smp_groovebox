@@ -732,6 +732,12 @@ void ui_layer_update_cycle(UI_LAYER* ui_layer){
     nav_update(ui_layer->app_intrf);
 }
 
+int ui_layer_wake_fd(UI_LAYER *ui_layer, uint32_t period_ms){
+    if(!ui_layer)
+        return -1;
+    return nav_wake_fd(ui_layer->app_intrf, period_ms);
+}
+
 ContextId ui_layer_state_root_return(UI_LAYER* ui_layer){
     if (!ui_layer)
         return CONTEXT_ID_INVALID;

@@ -25,6 +25,12 @@ int clap_read_ui_to_rt_messages(CLAP_PLUG_INFO *plug_data);
 // whole process to stop.
 int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data);
 
+// epoll fd mirroring every plugin's registered posix-fd (read/error interest
+// only - see clap_plug_ext_register_fd) and timer-support fds; -1 if it could
+// not be made. Readable means a clap_read_rt_to_ui_messages call is due -
+// never read this fd itself, the individual timerfds are drained there.
+int clap_plug_wake_fd(CLAP_PLUG_INFO *plug_data);
+
 // presets --------------------------------------------------
 // A loaded plugin's presets from its preset-discovery factory, browsed one
 // level at a time: categories first (a location, then its sub directories),

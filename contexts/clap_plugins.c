@@ -24,7 +24,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/stat.h>
+#include <sys/timerfd.h>
 #include <sys/wait.h>
 #include <threads.h>
 #include <time.h>
@@ -139,6 +141,9 @@ typedef struct _clap_plug_timer {
     uint32_t period_ms;
     // CLOCK_MONOTONIC ms
     uint64_t next_due;
+    // mirrors period_ms for the wake epoll set (2d), -1 if it could not be
+    // made - the next_due dispatch above still works without it
+    int timerfd;
 } CLAP_PLUG_TIMER;
 
 // note port struct holds the graph ports and info about the ports
@@ -279,6 +284,9 @@ typedef struct _clap_plug_info {
     TRANSPORT *transport;
     // paired with a plugin's uid as its node's owner
     uint64_t owner_tag;
+    // [main-thread] epoll fd every plugin's registered fds and timerfds are
+    // mirrored into (2d), -1 if it could not be made
+    int wake_epoll_fd;
 } CLAP_PLUG_INFO;
 
 // return the clap_plug_plug id on the plugins array that has the same
@@ -1368,6 +1376,21 @@ static void clap_plug_deactivate(CLAP_PLUG_PLUG *plug) {
     plug->plug_inst->deactivate(plug->plug_inst);
 }
 
+// epoll_ctl on the shared wake set (2d), used for both plugin fds and timerfds.
+// Best-effort: a failure here never fails the CLAP extension call, the
+// poll()-based dispatch below (clap_plug_fds_dispatch/clap_plug_timers_dispatch)
+// drives on_fd/on_timer regardless of whether the wake set has this fd.
+// Returns epoll_ctl's result (callers that create their own fd, i.e. timers,
+// check it to know whether to keep or close that fd).
+static int clap_plug_wake_epoll_ctl(CLAP_PLUG_INFO *plug_data, int op, int fd,
+                                    uint32_t events) {
+    if (!plug_data || plug_data->wake_epoll_fd < 0 || fd < 0)
+        return -1;
+    struct epoll_event ev = {.events = events};
+    ev.data.fd = fd;
+    return epoll_ctl(plug_data->wake_epoll_fd, op, fd, &ev);
+}
+
 // clean the single plugin struct
 // before calling this the plug_inst_processing should be == 0
 static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
@@ -1387,7 +1410,16 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
         }
         plug->plug_inst = NULL;
     }
-    // after destroy(), which may still unregister them
+    // after destroy(), which may still unregister them. A timerfd is ours to
+    // close though - a misbehaving destroy() must not leak it.
+    for (uint32_t i = 0; i < plug->timers_count; i++) {
+        if (plug->timers[i].timerfd < 0)
+            continue;
+        clap_plug_wake_epoll_ctl(plug_data, EPOLL_CTL_DEL,
+                                 plug->timers[i].timerfd, 0);
+        close(plug->timers[i].timerfd);
+        plug->timers[i].timerfd = -1;
+    }
     plug->fds_count = 0;
     plug->timers_count = 0;
     // requests and drops left by the destroyed instance must not reach the
@@ -1591,6 +1623,10 @@ static bool clap_plug_ext_register_fd(const clap_host_t *host, int fd,
     plug->fd_flags[slot] = flags;
     if (slot == plug->fds_count)
         plug->fds_count++;
+    // write interest never goes in - an almost always writable fd would keep
+    // the wake fd readable forever. error/hangup are reported either way.
+    clap_plug_wake_epoll_ctl(plug->plug_data, EPOLL_CTL_ADD, fd,
+                             (flags & CLAP_POSIX_FD_READ) ? EPOLLIN : 0);
     return true;
 }
 
@@ -1604,6 +1640,8 @@ static bool clap_plug_ext_modify_fd(const clap_host_t *host, int fd,
         return false;
     plug->fds[slot].events = clap_plug_fd_poll_events(flags);
     plug->fd_flags[slot] = flags;
+    clap_plug_wake_epoll_ctl(plug->plug_data, EPOLL_CTL_MOD, fd,
+                             (flags & CLAP_POSIX_FD_READ) ? EPOLLIN : 0);
     return true;
 }
 
@@ -1619,6 +1657,7 @@ static bool clap_plug_ext_unregister_fd(const clap_host_t *host, int fd) {
     plug->fds[slot].fd = -1;
     while (plug->fds_count > 0 && plug->fds[plug->fds_count - 1].fd < 0)
         plug->fds_count--;
+    clap_plug_wake_epoll_ctl(plug->plug_data, EPOLL_CTL_DEL, fd, 0);
     return true;
 }
 
@@ -1673,7 +1712,24 @@ static bool clap_plug_ext_register_timer(const clap_host_t *host,
     uint32_t period = period_ms > 0 ? period_ms : 1;
     plug->timers[slot] = (CLAP_PLUG_TIMER){.id = plug->next_timer_id++,
                                            .period_ms = period,
-                                           .next_due = clap_now_ms() + period};
+                                           .next_due = clap_now_ms() + period,
+                                           .timerfd = -1};
+    // mirrors the period into the wake set, best effort - the next_due
+    // dispatch above fires on_timer regardless of whether this exists
+    int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+    if (tfd >= 0) {
+        struct itimerspec spec = {
+            .it_value = {.tv_sec = period / 1000,
+                        .tv_nsec = (long)(period % 1000) * 1000000L},
+            .it_interval = {.tv_sec = period / 1000,
+                           .tv_nsec = (long)(period % 1000) * 1000000L}};
+        if (timerfd_settime(tfd, 0, &spec, NULL) == 0 &&
+            clap_plug_wake_epoll_ctl(plug->plug_data, EPOLL_CTL_ADD, tfd,
+                                     EPOLLIN) == 0)
+            plug->timers[slot].timerfd = tfd;
+        else
+            close(tfd);
+    }
     if (slot == plug->timers_count)
         plug->timers_count++;
     *timer_id = plug->timers[slot].id;
@@ -1690,6 +1746,12 @@ static bool clap_plug_ext_unregister_timer(const clap_host_t *host,
     for (uint32_t i = 0; i < plug->timers_count; i++) {
         if (plug->timers[i].id != timer_id)
             continue;
+        if (plug->timers[i].timerfd >= 0) {
+            clap_plug_wake_epoll_ctl(plug->plug_data, EPOLL_CTL_DEL,
+                                     plug->timers[i].timerfd, 0);
+            close(plug->timers[i].timerfd);
+            plug->timers[i].timerfd = -1;
+        }
         plug->timers[i].id = CLAP_INVALID_ID;
         while (plug->timers_count > 0 &&
                plug->timers[plug->timers_count - 1].id == CLAP_INVALID_ID)
@@ -1706,6 +1768,16 @@ static void clap_plug_timers_dispatch(CLAP_PLUG_PLUG *plug) {
     uint32_t count = plug->timers_count;
     if (count == 0)
         return;
+    // drain every timerfd regardless of on_timer below - level-triggered, so
+    // leaving one unread keeps the wake fd readable forever. One read empties
+    // the whole count (coalesced into a single counter) and resets it to 0.
+    for (uint32_t i = 0; i < count; i++) {
+        int tfd = plug->timers[i].timerfd;
+        if (tfd < 0)
+            continue;
+        uint64_t expirations;
+        read(tfd, &expirations, sizeof(expirations));
+    }
     const clap_plugin_timer_support_t *ext =
         plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_TIMER_SUPPORT);
     if (!ext || !ext->on_timer)
@@ -2087,6 +2159,10 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data) {
     return 0;
 }
 
+int clap_plug_wake_fd(CLAP_PLUG_INFO *plug_data) {
+    return plug_data ? plug_data->wake_epoll_fd : -1;
+}
+
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error, GRAPH *graph,
@@ -2105,6 +2181,8 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     plug_data->graph = graph;
     plug_data->transport = transport;
     plug_data->owner_tag = owner_tag;
+    // -1 (feature unavailable) is a valid outcome, not a reason to fail init
+    plug_data->wake_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     plug_data->clap_plugin_list.plugin_list = NULL;
     CXCONTROL_RT_FUNCS rt_funcs_struct = {0};
     CXCONTROL_UI_FUNCS ui_funcs_struct = {0};
@@ -3385,6 +3463,9 @@ void clap_plug_clean_memory(CLAP_PLUG_INFO *plug_data) {
     if (plug_data->clap_plugin_list.plugin_list)
         free(plug_data->clap_plugin_list.plugin_list);
     intern_clean(&plug_data->clap_plugin_list.ids);
+
+    if (plug_data->wake_epoll_fd >= 0)
+        close(plug_data->wake_epoll_fd);
 
     free(plug_data);
 }
