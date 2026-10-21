@@ -4,8 +4,8 @@ CC=gcc
 BUILD_DIR=build
 BUILD_FILE=smp_grvbx
 FILE=$(BUILD_DIR)/$(BUILD_FILE)
-#the clap scanner, run by the app from the directory of its binary
 
+#the clap scanner, run by the app from the directory of its binary
 SCAN_FILE=build/smp_clap_scan
 
 # user interfaces, choose one
@@ -17,7 +17,7 @@ UI_CLI = smp_groovebox_ui_cli.c
 INCDIR = -I/usr/include
 
 #additional libs
-LIBS = -lm -ljack -lsndfile -ljson-c -llilv-0
+LIBS = -lm -ljack -lsndfile -ljson-c -llilv-0 $(WINDOW_LIBS)
 
 #jalv source code
 JALV_C = util_funcs/jalv/symap.c util_funcs/jalv/worker.c util_funcs/jalv/zix/allocator.c util_funcs/jalv/zix/allocator.h util_funcs/jalv/zix/attributes.h util_funcs/jalv/zix/ring.c
@@ -32,8 +32,13 @@ UTIL_FUNCS = util_funcs/wav_funcs.c util_funcs/math_funcs.c util_funcs/string_fu
 ENGINE = engine/graph.c engine/transport.c engine/midi_clock.c
 #the audio backend (backend/audio_backend.h), one picked here
 BACKEND = backend/jack_backend.c
+#the plugin GUIs' host windows (window/host_window.h), one picked here with its libs
+WINDOW = window/x11_window.c
+WINDOW_LIBS = -lX11
+#WINDOW = window/null_window.c
+#WINDOW_LIBS =
 #additional sources
-SRC = $(UTIL_FUNCS) $(ENGINE) $(BACKEND) contexts/sampler.c contexts/plugins.c contexts/clap_plugins.c contexts/context_control.c app_data.c app_intrf.c ui_layer.c contexts/params.c contexts/synth.c $(JALV_C) $(CLAP_EXT_C)
+SRC = $(UTIL_FUNCS) $(ENGINE) $(BACKEND) $(WINDOW) contexts/sampler.c contexts/plugins.c contexts/clap_plugins.c contexts/context_control.c app_data.c app_intrf.c ui_layer.c contexts/params.c contexts/synth.c $(JALV_C) $(CLAP_EXT_C)
 
 #Remote dir for the source code
 PI_DIR = ~/Audio/Source/smp_groovebox/
