@@ -1791,7 +1791,7 @@ static void clap_plug_ext_log(const clap_host_t *host,
     // severity is not sent, right now dont see the need to send severity - this
     // should be obvious from the message
     context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                         clap_plug_return_is_audio_thread(), msg);
+                         clap_plug_return_is_audio_thread(), "%s", msg);
 }
 
 static const void *clap_plug_get_extension(const clap_host_t *host,

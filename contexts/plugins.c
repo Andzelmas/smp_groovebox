@@ -1,3 +1,4 @@
+#include <dlfcn.h>
 #include <lilv-0/lilv/lilv.h>
 #include <lv2/atom/atom.h>
 #include <lv2/atom/forge.h>
@@ -62,6 +63,9 @@
 #ifndef MSG_BUFFER_SIZE
 #define MSG_BUFFER_SIZE 1024
 #endif
+// an embedded UI's host window until the UI sizes it
+#define PLUG_GUI_START_W 400
+#define PLUG_GUI_START_H 300
 
 static thread_local bool is_audio_thread =
     false; // can be used to check what thread this is, useful for thread safe
@@ -106,6 +110,7 @@ typedef struct _plug_nodes {
     LilvNode *lv2_maximum;
     LilvNode *lv2_minimum;
     LilvNode *lv2_name;
+    LilvNode *lv2_optionalFeature;
     LilvNode *lv2_requiredFeature;
     LilvNode *lv2_sampleRate;
     LilvNode *lv2_symbol;
@@ -121,6 +126,8 @@ typedef struct _plug_nodes {
     LilvNode *rdfs_label;
     LilvNode *rdfs_range;
     LilvNode *rsz_minimumSize;
+    LilvNode *ui_fixedSize;
+    LilvNode *ui_noUserResize;
     LilvNode *ui_showInterface;
     LilvNode *ui_X11UI;
     LilvNode *work_interface;
@@ -256,6 +263,18 @@ typedef enum {
     PLUG_GUI_SHOW,
 } PlugGuiMode;
 
+// the features a UI is instantiated with, set at each show and valid until
+// its cleanup()
+#define PLUG_GUI_OWN_FEATURES 7
+typedef struct _plug_gui_features {
+    LV2UI_Resize resize;
+    LV2UI_Port_Map port_map;
+    LV2UI_Touch touch;
+    LV2_Feature own[PLUG_GUI_OWN_FEATURES];
+    // map, unmap, log, options and own, NULL terminated
+    const LV2_Feature *list[PLUG_GUI_OWN_FEATURES + 5];
+} PLUG_GUI_FEATURES;
+
 typedef struct _plug_plug {
     // is the plugin processing, if is_processing == 0, it will be skipped in
     // the process function, touch only on [audio-thread]
@@ -298,6 +317,21 @@ typedef struct _plug_plug {
     bool gui_shown;
     // [main-thread] gui_shown changed, see plug_plugin_gui_changed
     bool gui_changed;
+    // [main-thread] the shown UI, gui_lib our reference from show to hide
+    void *gui_lib;
+    const LV2UI_Descriptor *gui_desc;
+    LV2UI_Handle gui_inst;
+    const LV2UI_Idle_Interface *gui_idle;
+    // a UI of its own window only
+    const LV2UI_Show_Interface *gui_show_if;
+    // the UI's own resize, NULL when the user may not resize it
+    const LV2UI_Resize *gui_user_resize;
+    // an embedded UI's host window, NULL otherwise
+    HWIN *gui_win;
+    // the size the UI last asked for, 0 before it did
+    uint32_t gui_w;
+    uint32_t gui_h;
+    PLUG_GUI_FEATURES gui_features;
     // array of available ports for the plugin
     PLUG_PORT *ports;
     // how many ports do we have on plugin
@@ -452,6 +486,9 @@ static void plug_workers_free(PLUG_PLUG *plug) {
     plug->features.ssched.handle = NULL;
 }
 
+static void plug_gui_destroy(PLUG_PLUG *plug, bool shown);
+static int plug_gui_hide(PLUG_PLUG *plug);
+
 static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     if (!plug_data)
         return -1;
@@ -459,6 +496,8 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
         return -1;
 
     PLUG_PLUG *cur_plug = &(plug_data->plugins[id]);
+    // the UI before the instance it may access
+    plug_gui_destroy(cur_plug, cur_plug->gui_shown);
     // remove preset
     if (cur_plug->preset) {
         const LilvNode *old_preset = lilv_state_get_uri(cur_plug->preset);
@@ -694,6 +733,7 @@ static void plug_init_nodes(LilvWorld *const world, PLUG_NODES *const nodes) {
     nodes->lv2_maximum = lilv_new_uri(world, LV2_CORE__maximum);
     nodes->lv2_minimum = lilv_new_uri(world, LV2_CORE__minimum);
     nodes->lv2_name = lilv_new_uri(world, LV2_CORE__name);
+    nodes->lv2_optionalFeature = lilv_new_uri(world, LV2_CORE__optionalFeature);
     nodes->lv2_requiredFeature = lilv_new_uri(world, LV2_CORE__requiredFeature);
     nodes->lv2_sampleRate = lilv_new_uri(world, LV2_CORE__sampleRate);
     nodes->lv2_symbol = lilv_new_uri(world, LV2_CORE__symbol);
@@ -710,6 +750,8 @@ static void plug_init_nodes(LilvWorld *const world, PLUG_NODES *const nodes) {
     nodes->rdfs_label = lilv_new_uri(world, LILV_NS_RDFS "label");
     nodes->rdfs_range = lilv_new_uri(world, LILV_NS_RDFS "range");
     nodes->rsz_minimumSize = lilv_new_uri(world, LV2_RESIZE_PORT__minimumSize);
+    nodes->ui_fixedSize = lilv_new_uri(world, LV2_UI__fixedSize);
+    nodes->ui_noUserResize = lilv_new_uri(world, LV2_UI__noUserResize);
     nodes->ui_showInterface = lilv_new_uri(world, LV2_UI__showInterface);
     nodes->ui_X11UI = lilv_new_uri(world, LV2_UI__X11UI);
     nodes->work_interface = lilv_new_uri(world, LV2_WORKER__interface);
@@ -779,7 +821,7 @@ static int plug_vprintf(LV2_Log_Handle handle, LV2_URID type, const char *fmt,
     char send_msg[MAX_STRING_MSG_LENGTH];
     ret = vsnprintf(send_msg, MAX_STRING_MSG_LENGTH, fmt, ap);
     context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                         is_audio_thread, send_msg);
+                         is_audio_thread, "%s", send_msg);
     return ret;
 }
 static int plug_printf(LV2_Log_Handle handle, LV2_URID type, const char *fmt,
@@ -1256,6 +1298,10 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
         if (!cur_plug->plug_instance)
             continue;
         param_msgs_process(cur_plug->plug_params, 0);
+        // non-zero: the UI was closed
+        if (cur_plug->gui_idle &&
+            cur_plug->gui_idle->idle(cur_plug->gui_inst) != 0)
+            plug_gui_hide(cur_plug);
         uint32_t latency = atomic_load(&cur_plug->latency_rt);
         if (latency != cur_plug->latency) {
             cur_plug->latency = latency;
@@ -1879,20 +1925,224 @@ static void plug_gui_shown_set(PLUG_PLUG *plug, bool shown) {
     plug->gui_changed = true;
 }
 
+static const void *plug_gui_extension(const LV2UI_Descriptor *desc,
+                                      const char *uri) {
+    return desc->extension_data ? desc->extension_data(uri) : NULL;
+}
+
+// [main-thread] cleanup() - after hide() for a shown UI of its own window -
+// then the host window, our library reference last
+static void plug_gui_destroy(PLUG_PLUG *plug, bool shown) {
+    if (plug->gui_inst) {
+        if (shown && plug->gui_show_if)
+            plug->gui_show_if->hide(plug->gui_inst);
+        plug->gui_desc->cleanup(plug->gui_inst);
+    }
+    hwin_destroy(plug->gui_win);
+    if (plug->gui_lib)
+        dlclose(plug->gui_lib);
+    plug->gui_lib = NULL;
+    plug->gui_desc = NULL;
+    plug->gui_inst = NULL;
+    plug->gui_idle = NULL;
+    plug->gui_show_if = NULL;
+    plug->gui_user_resize = NULL;
+    plug->gui_win = NULL;
+    plug->gui_w = 0;
+    plug->gui_h = 0;
+}
+
 // [main-thread]
+static int plug_gui_hide(PLUG_PLUG *plug) {
+    if (!plug->gui_shown)
+        return 0;
+    plug_gui_destroy(plug, true);
+    plug_gui_shown_set(plug, false);
+    return 0;
+}
+
+// [main-thread] the user closed the host window
+static void plug_gui_on_close(void *user_data) {
+    plug_gui_hide((PLUG_PLUG *)user_data);
+}
+
+// [main-thread] a size the user or the window manager gave the host window,
+// the window follows the UI's child. A refusal gets the UI's own size back
+static void plug_gui_on_resize(void *user_data, uint32_t w, uint32_t h) {
+    PLUG_PLUG *plug = (PLUG_PLUG *)user_data;
+    if (!plug->gui_user_resize)
+        return;
+    int refused =
+        plug->gui_user_resize->ui_resize(plug->gui_inst, (int)w, (int)h);
+    if (refused && plug->gui_w > 0)
+        hwin_resize(plug->gui_win, plug->gui_w, plug->gui_h);
+}
+
+// ui:resize, the UI's size
+static int plug_gui_host_resize(LV2UI_Feature_Handle handle, int width,
+                                int height) {
+    PLUG_PLUG *plug = (PLUG_PLUG *)handle;
+    if (!plug->gui_win || width <= 0 || height <= 0)
+        return 1;
+    plug->gui_w = (uint32_t)width;
+    plug->gui_h = (uint32_t)height;
+    hwin_resize(plug->gui_win, plug->gui_w, plug->gui_h);
+    return 0;
+}
+
+static uint32_t plug_gui_port_index(LV2UI_Feature_Handle handle,
+                                    const char *symbol) {
+    PLUG_PORT *port = plug_find_port_by_name((PLUG_PLUG *)handle, symbol);
+    return port ? port->index : LV2UI_INVALID_PORT_INDEX;
+}
+
+static void plug_gui_touch(LV2UI_Feature_Handle handle, uint32_t port_index,
+                           bool grabbed) {
+    (void)handle;
+    (void)port_index;
+    (void)grabbed;
+}
+
+static void plug_gui_write(LV2UI_Controller controller, uint32_t port_index,
+                           uint32_t buffer_size, uint32_t protocol,
+                           const void *buffer) {
+    (void)buffer;
+    PLUG_PLUG *plug = (PLUG_PLUG *)controller;
+    log_append_logfile("%s: GUI wrote %u bytes to port %u, protocol %u - "
+                       "dropped\n",
+                       plug->name, buffer_size, port_index, protocol);
+}
+
+// [main-thread] for the current instance, ui:parent only embedded
+static void plug_gui_features_set(PLUG_PLUG *plug, bool embed) {
+    PLUG_GUI_FEATURES *f = &(plug->gui_features);
+    f->resize =
+        (LV2UI_Resize){.handle = plug, .ui_resize = plug_gui_host_resize};
+    f->port_map =
+        (LV2UI_Port_Map){.handle = plug, .port_index = plug_gui_port_index};
+    f->touch = (LV2UI_Touch){.handle = plug, .touch = plug_gui_touch};
+    const LV2_Feature own[PLUG_GUI_OWN_FEATURES] = {
+        {LV2_INSTANCE_ACCESS_URI,
+         lilv_instance_get_handle(plug->plug_instance)},
+        {LV2_DATA_ACCESS_URI, &(plug->features.ext_data)},
+        {LV2_UI__resize, &(f->resize)},
+        {LV2_UI__portMap, &(f->port_map)},
+        {LV2_UI__touch, &(f->touch)},
+        {LV2_UI__idleInterface, NULL},
+        {LV2_UI__parent, (void *)hwin_native(plug->gui_win)}};
+    memcpy(f->own, own, sizeof(own));
+    size_t n = 0;
+    f->list[n++] = &(plug->features.map_feature);
+    f->list[n++] = &(plug->features.unmap_feature);
+    f->list[n++] = &(plug->features.log_feature);
+    f->list[n++] = &(plug->features.options_feature);
+    for (size_t i = 0; i < PLUG_GUI_OWN_FEATURES - (embed ? 0 : 1); i++)
+        f->list[n++] = &(f->own[i]);
+    f->list[n] = NULL;
+}
+
+// [main-thread] its library open, its descriptor found. The step that failed,
+// NULL on success
+static const char *plug_gui_open(PLUG_PLUG *plug) {
+    char *path = lilv_file_uri_parse(
+        lilv_node_as_uri(lilv_ui_get_binary_uri(plug->gui_ui)), NULL);
+    if (!path)
+        return "binary path";
+    plug->gui_lib = dlopen(path, RTLD_LOCAL | RTLD_LAZY);
+    lilv_free(path);
+    if (!plug->gui_lib) {
+        log_append_logfile("%s: %s\n", plug->name, dlerror());
+        return "dlopen";
+    }
+    LV2UI_DescriptorFunction descriptor =
+        (LV2UI_DescriptorFunction)dlsym(plug->gui_lib, "lv2ui_descriptor");
+    if (!descriptor)
+        return "lv2ui_descriptor";
+    const char *ui_uri = lilv_node_as_uri(lilv_ui_get_uri(plug->gui_ui));
+    for (uint32_t i = 0;; i++) {
+        const LV2UI_Descriptor *desc = descriptor(i);
+        if (!desc)
+            return "descriptor";
+        if (desc->URI && strcmp(desc->URI, ui_uri) == 0) {
+            plug->gui_desc = desc;
+            return NULL;
+        }
+    }
+}
+
+// [main-thread] the UI resizes itself on request and does not say the user
+// should not resize it
+static const LV2UI_Resize *plug_gui_user_resize(PLUG_PLUG *plug) {
+    PLUG_INFO *plug_data = plug->plug_data;
+    PLUG_NODES *nodes = &(plug_data->nodes);
+    const LilvNode *ui_uri = lilv_ui_get_uri(plug->gui_ui);
+    if (lilv_world_ask(plug_data->lv_world, ui_uri, nodes->lv2_optionalFeature,
+                       nodes->ui_noUserResize) ||
+        lilv_world_ask(plug_data->lv_world, ui_uri, nodes->lv2_optionalFeature,
+                       nodes->ui_fixedSize))
+        return NULL;
+    return plug_gui_extension(plug->gui_desc, LV2_UI__resize);
+}
+
+// [main-thread] the UI instantiated and shown, embedded in a host window made
+// first or in a window of its own. The step that failed, NULL on success
+static const char *plug_gui_create(PLUG_PLUG *plug) {
+    const char *failed = plug_gui_open(plug);
+    if (failed)
+        return failed;
+    const LV2UI_Descriptor *desc = plug->gui_desc;
+    bool embed = plug->gui_mode == PLUG_GUI_EMBED;
+    if (embed) {
+        plug->gui_user_resize = plug_gui_user_resize(plug);
+        HWIN_FUNCS funcs = {.on_close = plug_gui_on_close,
+                            .on_resize = plug_gui_on_resize};
+        uint32_t flags =
+            HWIN_FIT_CHILD | (plug->gui_user_resize ? HWIN_RESIZABLE : 0);
+        plug->gui_win =
+            hwin_create(plug->plug_data->hwin, plug->name, PLUG_GUI_START_W,
+                        PLUG_GUI_START_H, flags, funcs, plug);
+        if (!plug->gui_win)
+            return "hwin_create";
+    } else {
+        plug->gui_show_if = plug_gui_extension(desc, LV2_UI__showInterface);
+        if (!plug->gui_show_if)
+            return "showInterface";
+    }
+    plug_gui_features_set(plug, embed);
+    char *bundle_path = lilv_file_uri_parse(
+        lilv_node_as_uri(lilv_ui_get_bundle_uri(plug->gui_ui)), NULL);
+    if (!bundle_path)
+        return "bundle path";
+    LV2UI_Widget widget = NULL;
+    plug->gui_inst = desc->instantiate(
+        desc, lilv_node_as_uri(lilv_plugin_get_uri(plug->plug)), bundle_path,
+        plug_gui_write, plug, &widget, plug->gui_features.list);
+    lilv_free(bundle_path);
+    if (!plug->gui_inst)
+        return "instantiate";
+    plug->gui_idle = plug_gui_extension(desc, LV2_UI__idleInterface);
+    if (embed) {
+        hwin_show(plug->gui_win);
+        return NULL;
+    }
+    return plug->gui_show_if->show(plug->gui_inst) == 0 ? NULL : "show";
+}
+
+// [main-thread] a failed step logged and the UI undone
 static int plug_gui_show(PLUG_PLUG *plug) {
     if (!hwin_sys_open(plug->plug_data->hwin)) {
         log_append_logfile("%s: GUI not shown, no window system\n",
                            plug->name);
         return -1;
     }
-    log_append_logfile("%s: GUI not shown\n", plug->name);
-    return -1;
-}
-
-// [main-thread]
-static int plug_gui_hide(PLUG_PLUG *plug) {
-    plug_gui_shown_set(plug, false);
+    const char *failed = plug_gui_create(plug);
+    if (failed) {
+        log_append_logfile("%s: GUI not shown, %s failed\n", plug->name,
+                           failed);
+        plug_gui_destroy(plug, false);
+        return -1;
+    }
+    plug_gui_shown_set(plug, true);
     return 0;
 }
 
@@ -2057,10 +2307,24 @@ static const void *plug_get_port_value(const char *port_symbol,
     return &(port->control);
 }
 
+// [main-thread] a reference on the plugin's loaded library, NULL when it is
+// not loaded. dlclose it
+static void *plug_library_hold(const LilvPlugin *plugin) {
+    char *path = lilv_file_uri_parse(
+        lilv_node_as_uri(lilv_plugin_get_library_uri(plugin)), NULL);
+    if (!path)
+        return NULL;
+    void *lib = dlopen(path, RTLD_LOCAL | RTLD_LAZY | RTLD_NOLOAD);
+    lilv_free(path);
+    return lib;
+}
+
 // [main-thread] a new instance at plug_data's sample rate and block length,
 // with the old one's state. The plugin is stopped. -1 when instantiating
 // failed - the plugin has no instance then
 static int plug_reinstantiate(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
+    // the UI may access the old instance, gui_shown stays for the re-show
+    plug_gui_destroy(plug, plug->gui_shown);
     LilvState *state = lilv_state_new_from_instance(
         plug->plug, plug->plug_instance, &(plug->map), NULL, NULL, NULL, NULL,
         plug_get_port_value, plug, LV2_STATE_IS_POD | LV2_STATE_IS_PORTABLE,
@@ -2071,9 +2335,14 @@ static int plug_reinstantiate(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         lilv_instance_deactivate(plug->plug_instance);
         plug->plug_instance_activated = 0;
     }
+    // freeing the last instance would unload the library, the new one load it
+    // again
+    void *lib = plug_library_hold(plug->plug);
     lilv_instance_free(plug->plug_instance);
     plug->plug_instance = lilv_plugin_instantiate(
         plug->plug, plug_data->sample_rate, plug->feature_list);
+    if (lib)
+        dlclose(lib);
     if (!plug->plug_instance) {
         if (state)
             lilv_state_free(state);
@@ -2152,6 +2421,9 @@ int plug_audio_config_set(PLUG_INFO *plug_data, SAMPLE_T sample_rate,
         if (rate_changed)
             plug_controls_rescale(plug_data, plug);
         context_sub_wait_for_start(plug_data->control_data, (void *)plug);
+        // the UI plug_reinstantiate closed
+        if (plug->gui_shown && plug_gui_show(plug) != 0)
+            plug_gui_shown_set(plug, false);
     }
     return result;
 }
