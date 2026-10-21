@@ -4,6 +4,7 @@
 #include "../engine/transport.h"
 #include "../structs.h"
 #include "../util_funcs/tree_index.h"
+#include "../window/host_window.h"
 #include "params.h"
 
 enum ClapPlugStatus {
@@ -48,11 +49,13 @@ int clap_plug_preset_load(void *plug, uint64_t key);
 //--------------------------------------------------
 
 // initiate the main plugin data struct. A plugin is a node of graph, owned by
-// (owner_tag, the plugin's uid). clap_process.transport follows transport
+// (owner_tag, the plugin's uid). clap_process.transport follows transport.
+// Plugin GUIs are shown with hwin
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error, GRAPH *graph,
-                               TRANSPORT *transport, uint64_t owner_tag);
+                               TRANSPORT *transport, HWIN_SYS *hwin,
+                               uint64_t owner_tag);
 
 // [main-thread] the values plugins are activated with. Every activated plugin
 // restarts with them. A plugin runs nothing for nframes outside [min, max].
@@ -108,6 +111,16 @@ uint32_t clap_plug_plugin_uid(void *plug);
 uint32_t clap_plug_plugin_latency(void *plug);
 // [main-thread] did the latency change since the last call
 bool clap_plug_plugin_latency_changed(void *plug);
+
+// [main-thread] the plugin has a GUI the host can show, known at load
+bool clap_plug_plugin_gui_available(void *plug);
+// [main-thread] its GUI is shown
+bool clap_plug_plugin_gui_shown(void *plug);
+// [main-thread] did the shown state change since the last call
+bool clap_plug_plugin_gui_changed(void *plug);
+// [main-thread] show the GUI, or hide a shown one. 0 on success, -1 on a
+// failure (logged)
+int clap_plug_plugin_gui_toggle(void *plug);
 
 // return if the plugins array is dirty - if it changed
 bool clap_plug_plugins_is_dirty(CLAP_PLUG_INFO *plug_data);

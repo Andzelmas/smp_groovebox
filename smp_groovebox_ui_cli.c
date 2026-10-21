@@ -1593,6 +1593,8 @@ int main() {
                 helper_string_print_underline(candidates[i].action.label,
                                               candidates[i].letter);
                 printf("-");
+                if (candidates[i].action.active)
+                    printf(" (on)");
                 if (!candidates[i].action.enabled)
                     printf(" (disabled)");
                 printf(" ");

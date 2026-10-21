@@ -11,6 +11,7 @@
 #include "engine/graph.h"
 #include "engine/midi_clock.h"
 #include "engine/transport.h"
+#include "window/host_window.h"
 // string functions
 #include "contexts/clap_plugins.h"
 #include "contexts/plugins.h"
@@ -74,6 +75,10 @@ typedef struct _app_info {
     int wake_epoll_fd;
     int rt_ui_timerfd;
     uint32_t rt_ui_period_ms; // last period asked for, 0 = disarmed
+    // the plugin GUIs' host windows, connected by a context's first show
+    HWIN_SYS *hwin;
+    // hwin_sys_fd is in wake_epoll_fd
+    bool hwin_fd_watched;
 } APP_INFO;
 
 // push one event, growing the queue if it is full
@@ -113,6 +118,8 @@ static int clean_memory(APP_INFO *app_data) {
     // clean the synth memory
     if (app_data->synth_data)
         synth_clean_memory(app_data->synth_data);
+    // the contexts destroyed their windows
+    hwin_sys_clean(app_data->hwin);
 
     // stops the process callback, removes its endpoint nodes
     audio_backend_clean(app_data->backend);
@@ -824,9 +831,16 @@ static void list_choice_from_tree_row(const TREE_ROW *row, unsigned int leaf_ns,
     out->flags = row->is_branch ? DATA_CHOICE_BRANCH : 0;
 }
 
-// a loaded plugin's (lv2 or clap) action menu: Remove, and Preset - loading
-// one picked from its preset list. 
-static size_t plugin_action_list(DataAction *out, size_t cap) {
+// DataAction.id of a loaded plugin's COMMAND
+enum {
+    PLUGIN_ACTION_GUI = 0,
+};
+
+// a loaded plugin's (lv2 or clap) action menu: Remove, Preset - loading one
+// picked from its preset list, and GUI - showing or hiding the plugin's own
+// GUI
+static size_t plugin_action_list(DataAction *out, size_t cap,
+                                 bool gui_available, bool gui_shown) {
     if (!out)
         return 0;
     size_t n = 0;
@@ -846,7 +860,28 @@ static size_t plugin_action_list(DataAction *out, size_t cap) {
             .enabled = true,
             .style = DATA_ACTION_STYLE_NORMAL,
         };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_COMMAND,
+            .id = PLUGIN_ACTION_GUI,
+            .label = "GUI",
+            .tooltip = "Show or hide this plugin's GUI",
+            .enabled = gui_available,
+            .active = gui_shown,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
     return n;
+}
+
+// the GUI COMMAND through a module's getter and toggle
+static DataActionResult plugin_gui_command(void *plug, uint32_t id,
+                                           bool (*available)(void *),
+                                           int (*toggle)(void *)) {
+    if (id != PLUGIN_ACTION_GUI)
+        return DATA_ACTION_ERR_INVALID;
+    if (!available(plug))
+        return DATA_ACTION_ERR_NOT_ALLOWED;
+    return toggle(plug) == 0 ? DATA_ACTION_OK : DATA_ACTION_ERR_DATA;
 }
 
 // the Preset action's one arg, picked from the plugin's preset list
@@ -881,12 +916,12 @@ static bool lv2_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
 static ContextId lv2_plugin_id(void *user_data) {
     return MAKE_ID(DATA_NS_LV2_PLUG, plug_plugin_uid(user_data));
 }
-// DATA_CAP_ACTIONS: a loaded lv2 plugin can be removed, and can load a preset
-// picked from its preset list (banks as category rows).
+// DATA_CAP_ACTIONS: a loaded lv2 plugin can be removed, can load a preset
+// picked from its preset list (banks as category rows), and show its UI.
 static size_t lv2_plugin_action_list(void *user_data, DataAction *out,
                                      size_t cap) {
-    (void)user_data;
-    return plugin_action_list(out, cap);
+    return plugin_action_list(out, cap, plug_plugin_gui_available(user_data),
+                              plug_plugin_gui_shown(user_data));
 }
 static size_t lv2_plugin_action_args(void *user_data,
                                      DataActionType type, uint32_t id,
@@ -919,12 +954,15 @@ static bool lv2_plugin_list_at(void *user_data, DataListId list,
 static DataActionResult lv2_plugin_action_do(void *user_data,
                                              const DataActionReq *req,
                                              ContextId *out_new) {
-    (void)out_new; // neither action creates anything
+    (void)out_new; // no action creates anything
     if (!req || !user_data)
         return DATA_ACTION_ERR_INVALID;
     if (req->type == DATA_ACTION_REMOVE)
         return plug_stop_and_remove_plug(user_data) != 0 ? DATA_ACTION_ERR_DATA
                                                          : DATA_ACTION_OK;
+    if (req->type == DATA_ACTION_COMMAND)
+        return plugin_gui_command(user_data, req->id, plug_plugin_gui_available,
+                                  plug_plugin_gui_toggle);
     if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
@@ -1096,13 +1134,14 @@ static bool clap_plugin_child_at(void *user_data, size_t idx, DataObject *out) {
 static ContextId clap_plugin_id(void *user_data) {
     return MAKE_ID(DATA_NS_CLAP_PLUG, clap_plug_plugin_uid(user_data));
 }
-// DATA_CAP_ACTIONS: a loaded clap plugin can be removed, and can load a preset
+// DATA_CAP_ACTIONS: a loaded clap plugin can be removed, can load a preset
 // picked from its preset list (locations and their sub directories as
-// category rows).
+// category rows), and show its GUI.
 static size_t clap_plugin_action_list(void *user_data, DataAction *out,
                                       size_t cap) {
-    (void)user_data;
-    return plugin_action_list(out, cap);
+    return plugin_action_list(out, cap,
+                              clap_plug_plugin_gui_available(user_data),
+                              clap_plug_plugin_gui_shown(user_data));
 }
 static size_t clap_plugin_action_args(void *user_data,
                                       DataActionType type, uint32_t id,
@@ -1135,13 +1174,17 @@ static bool clap_plugin_list_at(void *user_data, DataListId list,
 static DataActionResult clap_plugin_action_do(void *user_data,
                                               const DataActionReq *req,
                                               ContextId *out_new) {
-    (void)out_new; // neither action creates anything
+    (void)out_new; // no action creates anything
     if (!req || !user_data)
         return DATA_ACTION_ERR_INVALID;
     if (req->type == DATA_ACTION_REMOVE)
         return clap_plug_plug_stop_and_clean(user_data) != 0
                    ? DATA_ACTION_ERR_DATA
                    : DATA_ACTION_OK;
+    if (req->type == DATA_ACTION_COMMAND)
+        return plugin_gui_command(user_data, req->id,
+                                  clap_plug_plugin_gui_available,
+                                  clap_plug_plugin_gui_toggle);
     if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
@@ -1840,6 +1883,8 @@ DataObject app_init(void) {
     app_data->wake_epoll_fd = -1;
     app_data->rt_ui_timerfd = -1;
     app_data->rt_ui_period_ms = 0;
+    app_data->hwin = NULL;
+    app_data->hwin_fd_watched = false;
 
     /*init the audio backend for the whole program*/
     /*--------------------------------------------------*/
@@ -1887,11 +1932,17 @@ DataObject app_init(void) {
         return invalid;
     }
     /*--------------------------------------------------*/
+    // before any plugin loads - it installs the window system's error handler
+    app_data->hwin = hwin_sys_init();
+    if (!app_data->hwin) {
+        clean_memory(app_data);
+        return invalid;
+    }
     // Init the plugin data object, it will not run any plugins yet
     plug_status_t plug_errors = 0;
     app_data->plug_data =
         plug_init(buffer_size, samplerate, &plug_errors, app_data->graph,
-                  app_data->transport, DATA_NS_LV2_PLUG);
+                  app_data->transport, app_data->hwin, DATA_NS_LV2_PLUG);
     if (!app_data->plug_data) {
         clean_memory(app_data);
         return invalid;
@@ -1902,7 +1953,8 @@ DataObject app_init(void) {
     clap_plug_status_t clap_plug_errors = 0;
     app_data->clap_plug_data =
         clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors,
-                       app_data->graph, app_data->transport, DATA_NS_CLAP_PLUG);
+                       app_data->graph, app_data->transport, app_data->hwin,
+                       DATA_NS_CLAP_PLUG);
     if (!(app_data->clap_plug_data)) {
         clean_memory(app_data);
         return invalid;
@@ -2067,6 +2119,19 @@ static void app_transport_sync_update(APP_INFO *app_data) {
     app_data->sync_seen = TRANSPORT_SYNC_FOLLOW;
 }
 
+// the window connection's fd joins the wake epoll once both exist
+static void app_wake_hwin_watch(APP_INFO *app_data) {
+    if (app_data->hwin_fd_watched || app_data->wake_epoll_fd < 0)
+        return;
+    int fd = hwin_sys_fd(app_data->hwin);
+    if (fd < 0)
+        return;
+    struct epoll_event ev = {.events = EPOLLIN};
+    ev.data.fd = fd;
+    app_data->hwin_fd_watched =
+        epoll_ctl(app_data->wake_epoll_fd, EPOLL_CTL_ADD, fd, &ev) == 0;
+}
+
 int app_data_wake_fd(void *root_user_data, uint32_t period_ms) {
     if (!root_user_data)
         return -1;
@@ -2089,6 +2154,7 @@ int app_data_wake_fd(void *root_user_data, uint32_t period_ms) {
             epoll_ctl(app_data->wake_epoll_fd, EPOLL_CTL_ADD,
                      app_data->rt_ui_timerfd, &ev);
         }
+        app_wake_hwin_watch(app_data);
     }
     if (app_data->rt_ui_timerfd >= 0 &&
         period_ms != app_data->rt_ui_period_ms) {
@@ -2119,6 +2185,9 @@ void app_data_update(void *root_user_data) {
     transport_update(app_data->transport);
     app_transport_requests(app_data);
     app_transport_sync_update(app_data);
+    // before the contexts' reads, so a GUI window's close is handled in this
+    // cycle
+    hwin_sys_process(app_data->hwin);
     // read messages from rt thread on [main-thread] for CLAP plugins
     clap_read_rt_to_ui_messages(app_data->clap_plug_data);
     // read messages from the rt thread on the [main-thread] for lv2 plugins
@@ -2128,6 +2197,8 @@ void app_data_update(void *root_user_data) {
     // read messages from the rt thread on the [main-thread] for the synth
     // context
     synth_read_rt_to_ui_messages(app_data->synth_data);
+    // a GUI shown since the last update, or by the reads above, connects
+    app_wake_hwin_watch(app_data);
     app_audio_config_update(app_data);
     graph_compensation_set(app_data->graph, transport_pdc(app_data->transport));
     // publish what the contexts changed in the graph, free what the audio
@@ -2179,8 +2250,9 @@ void app_data_update(void *root_user_data) {
         app_data_push_event(app_data, DATA_EVENT_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_ROOT));
 
-    // param value/name/flag and plugin latency changes, after the structure
-    // events above so a just added param or plugin already has its context
+    // param value/name/flag and plugin latency / GUI shown changes, after the
+    // structure events above so a just added param or plugin already has its
+    // context
     app_data_push_param_changes(app_data,
                                 transport_param_container(app_data->transport));
     for (unsigned int i = 0;; i++) {
@@ -2195,7 +2267,10 @@ void app_data_update(void *root_user_data) {
             break;
         app_data_push_param_changes(app_data,
                                     plug_plugin_param_container(plug));
-        if (plug_plugin_latency_changed(plug))
+        // both flags cleared
+        bool latency_changed = plug_plugin_latency_changed(plug);
+        bool gui_changed = plug_plugin_gui_changed(plug);
+        if (latency_changed || gui_changed)
             app_data_push_event(app_data, DATA_EVENT_CHANGED,
                                 lv2_plugin_id(plug));
     }
@@ -2205,7 +2280,9 @@ void app_data_update(void *root_user_data) {
             break;
         app_data_push_param_changes(app_data,
                                     clap_plug_plugin_param_container(plug));
-        if (clap_plug_plugin_latency_changed(plug))
+        bool latency_changed = clap_plug_plugin_latency_changed(plug);
+        bool gui_changed = clap_plug_plugin_gui_changed(plug);
+        if (latency_changed || gui_changed)
             app_data_push_event(app_data, DATA_EVENT_CHANGED,
                                 clap_plugin_id(plug));
     }

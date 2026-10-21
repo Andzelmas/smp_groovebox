@@ -3,6 +3,7 @@
 #include "../engine/transport.h"
 #include "../structs.h"
 #include "../util_funcs/tree_index.h"
+#include "../window/host_window.h"
 #include "params.h"
 #include <stdbool.h>
 #include <stdlib.h>
@@ -22,10 +23,12 @@ typedef struct _plug_evbuf_impl PLUG_EVBUF;
 typedef struct _plug_evbuf_iterator_impl PLUG_EVBUF_ITERATOR;
 
 // inititialize the plugin host data. A plugin is a node of graph, owned by
-// (owner_tag, the plugin's uid). time:Position follows transport
+// (owner_tag, the plugin's uid). time:Position follows transport. Plugin UIs
+// are shown with hwin
 PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
                      plug_status_t *plug_errors, GRAPH *graph,
-                     TRANSPORT *transport, uint64_t owner_tag);
+                     TRANSPORT *transport, HWIN_SYS *hwin,
+                     uint64_t owner_tag);
 
 // Scans the installed plugins and (re)builds the list of them on plug_data.
 // Safe to call again while plugins are loaded. A plugin keeps its key across
@@ -91,6 +94,16 @@ uint32_t plug_plugin_uid(void *plug);
 uint32_t plug_plugin_latency(void *plug);
 // [main-thread] did the latency change since the last call
 bool plug_plugin_latency_changed(void *plug);
+
+// [main-thread] the plugin has a UI the host can show, known at load
+bool plug_plugin_gui_available(void *plug);
+// [main-thread] its UI is shown
+bool plug_plugin_gui_shown(void *plug);
+// [main-thread] did the shown state change since the last call
+bool plug_plugin_gui_changed(void *plug);
+// [main-thread] show the UI, or hide a shown one. 0 on success, -1 on a
+// failure (logged)
+int plug_plugin_gui_toggle(void *plug);
 
 // return this plugin instance's own param container, NULL on error/none yet
 PRM_CONTAIN *plug_plugin_param_container(void *plug);

@@ -91,6 +91,13 @@ enum {
     CLAP_PLUG_REQ_SYNC_VALUES = 1U << 5,
 };
 
+// how a plugin's GUI is shown: in a host window, or in a window of its own
+typedef enum {
+    CLAP_PLUG_GUI_NONE = 0,
+    CLAP_PLUG_GUI_EMBED,
+    CLAP_PLUG_GUI_FLOAT,
+} ClapPlugGuiMode;
+
 // plugin list item - from this struct a clap plugin can be loaded
 typedef struct _plugin_list_item {
     // full plugin path with the directory and all,
@@ -202,6 +209,11 @@ typedef struct _clap_plug_plug {
     uint32_t latency;
     // [main-thread] latency changed, see clap_plug_plugin_latency_changed
     bool latency_changed;
+    // [main-thread] picked at load
+    ClapPlugGuiMode gui_mode;
+    bool gui_shown;
+    // [main-thread] gui_shown changed, see clap_plug_plugin_gui_changed
+    bool gui_changed;
     // CLAP_PLUG_PORT holds the graph ports and the clap_audio_buffer_t
     // arrays, to send to plugin process function
     CLAP_PLUG_PORT input_ports;
@@ -284,6 +296,8 @@ typedef struct _clap_plug_info {
     TRANSPORT *transport;
     // paired with a plugin's uid as its node's owner
     uint64_t owner_tag;
+    // the plugin GUIs' host windows
+    HWIN_SYS *hwin;
     // [main-thread] epoll fd every plugin's registered fds and timerfds are
     // mirrored into, -1 if it could not be made
     int wake_epoll_fd;
@@ -1448,6 +1462,9 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     plug->node = NULL;
     plug->latency = 0;
     plug->latency_changed = false;
+    plug->gui_mode = CLAP_PLUG_GUI_NONE;
+    plug->gui_shown = false;
+    plug->gui_changed = false;
     // clean the event structs
     clap_input_events_t *in_events = &(plug->input_events);
     ub_clean((UB_EVENT *)in_events->ctx);
@@ -2166,7 +2183,8 @@ int clap_plug_wake_fd(CLAP_PLUG_INFO *plug_data) {
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error, GRAPH *graph,
-                               TRANSPORT *transport, uint64_t owner_tag) {
+                               TRANSPORT *transport, HWIN_SYS *hwin,
+                               uint64_t owner_tag) {
     if (!graph)
         return NULL;
     // clap_plug_init is called on [main-thread]
@@ -2180,6 +2198,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     memset(plug_data, '\0', sizeof(*plug_data));
     plug_data->graph = graph;
     plug_data->transport = transport;
+    plug_data->hwin = hwin;
     plug_data->owner_tag = owner_tag;
     // -1 (feature unavailable) is a valid outcome, not a reason to fail init
     plug_data->wake_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
@@ -2267,6 +2286,9 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->plug_params = NULL;
         plug->presets = NULL;
         plug->presets_built = false;
+        plug->gui_mode = CLAP_PLUG_GUI_NONE;
+        plug->gui_shown = false;
+        plug->gui_changed = false;
         atomic_init(&plug->requests, 0U);
         atomic_init(&plug->in_events_dropped, 0U);
         atomic_init(&plug->out_events_dropped, 0U);
@@ -2819,6 +2841,23 @@ static void clap_plug_set_display_name(CLAP_PLUG_PLUG *plug) {
                                        used, used_count, &plug->name_at);
 }
 
+// [main-thread] after init(): embedded if the plugin can use the host's
+// window api, else floating if it can open its own window with it
+static ClapPlugGuiMode clap_plug_gui_mode_pick(CLAP_PLUG_PLUG *plug) {
+    const char *api = hwin_sys_api(plug->plug_data->hwin);
+    if (!api)
+        return CLAP_PLUG_GUI_NONE;
+    const clap_plugin_gui_t *gui =
+        plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_GUI);
+    if (!gui || !gui->is_api_supported)
+        return CLAP_PLUG_GUI_NONE;
+    if (gui->is_api_supported(plug->plug_inst, api, false))
+        return CLAP_PLUG_GUI_EMBED;
+    if (gui->is_api_supported(plug->plug_inst, api, true))
+        return CLAP_PLUG_GUI_FLOAT;
+    return CLAP_PLUG_GUI_NONE;
+}
+
 uint32_t clap_plug_load_and_activate(void *plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
     if (!plugin_list_item)
@@ -2990,6 +3029,12 @@ uint32_t clap_plug_load_and_activate(void *plugin_item) {
     // set
     clap_plug_set_display_name(plug);
 
+    plug->gui_mode = clap_plug_gui_mode_pick(plug);
+    static const char *const gui_mode_names[] = {"none", "embedded",
+                                                 "floating"};
+    log_append_logfile("%s: GUI %s\n", plug->name,
+                       gui_mode_names[plug->gui_mode]);
+
     // start processing the plugin
     clap_plug_activate_start_processing((void *)plug);
 
@@ -3050,6 +3095,60 @@ bool clap_plug_plugin_latency_changed(void *plug) {
     bool changed = cur_plug->latency_changed;
     cur_plug->latency_changed = false;
     return changed;
+}
+
+bool clap_plug_plugin_gui_available(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    return cur_plug && cur_plug->gui_mode != CLAP_PLUG_GUI_NONE;
+}
+
+bool clap_plug_plugin_gui_shown(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    return cur_plug && cur_plug->gui_shown;
+}
+
+bool clap_plug_plugin_gui_changed(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return false;
+    bool changed = cur_plug->gui_changed;
+    cur_plug->gui_changed = false;
+    return changed;
+}
+
+// [main-thread] flagged for clap_plug_plugin_gui_changed
+static void clap_plug_gui_shown_set(CLAP_PLUG_PLUG *plug, bool shown) {
+    if (plug->gui_shown == shown)
+        return;
+    plug->gui_shown = shown;
+    plug->gui_changed = true;
+}
+
+// [main-thread]
+static int clap_plug_gui_show(CLAP_PLUG_PLUG *plug) {
+    if (!hwin_sys_open(plug->plug_data->hwin)) {
+        log_append_logfile("%s: GUI not shown, no window system\n",
+                           plug->name);
+        return -1;
+    }
+    log_append_logfile("%s: GUI not shown\n", plug->name);
+    return -1;
+}
+
+// [main-thread]
+static int clap_plug_gui_hide(CLAP_PLUG_PLUG *plug) {
+    clap_plug_gui_shown_set(plug, false);
+    return 0;
+}
+
+int clap_plug_plugin_gui_toggle(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug || !cur_plug->plug_data ||
+        cur_plug->gui_mode == CLAP_PLUG_GUI_NONE)
+        return -1;
+    if (cur_plug->gui_shown)
+        return clap_plug_gui_hide(cur_plug);
+    return clap_plug_gui_show(cur_plug);
 }
 
 // return this plugin instance's own param container, NULL on error/none yet

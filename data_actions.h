@@ -70,6 +70,8 @@ typedef struct {
     const char *label;      // borrowed, static in the data layer
     const char *tooltip;
     bool enabled;
+    // a toggle that is on, false for any other action
+    bool active;
     DataActionStyle style;
 } DataAction;
 

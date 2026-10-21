@@ -3,6 +3,7 @@
 #include <lv2/atom/forge.h>
 #include <lv2/buf-size/buf-size.h>
 #include <lv2/data-access/data-access.h>
+#include <lv2/instance-access/instance-access.h>
 #include <lv2/log/log.h>
 #include <lv2/midi/midi.h>
 #include <lv2/options/options.h>
@@ -105,6 +106,7 @@ typedef struct _plug_nodes {
     LilvNode *lv2_maximum;
     LilvNode *lv2_minimum;
     LilvNode *lv2_name;
+    LilvNode *lv2_requiredFeature;
     LilvNode *lv2_sampleRate;
     LilvNode *lv2_symbol;
     LilvNode *lv2_toggled;
@@ -120,6 +122,7 @@ typedef struct _plug_nodes {
     LilvNode *rdfs_range;
     LilvNode *rsz_minimumSize;
     LilvNode *ui_showInterface;
+    LilvNode *ui_X11UI;
     LilvNode *work_interface;
     LilvNode *work_schedule;
     LilvNode *end;
@@ -245,6 +248,14 @@ typedef struct _plug_property_param {
     int val_id;
 } PLUG_PROPERTY_PARAM;
 
+// how a plugin's UI is shown: embedded in a host window, or in a window of its
+// own through ui:showInterface
+typedef enum {
+    PLUG_GUI_NONE = 0,
+    PLUG_GUI_EMBED,
+    PLUG_GUI_SHOW,
+} PlugGuiMode;
+
 typedef struct _plug_plug {
     // is the plugin processing, if is_processing == 0, it will be skipped in
     // the process function, touch only on [audio-thread]
@@ -279,6 +290,14 @@ typedef struct _plug_plug {
     uint32_t latency;
     // [main-thread] latency changed, see plug_plugin_latency_changed
     bool latency_changed;
+    // [main-thread] the plugin's UIs and the one picked at load, gui_ui NULL
+    // when gui_mode is NONE
+    LilvUIs *uis;
+    const LilvUI *gui_ui;
+    PlugGuiMode gui_mode;
+    bool gui_shown;
+    // [main-thread] gui_shown changed, see plug_plugin_gui_changed
+    bool gui_changed;
     // array of available ports for the plugin
     PLUG_PORT *ports;
     // how many ports do we have on plugin
@@ -357,6 +376,8 @@ typedef struct _plug_info {
     TRANSPORT *transport;
     // paired with a plugin's uid as its node's owner
     uint64_t owner_tag;
+    // the plugin GUIs' host windows
+    HWIN_SYS *hwin;
     // the available plugins list struct
     PLUGIN_LIST plugin_list;
     // this is control for [audio-thread] and [main-thread] sys communication
@@ -519,6 +540,13 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     atomic_store(&cur_plug->latency_rt, 0U);
     cur_plug->latency = 0;
     cur_plug->latency_changed = false;
+    if (cur_plug->uis)
+        lilv_uis_free(cur_plug->uis);
+    cur_plug->uis = NULL;
+    cur_plug->gui_ui = NULL;
+    cur_plug->gui_mode = PLUG_GUI_NONE;
+    cur_plug->gui_shown = false;
+    cur_plug->gui_changed = false;
     cur_plug->request_update = false;
     cur_plug->safe_restore = false;
     cur_plug->plug = NULL;
@@ -666,6 +694,7 @@ static void plug_init_nodes(LilvWorld *const world, PLUG_NODES *const nodes) {
     nodes->lv2_maximum = lilv_new_uri(world, LV2_CORE__maximum);
     nodes->lv2_minimum = lilv_new_uri(world, LV2_CORE__minimum);
     nodes->lv2_name = lilv_new_uri(world, LV2_CORE__name);
+    nodes->lv2_requiredFeature = lilv_new_uri(world, LV2_CORE__requiredFeature);
     nodes->lv2_sampleRate = lilv_new_uri(world, LV2_CORE__sampleRate);
     nodes->lv2_symbol = lilv_new_uri(world, LV2_CORE__symbol);
     nodes->lv2_toggled = lilv_new_uri(world, LV2_CORE__toggled);
@@ -682,6 +711,7 @@ static void plug_init_nodes(LilvWorld *const world, PLUG_NODES *const nodes) {
     nodes->rdfs_range = lilv_new_uri(world, LILV_NS_RDFS "range");
     nodes->rsz_minimumSize = lilv_new_uri(world, LV2_RESIZE_PORT__minimumSize);
     nodes->ui_showInterface = lilv_new_uri(world, LV2_UI__showInterface);
+    nodes->ui_X11UI = lilv_new_uri(world, LV2_UI__X11UI);
     nodes->work_interface = lilv_new_uri(world, LV2_WORKER__interface);
     nodes->work_schedule = lilv_new_uri(world, LV2_WORKER__schedule);
     nodes->end = NULL;
@@ -781,7 +811,8 @@ static int plug_plug_stop_process(void *user_data) {
 
 PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
                      plug_status_t *plug_errors, GRAPH *graph,
-                     TRANSPORT *transport, uint64_t owner_tag) {
+                     TRANSPORT *transport, HWIN_SYS *hwin,
+                     uint64_t owner_tag) {
     PLUG_INFO *plug_data = (PLUG_INFO *)malloc(sizeof(PLUG_INFO));
     if (!plug_data) {
         *plug_errors = plug_failed_malloc;
@@ -819,6 +850,7 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
 
     plug_data->graph = graph;
     plug_data->transport = transport;
+    plug_data->hwin = hwin;
     plug_data->owner_tag = owner_tag;
 
     // init the plugin instances to shell
@@ -843,6 +875,11 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
         atomic_init(&plug->latency_rt, 0U);
         plug->latency = 0;
         plug->latency_changed = false;
+        plug->uis = NULL;
+        plug->gui_ui = NULL;
+        plug->gui_mode = PLUG_GUI_NONE;
+        plug->gui_shown = false;
+        plug->gui_changed = false;
         plug->plug_params = NULL;
         plug->safe_restore = false;
         plug->id = i;
@@ -1495,6 +1532,84 @@ static void plug_patch_message_rt(PLUG_PLUG *plug,
 
 static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug);
 
+// the features a UI is given, ui:parent only to an embedded one
+static const char *const plug_ui_features[] = {
+    LV2_URID__map,          LV2_URID__unmap,     LV2_UI__resize,
+    LV2_INSTANCE_ACCESS_URI, LV2_DATA_ACCESS_URI, LV2_OPTIONS__options,
+    LV2_UI__idleInterface,  LV2_UI__portMap,     LV2_LOG__log,
+    LV2_UI__touch,          NULL};
+
+// does the host give every feature the UI requires. Logs the first one
+// missing
+static bool plug_ui_features_given(PLUG_INFO *plug_data, const char *name,
+                                   const LilvUI *ui, bool embed) {
+    const LilvNode *ui_uri = lilv_ui_get_uri(ui);
+    LilvNodes *required =
+        lilv_world_find_nodes(plug_data->lv_world, ui_uri,
+                              plug_data->nodes.lv2_requiredFeature, NULL);
+    bool given = true;
+    LILV_FOREACH(nodes, i, required) {
+        const char *feature = lilv_node_as_string(lilv_nodes_get(required, i));
+        bool found = embed && strcmp(feature, LV2_UI__parent) == 0;
+        for (size_t f = 0; !found && plug_ui_features[f]; f++)
+            found = strcmp(feature, plug_ui_features[f]) == 0;
+        if (found)
+            continue;
+        log_append_logfile("%s: UI %s skipped, it requires %s\n", name,
+                           lilv_node_as_string(ui_uri), feature);
+        given = false;
+        break;
+    }
+    lilv_nodes_free(required);
+    return given;
+}
+
+// an X11 UI embedded in a host window, else a UI showing its own window
+static void plug_gui_ui_pick(PLUG_INFO *plug_data, PLUG_PLUG *plug, bool x11) {
+    LilvWorld *world = plug_data->lv_world;
+    PLUG_NODES *nodes = &plug_data->nodes;
+    plug->uis = lilv_plugin_get_uis(plug->plug);
+    const LilvUI *show_ui = NULL;
+    LILV_FOREACH(uis, i, plug->uis) {
+        const LilvUI *ui = lilv_uis_get(plug->uis, i);
+        const LilvNode *ui_uri = lilv_ui_get_uri(ui);
+        // its features and extension data are often in a file of its own
+        lilv_world_load_resource(world, ui_uri);
+        // a UI missing a feature when embedded misses it when shown too
+        if (x11 && lilv_ui_is_a(ui, nodes->ui_X11UI)) {
+            if (!plug_ui_features_given(plug_data, plug->name, ui, true))
+                continue;
+            plug->gui_ui = ui;
+            plug->gui_mode = PLUG_GUI_EMBED;
+            break;
+        }
+        if (!show_ui &&
+            lilv_world_ask(world, ui_uri, nodes->lv2_extensionData,
+                           nodes->ui_showInterface) &&
+            plug_ui_features_given(plug_data, plug->name, ui, false))
+            show_ui = ui;
+    }
+    if (plug->gui_mode == PLUG_GUI_NONE && show_ui) {
+        plug->gui_ui = show_ui;
+        plug->gui_mode = PLUG_GUI_SHOW;
+    }
+}
+
+// [main-thread] at load. Either mode needs a window api, embedding x11
+static void plug_gui_pick(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
+    const char *api = hwin_sys_api(plug_data->hwin);
+    if (api)
+        plug_gui_ui_pick(plug_data, plug, strcmp(api, "x11") == 0);
+    if (plug->gui_mode == PLUG_GUI_NONE) {
+        log_append_logfile("%s: GUI none\n", plug->name);
+        return;
+    }
+    log_append_logfile(
+        "%s: GUI %s, %s\n", plug->name,
+        plug->gui_mode == PLUG_GUI_EMBED ? "embedded" : "floating",
+        lilv_node_as_string(lilv_ui_get_uri(plug->gui_ui)));
+}
+
 uint32_t plug_load_and_activate(void *plugin_item) {
     PLUGIN_LIST_ITEM *plugin_list_item = (PLUGIN_LIST_ITEM *)plugin_item;
     if (!plugin_list_item)
@@ -1676,6 +1791,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     plug->plug_data = plug_data;
     // build the display name once, now that plug->plug and plug->id are set
     plug_set_display_name(plug);
+    plug_gui_pick(plug_data, plug);
     // its first cycle already runs a plan with its ports
     graph_plan_update(plug_data->graph);
     // wait for the plugin to start processing
@@ -1734,6 +1850,60 @@ bool plug_plugin_latency_changed(void *plug) {
     bool changed = cur_plug->latency_changed;
     cur_plug->latency_changed = false;
     return changed;
+}
+
+bool plug_plugin_gui_available(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    return cur_plug && cur_plug->gui_mode != PLUG_GUI_NONE;
+}
+
+bool plug_plugin_gui_shown(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    return cur_plug && cur_plug->gui_shown;
+}
+
+bool plug_plugin_gui_changed(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return false;
+    bool changed = cur_plug->gui_changed;
+    cur_plug->gui_changed = false;
+    return changed;
+}
+
+// [main-thread] flagged for plug_plugin_gui_changed
+static void plug_gui_shown_set(PLUG_PLUG *plug, bool shown) {
+    if (plug->gui_shown == shown)
+        return;
+    plug->gui_shown = shown;
+    plug->gui_changed = true;
+}
+
+// [main-thread]
+static int plug_gui_show(PLUG_PLUG *plug) {
+    if (!hwin_sys_open(plug->plug_data->hwin)) {
+        log_append_logfile("%s: GUI not shown, no window system\n",
+                           plug->name);
+        return -1;
+    }
+    log_append_logfile("%s: GUI not shown\n", plug->name);
+    return -1;
+}
+
+// [main-thread]
+static int plug_gui_hide(PLUG_PLUG *plug) {
+    plug_gui_shown_set(plug, false);
+    return 0;
+}
+
+int plug_plugin_gui_toggle(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug || !cur_plug->plug_data ||
+        cur_plug->gui_mode == PLUG_GUI_NONE)
+        return -1;
+    if (cur_plug->gui_shown)
+        return plug_gui_hide(cur_plug);
+    return plug_gui_show(cur_plug);
 }
 
 PRM_CONTAIN *plug_plugin_param_container(void *plug) {
