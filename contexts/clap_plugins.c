@@ -89,6 +89,15 @@ enum {
     // from the plugin or after a preset load, so they are read again from
     // the plugin
     CLAP_PLUG_REQ_SYNC_VALUES = 1U << 5,
+    // clap_host_gui calls, see clap_plug_gui_requests
+    CLAP_PLUG_REQ_GUI_RESIZE = 1U << 6,
+    CLAP_PLUG_REQ_GUI_SHOW = 1U << 7,
+    CLAP_PLUG_REQ_GUI_HIDE = 1U << 8,
+    CLAP_PLUG_REQ_GUI_CLOSED = 1U << 9,
+    CLAP_PLUG_REQ_GUI_HINTS = 1U << 10,
+    CLAP_PLUG_REQ_GUI = CLAP_PLUG_REQ_GUI_RESIZE | CLAP_PLUG_REQ_GUI_SHOW |
+                        CLAP_PLUG_REQ_GUI_HIDE | CLAP_PLUG_REQ_GUI_CLOSED |
+                        CLAP_PLUG_REQ_GUI_HINTS,
 };
 
 // how a plugin's GUI is shown: in a host window, or in a window of its own
@@ -211,9 +220,19 @@ typedef struct _clap_plug_plug {
     bool latency_changed;
     // [main-thread] picked at load
     ClapPlugGuiMode gui_mode;
-    bool gui_shown;
+    // the GUI is created and shown - a hidden one is destroyed. Written on
+    // [main-thread] only, request_show / request_hide read it on any thread
+    atomic_bool gui_shown;
     // [main-thread] gui_shown changed, see clap_plug_plugin_gui_changed
     bool gui_changed;
+    // [main-thread] an embedded GUI's host window, NULL otherwise
+    HWIN *gui_win;
+    // [main-thread] what a drag on gui_win is fitted to
+    clap_gui_resize_hints_t gui_hints;
+    // the size an off-main request_resize asks for, w << 32 | h
+    atomic_uint_least64_t gui_size_req;
+    // closed(true): the plugin destroyed its GUI, destroy() only acknowledges
+    atomic_bool gui_was_destroyed;
     // CLAP_PLUG_PORT holds the graph ports and the clap_audio_buffer_t
     // arrays, to send to plugin process function
     CLAP_PLUG_PORT input_ports;
@@ -291,6 +310,7 @@ typedef struct _clap_plug_info {
     clap_host_latency_t ext_latency;
     clap_host_posix_fd_support_t ext_posix_fd;
     clap_host_timer_support_t ext_timer;
+    clap_host_gui_t ext_gui;
     GRAPH *graph;
     // the clock clap_process.transport comes from, read on [audio-thread]
     TRANSPORT *transport;
@@ -1390,6 +1410,243 @@ static void clap_plug_deactivate(CLAP_PLUG_PLUG *plug) {
     plug->plug_inst->deactivate(plug->plug_inst);
 }
 
+static const clap_plugin_gui_t *clap_plug_gui_ext(const CLAP_PLUG_PLUG *plug) {
+    return plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_GUI);
+}
+
+// [main-thread] flagged for clap_plug_plugin_gui_changed
+static void clap_plug_gui_shown_set(CLAP_PLUG_PLUG *plug, bool shown) {
+    if (atomic_load(&plug->gui_shown) == shown)
+        return;
+    atomic_store(&plug->gui_shown, shown);
+    plug->gui_changed = true;
+}
+
+// [main-thread] an embedded GUI's resize hints, no axis when it can not
+// resize. Returns whether any axis resizes
+static bool clap_plug_gui_hints_update(CLAP_PLUG_PLUG *plug,
+                                       const clap_plugin_gui_t *gui) {
+    clap_gui_resize_hints_t hints = {0};
+    if (gui->can_resize(plug->plug_inst) &&
+        !gui->get_resize_hints(plug->plug_inst, &hints))
+        hints = (clap_gui_resize_hints_t){.can_resize_horizontally = true,
+                                          .can_resize_vertically = true};
+    plug->gui_hints = hints;
+    bool resizable =
+        hints.can_resize_horizontally || hints.can_resize_vertically;
+    hwin_set_resizable(plug->gui_win, resizable);
+    return resizable;
+}
+
+// [main-thread] the drag fitted to the resize hints: an axis the GUI can not
+// resize keeps its length, a kept aspect ratio gives the largest size of it
+// inside the drag. False when it can not be resized
+static bool clap_plug_gui_hints_fit(CLAP_PLUG_PLUG *plug,
+                                    const clap_plugin_gui_t *gui, uint32_t *w,
+                                    uint32_t *h) {
+    const clap_gui_resize_hints_t *hints = &(plug->gui_hints);
+    bool horizontal = hints->can_resize_horizontally;
+    bool vertical = hints->can_resize_vertically;
+    if (!horizontal && !vertical)
+        return false;
+    if (!horizontal || !vertical) {
+        uint32_t cur_w = 0;
+        uint32_t cur_h = 0;
+        if (!gui->get_size(plug->plug_inst, &cur_w, &cur_h))
+            return false;
+        if (!horizontal)
+            *w = cur_w;
+        if (!vertical)
+            *h = cur_h;
+        return true;
+    }
+    uint64_t ratio_w = hints->aspect_ratio_width;
+    uint64_t ratio_h = hints->aspect_ratio_height;
+    if (!hints->preserve_aspect_ratio || ratio_w == 0 || ratio_h == 0)
+        return true;
+    if (*w * ratio_h > *h * ratio_w)
+        *w = (uint32_t)(*h * ratio_w / ratio_h);
+    else
+        *h = (uint32_t)(*w * ratio_h / ratio_w);
+    return true;
+}
+
+// [main-thread] hide() - not for a GUI never shown or one the plugin destroyed
+// itself (closed(true)) - then destroy() and its host window
+static void clap_plug_gui_destroy(CLAP_PLUG_PLUG *plug, bool shown) {
+    const clap_plugin_gui_t *gui = clap_plug_gui_ext(plug);
+    if (!atomic_exchange(&plug->gui_was_destroyed, false) && shown)
+        gui->hide(plug->plug_inst);
+    gui->destroy(plug->plug_inst);
+    hwin_destroy(plug->gui_win);
+    plug->gui_win = NULL;
+}
+
+// [main-thread] a hidden GUI is destroyed, a show creates it again
+static int clap_plug_gui_hide(CLAP_PLUG_PLUG *plug) {
+    if (!atomic_load(&plug->gui_shown))
+        return 0;
+    clap_plug_gui_destroy(plug, true);
+    clap_plug_gui_shown_set(plug, false);
+    return 0;
+}
+
+// [main-thread] the user closed the host window
+static void clap_plug_gui_on_close(void *user_data) {
+    clap_plug_gui_hide((CLAP_PLUG_PLUG *)user_data);
+}
+
+// [main-thread] a size the user or the window manager gave the host window
+static void clap_plug_gui_on_resize(void *user_data, uint32_t w, uint32_t h) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)user_data;
+    const clap_plugin_gui_t *gui = clap_plug_gui_ext(plug);
+    uint32_t fit_w = w;
+    uint32_t fit_h = h;
+    bool resized = clap_plug_gui_hints_fit(plug, gui, &fit_w, &fit_h) &&
+                   gui->adjust_size(plug->plug_inst, &fit_w, &fit_h) &&
+                   gui->set_size(plug->plug_inst, fit_w, fit_h);
+    // refused, the GUI's own size back
+    if (!resized && !gui->get_size(plug->plug_inst, &fit_w, &fit_h))
+        return;
+    if (fit_w != w || fit_h != h)
+        hwin_resize(plug->gui_win, fit_w, fit_h);
+}
+
+// [main-thread] after create(): the host window, the GUI parented into it,
+// shown. The step that failed, NULL on success
+static const char *clap_plug_gui_embed(CLAP_PLUG_PLUG *plug,
+                                       const clap_plugin_gui_t *gui) {
+    bool resizable = clap_plug_gui_hints_update(plug, gui);
+    uint32_t w = 0;
+    uint32_t h = 0;
+    if (!gui->get_size(plug->plug_inst, &w, &h))
+        return "get_size";
+    HWIN_SYS *hwin = plug->plug_data->hwin;
+    HWIN_FUNCS funcs = {.on_close = clap_plug_gui_on_close,
+                        .on_resize = clap_plug_gui_on_resize};
+    plug->gui_win = hwin_create(hwin, plug->name, w, h,
+                                resizable ? HWIN_RESIZABLE : 0, funcs, plug);
+    if (!plug->gui_win)
+        return "hwin_create";
+    clap_window_t parent = {.api = hwin_sys_api(hwin),
+                            .x11 = (clap_xwnd)hwin_native(plug->gui_win)};
+    if (!gui->set_parent(plug->plug_inst, &parent))
+        return "set_parent";
+    hwin_show(plug->gui_win);
+    return NULL;
+}
+
+// [main-thread] the calls in the spec's order, a failed one logged and the GUI
+// undone
+static int clap_plug_gui_show(CLAP_PLUG_PLUG *plug) {
+    HWIN_SYS *hwin = plug->plug_data->hwin;
+    if (!hwin_sys_open(hwin)) {
+        log_append_logfile("%s: GUI not shown, no window system\n",
+                           plug->name);
+        return -1;
+    }
+    // what an earlier GUI asked for never reaches this one
+    atomic_fetch_and(&plug->requests, ~(unsigned int)CLAP_PLUG_REQ_GUI);
+    atomic_store(&plug->gui_was_destroyed, false);
+    const clap_plugin_gui_t *gui = clap_plug_gui_ext(plug);
+    bool floating = plug->gui_mode == CLAP_PLUG_GUI_FLOAT;
+    if (!gui->create(plug->plug_inst, hwin_sys_api(hwin), floating)) {
+        log_append_logfile("%s: GUI not shown, create failed\n", plug->name);
+        return -1;
+    }
+    const char *failed = NULL;
+    if (floating)
+        gui->suggest_title(plug->plug_inst, plug->name);
+    else
+        failed = clap_plug_gui_embed(plug, gui);
+    if (!failed && !gui->show(plug->plug_inst))
+        failed = "show";
+    if (failed) {
+        log_append_logfile("%s: GUI not shown, %s failed\n", plug->name,
+                           failed);
+        clap_plug_gui_destroy(plug, false);
+        return -1;
+    }
+    clap_plug_gui_shown_set(plug, true);
+    return 0;
+}
+
+// gui extension, [thread-safe]: marked for clap_plug_gui_requests, but a
+// request_resize on [main-thread], whose true means accepted
+static void clap_plug_ext_gui_resize_hints_changed(const clap_host_t *host) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!plug)
+        return;
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_GUI_HINTS);
+}
+
+static bool clap_plug_ext_gui_request_resize(const clap_host_t *host,
+                                             uint32_t width, uint32_t height) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!plug)
+        return false;
+    if (is_main_thread) {
+        if (!plug->gui_win)
+            return false;
+        hwin_resize(plug->gui_win, width, height);
+        return true;
+    }
+    // true only acknowledges it, the newest size wins
+    atomic_store(&plug->gui_size_req, (uint64_t)width << 32 | height);
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_GUI_RESIZE);
+    return true;
+}
+
+static bool clap_plug_ext_gui_request_show(const clap_host_t *host) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!plug || !atomic_load(&plug->gui_shown))
+        return false;
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_GUI_SHOW);
+    return true;
+}
+
+static bool clap_plug_ext_gui_request_hide(const clap_host_t *host) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!plug || !atomic_load(&plug->gui_shown))
+        return false;
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_GUI_HIDE);
+    return true;
+}
+
+static void clap_plug_ext_gui_closed(const clap_host_t *host,
+                                     bool was_destroyed) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!plug)
+        return;
+    if (was_destroyed)
+        atomic_store(&plug->gui_was_destroyed, true);
+    atomic_fetch_or(&plug->requests, CLAP_PLUG_REQ_GUI_CLOSED);
+}
+
+// [main-thread] the gui requests of a shown GUI, dropped otherwise
+static void clap_plug_gui_requests(CLAP_PLUG_PLUG *plug, unsigned int reqs) {
+    if ((reqs & CLAP_PLUG_REQ_GUI) == 0 || !atomic_load(&plug->gui_shown))
+        return;
+    if ((reqs & (CLAP_PLUG_REQ_GUI_CLOSED | CLAP_PLUG_REQ_GUI_HIDE)) != 0) {
+        clap_plug_gui_hide(plug);
+        return;
+    }
+    const clap_plugin_gui_t *gui = clap_plug_gui_ext(plug);
+    if ((reqs & CLAP_PLUG_REQ_GUI_SHOW) != 0) {
+        hwin_show(plug->gui_win);
+        gui->show(plug->plug_inst);
+    }
+    // the rest only for an embedded one
+    if (!plug->gui_win)
+        return;
+    if ((reqs & CLAP_PLUG_REQ_GUI_HINTS) != 0)
+        clap_plug_gui_hints_update(plug, gui);
+    if ((reqs & CLAP_PLUG_REQ_GUI_RESIZE) != 0) {
+        uint64_t size = atomic_load(&plug->gui_size_req);
+        hwin_resize(plug->gui_win, (uint32_t)(size >> 32), (uint32_t)size);
+    }
+}
+
 // epoll_ctl on the shared wake set, used for both plugin fds and timerfds.
 // Best-effort: a failure here never fails the CLAP extension call, the
 // poll()-based dispatch below (clap_plug_fds_dispatch/clap_plug_timers_dispatch)
@@ -1417,6 +1674,8 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     CLAP_PLUG_PLUG *plug = &(plug_data->plugins[plug_id]);
 
     if (plug->plug_inst) {
+        // the GUI before the instance it belongs to
+        clap_plug_gui_hide(plug);
         clap_plug_deactivate(plug);
         if (plug->plug_inst_created == 1) {
             plug->plug_inst->destroy(plug->plug_inst);
@@ -1463,7 +1722,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     plug->latency = 0;
     plug->latency_changed = false;
     plug->gui_mode = CLAP_PLUG_GUI_NONE;
-    plug->gui_shown = false;
+    atomic_store(&plug->gui_shown, false);
     plug->gui_changed = false;
     // clean the event structs
     clap_input_events_t *in_events = &(plug->input_events);
@@ -1570,6 +1829,9 @@ static const void *clap_plug_get_extension(const clap_host_t *host,
     }
     if (strcmp(ex_id, CLAP_EXT_TIMER_SUPPORT) == 0) {
         return &(plug_data->ext_timer);
+    }
+    if (strcmp(ex_id, CLAP_EXT_GUI) == 0) {
+        return &(plug_data->ext_gui);
     }
     // if there is no extension implemented that the plugin needs send the name
     // of the extension to the ui
@@ -2064,6 +2326,7 @@ static void clap_plug_requests_process(CLAP_PLUG_PLUG *plug) {
     // after the queued (older) values were applied by the caller
     if ((reqs & CLAP_PLUG_REQ_SYNC_VALUES) != 0)
         clap_plug_params_sync_values(plug);
+    clap_plug_gui_requests(plug, reqs);
 }
 
 static int clap_plug_start_process(void *user_data) {
@@ -2267,6 +2530,13 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     // timer-support extension
     plug_data->ext_timer.register_timer = clap_plug_ext_register_timer;
     plug_data->ext_timer.unregister_timer = clap_plug_ext_unregister_timer;
+    // gui extension
+    plug_data->ext_gui.resize_hints_changed =
+        clap_plug_ext_gui_resize_hints_changed;
+    plug_data->ext_gui.request_resize = clap_plug_ext_gui_request_resize;
+    plug_data->ext_gui.request_show = clap_plug_ext_gui_request_show;
+    plug_data->ext_gui.request_hide = clap_plug_ext_gui_request_hide;
+    plug_data->ext_gui.closed = clap_plug_ext_gui_closed;
 
     // init the plugins array
     plug_data->plugins_dirty = false;
@@ -2287,8 +2557,11 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         plug->presets = NULL;
         plug->presets_built = false;
         plug->gui_mode = CLAP_PLUG_GUI_NONE;
-        plug->gui_shown = false;
+        atomic_init(&plug->gui_shown, false);
         plug->gui_changed = false;
+        plug->gui_win = NULL;
+        atomic_init(&plug->gui_size_req, 0U);
+        atomic_init(&plug->gui_was_destroyed, false);
         atomic_init(&plug->requests, 0U);
         atomic_init(&plug->in_events_dropped, 0U);
         atomic_init(&plug->out_events_dropped, 0U);
@@ -2842,18 +3115,21 @@ static void clap_plug_set_display_name(CLAP_PLUG_PLUG *plug) {
 }
 
 // [main-thread] after init(): embedded if the plugin can use the host's
-// window api, else floating if it can open its own window with it
+// window api, else floating if it can open its own window with it. Each mode
+// needs every call the host makes in it
 static ClapPlugGuiMode clap_plug_gui_mode_pick(CLAP_PLUG_PLUG *plug) {
     const char *api = hwin_sys_api(plug->plug_data->hwin);
     if (!api)
         return CLAP_PLUG_GUI_NONE;
-    const clap_plugin_gui_t *gui =
-        plug->plug_inst->get_extension(plug->plug_inst, CLAP_EXT_GUI);
-    if (!gui || !gui->is_api_supported)
+    const clap_plugin_gui_t *gui = clap_plug_gui_ext(plug);
+    if (!gui || !gui->is_api_supported || !gui->create || !gui->destroy ||
+        !gui->show || !gui->hide)
         return CLAP_PLUG_GUI_NONE;
-    if (gui->is_api_supported(plug->plug_inst, api, false))
+    if (gui->can_resize && gui->get_resize_hints && gui->get_size &&
+        gui->adjust_size && gui->set_size && gui->set_parent &&
+        gui->is_api_supported(plug->plug_inst, api, false))
         return CLAP_PLUG_GUI_EMBED;
-    if (gui->is_api_supported(plug->plug_inst, api, true))
+    if (gui->suggest_title && gui->is_api_supported(plug->plug_inst, api, true))
         return CLAP_PLUG_GUI_FLOAT;
     return CLAP_PLUG_GUI_NONE;
 }
@@ -3104,7 +3380,7 @@ bool clap_plug_plugin_gui_available(void *plug) {
 
 bool clap_plug_plugin_gui_shown(void *plug) {
     CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
-    return cur_plug && cur_plug->gui_shown;
+    return cur_plug && atomic_load(&cur_plug->gui_shown);
 }
 
 bool clap_plug_plugin_gui_changed(void *plug) {
@@ -3116,37 +3392,12 @@ bool clap_plug_plugin_gui_changed(void *plug) {
     return changed;
 }
 
-// [main-thread] flagged for clap_plug_plugin_gui_changed
-static void clap_plug_gui_shown_set(CLAP_PLUG_PLUG *plug, bool shown) {
-    if (plug->gui_shown == shown)
-        return;
-    plug->gui_shown = shown;
-    plug->gui_changed = true;
-}
-
-// [main-thread]
-static int clap_plug_gui_show(CLAP_PLUG_PLUG *plug) {
-    if (!hwin_sys_open(plug->plug_data->hwin)) {
-        log_append_logfile("%s: GUI not shown, no window system\n",
-                           plug->name);
-        return -1;
-    }
-    log_append_logfile("%s: GUI not shown\n", plug->name);
-    return -1;
-}
-
-// [main-thread]
-static int clap_plug_gui_hide(CLAP_PLUG_PLUG *plug) {
-    clap_plug_gui_shown_set(plug, false);
-    return 0;
-}
-
 int clap_plug_plugin_gui_toggle(void *plug) {
     CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
     if (!cur_plug || !cur_plug->plug_data ||
         cur_plug->gui_mode == CLAP_PLUG_GUI_NONE)
         return -1;
-    if (cur_plug->gui_shown)
+    if (atomic_load(&cur_plug->gui_shown))
         return clap_plug_gui_hide(cur_plug);
     return clap_plug_gui_show(cur_plug);
 }
