@@ -199,6 +199,10 @@ typedef struct _plug_port {
     LV2_URID port_type_urid;
     // MIDI events the input sequence had no room for, taken on [main-thread]
     atomic_uint seq_dropped;
+    // an output control's value after each run, written by [audio-thread]
+    _Atomic(float) control_rt;
+    // [main-thread] the value the shown UI last got or wrote
+    float gui_sent;
 } PLUG_PORT;
 
 typedef struct _plug_features {
@@ -488,6 +492,7 @@ static void plug_workers_free(PLUG_PLUG *plug) {
 
 static void plug_gui_destroy(PLUG_PLUG *plug, bool shown);
 static int plug_gui_hide(PLUG_PLUG *plug);
+static void plug_gui_ports_update(PLUG_PLUG *plug, bool all);
 
 static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     if (!plug_data)
@@ -1298,6 +1303,7 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
         if (!cur_plug->plug_instance)
             continue;
         param_msgs_process(cur_plug->plug_params, 0);
+        plug_gui_ports_update(cur_plug, false);
         // non-zero: the UI was closed
         if (cur_plug->gui_idle &&
             cur_plug->gui_idle->idle(cur_plug->gui_inst) != 0)
@@ -2003,11 +2009,58 @@ static void plug_gui_touch(LV2UI_Feature_Handle handle, uint32_t port_index,
     (void)grabbed;
 }
 
+// an input control with a param, the only port a float write reaches
+static bool plug_gui_port_writable(const PLUG_PORT *port) {
+    return port->type == PORT_TYPE_CONTROL && port->flow == PORT_FLOW_INPUT &&
+           port->param_index >= 0;
+}
+
+// [main-thread] a control port's value for the UI, false for any other port
+static bool plug_gui_port_value(PLUG_PLUG *plug, PLUG_PORT *port,
+                                float *out) {
+    if (plug_gui_port_writable(port)) {
+        *out = (float)param_get_value(plug->plug_params, port->param_index, 0);
+        return true;
+    }
+    if (port->type == PORT_TYPE_CONTROL && port->flow == PORT_FLOW_OUTPUT) {
+        *out = atomic_load(&port->control_rt);
+        return true;
+    }
+    return false;
+}
+
+// [main-thread] port_event for each control port whose value the UI has not
+// got or written, for every one when all
+static void plug_gui_ports_update(PLUG_PLUG *plug, bool all) {
+    if (!plug->gui_inst || !plug->gui_desc->port_event)
+        return;
+    for (uint32_t i = 0; i < plug->num_ports; i++) {
+        PLUG_PORT *port = &(plug->ports[i]);
+        float value;
+        if (!plug_gui_port_value(plug, port, &value) ||
+            (!all && value == port->gui_sent))
+            continue;
+        port->gui_sent = value;
+        plug->gui_desc->port_event(plug->gui_inst, i, sizeof(value), 0,
+                                   &value);
+    }
+}
+
+// a float to an input control sets its param. gui_sent takes the raw value:
+// one the param clamps goes back to the UI
 static void plug_gui_write(LV2UI_Controller controller, uint32_t port_index,
                            uint32_t buffer_size, uint32_t protocol,
                            const void *buffer) {
-    (void)buffer;
     PLUG_PLUG *plug = (PLUG_PLUG *)controller;
+    PLUG_PORT *port =
+        port_index < plug->num_ports ? &(plug->ports[port_index]) : NULL;
+    if (protocol == 0 && buffer_size == sizeof(float) && port &&
+        plug_gui_port_writable(port)) {
+        memcpy(&port->gui_sent, buffer, sizeof(float));
+        param_set_value(plug->plug_params, port->param_index, port->gui_sent,
+                        NULL, Operation_SetValue);
+        return;
+    }
     log_append_logfile("%s: GUI wrote %u bytes to port %u, protocol %u - "
                        "dropped\n",
                        plug->name, buffer_size, port_index, protocol);
@@ -2120,6 +2173,7 @@ static const char *plug_gui_create(PLUG_PLUG *plug) {
     lilv_free(bundle_path);
     if (!plug->gui_inst)
         return "instantiate";
+    plug_gui_ports_update(plug, true);
     plug->gui_idle = plug_gui_extension(desc, LV2_UI__idleInterface);
     if (embed) {
         hwin_show(plug->gui_win);
@@ -2463,6 +2517,7 @@ static int plug_ports_create(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
         cur_port->graph_port = NULL;
         cur_port->evbuf = NULL;
         atomic_init(&cur_port->seq_dropped, 0U);
+        atomic_init(&cur_port->control_rt, 0.0f);
         cur_port->buf_size = 0;
         cur_port->index = i;
         cur_port->param_index = -1;
@@ -2847,6 +2902,7 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
         // update the output parameters (these should be sent to ui for
         // display)
         if (cur_port->type == PORT_TYPE_CONTROL) {
+            atomic_store(&cur_port->control_rt, cur_port->control);
             // set param but not too often to not swamp the rt_to_ui ring
             // buffer. it does not matter that the [audio-thread] parameter
             // will be set at the same speed, since it output parameter
