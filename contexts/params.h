@@ -152,7 +152,9 @@ unsigned int param_return_num_params(PRM_CONTAIN *param_container,
 // process ring_buffers - apply value messages that crossed from the other
 // side. Each message is already the final, clamped value (see
 // PARAM_RING_DATA_BIT) - this just stores it, no operation is replayed. The
-// rt side also takes a new range or cookie (param_set_range / _cookie).
+// rt side also takes a new range or cookie (param_set_range / _cookie). The
+// ui side then sends again the values and ranges a full ui_to_rt queue
+// refused - the latest of each, a range before its value.
 void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params);
 
 // rt-side value setter, for values that come from the owner (a plugin output,

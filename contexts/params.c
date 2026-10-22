@@ -86,6 +86,11 @@ typedef struct _params_param_ui {
     // value, name or flags changed since param_changed_take last returned it
     // (or param_mark_changed marked it)
     bool changed;
+    // what a full ui_to_rt queue refused, see param_ui_send. The value goes
+    // with the from_owner of its latest store
+    bool unsent_value;
+    bool unsent_from_owner;
+    bool unsent_range;
 } PRM_PARAM_UI;
 
 // one interned parameter category. Like PRM_PARAM_RT/UI each of these is its
@@ -136,6 +141,8 @@ typedef struct _params_container {
     bool any_changed;
     // any rt param has resend set - rt only, lets param_rt_resend skip the scan
     bool rt_resend;
+    // any ui param has something unsent - lets param_ui_resend skip the scan
+    bool ui_resend;
     // interned categories - own malloc each, outer array realloc'd (see
     // PRM_PARAM_CATEGORY). Never removed individually, so num_categories only
     // grows and every index below it is alive.
@@ -248,6 +255,7 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     param_container->generation_polled = 0;
     param_container->any_changed = false;
     param_container->rt_resend = false;
+    param_container->ui_resend = false;
     param_container->categories = NULL;
     param_container->num_categories = 0;
     param_container->owner_index = NULL;
@@ -382,6 +390,9 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     new_ui_param->self_container = param_container;
     new_ui_param->self_val_id = (int)idx;
     new_ui_param->changed = false;
+    new_ui_param->unsent_value = false;
+    new_ui_param->unsent_from_owner = false;
+    new_ui_param->unsent_range = false;
 
     param_container->generation++;
 
@@ -434,6 +445,62 @@ void params_container_resync(PRM_CONTAIN *param_container,
                         new_params[i].uid, new_params[i].owner_id,
                         new_params[i].flags, new_params[i].category_uid,
                         new_params[i].cookie);
+    }
+}
+
+// false, and a retry by param_ui_resend, when the ui_to_rt queue is full
+static bool param_ui_write(PRM_CONTAIN *param_container,
+                           const PARAM_RING_DATA_BIT *send_bit) {
+    if (ring_buffer_write(param_container->param_ui_to_rt, send_bit,
+                          sizeof(*send_bit)) == 1)
+        return true;
+    param_container->ui_resend = true;
+    return false;
+}
+
+// send the rt side what it has not got of this param: its range, then its
+// value, so a value never overtakes an unsent range. What the queue refuses
+// stays marked. false when refused
+static bool param_ui_send(PRM_CONTAIN *param_container, int val_id,
+                          PRM_PARAM_UI *cur_param) {
+    if (cur_param->unsent_range) {
+        PARAM_RING_DATA_BIT send_bit = {
+            .val_id = val_id,
+            .uid = cur_param->uid,
+            .range = {.min_val = cur_param->min_val,
+                      .max_val = cur_param->max_val},
+            .kind = PARAM_MSG_RANGE};
+        if (!param_ui_write(param_container, &send_bit))
+            return false;
+        cur_param->unsent_range = false;
+    }
+    if (cur_param->unsent_value) {
+        PARAM_RING_DATA_BIT send_bit = {
+            .val_id = val_id,
+            .uid = cur_param->uid,
+            .param_value = cur_param->val,
+            .from_owner = cur_param->unsent_from_owner};
+        if (!param_ui_write(param_container, &send_bit))
+            return false;
+        cur_param->unsent_value = false;
+    }
+    return true;
+}
+
+// send what a full ui_to_rt queue refused, once there is room
+static void param_ui_resend(PRM_CONTAIN *param_container) {
+    if (!param_container->ui_resend)
+        return;
+    // a send that does not fit sets it again
+    param_container->ui_resend = false;
+    for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
+        PRM_PARAM_UI *cur_param = param_container->ui_params[i];
+        if (!cur_param ||
+            !(cur_param->unsent_value || cur_param->unsent_range))
+            continue;
+        // still full - the rest wait for the next call
+        if (!param_ui_send(param_container, (int)i, cur_param))
+            return;
     }
 }
 
@@ -498,8 +565,12 @@ void param_msgs_process(PRM_CONTAIN *param_container, unsigned int rt_params) {
             if (cur_param->val != cur_bit.param_value)
                 param_ui_mark_changed(param_container, cur_param);
             cur_param->val = cur_bit.param_value;
+            // the rt side has the value this side now shows
+            cur_param->unsent_value = false;
         }
     }
+    if (!rt_params)
+        param_ui_resend(param_container);
 }
 
 // send an rt param's value to the ui side. A full queue marks it for
@@ -565,22 +636,18 @@ void param_rt_resend(PRM_CONTAIN *param_container) {
     }
 }
 
-// store a ui param's new value; if it changed, mark it and send it to the rt
-// side
+// store a ui param's new value; if it changed, mark it. Then send the rt side
+// what it has not got
 static void param_ui_value_store(PRM_CONTAIN *param_container, int val_id,
                                  PRM_PARAM_UI *cur_param, PARAM_T new_val,
                                  bool from_owner) {
-    PARAM_T prev_val = cur_param->val;
-    cur_param->val = new_val;
-    if (new_val == prev_val)
-        return;
-    param_ui_mark_changed(param_container, cur_param);
-    PARAM_RING_DATA_BIT send_bit = {.val_id = val_id,
-                                    .uid = cur_param->uid,
-                                    .param_value = new_val,
-                                    .from_owner = from_owner};
-    ring_buffer_write(param_container->param_ui_to_rt, &send_bit,
-                      sizeof(send_bit));
+    if (new_val != cur_param->val) {
+        cur_param->val = new_val;
+        param_ui_mark_changed(param_container, cur_param);
+        cur_param->unsent_value = true;
+        cur_param->unsent_from_owner = from_owner;
+    }
+    param_ui_send(param_container, val_id, cur_param);
 }
 
 int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
@@ -675,13 +742,8 @@ int param_set_range(PRM_CONTAIN *param_container, int val_id, PARAM_T min,
     cur_param->min_val = min;
     cur_param->max_val = max;
     param_ui_mark_changed(param_container, cur_param);
-    // the range first, so the rt side clamps with it before the value below
-    PARAM_RING_DATA_BIT send_bit = {.val_id = val_id,
-                                    .uid = cur_param->uid,
-                                    .range = {.min_val = min, .max_val = max},
-                                    .kind = PARAM_MSG_RANGE};
-    ring_buffer_write(param_container->param_ui_to_rt, &send_bit,
-                      sizeof(send_bit));
+    // param_ui_send sends it before the clamped value
+    cur_param->unsent_range = true;
     param_ui_value_store(param_container, val_id, cur_param,
                          param_clamp(cur_param->val, min, max), from_owner);
     return 0;
