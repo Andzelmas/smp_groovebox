@@ -33,6 +33,7 @@
 #include "../util_funcs/jalv/symap.h"
 // for workers feature
 #include "../util_funcs/jalv/worker.h"
+#include "../util_funcs/jalv/zix/ring.h"
 #include "../util_funcs/jalv/zix/sem.h"
 #include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
@@ -197,7 +198,8 @@ typedef struct _plug_port {
     float control;   ///< For control ports, otherwise 0.0f
     // for convenience we can save the current port urid of its type
     LV2_URID port_type_urid;
-    // MIDI events the input sequence had no room for, taken on [main-thread]
+    // events (MIDI, property sets) the input sequence had no room for, taken
+    // on [main-thread]
     atomic_uint seq_dropped;
     // an output control's value after each run, written by [audio-thread]
     _Atomic(float) control_rt;
@@ -279,6 +281,12 @@ typedef struct _plug_gui_features {
     const LV2_Feature *list[PLUG_GUI_OWN_FEATURES + 5];
 } PLUG_GUI_FEATURES;
 
+// a record in a UI atom ring, the atom follows it
+typedef struct _plug_gui_atom {
+    uint32_t port;
+    uint32_t size; // the atom's, its header included
+} PLUG_GUI_ATOM;
+
 typedef struct _plug_plug {
     // is the plugin processing, if is_processing == 0, it will be skipped in
     // the process function, touch only on [audio-thread]
@@ -336,6 +344,16 @@ typedef struct _plug_plug {
     uint32_t gui_w;
     uint32_t gui_h;
     PLUG_GUI_FEATURES gui_features;
+    // [main-thread] the UI's atoms, made at the first show and kept until
+    // removal. [audio-thread] reads ui_to_rt and writes rt_to_ui, gui_atom
+    // holds one atom read from rt_to_ui
+    ZixRing *gui_ui_to_rt;
+    ZixRing *gui_rt_to_ui;
+    LV2_Atom *gui_atom;
+    // gui_shown for [audio-thread], stored after the rings
+    atomic_bool gui_shown_rt;
+    // atoms gui_rt_to_ui had no room for, taken on [main-thread]
+    atomic_uint gui_dropped;
     // array of available ports for the plugin
     PLUG_PORT *ports;
     // how many ports do we have on plugin
@@ -365,11 +383,13 @@ typedef struct _plug_plug {
     // port symbol -> index in ports, for restoring a preset's port values
     INTERN_TABLE port_symbols;
     // property URID -> param, sorted by URID. Built at load, read by the
-    // [audio-thread] for the plugin's patch:Set and patch:Put messages
+    // [audio-thread] for the plugin's patch:Set and patch:Put messages and by
+    // [main-thread] for its UI's patch:Set
     PLUG_PROPERTY_PARAM *property_params;
     uint32_t num_property_params;
-    // do we need to update, after a preset loading for example
-    bool request_update;
+    // [main-thread] asks for a patch:Get, after a preset loading for example.
+    // Taken by [audio-thread]
+    atomic_bool request_update;
     // [audio-thread] the transport seq the plugin last got time:Position for
     // (0 = never) and the frame its own count expects next. [main-thread]
     // zeroes pos_seq only before the plugin is in the graph or while stopped
@@ -491,8 +511,10 @@ static void plug_workers_free(PLUG_PLUG *plug) {
 }
 
 static void plug_gui_destroy(PLUG_PLUG *plug, bool shown);
+static void plug_gui_rings_free(PLUG_PLUG *plug);
 static int plug_gui_hide(PLUG_PLUG *plug);
 static void plug_gui_ports_update(PLUG_PLUG *plug, bool all);
+static void plug_gui_atoms_out(PLUG_PLUG *plug);
 
 static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     if (!plug_data)
@@ -503,6 +525,7 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     PLUG_PLUG *cur_plug = &(plug_data->plugins[id]);
     // the UI before the instance it may access
     plug_gui_destroy(cur_plug, cur_plug->gui_shown);
+    plug_gui_rings_free(cur_plug);
     // remove preset
     if (cur_plug->preset) {
         const LilvNode *old_preset = lilv_state_get_uri(cur_plug->preset);
@@ -591,7 +614,9 @@ static int plug_remove_plug(PLUG_INFO *plug_data, int id) {
     cur_plug->gui_mode = PLUG_GUI_NONE;
     cur_plug->gui_shown = false;
     cur_plug->gui_changed = false;
-    cur_plug->request_update = false;
+    atomic_store(&cur_plug->gui_shown_rt, false);
+    atomic_store(&cur_plug->gui_dropped, 0U);
+    atomic_store(&cur_plug->request_update, false);
     cur_plug->safe_restore = false;
     cur_plug->plug = NULL;
     cur_plug->plug_data = NULL;
@@ -689,30 +714,50 @@ static bool plug_evbuf_get(PLUG_EVBUF_ITERATOR iter, uint32_t *frames,
     return true;
 }
 
-static int plug_evbuf_write(PLUG_EVBUF_ITERATOR *iter, uint32_t frames,
-                            uint32_t subframes, uint32_t type, uint32_t size,
-                            const void *data) {
-    (void)subframes;
+// the padded event an atom of atom_size bytes, its header included, takes in a
+// sequence
+static uint32_t plug_evbuf_event_size(uint32_t atom_size) {
+    return lv2_atom_pad_size(sizeof(LV2_Atom_Event) - sizeof(LV2_Atom) +
+                             atom_size);
+}
 
+// an event for an atom of atom_size bytes, its header included, at the
+// iterator, the atom left for the caller to fill. NULL when there is no room
+static LV2_Atom *plug_evbuf_append(PLUG_EVBUF_ITERATOR *iter, uint32_t frames,
+                                   uint32_t atom_size) {
     LV2_Atom_Sequence *aseq = &iter->evbuf->buf;
-    if (iter->evbuf->capacity - sizeof(LV2_Atom) - aseq->atom.size <
-        sizeof(LV2_Atom_Event) + size) {
-        return -1;
-    }
+    const uint32_t size = plug_evbuf_event_size(atom_size);
+    if (iter->evbuf->capacity - sizeof(LV2_Atom) - aseq->atom.size < size)
+        return NULL;
 
     LV2_Atom_Event *aev =
         (LV2_Atom_Event *)((char *)LV2_ATOM_CONTENTS(LV2_Atom_Sequence, aseq) +
                            iter->offset);
-
     aev->time.frames = frames;
-    aev->body.type = type;
-    aev->body.size = size;
-    memcpy(LV2_ATOM_BODY(&aev->body), data, size);
-
-    size = lv2_atom_pad_size(sizeof(LV2_Atom_Event) + size);
     aseq->atom.size += size;
     iter->offset += size;
+    return &aev->body;
+}
 
+// does an atom of atom_size bytes, its header included, fit the empty input
+// sequence. The capacity never changes, any thread may ask
+static bool plug_evbuf_fits(const PLUG_EVBUF *evbuf, uint32_t atom_size) {
+    return atom_size < evbuf->capacity &&
+           plug_evbuf_event_size(atom_size) <=
+               evbuf->capacity - sizeof(LV2_Atom) -
+                   sizeof(LV2_Atom_Sequence_Body);
+}
+
+static int plug_evbuf_write(PLUG_EVBUF_ITERATOR *iter, uint32_t frames,
+                            uint32_t subframes, uint32_t type, uint32_t size,
+                            const void *data) {
+    (void)subframes;
+    LV2_Atom *atom = plug_evbuf_append(iter, frames, sizeof(LV2_Atom) + size);
+    if (!atom)
+        return -1;
+    atom->type = type;
+    atom->size = size;
+    memcpy(LV2_ATOM_BODY(atom), data, size);
     return 0;
 }
 
@@ -916,7 +961,7 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
         plug->preset = NULL;
         plug->controls = NULL;
         plug->num_controls = 0;
-        plug->request_update = false;
+        atomic_init(&plug->request_update, false);
         plug->control_in = -1;
         plug->latency_port = -1;
         atomic_init(&plug->latency_rt, 0U);
@@ -927,6 +972,11 @@ PLUG_INFO *plug_init(uint32_t block_length, SAMPLE_T samplerate,
         plug->gui_mode = PLUG_GUI_NONE;
         plug->gui_shown = false;
         plug->gui_changed = false;
+        plug->gui_ui_to_rt = NULL;
+        plug->gui_rt_to_ui = NULL;
+        plug->gui_atom = NULL;
+        atomic_init(&plug->gui_shown_rt, false);
+        atomic_init(&plug->gui_dropped, 0U);
         plug->plug_params = NULL;
         plug->safe_restore = false;
         plug->id = i;
@@ -1252,7 +1302,7 @@ int plug_plugin_preset_load(void *plug, uint64_t key) {
         param_set_value(cur_plug->plug_params, cur_port->param_index,
                         (PARAM_T)cur_port->control, NULL, Operation_SyncValue);
     }
-    cur_plug->request_update = true;
+    atomic_store(&cur_plug->request_update, true);
     context_sub_wait_for_start(plug_data->control_data, (void *)cur_plug);
 
     // the current preset's data stays loaded in the world while it is current
@@ -1304,6 +1354,7 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
             continue;
         param_msgs_process(cur_plug->plug_params, 0);
         plug_gui_ports_update(cur_plug, false);
+        plug_gui_atoms_out(cur_plug);
         // non-zero: the UI was closed
         if (cur_plug->gui_idle &&
             cur_plug->gui_idle->idle(cur_plug->gui_inst) != 0)
@@ -1316,12 +1367,16 @@ int plug_read_rt_to_ui_messages(PLUG_INFO *plug_data) {
             log_append_logfile("%s: latency %u frames\n", cur_plug->name,
                                latency);
         }
+        uint32_t gui_dropped = atomic_exchange(&cur_plug->gui_dropped, 0U);
+        if (gui_dropped > 0)
+            log_append_logfile("%s: %u atoms to the GUI dropped\n",
+                               cur_plug->name, gui_dropped);
         for (uint32_t j = 0; cur_plug->ports && j < cur_plug->num_ports; j++) {
             PLUG_PORT *port = &(cur_plug->ports[j]);
             uint32_t dropped = atomic_exchange(&port->seq_dropped, 0U);
             if (dropped > 0)
                 log_append_logfile(
-                    "%s %s: %u MIDI events dropped\n", cur_plug->name,
+                    "%s %s: %u events dropped\n", cur_plug->name,
                     lilv_node_as_string(
                         lilv_port_get_symbol(cur_plug->plug, port->lilv_port)),
                     dropped);
@@ -1539,13 +1594,21 @@ static int plug_property_params_build(PLUG_PLUG *plug) {
     return 0;
 }
 
+// a property's param, NULL when it has none. property_params is not changed
+// after load, any thread may ask
+static const PLUG_PROPERTY_PARAM *
+plug_property_param_find(const PLUG_PLUG *plug, LV2_URID property) {
+    if (plug->num_property_params == 0)
+        return NULL;
+    PLUG_PROPERTY_PARAM want = {.urid = property};
+    return bsearch(&want, plug->property_params, plug->num_property_params,
+                   sizeof(PLUG_PROPERTY_PARAM), plug_property_param_cmp);
+}
+
 // [audio-thread] the plugin says one of its properties has a new value
 static void plug_property_changed_rt(PLUG_PLUG *plug, LV2_URID property,
                                      const LV2_Atom *value) {
-    PLUG_PROPERTY_PARAM want = {.urid = property};
-    const PLUG_PROPERTY_PARAM *found =
-        bsearch(&want, plug->property_params, plug->num_property_params,
-                sizeof(PLUG_PROPERTY_PARAM), plug_property_param_cmp);
+    const PLUG_PROPERTY_PARAM *found = plug_property_param_find(plug, property);
     float fvalue;
     if (!found || !plug_value_as_float(plug, LV2_ATOM_BODY_CONST(value),
                                        value->size, value->type, &fvalue))
@@ -1923,8 +1986,10 @@ bool plug_plugin_gui_changed(void *plug) {
     return changed;
 }
 
-// [main-thread] flagged for plug_plugin_gui_changed
+// [main-thread] flagged for plug_plugin_gui_changed. The run sees it after the
+// rings it gates
 static void plug_gui_shown_set(PLUG_PLUG *plug, bool shown) {
+    atomic_store_explicit(&plug->gui_shown_rt, shown, memory_order_release);
     if (plug->gui_shown == shown)
         return;
     plug->gui_shown = shown;
@@ -2046,6 +2111,130 @@ static void plug_gui_ports_update(PLUG_PLUG *plug, bool all) {
     }
 }
 
+static void plug_gui_rings_free(PLUG_PLUG *plug) {
+    zix_ring_free(plug->gui_ui_to_rt);
+    zix_ring_free(plug->gui_rt_to_ui);
+    free(plug->gui_atom);
+    plug->gui_ui_to_rt = NULL;
+    plug->gui_rt_to_ui = NULL;
+    plug->gui_atom = NULL;
+}
+
+// [main-thread] at the first show, each ring holds a full sequence of the
+// plugin's biggest atom port. False when they could not be made
+static bool plug_gui_rings_make(PLUG_PLUG *plug) {
+    if (plug->gui_ui_to_rt)
+        return true;
+    uint32_t size = (uint32_t)plug->plug_data->midi_buf_size;
+    for (uint32_t i = 0; i < plug->num_ports; i++)
+        if (plug->ports[i].evbuf)
+            size = MAX(size, plug->ports[i].evbuf->capacity);
+    plug->gui_ui_to_rt = zix_ring_new(NULL, size);
+    plug->gui_rt_to_ui = zix_ring_new(NULL, size);
+    if (plug->gui_rt_to_ui)
+        plug->gui_atom = malloc(zix_ring_capacity(plug->gui_rt_to_ui));
+    if (!plug->gui_ui_to_rt || !plug->gui_rt_to_ui || !plug->gui_atom) {
+        plug_gui_rings_free(plug);
+        return false;
+    }
+    zix_ring_mlock(plug->gui_ui_to_rt);
+    zix_ring_mlock(plug->gui_rt_to_ui);
+    return true;
+}
+
+// a record and its atom in one write, false when the ring has no room. Only on
+// the ring's writer thread
+static bool plug_gui_ring_write(ZixRing *ring, uint32_t port, LV2_URID type,
+                                uint32_t size, const void *body) {
+    const PLUG_GUI_ATOM rec = {.port = port,
+                               .size = (uint32_t)sizeof(LV2_Atom) + size};
+    const LV2_Atom atom = {.size = size, .type = type};
+    ZixRingTransaction tx = zix_ring_begin_write(ring);
+    if (zix_ring_amend_write(ring, &tx, &rec, sizeof(rec)) ||
+        zix_ring_amend_write(ring, &tx, &atom, sizeof(atom)) ||
+        zix_ring_amend_write(ring, &tx, body, size))
+        return false;
+    zix_ring_commit_write(ring, &tx);
+    return true;
+}
+
+// [main-thread] the plugin's atoms to the shown UI. Left in the ring while
+// there is none, the next show empties it
+static void plug_gui_atoms_out(PLUG_PLUG *plug) {
+    ZixRing *ring = plug->gui_rt_to_ui;
+    if (!plug->gui_inst || !ring)
+        return;
+    PLUG_GUI_ATOM rec;
+    while (zix_ring_read(ring, &rec, sizeof(rec)) == sizeof(rec)) {
+        zix_ring_read(ring, plug->gui_atom, rec.size);
+        if (plug->gui_desc->port_event)
+            plug->gui_desc->port_event(plug->gui_inst, rec.port, rec.size,
+                                       plug->urids->atom_eventTransfer,
+                                       plug->gui_atom);
+    }
+}
+
+// [audio-thread] the UI's atoms into their ports' sequences. One with no room
+// waits in the ring for the next cycle, the ones behind it with it
+static void plug_gui_atoms_in_rt(PLUG_PLUG *plug) {
+    ZixRing *ring = plug->gui_ui_to_rt;
+    PLUG_GUI_ATOM rec;
+    while (zix_ring_peek(ring, &rec, sizeof(rec)) == sizeof(rec)) {
+        PLUG_EVBUF_ITERATOR iter =
+            plug_evbuf_end(plug->ports[rec.port].evbuf);
+        LV2_Atom *atom = plug_evbuf_append(&iter, 0, rec.size);
+        if (!atom)
+            return;
+        zix_ring_skip(ring, sizeof(rec));
+        zix_ring_read(ring, atom, rec.size);
+    }
+}
+
+// [main-thread] a patch:Set of a writable property with a number sets its
+// param, the run sends the plugin the param's value. False for any other atom
+static bool plug_gui_property_set(PLUG_PLUG *plug, const LV2_Atom *atom) {
+    const PLUG_URIDS *urids = plug->urids;
+    if (atom->type != plug->forge.Object ||
+        atom->size < sizeof(LV2_Atom_Object_Body) ||
+        ((const LV2_Atom_Object *)atom)->body.otype != urids->patch_Set)
+        return false;
+    const LV2_Atom *property = NULL;
+    const LV2_Atom *value = NULL;
+    lv2_atom_object_get((const LV2_Atom_Object *)atom, urids->patch_property,
+                        &property, urids->patch_value, &value, 0);
+    if (!property || !value || property->type != plug->forge.URID)
+        return false;
+    const PLUG_PROPERTY_PARAM *found = plug_property_param_find(
+        plug, ((const LV2_Atom_URID *)property)->body);
+    float fvalue;
+    if (!found || !plug->controls[found->val_id]->is_writable ||
+        !plug_value_as_float(plug, LV2_ATOM_BODY_CONST(value), value->size,
+                             value->type, &fvalue))
+        return false;
+    param_set_value(plug->plug_params, found->val_id, fvalue, NULL,
+                    Operation_SetValue);
+    return true;
+}
+
+// [main-thread] an atom for an input atom port, to the run through the ring.
+// False when it is malformed, its port's sequence can never take it or the
+// ring is full
+static bool plug_gui_atom_write(PLUG_PLUG *plug, const PLUG_PORT *port,
+                                uint32_t buffer_size, const void *buffer) {
+    if (port->type != PORT_TYPE_EVENT || port->flow != PORT_FLOW_INPUT ||
+        buffer_size < sizeof(LV2_Atom))
+        return false;
+    const LV2_Atom *atom = (const LV2_Atom *)buffer;
+    if (sizeof(LV2_Atom) + atom->size != buffer_size ||
+        !plug_evbuf_fits(port->evbuf, buffer_size))
+        return false;
+    if ((int)port->index == plug->control_in &&
+        plug_gui_property_set(plug, atom))
+        return true;
+    return plug_gui_ring_write(plug->gui_ui_to_rt, port->index, atom->type,
+                               atom->size, LV2_ATOM_BODY_CONST(atom));
+}
+
 // a float to an input control sets its param. gui_sent takes the raw value:
 // one the param clamps goes back to the UI
 static void plug_gui_write(LV2UI_Controller controller, uint32_t port_index,
@@ -2061,6 +2250,9 @@ static void plug_gui_write(LV2UI_Controller controller, uint32_t port_index,
                         NULL, Operation_SetValue);
         return;
     }
+    if (protocol == plug->urids->atom_eventTransfer && port &&
+        plug_gui_atom_write(plug, port, buffer_size, buffer))
+        return;
     log_append_logfile("%s: GUI wrote %u bytes to port %u, protocol %u - "
                        "dropped\n",
                        plug->name, buffer_size, port_index, protocol);
@@ -2140,6 +2332,10 @@ static const LV2UI_Resize *plug_gui_user_resize(PLUG_PLUG *plug) {
 // [main-thread] the UI instantiated and shown, embedded in a host window made
 // first or in a window of its own. The step that failed, NULL on success
 static const char *plug_gui_create(PLUG_PLUG *plug) {
+    if (!plug_gui_rings_make(plug))
+        return "atom rings";
+    // main is its reader: the atoms the run wrote for an earlier UI dropped
+    zix_ring_skip(plug->gui_rt_to_ui, zix_ring_read_space(plug->gui_rt_to_ui));
     const char *failed = plug_gui_open(plug);
     if (failed)
         return failed;
@@ -2197,6 +2393,8 @@ static int plug_gui_show(PLUG_PLUG *plug) {
         return -1;
     }
     plug_gui_shown_set(plug, true);
+    // after the shown flag, so a property plugin's answer reaches the new UI
+    atomic_store(&plug->request_update, true);
     return 0;
 }
 
@@ -2379,6 +2577,11 @@ static void *plug_library_hold(const LilvPlugin *plugin) {
 static int plug_reinstantiate(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
     // the UI may access the old instance, gui_shown stays for the re-show
     plug_gui_destroy(plug, plug->gui_shown);
+    // atoms for and from the old instance
+    if (plug->gui_ui_to_rt) {
+        zix_ring_reset(plug->gui_ui_to_rt);
+        zix_ring_reset(plug->gui_rt_to_ui);
+    }
     LilvState *state = lilv_state_new_from_instance(
         plug->plug, plug->plug_instance, &(plug->map), NULL, NULL, NULL, NULL,
         plug_get_port_value, plug, LV2_STATE_IS_POD | LV2_STATE_IS_PORTABLE,
@@ -2415,7 +2618,7 @@ static int plug_reinstantiate(PLUG_INFO *plug_data, PLUG_PLUG *plug) {
     plug->plug_instance_activated = 1;
     // its property params are read back from the new instance, which knows
     // no position yet
-    plug->request_update = true;
+    atomic_store(&plug->request_update, true);
     plug->pos_seq = 0;
     return 0;
 }
@@ -2715,6 +2918,21 @@ static const LV2_Atom *plug_position_forge_rt(PLUG_PLUG *plug,
     return (const LV2_Atom *)buf;
 }
 
+// [audio-thread] a property's value as the type it declares
+static void plug_property_value_forge_rt(LV2_Atom_Forge *forge, LV2_URID type,
+                                         PARAM_T value) {
+    if (type == forge->Int)
+        lv2_atom_forge_int(forge, (int32_t)lrint(value));
+    else if (type == forge->Long)
+        lv2_atom_forge_long(forge, (int64_t)llrint(value));
+    else if (type == forge->Bool)
+        lv2_atom_forge_bool(forge, value != 0);
+    else if (type == forge->Double)
+        lv2_atom_forge_double(forge, value);
+    else
+        lv2_atom_forge_float(forge, (float)value);
+}
+
 // a latency port's value in whole frames, NaN and below 1 as 0
 static uint32_t plug_latency_frames(float value) {
     if (!(value >= 1.0f))
@@ -2740,6 +2958,10 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
     // change, until the new instance
     if (nframes != plug_data->block_length)
         return false;
+    // taken before the shown flag is read, a show stores the flag first
+    const bool update = atomic_exchange(&plug->request_update, false);
+    const bool gui =
+        atomic_load_explicit(&plug->gui_shown_rt, memory_order_acquire);
 
     // time:Position for every input event port, after a jump or when the frame
     // is not where the plugin's own count puts it (a server can hold its frame
@@ -2773,7 +2995,7 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
             // clean the evbuf
             plug_evbuf_reset(cur_port->evbuf, 1);
             PLUG_EVBUF_ITERATOR iter_buf = plug_evbuf_begin(cur_port->evbuf);
-            if (plug->request_update) {
+            if (update) {
                 LV2_Atom_Forge_Frame frame;
                 uint8_t buf[MSG_BUFFER_SIZE];
                 lv2_atom_forge_set_buffer(&plug->forge, buf, sizeof(buf));
@@ -2827,16 +3049,9 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
                     &(plug->ports[plug->control_in]);
                 if (!control_port)
                     continue;
+                // after the frame 0 atoms already in it
                 PLUG_EVBUF_ITERATOR iter_buf =
-                    plug_evbuf_begin(control_port->evbuf);
-                if (plug_evbuf_get_size(control_port->evbuf) <= 0) {
-                    plug_evbuf_reset(control_port->evbuf, 1);
-                } else {
-                    iter_buf = plug_evbuf_end(control_port->evbuf);
-                }
-                if (!plug_evbuf_is_valid(iter_buf) &&
-                    plug_evbuf_get_size(control_port->evbuf) > 0)
-                    continue;
+                    plug_evbuf_end(control_port->evbuf);
 
                 // send the value to the event port as atom
                 // Dont copy the forge, only use address here - so the forge
@@ -2851,14 +3066,18 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
                 lv2_atom_forge_key(forge, plug_data->urids.patch_property);
                 lv2_atom_forge_urid(forge, cur_control->property);
                 lv2_atom_forge_key(forge, plug_data->urids.patch_value);
-                lv2_atom_forge_float(forge, param_value);
+                plug_property_value_forge_rt(forge, cur_control->value_type,
+                                             param_value);
                 lv2_atom_forge_pop(forge, &frame);
                 const LV2_Atom *const atom = (const LV2_Atom *)buf;
-                plug_evbuf_write(&iter_buf, 0, 0, atom->type, atom->size,
-                                 LV2_ATOM_BODY_CONST(atom));
+                if (plug_evbuf_write(&iter_buf, 0, 0, atom->type, atom->size,
+                                     LV2_ATOM_BODY_CONST(atom)) != 0)
+                    atomic_fetch_add(&control_port->seq_dropped, 1U);
             }
         }
     }
+    if (gui)
+        plug_gui_atoms_in_rt(plug);
 
     //----------------------------------------------------------------------------------------------------
     // midi last, a sequence is time ordered and the atoms above are all at
@@ -2880,7 +3099,6 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
         }
     }
 
-    plug->request_update = false;
     //----------------------------------------------------------------------------------------------------
     // now run the plugin for nframes
     plug_run_rt(plug, nframes);
@@ -2934,6 +3152,9 @@ bool plug_plugin_process_rt(void *plug_ptr, NFRAMES_T nframes) {
                 if (type == plug_data->urids.atom_Object &&
                     size >= sizeof(LV2_Atom_Object_Body))
                     plug_patch_message_rt(plug, data, size);
+                if (gui && !plug_gui_ring_write(plug->gui_rt_to_ui, i, type,
+                                                size, data))
+                    atomic_fetch_add(&plug->gui_dropped, 1U);
             }
         }
     }
