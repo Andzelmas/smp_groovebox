@@ -10,6 +10,7 @@
 #include "zix/sem.h"
 #include "zix/thread.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -20,7 +21,7 @@ struct JalvWorkerImpl {
   ZixRing*                    responses; ///< Responses from the worker
   void*                       response;  ///< Worker response buffer
   ZixSem*                     lock;      ///< Lock for plugin work() method
-  bool                        exit;      ///< Exit flag
+  atomic_bool                 exit;      ///< Exit flag, read by the worker thread
   ZixSem                      sem;       ///< Worker semaphore
   ZixThread                   thread;    ///< Worker thread
   LV2_Handle                  handle;    ///< Plugin handle
@@ -60,7 +61,7 @@ worker_func(void* const data)
   while (true) {
     // Wait for a request
     zix_sem_wait(&worker->sem);
-    if (worker->exit) {
+    if (atomic_load(&worker->exit)) {
       break;
     }
 
@@ -125,7 +126,7 @@ jalv_worker_new(ZixSem* const lock, const bool threaded)
     worker->responses = responses;
     worker->response  = response;
     worker->lock      = lock;
-    worker->exit      = false;
+    atomic_init(&worker->exit, false);
 
     zix_ring_mlock(responses);
     if (!threaded || !jalv_worker_launch(worker)) {
@@ -154,7 +155,7 @@ void
 jalv_worker_exit(JalvWorker* const worker)
 {
   if (worker && worker->threaded) {
-    worker->exit = true;
+    atomic_store(&worker->exit, true);
     zix_sem_post(&worker->sem);
     zix_thread_join(worker->thread, NULL);
     worker->threaded = false;
