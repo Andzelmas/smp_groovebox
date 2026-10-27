@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include "../types.h"
 
 int path_is_directory(const char* path){
@@ -88,5 +89,19 @@ int path_expand_home(const char* path, char* out, size_t out_len){
     }
     int len = snprintf(out, out_len, "%s%s", home, rest);
     if(len < 0 || (size_t)len >= out_len)return -1;
+    return 0;
+}
+
+int path_exe_dir(char* out, size_t out_len){
+    if(!out || out_len == 0)return -1;
+    char exe[MAX_PATH_STRING];
+    ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe));
+    if(len <= 0 || (size_t)len >= sizeof(exe))return -1;
+    exe[len] = '\0';
+    char* slash = strrchr(exe, '/');
+    if(!slash)return -1;
+    *slash = '\0';
+    int dir_len = snprintf(out, out_len, "%s", exe);
+    if(dir_len < 0 || (size_t)dir_len >= out_len)return -1;
     return 0;
 }

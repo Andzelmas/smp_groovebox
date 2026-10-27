@@ -11,6 +11,7 @@
 #include "engine/graph.h"
 #include "engine/midi_clock.h"
 #include "engine/transport.h"
+#include "settings.h"
 #include "window/host_window.h"
 // string functions
 #include "contexts/clap_plugins.h"
@@ -79,6 +80,8 @@ typedef struct _app_info {
     HWIN_SYS *hwin;
     // hwin_sys_fd is in wake_epoll_fd
     bool hwin_fd_watched;
+    // where the param config files go, "" = none written or read
+    char param_config_dir[MAX_PATH_STRING];
 } APP_INFO;
 
 // push one event, growing the queue if it is full
@@ -1885,6 +1888,16 @@ DataObject app_init(void) {
     app_data->rt_ui_period_ms = 0;
     app_data->hwin = NULL;
     app_data->hwin_fd_watched = false;
+    app_data->param_config_dir[0] = '\0';
+
+    const SETTINGS_KEY params_keys[] = {
+        {.key = "param_config_dir",
+         .type = SETTINGS_PATH,
+         .out = app_data->param_config_dir,
+         .out_len = sizeof(app_data->param_config_dir)},
+    };
+    settings_read(SETTINGS_SECTION_PARAMS, params_keys,
+                  sizeof(params_keys) / sizeof(params_keys[0]));
 
     /*init the audio backend for the whole program*/
     /*--------------------------------------------------*/

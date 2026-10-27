@@ -2673,16 +2673,10 @@ static bool clap_scan_first_visit(CLAP_SCAN *scan, const struct stat *st) {
 
 // the scanner sits next to this program's own binary
 static bool clap_scan_find_scanner(char *out, size_t out_len) {
-    char exe[MAX_PATH_STRING];
-    ssize_t len = readlink("/proc/self/exe", exe, sizeof(exe));
-    if (len <= 0 || (size_t)len >= sizeof(exe))
+    char dir[MAX_PATH_STRING];
+    if (path_exe_dir(dir, sizeof(dir)) != 0)
         return false;
-    exe[len] = '\0';
-    char *slash = strrchr(exe, '/');
-    if (!slash)
-        return false;
-    *slash = '\0';
-    int path_len = snprintf(out, out_len, "%s/%s", exe, CLAP_SCAN_EXE);
+    int path_len = snprintf(out, out_len, "%s/%s", dir, CLAP_SCAN_EXE);
     if (path_len < 0 || (size_t)path_len >= out_len)
         return false;
     return access(out, X_OK) == 0;

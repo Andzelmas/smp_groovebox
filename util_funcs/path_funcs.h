@@ -11,3 +11,5 @@ int path_has_dir(const char* path, char** file_ext, uint32_t ext_count, uint32_t
 //copy path into out with a leading ~ replaced by $HOME. -1 when it does not fit,
 //or when path starts with ~ and HOME is not set
 int path_expand_home(const char* path, char* out, size_t out_len);
+//the folder of this program's own binary, -1 when it can not be read or does not fit
+int path_exe_dir(char* out, size_t out_len);
