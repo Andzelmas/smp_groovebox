@@ -7,8 +7,9 @@
 // operations param_set_value can apply to a parameter - the value ops
 // (Decrease/Increase/SetValue/DefValue/SyncValue) clamp and may propagate to
 // the rt side; the property ops (SetIncr/SetDefValue/ChangeName/SetFlags/
-// SetCategory) only ever mutate ui-only fields (see param_set_value's own
-// doc comment).
+// SetCategory) only ever mutate the owner's ui-only fields (see param_set_
+// value's own doc comment) - a user value (param_user_table_set) shows over
+// them.
 enum paramOperType {
     Operation_Nothing = 0x00,
     Operation_Decrease = 0x01,
@@ -139,6 +140,37 @@ void params_container_resync(PRM_CONTAIN *param_container,
                              const PARAM_RESYNC_ITEM *new_params,
                              unsigned int new_count);
 
+// which values a PARAM_USER_ITEM sets
+enum paramUserSet {
+    PARAM_USER_NAME = 1 << 0,
+    PARAM_USER_INCREMENT = 1 << 1,
+    PARAM_USER_DEFAULT = 1 << 2,
+    PARAM_USER_HIDDEN = 1 << 3,
+    PARAM_USER_CATEGORY = 1 << 4,
+};
+
+// the user's values for the param with this key (see param_add_param). Each
+// one in set shows instead of the owner's, the rest stay the owner's. key and
+// name are copied. An empty name or a NaN increment/default counts as not set
+typedef struct _params_user_item {
+    const char *key;
+    uint32_t set; // paramUserSet bits
+    const char *name;
+    PARAM_T increment;
+    PARAM_T def_val;
+    bool hidden;
+    uint32_t category_uid; // 0 = top level
+} PARAM_USER_ITEM;
+
+// replaces the container's user values with items[] as a whole: a live param
+// whose key is not in it shows the owner's values again, a param added later
+// takes the item for its key. count 0 clears them. An item without a key is
+// skipped, a key given twice keeps its last item. Marks a param changed, or
+// bumps the generation, only where what the ui reads changes. -1 on
+// allocation failure, the old values stay. [main-thread] only
+int param_user_table_set(PRM_CONTAIN *param_container,
+                         const PARAM_USER_ITEM *items, unsigned int count);
+
 // opaque per-param handle, stable for exactly the param's own lifetime (same
 // underlying storage as the param itself. NULL on error. ui-only.
 void *param_get_handle(PRM_CONTAIN *param_container, int val_id);
@@ -186,7 +218,10 @@ void param_rt_resend(PRM_CONTAIN *param_container);
 // apply - unlike the rt side, every operation is meaningful here, since the
 // ui struct holds inc_am/def_val/name/is_hidden. The value operations
 //(Increase/Decrease/SetValue/DefValue/SyncValue) clamp and, if the result
-// changed, propagate the final value to the rt side; Returns -1 on error.
+// changed, propagate the final value to the rt side; Increase/Decrease/
+// DefValue use the effective increment/default (the user's if set). The
+// property operations set the owner's value, which shows only where the user
+// has none. Returns -1 on error.
 int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
                     const char *set_string_to, unsigned char param_op);
 
@@ -236,8 +271,8 @@ const char *param_get_key(PRM_CONTAIN *param_container, int val_id);
 int param_find_key(PRM_CONTAIN *param_container, const char *key);
 
 // return the parameter increment amount (by how much the parameter value
-// increases or decreases per Operation_Increase/Decrease) - ui-only, the rt
-// struct has no inc_am.
+// increases or decreases per Operation_Increase/Decrease), the user's if set
+// - ui-only, the rt struct has no inc_am.
 PARAM_T param_get_increment(PRM_CONTAIN *param_container, int val_id);
 
 // return the parameter's min/max range - ui-only, mirrors param_get_
@@ -272,12 +307,12 @@ int param_get_if_changed_rt(PRM_CONTAIN *param_container, int val_id);
 // param_get_if_changed_rt.
 int param_get_if_any_changed_rt(PRM_CONTAIN *param_container);
 
-// return the parameter's whole flags bitmask (see enum paramFlags), 0 on
-// error - ui-only.
+// return the owner's whole flags bitmask (see enum paramFlags), 0 on error -
+// ui-only. A user hidden is not in it, see param_is_hidden
 uint32_t param_get_flags(PRM_CONTAIN *param_container, int val_id);
 
-// get if parameter is hidden or not (PARAM_FLAG_HIDDEN) - ui-only, the rt
-// struct has no flags.
+// get if parameter is hidden or not (PARAM_FLAG_HIDDEN), the user's if set -
+// ui-only, the rt struct has no flags.
 unsigned int param_is_hidden(PRM_CONTAIN *param_container, int val_id);
 
 // get if the parameter can't be changed (PARAM_FLAG_READONLY) - ui-only,
@@ -288,9 +323,10 @@ unsigned int param_is_readonly(PRM_CONTAIN *param_container, int val_id);
 // ui-only, mirrors param_is_hidden.
 unsigned int param_is_enum(PRM_CONTAIN *param_container, int val_id);
 
-// get the parameter's current display name - ui-only, the rt struct has no
-// name. The string is owned by the param and stays valid while it exists
-// (renamed by Operation_ChangeName, never freed out from under a caller);
+// get the parameter's current display name, the user's if set - ui-only, the
+// rt struct has no name. The string is owned by the container and stays valid
+// while the param exists (renamed by Operation_ChangeName, never freed out
+// from under a caller);
 // callers that need to keep it past that must copy,  Returns NULL on error. Use
 // only on [main-thread].
 const char *param_get_name(PRM_CONTAIN *param_container, int val_id);
@@ -337,16 +373,17 @@ void *param_category_handle(PRM_CONTAIN *param_container, int cat_id);
 bool param_category_resolve(void *handle, PRM_CONTAIN **out_container,
                             int *out_cat_id);
 
-// which category this param sits in (see param_add_param), 0 if none/on
-// error - ui-only, mirrors param_get_name.
+// which category this param sits in (see param_add_param), the user's if set,
+// 0 if none/on error - ui-only, mirrors param_get_name.
 uint32_t param_get_category_uid(PRM_CONTAIN *param_container, int val_id);
 // --------------------------------------------------------------------------
 
-// has the SET of parameters on this container changed (one added or one
-// freed) since the last call? Check-and-clear. Owner-agnostic on purpose:
-// params.c bumps its own counter from param_add_param/params_container_
-// resync, so no owner has to remember to raise a flag. A value, name or
-// flag change is NOT a change here - nothing structural moved.
+// has the SET of parameters on this container changed (one added, freed or
+// moved to another category) since the last call? Check-and-clear.
+// Owner-agnostic on purpose: params.c bumps its own counter from param_add_
+// param/params_container_resync/the category setters, so no owner has to
+// remember to raise a flag. A value, name or flag change is NOT a change here
+// - nothing structural moved.
 // [main-thread] only.
 // NOTE: a container is "changed" from the moment its first param is added,
 // so the first call after an owner populates it returns true even though no
@@ -359,11 +396,11 @@ bool param_container_changed(PRM_CONTAIN *param_container);
 // differently. val_id -1 marks every param. [main-thread] only.
 void param_mark_changed(PRM_CONTAIN *param_container, int val_id);
 
-// write up to cap val_ids of the params whose value, name or flags changed on
-// the ui side (from any source - the ui, the owner, a rescan) since they were
-// last taken, and clear them. Returns how many were written - call again
-// until it returns 0. The presentation counterpart of
-// param_container_changed. [main-thread] only.
+// write up to cap val_ids of the params whose value, name, flags or increment
+// changed on the ui side (from any source - the ui, the owner, a rescan, the
+// user values) since they were last taken, and clear them. Returns how many
+// were written - call again until it returns 0. The presentation counterpart
+// of param_container_changed. [main-thread] only.
 size_t param_changed_take(PRM_CONTAIN *param_container, int *val_ids,
                           size_t cap);
 

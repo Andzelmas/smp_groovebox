@@ -2022,8 +2022,8 @@ bool app_data_poll_event(void *root_user_data, DataEvent *out) {
     return true;
 }
 
-// push a DATA_EVENT_CHANGED for every param of the container whose value, name
-// or flags changed since the last call
+// push a DATA_EVENT_CHANGED for every param of the container whose value, name,
+// flags or increment changed since the last call
 static void app_data_push_param_changes(APP_INFO *app_data,
                                         PRM_CONTAIN *container) {
     if (!container)

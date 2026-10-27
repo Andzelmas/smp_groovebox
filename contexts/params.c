@@ -58,6 +58,18 @@ typedef struct _params_param_rt {
     bool resend;
 } PRM_PARAM_RT;
 
+// the user's values for one param, each in effect only with its paramUserSet
+// bit in set
+typedef struct _params_user_values {
+    uint32_t set;
+    // in the container's user_names
+    uint64_t name;
+    PARAM_T increment;
+    PARAM_T def_val;
+    bool hidden;
+    uint32_t category_uid;
+} PRM_USER_VALUES;
+
 // ui-side parameter - everything the ui thread needs to present and edit a
 // parameter.
 typedef struct _params_param_ui {
@@ -81,13 +93,16 @@ typedef struct _params_param_ui {
     // intern). A uid, not an index - so it survives anything that
     // renumbers, and a re-categorise is a single field write.
     uint32_t category_uid;
+    // shown instead of the owner's name, inc_am, def_val, hidden flag and
+    // category_uid above where set
+    PRM_USER_VALUES user;
     // set once by param_add_param - lets param_get_handle/param_handle_
     // resolve turn this struct's own address into an opaque (container,
     // val_id) handle without exposing PRM_PARAM_UI itself outside params.c
     PRM_CONTAIN *self_container;
     int self_val_id;
-    // value, name or flags changed since param_changed_take last returned it
-    // (or param_mark_changed marked it)
+    // value, name, flags or increment changed since param_changed_take last
+    // returned it (or param_mark_changed marked it)
     bool changed;
     // what a full ui_to_rt queue refused, see param_ui_send. The value goes
     // with the from_owner of its latest store
@@ -159,9 +174,16 @@ typedef struct _params_container {
     PRM_OWNER_ENTRY *owner_index;
     unsigned int owner_index_count;
     unsigned int owner_index_max;
-    // every key ever added; the slot is the val_id of the live param holding
-    // it, INTERN_SLOT_NONE once that param is freed. ui-only
+    // every key ever added or given user values; the slot is the val_id of
+    // the live param holding it, INTERN_SLOT_NONE when none does. ui-only
     INTERN_TABLE keys;
+    // param_user_table_set's values, a key's at [key - 1]; a key past
+    // user_count has none
+    PRM_USER_VALUES *user_table;
+    size_t user_count;
+    // every user name ever set, kept so a name param_get_name returned
+    // stays valid
+    INTERN_TABLE user_names;
     // scratch buffer param_get_value_as_string formats into and returns a
     // pointer to - valid only until the next param_get_value_as_string call
     // on this container (any val_id)
@@ -182,6 +204,49 @@ static void param_ui_mark_changed(PRM_CONTAIN *param_container,
                                   PRM_PARAM_UI *cur_param) {
     cur_param->changed = true;
     param_container->any_changed = true;
+}
+
+// what the ui reads: the user's value where set, else the owner's
+static const char *param_ui_name(const PRM_CONTAIN *param_container,
+                                 const PRM_PARAM_UI *cur_param) {
+    if (cur_param->user.set & PARAM_USER_NAME)
+        return intern_name(&param_container->user_names, cur_param->user.name);
+    return cur_param->name;
+}
+
+static PARAM_T param_ui_increment(const PRM_PARAM_UI *cur_param) {
+    if (cur_param->user.set & PARAM_USER_INCREMENT)
+        return cur_param->user.increment;
+    return cur_param->inc_am;
+}
+
+static PARAM_T param_ui_default(const PRM_PARAM_UI *cur_param) {
+    if (cur_param->user.set & PARAM_USER_DEFAULT)
+        return cur_param->user.def_val;
+    return cur_param->def_val;
+}
+
+// of the flags only hidden is the user's
+static uint32_t param_ui_flags(const PRM_PARAM_UI *cur_param) {
+    if (!(cur_param->user.set & PARAM_USER_HIDDEN))
+        return cur_param->flags;
+    if (cur_param->user.hidden)
+        return cur_param->flags | PARAM_FLAG_HIDDEN;
+    return cur_param->flags & ~(uint32_t)PARAM_FLAG_HIDDEN;
+}
+
+static uint32_t param_ui_category(const PRM_PARAM_UI *cur_param) {
+    if (cur_param->user.set & PARAM_USER_CATEGORY)
+        return cur_param->user.category_uid;
+    return cur_param->category_uid;
+}
+
+// table's values for key, none set when it has none
+static PRM_USER_VALUES param_user_find(const PRM_USER_VALUES *table,
+                                       size_t count, uint64_t key) {
+    if (key == 0 || key > count)
+        return (PRM_USER_VALUES){0};
+    return table[key - 1];
 }
 
 // position of the first owner index entry not below (owner_id, val_id)
@@ -268,6 +333,9 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     param_container->owner_index_count = 0;
     param_container->owner_index_max = 0;
     param_container->keys = (INTERN_TABLE){0};
+    param_container->user_table = NULL;
+    param_container->user_count = 0;
+    param_container->user_names = (INTERN_TABLE){0};
     param_container->user_data.user_data = NULL;
     param_container->user_data.build_value = NULL;
     param_container->user_data.val_to_string = NULL;
@@ -405,6 +473,8 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name,
     new_ui_param->key = key_id;
     new_ui_param->flags = flags;
     new_ui_param->category_uid = category_uid;
+    new_ui_param->user = param_user_find(param_container->user_table,
+                                         param_container->user_count, key_id);
     new_ui_param->self_container = param_container;
     new_ui_param->self_val_id = (int)idx;
     new_ui_param->changed = false;
@@ -467,6 +537,87 @@ void params_container_resync(PRM_CONTAIN *param_container,
                         new_params[i].owner_id, new_params[i].flags,
                         new_params[i].category_uid, new_params[i].cookie);
     }
+}
+
+// cur_param shows user from now on
+static void param_user_apply(PRM_CONTAIN *param_container,
+                             PRM_PARAM_UI *cur_param, PRM_USER_VALUES user) {
+    const char *shown_name = param_ui_name(param_container, cur_param);
+    PARAM_T shown_inc = param_ui_increment(cur_param);
+    uint32_t shown_flags = param_ui_flags(cur_param);
+    uint32_t shown_category = param_ui_category(cur_param);
+    cur_param->user = user;
+    if (strcmp(shown_name, param_ui_name(param_container, cur_param)) != 0 ||
+        shown_inc != param_ui_increment(cur_param) ||
+        shown_flags != param_ui_flags(cur_param))
+        param_ui_mark_changed(param_container, cur_param);
+    if (shown_category != param_ui_category(cur_param))
+        param_container->generation++;
+}
+
+int param_user_table_set(PRM_CONTAIN *param_container,
+                         const PARAM_USER_ITEM *items, unsigned int count) {
+    if (!param_container)
+        return -1;
+    if (!items && count > 0)
+        return -1;
+    // the table is indexed by key, so every key is interned first
+    size_t table_count = 0;
+    for (unsigned int i = 0; i < count; i++) {
+        if (!items[i].key || items[i].key[0] == '\0')
+            continue;
+        uint64_t key = intern_add(&param_container->keys, items[i].key);
+        if (key == 0)
+            return -1;
+        if (key > table_count)
+            table_count = (size_t)key;
+    }
+    PRM_USER_VALUES *table = NULL;
+    if (table_count > 0) {
+        table = calloc(table_count, sizeof(PRM_USER_VALUES));
+        if (!table)
+            return -1;
+    }
+    for (unsigned int i = 0; i < count; i++) {
+        const PARAM_USER_ITEM *item = &items[i];
+        if (!item->key || item->key[0] == '\0')
+            continue;
+        PRM_USER_VALUES *user =
+            &table[intern_find(&param_container->keys, item->key) - 1];
+        *user = (PRM_USER_VALUES){0};
+        if ((item->set & PARAM_USER_NAME) && item->name &&
+            item->name[0] != '\0') {
+            user->name = intern_add(&param_container->user_names, item->name);
+            if (user->name == 0) {
+                free(table);
+                return -1;
+            }
+            user->set |= PARAM_USER_NAME;
+        }
+        if ((item->set & PARAM_USER_INCREMENT) && !isnan(item->increment)) {
+            user->increment = item->increment;
+            user->set |= PARAM_USER_INCREMENT;
+        }
+        if ((item->set & PARAM_USER_DEFAULT) && !isnan(item->def_val)) {
+            user->def_val = item->def_val;
+            user->set |= PARAM_USER_DEFAULT;
+        }
+        user->hidden = item->hidden;
+        user->category_uid = item->category_uid;
+        user->set |= item->set & (PARAM_USER_HIDDEN | PARAM_USER_CATEGORY);
+    }
+
+    for (unsigned int i = 0; i < param_container->num_of_params_ui; i++) {
+        PRM_PARAM_UI *cur_param = param_container->ui_params[i];
+        if (!cur_param)
+            continue;
+        param_user_apply(param_container, cur_param,
+                         param_user_find(table, table_count, cur_param->key));
+    }
+    free(param_container->user_table);
+    param_container->user_table = table;
+    param_container->user_count = table_count;
+    return 0;
 }
 
 // false, and a retry by param_ui_resend, when the ui_to_rt queue is full
@@ -683,11 +834,17 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
     if (!cur_param)
         return -1;
 
-    // property-only operations - mutate ui-only fields, nothing to clamp or
-    // propagate to the rt side, which has no matching fields
+    // property-only operations - mutate the owner's ui-only fields, nothing to
+    // clamp or propagate to the rt side, which has no matching fields. Marked
+    // only when what the ui reads changes - a user value may stand over it
+    PARAM_T shown_inc = param_ui_increment(cur_param);
+    uint32_t shown_flags = param_ui_flags(cur_param);
+    uint32_t shown_category = param_ui_category(cur_param);
     switch (param_op) {
     case Operation_SetIncr:
         cur_param->inc_am = set_to;
+        if (param_ui_increment(cur_param) != shown_inc)
+            param_ui_mark_changed(param_container, cur_param);
         return 0;
     case Operation_SetDefValue:
         cur_param->def_val = set_to;
@@ -697,24 +854,23 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
             strncmp(cur_param->name, set_string_to, MAX_SHORT_NAME_LENGTH) != 0) {
             snprintf(cur_param->name, MAX_SHORT_NAME_LENGTH, "%s",
                      set_string_to);
-            param_ui_mark_changed(param_container, cur_param);
+            if (!(cur_param->user.set & PARAM_USER_NAME))
+                param_ui_mark_changed(param_container, cur_param);
         }
         return 0;
     case Operation_SetFlags:
-        if (cur_param->flags != (uint32_t)set_to) {
-            cur_param->flags = (uint32_t)set_to;
+        cur_param->flags = (uint32_t)set_to;
+        if (param_ui_flags(cur_param) != shown_flags)
             param_ui_mark_changed(param_container, cur_param);
-        }
         return 0;
     case Operation_SetCategory:
         // structural: the param hangs under a different parent afterwards, so
         // the generation has to move even though the param SET is unchanged.
         // Only when it actually differs - a rescan re-reporting the same
         // category must not trigger a resync.
-        if (cur_param->category_uid != (uint32_t)set_to) {
-            cur_param->category_uid = (uint32_t)set_to;
+        cur_param->category_uid = (uint32_t)set_to;
+        if (param_ui_category(cur_param) != shown_category)
             param_container->generation++;
-        }
         return 0;
     default:
         break;
@@ -726,17 +882,17 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
     PARAM_T new_val = prev_val;
     switch (param_op) {
     case Operation_Decrease:
-        new_val = prev_val - set_to * cur_param->inc_am;
+        new_val = prev_val - set_to * param_ui_increment(cur_param);
         break;
     case Operation_Increase:
-        new_val = prev_val + set_to * cur_param->inc_am;
+        new_val = prev_val + set_to * param_ui_increment(cur_param);
         break;
     case Operation_SetValue:
     case Operation_SyncValue:
         new_val = set_to;
         break;
     case Operation_DefValue:
-        new_val = cur_param->def_val;
+        new_val = param_ui_default(cur_param);
         break;
     default:
         return -1;
@@ -891,7 +1047,7 @@ PARAM_T param_get_increment(PRM_CONTAIN *param_container, int val_id) {
         return -1;
     if (!param_container->ui_params[val_id])
         return -1;
-    return param_container->ui_params[val_id]->inc_am;
+    return param_ui_increment(param_container->ui_params[val_id]);
 }
 
 PARAM_T param_get_min(PRM_CONTAIN *param_container, int val_id) {
@@ -973,8 +1129,8 @@ const char *param_get_value_as_string(PRM_CONTAIN *param_container,
             return NULL;
         if (!param_container->ui_params[val_id])
             return NULL;
-        int decimals =
-            param_decimals_for_inc(param_container->ui_params[val_id]->inc_am);
+        int decimals = param_decimals_for_inc(
+            param_ui_increment(param_container->ui_params[val_id]));
         snprintf(param_container->value_string_scratch,
                 sizeof(param_container->value_string_scratch), "%.*f",
                 decimals, value);
@@ -1032,7 +1188,8 @@ unsigned int param_is_hidden(PRM_CONTAIN *param_container, int val_id) {
         return 0;
     if (!param_container->ui_params[val_id])
         return 0;
-    return (param_container->ui_params[val_id]->flags & PARAM_FLAG_HIDDEN) != 0;
+    return (param_ui_flags(param_container->ui_params[val_id]) &
+            PARAM_FLAG_HIDDEN) != 0;
 }
 
 unsigned int param_is_readonly(PRM_CONTAIN *param_container, int val_id) {
@@ -1062,7 +1219,7 @@ const char *param_get_name(PRM_CONTAIN *param_container, int val_id) {
         return NULL;
     if (!param_container->ui_params[val_id])
         return NULL;
-    return param_container->ui_params[val_id]->name;
+    return param_ui_name(param_container, param_container->ui_params[val_id]);
 }
 
 
@@ -1197,7 +1354,7 @@ uint32_t param_get_category_uid(PRM_CONTAIN *param_container, int val_id) {
         return 0;
     if (!param_container->ui_params[val_id])
         return 0;
-    return param_container->ui_params[val_id]->category_uid;
+    return param_ui_category(param_container->ui_params[val_id]);
 }
 
 void param_mark_changed(PRM_CONTAIN *param_container, int val_id) {
@@ -1281,6 +1438,8 @@ void param_clean_param_container(PRM_CONTAIN *param_container) {
     }
     free(param_container->owner_index);
     intern_clean(&param_container->keys);
+    free(param_container->user_table);
+    intern_clean(&param_container->user_names);
 
     free(param_container);
 }
