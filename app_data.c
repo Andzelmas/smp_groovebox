@@ -546,6 +546,32 @@ static const DataOps cx_param_cat_ops = {
     .child_at = cx_param_cat_child_at,
 };
 
+static bool cx_param_cat_listed(PRM_CONTAIN *container, int cat_id,
+                                uint32_t parent_cat_uid);
+
+// a live param sits in the category, directly or in a listed sub-category. A
+// hidden param counts - hiding one does not change the tree
+static bool cx_param_cat_used(PRM_CONTAIN *container, uint32_t cat_uid) {
+    unsigned int total = param_return_num_params(container, 0);
+    // a freed slot reads category 0, never a category's uid
+    for (unsigned int i = 0; i < total; i++)
+        if (param_get_category_uid(container, (int)i) == cat_uid)
+            return true;
+    unsigned int ncat = param_return_num_categories(container);
+    for (unsigned int i = 0; i < ncat; i++)
+        if (cx_param_cat_listed(container, (int)i, cat_uid))
+            return true;
+    return false;
+}
+
+// is cat_id a non-empty sub-category of parent_cat_uid
+static bool cx_param_cat_listed(PRM_CONTAIN *container, int cat_id,
+                                uint32_t parent_cat_uid) {
+    if (param_category_parent(container, cat_id) != parent_cat_uid)
+        return false;
+    return cx_param_cat_used(container, param_category_uid(container, cat_id));
+}
+
 static size_t cx_param_level_count(PRM_CONTAIN *container,
                                    uint32_t parent_cat_uid) {
     if (!container)
@@ -553,7 +579,7 @@ static size_t cx_param_level_count(PRM_CONTAIN *container,
     size_t n = 0;
     unsigned int ncat = param_return_num_categories(container);
     for (unsigned int i = 0; i < ncat; i++)
-        if (param_category_parent(container, (int)i) == parent_cat_uid)
+        if (cx_param_cat_listed(container, (int)i, parent_cat_uid))
             n++;
     unsigned int total = param_return_num_params(container, 0);
     for (unsigned int i = 0; i < total; i++) {
@@ -568,8 +594,8 @@ static size_t cx_param_level_count(PRM_CONTAIN *container,
 // ONE level slice of a param container's category tree, shared by every owner
 // whose params are CX children (they pass parent_cat_uid 0, the top level)
 // and by each category node (which passes its own uid).
-// A level is every sub-category of parent_cat_uid in cat_id (creation) order,
-// followed by every live param sitting directly in it in val_id order
+// A level is every listed sub-category of parent_cat_uid in cat_id (creation)
+// order, followed by every live param sitting directly in it in val_id order
 static bool cx_param_level_at(PRM_CONTAIN *container, uint32_t parent_cat_uid,
                               size_t idx, DataObject *out) {
     if (!container)
@@ -577,7 +603,7 @@ static bool cx_param_level_at(PRM_CONTAIN *container, uint32_t parent_cat_uid,
     unsigned int ncat = param_return_num_categories(container);
     unsigned int ngroups = 0;
     for (unsigned int i = 0; i < ncat; i++)
-        if (param_category_parent(container, (int)i) == parent_cat_uid)
+        if (cx_param_cat_listed(container, (int)i, parent_cat_uid))
             ngroups++;
 
     // groups by cat_id, then params by val_id - both DECLARATION order, i.e.
@@ -585,7 +611,7 @@ static bool cx_param_level_at(PRM_CONTAIN *container, uint32_t parent_cat_uid,
     if (idx < ngroups) {
         size_t want = idx;
         for (unsigned int i = 0; i < ncat; i++) {
-            if (param_category_parent(container, (int)i) != parent_cat_uid)
+            if (!cx_param_cat_listed(container, (int)i, parent_cat_uid))
                 continue;
             if (want == 0) {
                 void *handle = param_category_handle(container, (int)i);

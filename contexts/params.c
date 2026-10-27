@@ -1254,12 +1254,20 @@ uint32_t param_category_intern(PRM_CONTAIN *param_container,
                                uint32_t parent_uid, const char *name) {
     if (!param_container || !name || name[0] == '\0')
         return 0;
+    // the parent must already be here, so a parent chain only goes down in
+    // uid and always ends at the top level
+    bool parent_found = parent_uid == 0;
     for (unsigned int i = 0; i < param_container->num_categories; i++) {
         PRM_PARAM_CATEGORY *cat = param_container->categories[i];
-        if (cat && cat->parent_uid == parent_uid &&
-            strcmp(cat->name, name) == 0)
+        if (!cat)
+            continue;
+        if (cat->uid == parent_uid)
+            parent_found = true;
+        if (cat->parent_uid == parent_uid && strcmp(cat->name, name) == 0)
             return cat->uid;
     }
+    if (!parent_found)
+        return 0;
 
     unsigned int idx = param_container->num_categories;
     // growing this outer pointer array is safe to realloc for the same reason

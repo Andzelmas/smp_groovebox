@@ -344,7 +344,8 @@ const char *param_get_name(PRM_CONTAIN *param_container, int val_id);
 // All [main-thread] only.
 
 // find-or-create ONE category by (parent_uid, name) and return its uid, 0 for
-// an empty name or on error. name is a single segment - params.c has no
+// an empty name, a parent_uid that is not a category of this container, or on
+// error. name is a single segment - params.c has no
 // concept of a path or of any separator, because that is the OWNER's
 // convention, not the parameter model's (CLAP uses "/", another owner may
 // not). An owner with a nested grouping walks its own syntax and calls this
