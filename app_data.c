@@ -565,8 +565,8 @@ static size_t cx_param_level_count(PRM_CONTAIN *container,
 // ONE level slice of a param container's category tree, shared by every owner
 // whose params are CX children (they pass parent_cat_uid 0, the top level)
 // and by each category node (which passes its own uid).
-// A level is every sub-category of parent_cat_uid sorted by name, followed by
-// every live param sitting directly in it in val_id order
+// A level is every sub-category of parent_cat_uid in cat_id (creation) order,
+// followed by every live param sitting directly in it in val_id order
 static bool cx_param_level_at(PRM_CONTAIN *container, uint32_t parent_cat_uid,
                               size_t idx, DataObject *out) {
     if (!container)
