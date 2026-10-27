@@ -27,9 +27,7 @@
 #define SMP_SAMPLE_NAME_MAX 128
 
 //this module's own id space for its params, passed to param_add_param as
-//owner_id. Source-defined, so it is stable across runs and is what a saved
-//value gets matched back by - never a positional index. 0 stays reserved
-//for "no owner id".
+//owner_id. 0 stays reserved for "no owner id".
 enum smpParamId {
     SMP_PARAM_NONE = 0,
     SMP_PARAM_NOTE,
@@ -340,7 +338,7 @@ uint32_t smp_add(SMP_INFO *smp_data, const char *samp_path, int in_id) {
     // uid 0 - params.c mints; owner_id is this module's own enum. Keep the
     // returned val_id: the [audio-thread] indexes the param by it.
     cur_smp->val_id[SMP_PARAM_NOTE] =
-        param_add_param(cur_smp->params, "Note", 40, 0, 127, 1, 0,
+        param_add_param(cur_smp->params, "Note", "note", 40, 0, 127, 1, 0,
                         SMP_PARAM_NOTE, 0, 0, NULL);
     // a failed add returns -1, which would index out of range on the
     //[audio-thread] later

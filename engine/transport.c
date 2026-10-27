@@ -13,8 +13,7 @@
 // it is a jump - tick rounding and a tempo change inside a cycle stay below
 #define TRANSPORT_FOLLOW_SLACK 0.0625
 
-// owner ids of the Trk params: source-defined, so a saved value can be matched
-// back by them, never a positional index. 0 stays "no owner id"
+// owner ids of the Trk params, 0 stays "no owner id"
 enum trkParamId {
     TRK_PARAM_NONE = 0,
     TRK_PARAM_TEMPO,
@@ -483,24 +482,28 @@ TRANSPORT *transport_init(SAMPLE_T rate) {
     }
     // uid 0 - params.c mints one
     PRM_CONTAIN *params = transport->params;
-    transport->val[TRK_PARAM_TEMPO] = param_add_param(
-        params, "Tempo", 100, 10, 500, 1, 0, TRK_PARAM_TEMPO, 0, 0, NULL);
-    transport->val[TRK_PARAM_BAR] = param_add_param(
-        params, "Bar", 1, 1, TRANSPORT_BAR_MAX, 1, 0, TRK_PARAM_BAR, 0, 0, NULL);
+    transport->val[TRK_PARAM_TEMPO] =
+        param_add_param(params, "Tempo", "tempo", 100, 10, 500, 1, 0,
+                        TRK_PARAM_TEMPO, 0, 0, NULL);
+    transport->val[TRK_PARAM_BAR] =
+        param_add_param(params, "Bar", "bar", 1, 1, TRANSPORT_BAR_MAX, 1, 0,
+                        TRK_PARAM_BAR, 0, 0, NULL);
     transport->val[TRK_PARAM_BEAT] = param_add_param(
-        params, "Beat", 1, 1, 4, 1, 0, TRK_PARAM_BEAT, 0, 0, NULL);
-    transport->val[TRK_PARAM_TICK] =
-        param_add_param(params, "Tick", 0, 0, TRANSPORT_TICKS_PER_BEAT - 1, 1,
-                        0, TRK_PARAM_TICK, PARAM_FLAG_READONLY, 0, NULL);
+        params, "Beat", "beat", 1, 1, 4, 1, 0, TRK_PARAM_BEAT, 0, 0, NULL);
+    transport->val[TRK_PARAM_TICK] = param_add_param(
+        params, "Tick", "tick", 0, 0, TRANSPORT_TICKS_PER_BEAT - 1, 1, 0,
+        TRK_PARAM_TICK, PARAM_FLAG_READONLY, 0, NULL);
     transport->val[TRK_PARAM_BPB] = param_add_param(
-        params, "BPB", 4, 1, 16, 1, 0, TRK_PARAM_BPB, 0, 0, NULL);
-    transport->val[TRK_PARAM_BEAT_TYPE] = param_add_param(
-        params, "Beat_Type", 4, 2, 16, 1, 0, TRK_PARAM_BEAT_TYPE, 0, 0, NULL);
+        params, "BPB", "bpb", 4, 1, 16, 1, 0, TRK_PARAM_BPB, 0, 0, NULL);
+    transport->val[TRK_PARAM_BEAT_TYPE] =
+        param_add_param(params, "Beat_Type", "beat_type", 4, 2, 16, 1, 0,
+                        TRK_PARAM_BEAT_TYPE, 0, 0, NULL);
     transport->val[TRK_PARAM_SYNC] = param_add_param(
-        params, "Sync", TRANSPORT_SYNC_OFF, TRANSPORT_SYNC_OFF,
+        params, "Sync", "sync", TRANSPORT_SYNC_OFF, TRANSPORT_SYNC_OFF,
         TRANSPORT_SYNC_LEAD, 1, 0, TRK_PARAM_SYNC, PARAM_FLAG_ENUM, 0, NULL);
-    transport->val[TRK_PARAM_PDC] = param_add_param(
-        params, "PDC", 0, 0, 1, 1, 0, TRK_PARAM_PDC, PARAM_FLAG_ENUM, 0, NULL);
+    transport->val[TRK_PARAM_PDC] =
+        param_add_param(params, "PDC", "pdc", 0, 0, 1, 1, 0, TRK_PARAM_PDC,
+                        PARAM_FLAG_ENUM, 0, NULL);
     // a failed add is -1, which the rt side would index with
     for (int i = TRK_PARAM_NONE + 1; i < TRK_PARAM_COUNT; i++) {
         if (transport->val[i] < 0) {

@@ -81,7 +81,10 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 // one - in practice only params_container_resync does that, for a survivor.
 // Fails (returns -1) if a caller-supplied uid already exists in this container
 // (checked via param_find_uid) or on allocation failure. name is
-// copied immediately, not borrowed past this call. owner_id is a second,
+// copied immediately, not borrowed past this call. key is the owner's
+// persistent name for the param, the same every run (what a saved setting is
+// matched by), copied too. NULL or "" = no key; a non-empty key must be unique
+// among this container's live params, else the add fails. owner_id is a second,
 // separate identifier, opaque to params.c - the OWNER's own name for this
 // param, in whatever id space the owner uses (CLAP's clap_id, an index into
 // the owner's own array, a module-private enum). 
@@ -92,13 +95,14 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 // is which category this param sits in (see param_category_intern), 0 for
 // none. Reuses a freed slot if one exists, else grows the container. Returns
 // the new val_id (same index on both the rt and ui side) on success.
-int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
-                    PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    uint32_t owner_id, uint32_t flags, uint32_t category_uid,
-                    void *cookie);
+int param_add_param(PRM_CONTAIN *param_container, const char *name,
+                    const char *key, PARAM_T val, PARAM_T min, PARAM_T max,
+                    PARAM_T inc, uint32_t uid, uint32_t owner_id,
+                    uint32_t flags, uint32_t category_uid, void *cookie);
 
 // one parameter as the owner currently sees it, for params_container_resync.
-// name is copied, doesn't need to outlive the call. uid: for a survivor,
+// name and key are copied, don't need to outlive the call. A survivor keeps
+// the key it was added with. uid: for a survivor,
 // pass its EXISTING uid (via param_find_uid/param_get_uid) - resync matches
 // by uid only, so a wrong value here drops the survivor instead of matching
 // it. For a genuinely new param pass 0 and params.c mints one (see param_
@@ -109,6 +113,7 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
 // own job.
 typedef struct _params_resync_item {
     char name[MAX_SHORT_NAME_LENGTH];
+    char key[MAX_SHORT_NAME_LENGTH];
     PARAM_T val;
     PARAM_T min;
     PARAM_T max;
@@ -221,6 +226,14 @@ int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id);
 // knowing what the owner put there (e.g. CLAP's clap_id). 
 uint32_t param_get_owner_id(PRM_CONTAIN *param_container, int val_id,
                             unsigned int rt_params);
+
+// this param's key (see param_add_param), "" if it has none, NULL on error.
+// Owned by the container, valid for its whole life. ui-only
+const char *param_get_key(PRM_CONTAIN *param_container, int val_id);
+
+// the val_id of the live param with this key, -1 if none - an empty key never
+// matches. ui-only
+int param_find_key(PRM_CONTAIN *param_container, const char *key);
 
 // return the parameter increment amount (by how much the parameter value
 // increases or decreases per Operation_Increase/Decrease) - ui-only, the rt

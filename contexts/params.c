@@ -1,5 +1,6 @@
 #include "params.h"
 #include "../types.h"
+#include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/ring_buffer.h"
 #include <math.h>
@@ -72,6 +73,8 @@ typedef struct _params_param_ui {
     uint32_t uid;
     // owner-supplied secondary id, opaque to params.c
     uint32_t owner_id;
+    // in the container's keys, 0 = none
+    uint64_t key;
     // bitmask of enum paramFlags
     uint32_t flags;
     // which category this param sits in, 0 = none (see param_category_
@@ -156,6 +159,9 @@ typedef struct _params_container {
     PRM_OWNER_ENTRY *owner_index;
     unsigned int owner_index_count;
     unsigned int owner_index_max;
+    // every key ever added; the slot is the val_id of the live param holding
+    // it, INTERN_SLOT_NONE once that param is freed. ui-only
+    INTERN_TABLE keys;
     // scratch buffer param_get_value_as_string formats into and returns a
     // pointer to - valid only until the next param_get_value_as_string call
     // on this container (any val_id)
@@ -261,6 +267,7 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
     param_container->owner_index = NULL;
     param_container->owner_index_count = 0;
     param_container->owner_index_max = 0;
+    param_container->keys = (INTERN_TABLE){0};
     param_container->user_data.user_data = NULL;
     param_container->user_data.build_value = NULL;
     param_container->user_data.val_to_string = NULL;
@@ -291,10 +298,10 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container) {
 // (it mallocs).
 static uint32_t next_param_uid = 0;
 
-int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
-                    PARAM_T min, PARAM_T max, PARAM_T inc, uint32_t uid,
-                    uint32_t owner_id, uint32_t flags, uint32_t category_uid,
-                    void *cookie) {
+int param_add_param(PRM_CONTAIN *param_container, const char *name,
+                    const char *key, PARAM_T val, PARAM_T min, PARAM_T max,
+                    PARAM_T inc, uint32_t uid, uint32_t owner_id,
+                    uint32_t flags, uint32_t category_uid, void *cookie) {
     if (!param_container)
         return -1;
     if (!name)
@@ -310,6 +317,15 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     // param_get_uid's doc). A minted one is unique by construction.
     else if (param_find_uid(param_container, uid) != -1)
         return -1;
+    uint64_t key_id = 0;
+    if (key && key[0] != '\0') {
+        if (param_find_key(param_container, key) != -1)
+            return -1;
+        // a failed add below leaves the entry with no slot, harmless
+        key_id = intern_add(&param_container->keys, key);
+        if (key_id == 0)
+            return -1;
+    }
 
     PRM_PARAM_RT *new_rt_param = malloc(sizeof(PRM_PARAM_RT));
     if (!new_rt_param)
@@ -367,6 +383,7 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     param_container->rt_params[idx] = new_rt_param;
     param_container->ui_params[idx] = new_ui_param;
     param_owner_index_insert(param_container, owner_id, (int)idx);
+    intern_set_slot(&param_container->keys, key_id, idx);
 
     new_rt_param->val = val;
     new_rt_param->min_val = min;
@@ -385,6 +402,7 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name, PARAM_T val,
     snprintf(new_ui_param->name, MAX_SHORT_NAME_LENGTH, "%s", name);
     new_ui_param->uid = uid;
     new_ui_param->owner_id = owner_id;
+    new_ui_param->key = key_id;
     new_ui_param->flags = flags;
     new_ui_param->category_uid = category_uid;
     new_ui_param->self_container = param_container;
@@ -426,6 +444,9 @@ void params_container_resync(PRM_CONTAIN *param_container,
         param_owner_index_remove(param_container,
                                  param_container->rt_params[val_id]->owner_id,
                                  (int)val_id);
+        intern_set_slot(&param_container->keys,
+                        param_container->ui_params[val_id]->key,
+                        INTERN_SLOT_NONE);
         free(param_container->rt_params[val_id]);
         param_container->rt_params[val_id] = NULL;
         free(param_container->ui_params[val_id]);
@@ -440,11 +461,11 @@ void params_container_resync(PRM_CONTAIN *param_container,
     for (unsigned int i = 0; i < new_count; i++) {
         if (param_find_uid(param_container, new_params[i].uid) != -1)
             continue;
-        param_add_param(param_container, new_params[i].name, new_params[i].val,
-                        new_params[i].min, new_params[i].max, new_params[i].inc,
-                        new_params[i].uid, new_params[i].owner_id,
-                        new_params[i].flags, new_params[i].category_uid,
-                        new_params[i].cookie);
+        param_add_param(param_container, new_params[i].name, new_params[i].key,
+                        new_params[i].val, new_params[i].min, new_params[i].max,
+                        new_params[i].inc, new_params[i].uid,
+                        new_params[i].owner_id, new_params[i].flags,
+                        new_params[i].category_uid, new_params[i].cookie);
     }
 }
 
@@ -839,6 +860,28 @@ int param_find_owner_id(PRM_CONTAIN *param_container, uint32_t owner_id) {
         param_container->owner_index[pos].owner_id != owner_id)
         return -1;
     return param_container->owner_index[pos].val_id;
+}
+
+const char *param_get_key(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container)
+        return NULL;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return NULL;
+    if (!param_container->ui_params[val_id])
+        return NULL;
+    const char *key = intern_name(&param_container->keys,
+                                  param_container->ui_params[val_id]->key);
+    return key ? key : "";
+}
+
+int param_find_key(PRM_CONTAIN *param_container, const char *key) {
+    if (!param_container)
+        return -1;
+    size_t slot = intern_slot(&param_container->keys,
+                              intern_find(&param_container->keys, key));
+    if (slot == INTERN_SLOT_NONE)
+        return -1;
+    return (int)slot;
 }
 
 PARAM_T param_get_increment(PRM_CONTAIN *param_container, int val_id) {
@@ -1237,6 +1280,7 @@ void param_clean_param_container(PRM_CONTAIN *param_container) {
         free(param_container->categories);
     }
     free(param_container->owner_index);
+    intern_clean(&param_container->keys);
 
     free(param_container);
 }

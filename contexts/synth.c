@@ -39,9 +39,7 @@
 #define ADSR_MAX_TIME 5
 
 // this module's own id space for an oscillator's params, passed to
-// param_add_param as owner_id. Source-defined, so it is stable across runs
-// and is what a saved value gets matched back by - never a positional index.
-// 0 stays reserved for "no owner id".
+// param_add_param as owner_id. 0 stays reserved for "no owner id".
 enum synthOscParamId {
     SYNTH_PARAM_NONE = 0,
     SYNTH_PARAM_AMP,
@@ -608,34 +606,35 @@ SYNTH_DATA *synth_init(SAMPLE_T sample_rate, unsigned int with_metronome,
         cur_osc->params = params_init_param_container(&osc_params_user_data);
         // uid 0 - params.c mints; owner_id is this module's own enum
         cur_osc->val_id[SYNTH_PARAM_AMP] =
-            param_add_param(cur_osc->params, "Amp", 0.8, 0.00001, 1, 0.01, 0,
-                            SYNTH_PARAM_AMP, 0, 0, NULL);
+            param_add_param(cur_osc->params, "Amp", "amp", 0.8, 0.00001, 1,
+                            0.01, 0, SYNTH_PARAM_AMP, 0, 0, NULL);
         cur_osc->val_id[SYNTH_PARAM_FREQ] =
-            param_add_param(cur_osc->params, "Freq", 0, -12, 12, 0.1, 0,
+            param_add_param(cur_osc->params, "Freq", "freq", 0, -12, 12, 0.1, 0,
                             SYNTH_PARAM_FREQ, 0, 0, NULL);
         cur_osc->val_id[SYNTH_PARAM_SPREAD] =
-            param_add_param(cur_osc->params, "Spread", 0, 0, 1, 0.01, 0,
-                            SYNTH_PARAM_SPREAD, 0, 0, NULL);
+            param_add_param(cur_osc->params, "Spread", "spread", 0, 0, 1, 0.01,
+                            0, SYNTH_PARAM_SPREAD, 0, 0, NULL);
         cur_osc->val_id[SYNTH_PARAM_WOBBLE] =
-            param_add_param(cur_osc->params, "Wobble", 0, 0, 1, 0.05, 0,
-                            SYNTH_PARAM_WOBBLE, 0, 0, NULL);
+            param_add_param(cur_osc->params, "Wobble", "wobble", 0, 0, 1, 0.05,
+                            0, SYNTH_PARAM_WOBBLE, 0, 0, NULL);
         cur_osc->val_id[SYNTH_PARAM_OCTAVE] = param_add_param(
-            cur_osc->params, "Octave", 0, ((MAX_SEMITONES - 12) / 12.0) * -1,
-            (MAX_SEMITONES - 12) / 12.0, 1, 0, SYNTH_PARAM_OCTAVE, 0, 0, NULL);
+            cur_osc->params, "Octave", "octave", 0,
+            ((MAX_SEMITONES - 12) / 12.0) * -1, (MAX_SEMITONES - 12) / 12.0, 1,
+            0, SYNTH_PARAM_OCTAVE, 0, 0, NULL);
         cur_osc->val_id[SYNTH_PARAM_TABLE] =
-            param_add_param(cur_osc->params, "Table", 0, 0, 3, 1, 0,
+            param_add_param(cur_osc->params, "Table", "table", 0, 0, 3, 1, 0,
                             SYNTH_PARAM_TABLE, 0, 0, NULL);
         cur_osc->val_id[SYNTH_PARAM_ATTACK] = param_add_param(
-            cur_osc->params, "A", 0.0, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX,
-            0.1, 0, SYNTH_PARAM_ATTACK, 0, 0, NULL);
+            cur_osc->params, "A", "attack", 0.0, SYNTH_ADSR_TIME_MIN,
+            SYNTH_ADSR_TIME_MAX, 0.1, 0, SYNTH_PARAM_ATTACK, 0, 0, NULL);
         cur_osc->val_id[SYNTH_PARAM_DECAY] = param_add_param(
-            cur_osc->params, "D", 0.0, SYNTH_ADSR_TIME_MIN, SYNTH_ADSR_TIME_MAX,
-            0.1, 0, SYNTH_PARAM_DECAY, 0, 0, NULL);
+            cur_osc->params, "D", "decay", 0.0, SYNTH_ADSR_TIME_MIN,
+            SYNTH_ADSR_TIME_MAX, 0.1, 0, SYNTH_PARAM_DECAY, 0, 0, NULL);
         cur_osc->val_id[SYNTH_PARAM_SUSTAIN] =
-            param_add_param(cur_osc->params, "S", 1.0, 0.0, 1.0, 0.01, 0,
-                            SYNTH_PARAM_SUSTAIN, 0, 0, NULL);
+            param_add_param(cur_osc->params, "S", "sustain", 1.0, 0.0, 1.0,
+                            0.01, 0, SYNTH_PARAM_SUSTAIN, 0, 0, NULL);
         cur_osc->val_id[SYNTH_PARAM_RELEASE] = param_add_param(
-            cur_osc->params, "R", 0.001, SYNTH_ADSR_TIME_MIN,
+            cur_osc->params, "R", "release", 0.001, SYNTH_ADSR_TIME_MIN,
             SYNTH_ADSR_TIME_MAX, 0.1, 0, SYNTH_PARAM_RELEASE, 0, 0, NULL);
 
         if (synth_osc_ports_create(synth_data, cur_osc) != 0) {

@@ -1835,9 +1835,9 @@ uint32_t plug_load_and_activate(void *plugin_item) {
     // every param after it. uid is passed as 0 so params.c mints it.
     // owner_id is ct_iter + 1, the index into plug->controls (offset because
     // 0 means "no owner id"). NEVER persist that index - it is in-memory
-    // only. It exists to reach the control's SYMBOL, plug->controls[owner_id
-    // - 1]->symbol, which is what LV2 state keys on and what a saved value
-    // has to be matched by.
+    // only; the key is what a saved value is matched by: the port symbol,
+    // or a property's URI (lilv_world_get_symbol derives a symbol from the
+    // URI, two properties may get the same one).
     if (plug->controls) {
         PRM_CONTAIN *plug_params = params_init_param_container(NULL);
         // the lockstep above is an invariant, so check it rather than trust
@@ -1850,7 +1850,7 @@ uint32_t plug_load_and_activate(void *plugin_item) {
              ct_iter++) {
             PLUG_CONTROL *cur_ctrl = plug->controls[ct_iter];
             if (!cur_ctrl) {
-                if (param_add_param(plug_params, "", 0, 0, 0, 0, 0,
+                if (param_add_param(plug_params, "", "", 0, 0, 0, 0, 0,
                                     ct_iter + 1, 0, 0,
                                     NULL) != (int)ct_iter) {
                     lockstep_ok = 0;
@@ -1859,7 +1859,13 @@ uint32_t plug_load_and_activate(void *plugin_item) {
                 continue;
             }
 
-            const char *param_name = lilv_node_as_string(cur_ctrl->symbol);
+            const char *param_key =
+                cur_ctrl->type == PROPERTY
+                    ? lilv_node_as_uri(cur_ctrl->node)
+                    : lilv_node_as_string(cur_ctrl->symbol);
+            const char *param_name = lilv_node_as_string(cur_ctrl->label);
+            if (!param_name)
+                param_name = lilv_node_as_string(cur_ctrl->symbol);
             if (!param_name)
                 param_name = "";
             PARAM_T param_val = 0;
@@ -1876,9 +1882,9 @@ uint32_t plug_load_and_activate(void *plugin_item) {
                 p_flags |= PARAM_FLAG_READONLY;
             if (cur_ctrl->is_enumeration)
                 p_flags |= PARAM_FLAG_ENUM;
-            if (param_add_param(plug_params, param_name, param_val, param_min,
-                                param_max, cur_inc, 0, ct_iter + 1, p_flags, 0,
-                                NULL) != (int)ct_iter) {
+            if (param_add_param(plug_params, param_name, param_key, param_val,
+                                param_min, param_max, cur_inc, 0, ct_iter + 1,
+                                p_flags, 0, NULL) != (int)ct_iter) {
                 lockstep_ok = 0;
                 break;
             }

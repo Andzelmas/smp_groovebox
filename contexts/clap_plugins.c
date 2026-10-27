@@ -875,6 +875,8 @@ clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
 
         snprintf(out[written].name, MAX_SHORT_NAME_LENGTH, "%s",
                  param_info.name);
+        snprintf(out[written].key, MAX_SHORT_NAME_LENGTH, "%u",
+                 (unsigned int)param_info.id);
         out[written].val = param_info.default_value;
         out[written].min = param_min;
         out[written].max = param_max;
