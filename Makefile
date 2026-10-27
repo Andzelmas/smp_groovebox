@@ -17,7 +17,7 @@ UI_CLI = smp_groovebox_ui_cli.c
 INCDIR = -I/usr/include
 
 #additional libs
-LIBS = -lm -ljack -lsndfile -ljson-c -llilv-0 $(WINDOW_LIBS)
+LIBS = -lm -ljack -lsndfile -llilv-0 $(WINDOW_LIBS)
 
 #jalv source code
 JALV_C = util_funcs/jalv/symap.c util_funcs/jalv/worker.c util_funcs/jalv/zix/allocator.c util_funcs/jalv/zix/allocator.h util_funcs/jalv/zix/attributes.h util_funcs/jalv/zix/ring.c
@@ -27,7 +27,7 @@ CLAP_EXT_C = contexts/clap_ext/clap_ext_preset_load.c
 #the clap scanner's sources - plugin code that runs out of the app's process
 SCAN_C = contexts/clap_scan.c contexts/clap_ext/clap_ext_preset_factory.c
 #util functions
-UTIL_FUNCS = util_funcs/wav_funcs.c util_funcs/math_funcs.c util_funcs/string_funcs.c util_funcs/ring_buffer.c util_funcs/log_funcs.c util_funcs/osc_wavelookup.c util_funcs/uniform_buffer.c util_funcs/midi_buf.c util_funcs/path_funcs.c util_funcs/hash_table.c util_funcs/intern_table.c util_funcs/tree_index.c
+UTIL_FUNCS = util_funcs/wav_funcs.c util_funcs/math_funcs.c util_funcs/string_funcs.c util_funcs/ring_buffer.c util_funcs/log_funcs.c util_funcs/osc_wavelookup.c util_funcs/uniform_buffer.c util_funcs/midi_buf.c util_funcs/path_funcs.c util_funcs/hash_table.c util_funcs/intern_table.c util_funcs/tree_index.c util_funcs/json.c
 #the audio engine, knows no backend
 ENGINE = engine/graph.c engine/transport.c engine/midi_clock.c
 #the audio backend (backend/audio_backend.h), one picked here
