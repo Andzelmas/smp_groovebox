@@ -45,6 +45,24 @@ uint32_t str_numbered_name(char *out, size_t cap, const char *name,
 }
 
 
+size_t str_utf8_copy(char *out, size_t cap, const char *src, size_t len) {
+    if (!out || cap == 0)
+        return 0;
+    if (!src)
+        len = 0;
+    if (len >= cap) {
+        len = cap - 1;
+        // src[len] is the first byte left out - a continuation byte there
+        // belongs to a character that started inside the copy
+        while (len > 0 && ((unsigned char)src[len] & 0xC0) == 0x80)
+            len--;
+    }
+    if (len > 0)
+        memcpy(out, src, len);
+    out[len] = '\0';
+    return len;
+}
+
 void str_combine_str_int(char **string_in, int num) {
     char *ret_string = NULL;
     if (!(*string_in))

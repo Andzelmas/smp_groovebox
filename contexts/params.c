@@ -3,6 +3,7 @@
 #include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/ring_buffer.h"
+#include "../util_funcs/string_funcs.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -467,7 +468,8 @@ int param_add_param(PRM_CONTAIN *param_container, const char *name,
     new_ui_param->max_val = max;
     new_ui_param->def_val = val;
     new_ui_param->inc_am = inc;
-    snprintf(new_ui_param->name, MAX_SHORT_NAME_LENGTH, "%s", name);
+    str_utf8_copy(new_ui_param->name, sizeof(new_ui_param->name), name,
+                  strlen(name));
     new_ui_param->uid = uid;
     new_ui_param->owner_id = owner_id;
     new_ui_param->key = key_id;
@@ -849,15 +851,20 @@ int param_set_value(PRM_CONTAIN *param_container, int val_id, PARAM_T set_to,
     case Operation_SetDefValue:
         cur_param->def_val = set_to;
         return 0;
-    case Operation_ChangeName:
-        if (set_string_to &&
-            strncmp(cur_param->name, set_string_to, MAX_SHORT_NAME_LENGTH) != 0) {
-            snprintf(cur_param->name, MAX_SHORT_NAME_LENGTH, "%s",
-                     set_string_to);
+    case Operation_ChangeName: {
+        if (!set_string_to)
+            return 0;
+        // compared as stored, so the same long name is no change
+        char new_name[MAX_SHORT_NAME_LENGTH];
+        size_t new_len = str_utf8_copy(new_name, sizeof(new_name),
+                                       set_string_to, strlen(set_string_to));
+        if (strcmp(cur_param->name, new_name) != 0) {
+            memcpy(cur_param->name, new_name, new_len + 1);
             if (!(cur_param->user.set & PARAM_USER_NAME))
                 param_ui_mark_changed(param_container, cur_param);
         }
         return 0;
+    }
     case Operation_SetFlags:
         cur_param->flags = (uint32_t)set_to;
         if (param_ui_flags(cur_param) != shown_flags)
@@ -1222,6 +1229,28 @@ const char *param_get_name(PRM_CONTAIN *param_container, int val_id) {
     return param_ui_name(param_container, param_container->ui_params[val_id]);
 }
 
+bool param_get_owner_values(PRM_CONTAIN *param_container, int val_id,
+                            PARAM_USER_ITEM *out) {
+    if (!param_container || !out)
+        return false;
+    if (val_id < 0 || (unsigned int)val_id >= param_container->num_of_params_ui)
+        return false;
+    const PRM_PARAM_UI *cur_param = param_container->ui_params[val_id];
+    if (!cur_param)
+        return false;
+    const char *key = intern_name(&param_container->keys, cur_param->key);
+    *out = (PARAM_USER_ITEM){
+        .key = key ? key : "",
+        .set = PARAM_USER_NAME | PARAM_USER_INCREMENT | PARAM_USER_DEFAULT |
+               PARAM_USER_HIDDEN | PARAM_USER_CATEGORY,
+        .name = cur_param->name,
+        .increment = cur_param->inc_am,
+        .def_val = cur_param->def_val,
+        .hidden = (cur_param->flags & PARAM_FLAG_HIDDEN) != 0,
+        .category_uid = cur_param->category_uid,
+    };
+    return true;
+}
 
 void *param_get_handle(PRM_CONTAIN *param_container, int val_id) {
     if (!param_container)
@@ -1254,6 +1283,10 @@ uint32_t param_category_intern(PRM_CONTAIN *param_container,
                                uint32_t parent_uid, const char *name) {
     if (!param_container || !name || name[0] == '\0')
         return 0;
+    // compared as stored, so a long name finds the category it made before
+    char segment[MAX_CATEGORY_SEGMENT];
+    size_t segment_len =
+        str_utf8_copy(segment, sizeof(segment), name, strlen(name));
     // the parent must already be here, so a parent chain only goes down in
     // uid and always ends at the top level
     bool parent_found = parent_uid == 0;
@@ -1263,7 +1296,7 @@ uint32_t param_category_intern(PRM_CONTAIN *param_container,
             continue;
         if (cat->uid == parent_uid)
             parent_found = true;
-        if (cat->parent_uid == parent_uid && strcmp(cat->name, name) == 0)
+        if (cat->parent_uid == parent_uid && strcmp(cat->name, segment) == 0)
             return cat->uid;
     }
     if (!parent_found)
@@ -1282,7 +1315,7 @@ uint32_t param_category_intern(PRM_CONTAIN *param_container,
     PRM_PARAM_CATEGORY *cat = malloc(sizeof(PRM_PARAM_CATEGORY));
     if (!cat)
         return 0;
-    snprintf(cat->name, MAX_CATEGORY_SEGMENT, "%s", name);
+    memcpy(cat->name, segment, segment_len + 1);
     cat->parent_uid = parent_uid;
     cat->uid = ++next_category_uid;
     cat->self_container = param_container;
@@ -1294,6 +1327,31 @@ uint32_t param_category_intern(PRM_CONTAIN *param_container,
     // enumerated, so nothing is visible until a param is added into it or
     // moved into it - and both of those bump it themselves
     return cat->uid;
+}
+
+uint32_t param_category_intern_path(PRM_CONTAIN *param_container,
+                                    const char *path, char sep) {
+    if (!param_container || !path)
+        return 0;
+    uint32_t parent_uid = 0;
+    const char *seg = path;
+    while (*seg) {
+        const char *end = sep != '\0' ? strchr(seg, sep) : NULL;
+        size_t len = end ? (size_t)(end - seg) : strlen(seg);
+        if (len > 0) {
+            char name[MAX_CATEGORY_SEGMENT];
+            str_utf8_copy(name, sizeof(name), seg, len);
+            uint32_t uid =
+                param_category_intern(param_container, parent_uid, name);
+            if (uid == 0)
+                return parent_uid;
+            parent_uid = uid;
+        }
+        if (!end)
+            break;
+        seg = end + 1;
+    }
+    return parent_uid;
 }
 
 unsigned int param_return_num_categories(PRM_CONTAIN *param_container) {

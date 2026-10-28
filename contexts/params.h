@@ -43,10 +43,9 @@ enum paramFlags {
     PARAM_FLAG_ENUM     = 1 << 2,
 };
 
-// max length of ONE parameter-category name segment (see param_category_
-// intern). A segment is never a whole path, so this only has to hold
-// "Oscillators", not "Oscillators/Wavetable 1/Unison".
-#define MAX_CATEGORY_SEGMENT 128
+// buffer size of ONE parameter-category name segment (see param_category_
+// intern), so a whole CLAP module path (CLAP_PATH_SIZE) fits in one segment
+#define MAX_CATEGORY_SEGMENT 1024
 
 // struct that holds the parameters
 typedef struct _params_container PRM_CONTAIN;
@@ -82,7 +81,8 @@ params_init_param_container(const PRM_CONT_USER_DATA *user_data_per_container);
 // one - in practice only params_container_resync does that, for a survivor.
 // Fails (returns -1) if a caller-supplied uid already exists in this container
 // (checked via param_find_uid) or on allocation failure. name is
-// copied immediately, not borrowed past this call. key is the owner's
+// copied immediately, not borrowed past this call, cut to fit
+// MAX_SHORT_NAME_LENGTH without splitting a UTF-8 character. key is the owner's
 // persistent name for the param, the same every run (what a saved setting is
 // matched by), copied too. NULL or "" = no key; a non-empty key must be unique
 // among this container's live params, else the add fails. owner_id is a second,
@@ -331,6 +331,13 @@ unsigned int param_is_enum(PRM_CONTAIN *param_container, int val_id);
 // only on [main-thread].
 const char *param_get_name(PRM_CONTAIN *param_container, int val_id);
 
+// the owner's own name, increment, default, hidden and category_uid, whatever
+// the user set over them - all bits in set. key ("" if none) and name are
+// owned by the container, valid like param_get_key / param_get_name. false on
+// error. ui-only
+bool param_get_owner_values(PRM_CONTAIN *param_container, int val_id,
+                            PARAM_USER_ITEM *out);
+
 // PARAMETER CATEGORIES
 // --------------------------------------------------------------------------
 // A category is a real entity with its own minted, program-unique uid.
@@ -350,9 +357,17 @@ const char *param_get_name(PRM_CONTAIN *param_container, int val_id);
 // convention, not the parameter model's (CLAP uses "/", another owner may
 // not). An owner with a nested grouping walks its own syntax and calls this
 // once per level, passing the previous level's uid as parent_uid; passing 0
-// creates a top-level category.
+// creates a top-level category. A name too long for MAX_CATEGORY_SEGMENT is
+// cut without splitting a UTF-8 character.
 uint32_t param_category_intern(PRM_CONTAIN *param_container,
                                uint32_t parent_uid, const char *name);
+
+// param_category_intern for every segment of path split at the owner's sep,
+// each under the one before. An empty segment is skipped ("a//b" is "a/b"), a
+// long one cut like param_category_intern's name. Returns the last segment's uid, 0
+// for a path with no segment; on error the deepest one interned.
+uint32_t param_category_intern_path(PRM_CONTAIN *param_container,
+                                    const char *path, char sep);
 
 // how many categories this container has interned. Every index in
 // [0, count) is valid - categories are never freed individually.

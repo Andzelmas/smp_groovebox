@@ -16,6 +16,11 @@ uint32_t str_numbered_name(char *out, size_t cap, const char *name,
                            const uint32_t *used, size_t used_count,
                            size_t *name_at);
 
+// the first len bytes of src (UTF-8, need not be NUL terminated) into out, NUL
+// terminated. When they do not fit in cap the cut never splits a character.
+// Returns the bytes written without the NUL
+size_t str_utf8_copy(char *out, size_t cap, const char *src, size_t len);
+
 // combines a string with integer and padding and _ symbols
 // the result is in the string_in, but it is freed if succesfully combined
 void str_combine_str_int(char **string_in, int num);

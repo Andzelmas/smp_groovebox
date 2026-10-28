@@ -777,37 +777,6 @@ static unsigned int clap_plug_params_value_to_text(const void *user_data,
     return convert_err;
 }
 
-// clap_param_info_t.module is a "/"-separated tree path (its own doc: e.g.
-// "Oscillators/Wavetable 1"). params.c only ever interns
-// one segment at a time and has no notion of a path. Returns the leaf
-// category's uid, 0 for an empty/absent module.
-static uint32_t clap_plug_intern_module(PRM_CONTAIN *params,
-                                        const char *module) {
-    if (!params || !module)
-        return 0;
-    uint32_t parent_uid = 0;
-    const char *seg = module;
-    while (*seg) {
-        const char *slash = strchr(seg, '/');
-        size_t len = slash ? (size_t)(slash - seg) : strlen(seg);
-        if (len > 0) {
-            char name[MAX_CATEGORY_SEGMENT];
-            if (len >= MAX_CATEGORY_SEGMENT)
-                len = MAX_CATEGORY_SEGMENT - 1;
-            memcpy(name, seg, len);
-            name[len] = '\0';
-            uint32_t uid = param_category_intern(params, parent_uid, name);
-            if (uid == 0)
-                return parent_uid; // out of memory - keep what resolved
-            parent_uid = uid;
-        }
-        if (!slash)
-            break;
-        seg = slash + 1; // an empty segment just advances, so "a//b" == "a/b"
-    }
-    return parent_uid;
-}
-
 // translate the CLAP_PARAM_IS_HIDDEN/READONLY/ENUM bits of a clap_param_
 // info_t.flags into this container's own paramFlags
 static uint32_t clap_plug_translate_param_flags(uint32_t clap_flags) {
@@ -884,10 +853,10 @@ clap_plug_discover_params(CLAP_PLUG_PLUG *plug,
         out[written].uid = uid;
         out[written].owner_id = param_info.id;
         out[written].flags = param_flags;
-        // the chain is interned, so every param under "Oscillators/..."
-        // resolves to the same "Oscillators" entity
-        out[written].category_uid =
-            clap_plug_intern_module(plug->plug_params, param_info.module);
+        // module is a "/"-separated path, interned per segment, so every
+        // param under "Oscillators/..." resolves to the same "Oscillators"
+        out[written].category_uid = param_category_intern_path(
+            plug->plug_params, param_info.module, '/');
         out[written].cookie = param_info.cookie;
         written++;
     }
@@ -1084,7 +1053,8 @@ static void clap_plug_ext_params_rescan(const clap_host_t *host,
                 clap_plug_translate_param_flags(param_info.flags));
             clap_plug_reconcile_param_category(
                 plug->plug_params, val_id,
-                clap_plug_intern_module(plug->plug_params, param_info.module));
+                param_category_intern_path(plug->plug_params,
+                                           param_info.module, '/'));
         }
     }
 }
