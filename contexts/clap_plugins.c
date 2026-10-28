@@ -3316,6 +3316,16 @@ const char *clap_plug_plugin_name(void *plug) {
     return cur_plug->name;
 }
 
+const char *clap_plug_plugin_id(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return NULL;
+    if (!cur_plug->plug_entry)
+        return NULL;
+
+    return cur_plug->plugin_id;
+}
+
 uint32_t clap_plug_plugin_uid(void *plug) {
     CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
     if (!cur_plug)

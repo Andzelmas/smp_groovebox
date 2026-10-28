@@ -1950,6 +1950,16 @@ const char *plug_plugin_name(void *plug) {
     return cur_plug->name;
 }
 
+const char *plug_plugin_uri(void *plug) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug)
+        return NULL;
+    if (!cur_plug->plug_instance)
+        return NULL;
+
+    return lilv_node_as_uri(lilv_plugin_get_uri(cur_plug->plug));
+}
+
 uint32_t plug_plugin_uid(void *plug) {
     PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
     if (!cur_plug)

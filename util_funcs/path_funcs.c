@@ -1,5 +1,6 @@
 #include "path_funcs.h"
 #include <sys/stat.h>
+#include <errno.h>
 #include <string.h>
 #include <dirent.h>
 #include <stdio.h>
@@ -103,5 +104,40 @@ int path_exe_dir(char* out, size_t out_len){
     *slash = '\0';
     int dir_len = snprintf(out, out_len, "%s", exe);
     if(dir_len < 0 || (size_t)dir_len >= out_len)return -1;
+    return 0;
+}
+
+//mkdir, fine with a folder already there
+static int path_make_dir(const char* dir){
+    if(mkdir(dir, 0755) == 0 || errno == EEXIST)return 0;
+    int err = errno;
+    if(path_is_directory(dir) == 1)return 0;
+    errno = err;
+    return -1;
+}
+
+int path_make_dirs(const char* path){
+    if(!path || path[0] == '\0'){
+	errno = ENOENT;
+	return -1;
+    }
+    char dir[MAX_PATH_STRING];
+    int len = snprintf(dir, sizeof(dir), "%s", path);
+    if(len < 0 || (size_t)len >= sizeof(dir)){
+	errno = ENAMETOOLONG;
+	return -1;
+    }
+    //every '/' past the first char ends a parent
+    for(char* cur = dir + 1; *cur != '\0'; cur++){
+	if(*cur != '/')continue;
+	*cur = '\0';
+	if(path_make_dir(dir) != 0)return -1;
+	*cur = '/';
+    }
+    if(path_make_dir(dir) != 0)return -1;
+    if(path_is_directory(dir) != 1){
+	errno = ENOTDIR;
+	return -1;
+    }
     return 0;
 }

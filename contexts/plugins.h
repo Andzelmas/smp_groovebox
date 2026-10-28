@@ -86,6 +86,10 @@ void *plug_plugin_return(PLUG_INFO *plug_data, unsigned int idx);
 // is removed. returns NULL on error.
 const char *plug_plugin_name(void *plug);
 
+// the plugin's URI, the same every run. Valid until the plugin is removed,
+// NULL on error
+const char *plug_plugin_uri(void *plug);
+
 // return the plugin's monotonic identity uid (0 on error). Assigned at load,
 // never reused for a different plugin.
 uint32_t plug_plugin_uid(void *plug);

@@ -1,3 +1,4 @@
+#include <errno.h>
 #include <semaphore.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,15 +22,24 @@
 #include "util_funcs/string_funcs.h"
 // math helper functions
 #include "contexts/context_control.h"
+#include "contexts/param_config.h"
 #include "contexts/params.h"
 #include "util_funcs/log_funcs.h"
 #include "util_funcs/math_funcs.h"
+#include "util_funcs/path_funcs.h"
 #include "util_funcs/ring_buffer.h"
 #include <threads.h>
 
 // starting size of the data event queue, it grows when a cycle produces more
 // (a CLAP text rescan changes every param of the plugin at once)
 #define APP_DATA_EVENT_QUEUE_START 64
+
+// param config owner kinds, a plugin's own id follows: "clap:<id>"
+#define PARAM_CONFIG_KIND_CLAP "clap"
+#define PARAM_CONFIG_KIND_LV2 "lv2"
+#define PARAM_CONFIG_KIND_SYNTH_OSC "synth_osc"
+#define PARAM_CONFIG_KIND_SAMPLER "sampler"
+#define PARAM_CONFIG_KIND_TRK "trk"
 
 typedef struct _app_info {
     // the smapler data
@@ -83,6 +93,10 @@ typedef struct _app_info {
     bool hwin_fd_watched;
     // where the param config files go, "" = none written or read
     char param_config_dir[MAX_PATH_STRING];
+    // the newest sample / plugin uid already given its param config
+    uint32_t smp_uid_seen;
+    uint32_t lv2_uid_seen;
+    uint32_t clap_uid_seen;
 } APP_INFO;
 
 // push one event, growing the queue if it is full
@@ -1891,6 +1905,75 @@ static const DataOps root_ops = {
     .name = root_name,
 };
 
+static bool app_param_config_name_char(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+           (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+}
+
+// owner's param config file in dir, every char of owner outside
+// [A-Za-z0-9._-] as '_' - the owner inside the file tells apart two that come
+// out the same. false when it does not fit
+static bool app_param_config_path(const char *dir, const char *owner,
+                                  char *out, size_t out_len) {
+    int len = snprintf(out, out_len, "%s/%s.json", dir, owner);
+    if (len < 0 || (size_t)len >= out_len)
+        return false;
+    char *name = out + strlen(dir) + 1;
+    for (size_t i = 0; owner[i] != '\0'; i++)
+        if (!app_param_config_name_char(name[i]))
+            name[i] = '_';
+    return true;
+}
+
+// a param config file lists only the params with a key
+static bool app_param_container_keyed(PRM_CONTAIN *container) {
+    unsigned int count = param_return_num_params(container, 0);
+    for (unsigned int val_id = 0; val_id < count; val_id++) {
+        const char *key = param_get_key(container, (int)val_id);
+        if (key && key[0] != '\0')
+            return true;
+    }
+    return false;
+}
+
+// a new container reads its param config file. A missing file is written once
+// the container has a param with a key - a CLAP plugin may get its params
+// after load. The owner is "kind:id", kind alone for an id of ""; a NULL id
+// (an error) reads and writes nothing
+static void app_param_config_sync(APP_INFO *app_data, PRM_CONTAIN *container,
+                                  const char *kind, const char *id,
+                                  bool is_new) {
+    if (!container || !id || app_data->param_config_dir[0] == '\0')
+        return;
+    char owner[MAX_PATH_STRING];
+    char path[MAX_PATH_STRING];
+    if (id[0] != '\0')
+        snprintf(owner, sizeof(owner), "%s:%s", kind, id);
+    else
+        snprintf(owner, sizeof(owner), "%s", kind);
+    // a cut owner does not fit the path either
+    if (!app_param_config_path(app_data->param_config_dir, owner, path,
+                               sizeof(path))) {
+        log_append_logfile("param_config: the file path for %s is too long, "
+                           "not read or written\n",
+                           owner);
+        return;
+    }
+    if (is_new) {
+        if (param_config_read(container, owner, path) != PARAM_CONFIG_MISSING)
+            return;
+    } else if (access(path, F_OK) == 0)
+        return;
+    if (!app_param_container_keyed(container))
+        return;
+    if (path_make_dirs(app_data->param_config_dir) != 0) {
+        log_append_logfile("param_config: %s: %s, %s not written\n",
+                           app_data->param_config_dir, strerror(errno), path);
+        return;
+    }
+    param_config_write(container, owner, path);
+}
+
 DataObject app_init(void) {
     const DataObject invalid = {0};
     APP_INFO *app_data = (APP_INFO *)malloc(sizeof(APP_INFO));
@@ -1930,6 +2013,9 @@ DataObject app_init(void) {
     app_data->hwin = NULL;
     app_data->hwin_fd_watched = false;
     app_data->param_config_dir[0] = '\0';
+    app_data->smp_uid_seen = 0;
+    app_data->lv2_uid_seen = 0;
+    app_data->clap_uid_seen = 0;
 
     const SETTINGS_KEY params_keys[] = {
         {.key = "param_config_dir",
@@ -2023,6 +2109,16 @@ DataObject app_init(void) {
         clean_memory(app_data);
         return invalid;
     }
+    // the transport's and the oscillators' containers are new only here
+    app_param_config_sync(app_data,
+                          transport_param_container(app_data->transport),
+                          PARAM_CONFIG_KIND_TRK, "", true);
+    size_t osc_count = synth_return_osc_num(app_data->synth_data);
+    for (unsigned int i = 0; i < osc_count; i++)
+        app_param_config_sync(
+            app_data,
+            synth_osc_param_container(synth_osc_return(app_data->synth_data, i)),
+            PARAM_CONFIG_KIND_SYNTH_OSC, "", true);
     // the transport's MIDI clock, pre-wired to the exposed midi_clock_out
     app_data->midi_clock = midi_clock_init(
         app_data->graph, app_data->transport, DATA_NS_SINGLETON, SID_TRK);
@@ -2223,6 +2319,78 @@ int app_data_wake_fd(void *root_user_data, uint32_t period_ms) {
     return app_data->wake_epoll_fd;
 }
 
+// a params container's structural change -> CHILDREN_CHANGED on its owner.
+// is_new: the container appeared since the last update
+static void app_param_container_update(APP_INFO *app_data,
+                                       PRM_CONTAIN *container, ContextId owner,
+                                       const char *kind, const char *id,
+                                       bool is_new) {
+    // before the poll, so what the file changes is in this update's event
+    if (is_new)
+        app_param_config_sync(app_data, container, kind, id, true);
+    if (!param_container_changed(container))
+        return;
+    app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED, owner);
+    if (!is_new)
+        app_param_config_sync(app_data, container, kind, id, false);
+}
+
+// every params container. Sample and plugin uids only grow, so one above the
+// newest seen is new; the synth's and Trk's were new in app_init
+static void app_param_containers_update(APP_INFO *app_data) {
+    app_param_container_update(app_data,
+                               transport_param_container(app_data->transport),
+                               trk_id(NULL), PARAM_CONFIG_KIND_TRK, "", false);
+    size_t osc_count = synth_return_osc_num(app_data->synth_data);
+    for (unsigned int i = 0; i < osc_count; i++) {
+        void *osc = synth_osc_return(app_data->synth_data, i);
+        app_param_container_update(app_data, synth_osc_param_container(osc),
+                                   osc_id(osc), PARAM_CONFIG_KIND_SYNTH_OSC, "",
+                                   false);
+    }
+    uint32_t newest = app_data->smp_uid_seen;
+    for (unsigned int i = 0;; i++) {
+        void *smp = smp_sample_return(app_data->smp_data, i);
+        if (!smp)
+            break;
+        uint32_t uid = smp_sample_uid(smp);
+        app_param_container_update(app_data, smp_sample_param_container(smp),
+                                   sample_id(smp), PARAM_CONFIG_KIND_SAMPLER,
+                                   "", uid > app_data->smp_uid_seen);
+        if (uid > newest)
+            newest = uid;
+    }
+    app_data->smp_uid_seen = newest;
+    newest = app_data->lv2_uid_seen;
+    for (unsigned int i = 0;; i++) {
+        void *plug = plug_plugin_return(app_data->plug_data, i);
+        if (!plug)
+            break;
+        uint32_t uid = plug_plugin_uid(plug);
+        app_param_container_update(app_data, plug_plugin_param_container(plug),
+                                   lv2_plugin_id(plug), PARAM_CONFIG_KIND_LV2,
+                                   plug_plugin_uri(plug),
+                                   uid > app_data->lv2_uid_seen);
+        if (uid > newest)
+            newest = uid;
+    }
+    app_data->lv2_uid_seen = newest;
+    newest = app_data->clap_uid_seen;
+    for (unsigned int i = 0;; i++) {
+        void *plug = clap_plug_plugin_return(app_data->clap_plug_data, i);
+        if (!plug)
+            break;
+        uint32_t uid = clap_plug_plugin_uid(plug);
+        app_param_container_update(
+            app_data, clap_plug_plugin_param_container(plug),
+            clap_plugin_id(plug), PARAM_CONFIG_KIND_CLAP,
+            clap_plug_plugin_id(plug), uid > app_data->clap_uid_seen);
+        if (uid > newest)
+            newest = uid;
+    }
+    app_data->clap_uid_seen = newest;
+}
+
 void app_data_update(void *root_user_data) {
     if (!root_user_data)
         return;
@@ -2277,17 +2445,8 @@ void app_data_update(void *root_user_data) {
         app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
                             MAKE_ID(DATA_NS_SINGLETON, SID_CLAP_PLUGINS));
 
-    // same, one level down: did any one CLAP instance's own param set change.
-    // asked of the param container itself rather than of a CLAP-specific flag
-    for (unsigned int i = 0;; i++) {
-        void *plug = clap_plug_plugin_return(app_data->clap_plug_data, i);
-        if (!plug)
-            break;
-        if (param_container_changed(clap_plug_plugin_param_container(plug)))
-            app_data_push_event(app_data, DATA_EVENT_CHILDREN_CHANGED,
-                                MAKE_ID(DATA_NS_CLAP_PLUG,
-                                       clap_plug_plugin_uid(plug)));
-    }
+    // same, one level down: each params container's own param set
+    app_param_containers_update(app_data);
 
     // ports are not in the CX tree, so a backend or graph port / edge change is
     // a data changed event on root, not a structure change
