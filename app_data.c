@@ -8,6 +8,7 @@
 // my libraries
 #include "app_data.h"
 #include "backend/audio_backend.h"
+#include "data_actions.h"
 #include "engine/graph.h"
 #include "engine/midi_clock.h"
 #include "engine/transport.h"
@@ -402,6 +403,14 @@ static size_t cx_param_action_list(void *user_data, DataAction *out,
             .enabled = writable,
             .style = DATA_ACTION_STYLE_NORMAL,
         };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_COMMAND,
+            .label = "Default",
+            .tooltip = "Set value to default",
+            .enabled = writable,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
     return n;
 }
 static size_t cx_param_action_args(void *user_data, DataActionType type,
@@ -488,6 +497,12 @@ static DataActionResult cx_param_action_do(void *user_data,
     if (req->type == DATA_ACTION_SET_VALUE) {
         if (param_set_value(container, val_id, (PARAM_T)req->set_value.value,
                             NULL, Operation_SetValue) != 0)
+            return DATA_ACTION_ERR_DATA;
+        return DATA_ACTION_OK;
+    }
+    if (req->type == DATA_ACTION_COMMAND) {
+        if (param_set_value(container, val_id, 0.0, NULL, Operation_DefValue) !=
+            0)
             return DATA_ACTION_ERR_DATA;
         return DATA_ACTION_OK;
     }
