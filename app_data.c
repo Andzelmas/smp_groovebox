@@ -99,6 +99,10 @@ typedef struct _app_info {
     uint32_t clap_uid_seen;
 } APP_INFO;
 
+// for the param config Reload of the contexts with params, whose user_data is
+// their module's item. Set in app_init, [main-thread] only
+static APP_INFO *param_config_app;
+
 // push one event, growing the queue if it is full
 static void app_data_push_event(APP_INFO *app_data, DataEventType type,
                                 ContextId id) {
@@ -124,6 +128,7 @@ static void app_data_push_event(APP_INFO *app_data, DataEventType type,
 static int clean_memory(APP_INFO *app_data) {
     if (!app_data)
         return -1;
+    param_config_app = NULL;
     // clean the clap plug_data memory
     if (app_data->clap_plug_data)
         clap_plug_clean_memory(app_data->clap_plug_data);
@@ -707,6 +712,12 @@ static bool cx_param_cat_child_at(void *user_data, size_t idx,
                              param_category_uid(container, cat_id), idx, out);
 }
 
+// the param config Reload, on every context with params
+static DataAction app_param_config_reload_action(void);
+static DataActionResult app_param_config_reload(PRM_CONTAIN *container,
+                                                const char *kind,
+                                                const char *id);
+
 // the Trk container: constant name, the transport's params as children.
 static size_t trk_child_count(void *user_data) {
     return cx_param_level_count(transport_param_container(user_data), 0);
@@ -723,13 +734,31 @@ static ContextId trk_id(void *user_data) {
     (void)user_data;
     return MAKE_ID(DATA_NS_SINGLETON, SID_TRK);
 }
+static size_t trk_action_list(void *user_data, DataAction *out, size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = app_param_config_reload_action();
+    return 1;
+}
+static DataActionResult trk_action_do(void *user_data,
+                                      const DataActionReq *req,
+                                      ContextId *out_new) {
+    (void)out_new;
+    if (!req || req->type != DATA_ACTION_REFRESH)
+        return DATA_ACTION_ERR_INVALID;
+    return app_param_config_reload(transport_param_container(user_data),
+                                   PARAM_CONFIG_KIND_TRK, "");
+}
 
 static const DataOps trk_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN,
+    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_ACTIONS,
     .id = trk_id,
     .child_count = trk_child_count,
     .child_at = trk_child_at,
     .name = trk_name,
+    .action_list = trk_action_list,
+    .action_do = trk_action_do,
 };
 
 // single loaded sample. user_data is the SMP_SMP* from smp_sample_return.
@@ -742,30 +771,38 @@ static bool sample_child_at(void *user_data, size_t idx, DataObject *out) {
 static ContextId sample_id(void *user_data) {
     return MAKE_ID(DATA_NS_SAMPLE, smp_sample_uid(user_data));
 }
-// DATA_CAP_ACTIONS: a loaded sample can only be removed. No args, no lists -
-// action_args/list_count/list_at stay unset (NULL), which the data_object.h
-// wrappers already treat as "0 args" / "empty list".
+// DATA_CAP_ACTIONS: a loaded sample can be removed and reload its param
+// config. No args, no lists - action_args/list_count/list_at stay unset
+// (NULL), which the data_object.h wrappers already treat as "0 args" / "empty
+// list".
 static size_t sample_action_list(void *user_data, DataAction *out,
                                  size_t cap) {
     (void)user_data;
-    if (!out || cap < 1)
+    if (!out)
         return 0;
-    out[0] = (DataAction){
-        .type = DATA_ACTION_REMOVE,
-        .label = "Remove",
-        .tooltip = "Remove this sample",
-        .enabled = true,
-        .style = DATA_ACTION_STYLE_DANGEROUS,
-    };
-    return 1;
+    size_t n = 0;
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_REMOVE,
+            .label = "Remove",
+            .tooltip = "Remove this sample",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_DANGEROUS,
+        };
+    if (n < cap)
+        out[n++] = app_param_config_reload_action();
+    return n;
 }
 static DataActionResult sample_action_do(void *user_data,
                                          const DataActionReq *req,
                                          ContextId *out_new) {
-    (void)out_new; // REMOVE creates nothing
-    if (!req || req->type != DATA_ACTION_REMOVE)
+    (void)out_new; // no action creates anything
+    if (!req || !user_data)
         return DATA_ACTION_ERR_INVALID;
-    if (!user_data)
+    if (req->type == DATA_ACTION_REFRESH)
+        return app_param_config_reload(smp_sample_param_container(user_data),
+                                       PARAM_CONFIG_KIND_SAMPLER, "");
+    if (req->type != DATA_ACTION_REMOVE)
         return DATA_ACTION_ERR_INVALID;
     if (smp_stop_and_remove_sample(user_data) != 0)
         return DATA_ACTION_ERR_DATA;
@@ -895,8 +932,8 @@ enum {
 };
 
 // a loaded plugin's (lv2 or clap) action menu: Remove, Preset - loading one
-// picked from its preset list, and GUI - showing or hiding the plugin's own
-// GUI
+// picked from its preset list, GUI - showing or hiding the plugin's own GUI,
+// and Reload of its param config
 static size_t plugin_action_list(DataAction *out, size_t cap,
                                  bool gui_available, bool gui_shown) {
     if (!out)
@@ -928,6 +965,8 @@ static size_t plugin_action_list(DataAction *out, size_t cap,
             .active = gui_shown,
             .style = DATA_ACTION_STYLE_NORMAL,
         };
+    if (n < cap)
+        out[n++] = app_param_config_reload_action();
     return n;
 }
 
@@ -1021,6 +1060,10 @@ static DataActionResult lv2_plugin_action_do(void *user_data,
     if (req->type == DATA_ACTION_COMMAND)
         return plugin_gui_command(user_data, req->id, plug_plugin_gui_available,
                                   plug_plugin_gui_toggle);
+    if (req->type == DATA_ACTION_REFRESH)
+        return app_param_config_reload(plug_plugin_param_container(user_data),
+                                       PARAM_CONFIG_KIND_LV2,
+                                       plug_plugin_uri(user_data));
     if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
@@ -1243,6 +1286,10 @@ static DataActionResult clap_plugin_action_do(void *user_data,
         return plugin_gui_command(user_data, req->id,
                                   clap_plug_plugin_gui_available,
                                   clap_plug_plugin_gui_toggle);
+    if (req->type == DATA_ACTION_REFRESH)
+        return app_param_config_reload(
+            clap_plug_plugin_param_container(user_data), PARAM_CONFIG_KIND_CLAP,
+            clap_plug_plugin_id(user_data));
     if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
@@ -1415,14 +1462,33 @@ static bool osc_child_at(void *user_data, size_t idx, DataObject *out) {
 static ContextId osc_id(void *user_data) {
     return MAKE_ID(DATA_NS_SYNTH_OSC, synth_osc_uid(user_data));
 }
+static size_t osc_action_list(void *user_data, DataAction *out, size_t cap) {
+    (void)user_data;
+    if (!out || cap < 1)
+        return 0;
+    out[0] = app_param_config_reload_action();
+    return 1;
+}
+static DataActionResult osc_action_do(void *user_data,
+                                      const DataActionReq *req,
+                                      ContextId *out_new) {
+    (void)out_new;
+    if (!req || req->type != DATA_ACTION_REFRESH)
+        return DATA_ACTION_ERR_INVALID;
+    return app_param_config_reload(synth_osc_param_container(user_data),
+                                   PARAM_CONFIG_KIND_SYNTH_OSC, "");
+}
 // synth_osc_name already matches DataOps.name (const char *(*)(void *))
 static const DataOps osc_ops = {
-    .capabilities = DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_GROUP,
+    .capabilities =
+        DATA_CAP_NAME | DATA_CAP_CHILDREN | DATA_CAP_GROUP | DATA_CAP_ACTIONS,
     .id = osc_id,
     .group_key = osc_id,
     .child_count = osc_child_count,
     .child_at = osc_child_at,
     .name = synth_osc_name,
+    .action_list = osc_action_list,
+    .action_do = osc_action_do,
 };
 
 // container of the synth oscillators. user_data is SYNTH_DATA*. Oscillators are
@@ -1936,10 +2002,42 @@ static bool app_param_container_keyed(PRM_CONTAIN *container) {
     return false;
 }
 
+// the owner, "kind:id" or kind alone for an id of "", and its file in dir.
+// false (logged) when the path does not fit
+static bool app_param_config_owner_path(const char *dir, const char *kind,
+                                        const char *id,
+                                        char owner[MAX_PATH_STRING],
+                                        char path[MAX_PATH_STRING]) {
+    if (id[0] != '\0')
+        snprintf(owner, MAX_PATH_STRING, "%s:%s", kind, id);
+    else
+        snprintf(owner, MAX_PATH_STRING, "%s", kind);
+    // a cut owner does not fit the path either
+    if (app_param_config_path(dir, owner, path, MAX_PATH_STRING))
+        return true;
+    log_append_logfile("param_config: the file path for %s is too long, not "
+                       "read or written\n",
+                       owner);
+    return false;
+}
+
+// a missing file for container, once it has a param with a key. false when it
+// could not be written
+static bool app_param_config_create(const char *dir, PRM_CONTAIN *container,
+                                    const char *owner, const char *path) {
+    if (!app_param_container_keyed(container))
+        return true;
+    if (path_make_dirs(dir) != 0) {
+        log_append_logfile("param_config: %s: %s, %s not written\n", dir,
+                           strerror(errno), path);
+        return false;
+    }
+    return param_config_write(container, owner, path) != PARAM_CONFIG_FAILED;
+}
+
 // a new container reads its param config file. A missing file is written once
 // the container has a param with a key - a CLAP plugin may get its params
-// after load. The owner is "kind:id", kind alone for an id of ""; a NULL id
-// (an error) reads and writes nothing
+// after load. A NULL id (an error) reads and writes nothing
 static void app_param_config_sync(APP_INFO *app_data, PRM_CONTAIN *container,
                                   const char *kind, const char *id,
                                   bool is_new) {
@@ -1947,31 +2045,113 @@ static void app_param_config_sync(APP_INFO *app_data, PRM_CONTAIN *container,
         return;
     char owner[MAX_PATH_STRING];
     char path[MAX_PATH_STRING];
-    if (id[0] != '\0')
-        snprintf(owner, sizeof(owner), "%s:%s", kind, id);
-    else
-        snprintf(owner, sizeof(owner), "%s", kind);
-    // a cut owner does not fit the path either
-    if (!app_param_config_path(app_data->param_config_dir, owner, path,
-                               sizeof(path))) {
-        log_append_logfile("param_config: the file path for %s is too long, "
-                           "not read or written\n",
-                           owner);
+    if (!app_param_config_owner_path(app_data->param_config_dir, kind, id,
+                                     owner, path))
         return;
-    }
     if (is_new) {
         if (param_config_read(container, owner, path) != PARAM_CONFIG_MISSING)
             return;
     } else if (access(path, F_OK) == 0)
         return;
-    if (!app_param_container_keyed(container))
+    app_param_config_create(app_data->param_config_dir, container, owner, path);
+}
+
+static bool app_param_config_on(void) {
+    return param_config_app && param_config_app->param_config_dir[0] != '\0';
+}
+
+static DataAction app_param_config_reload_action(void) {
+    return (DataAction){
+        .type = DATA_ACTION_REFRESH,
+        .label = "Reload param config",
+        .tooltip = "Read the param config file again, into everything that "
+                   "shares it",
+        .enabled = app_param_config_on(),
+        .style = DATA_ACTION_STYLE_NORMAL,
+    };
+}
+
+// one owner's file, read again into each of its containers
+typedef struct {
+    const char *kind;
+    const char *id;
+    char owner[MAX_PATH_STRING];
+    char path[MAX_PATH_STRING];
+    bool missing;
+    bool failed;
+} APP_PARAM_RELOAD;
+
+// container reads the file again if it is the reload's owner's. A missing
+// file clears its user values
+static void app_param_config_reread(APP_PARAM_RELOAD *reload,
+                                    PRM_CONTAIN *container, const char *kind,
+                                    const char *id) {
+    if (!container || !id || strcmp(kind, reload->kind) != 0 ||
+        strcmp(id, reload->id) != 0)
         return;
-    if (path_make_dirs(app_data->param_config_dir) != 0) {
-        log_append_logfile("param_config: %s: %s, %s not written\n",
-                           app_data->param_config_dir, strerror(errno), path);
-        return;
+    PARAM_CONFIG_RESULT result =
+        param_config_read(container, reload->owner, reload->path);
+    if (result == PARAM_CONFIG_MISSING) {
+        reload->missing = true;
+        if (param_user_table_set(container, NULL, 0) != 0)
+            reload->failed = true;
+    } else if (result == PARAM_CONFIG_FAILED)
+        reload->failed = true;
+}
+
+// every container of container's owner reads the file again, a missing file
+// is written from container
+static DataActionResult app_param_config_reload(PRM_CONTAIN *container,
+                                                const char *kind,
+                                                const char *id) {
+    if (!app_param_config_on())
+        return DATA_ACTION_ERR_NOT_ALLOWED;
+    if (!container || !id)
+        return DATA_ACTION_ERR_INVALID;
+    APP_INFO *app_data = param_config_app;
+    APP_PARAM_RELOAD reload = {.kind = kind, .id = id};
+    if (!app_param_config_owner_path(app_data->param_config_dir, kind, id,
+                                     reload.owner, reload.path))
+        return DATA_ACTION_ERR_DATA;
+
+    app_param_config_reread(&reload,
+                            transport_param_container(app_data->transport),
+                            PARAM_CONFIG_KIND_TRK, "");
+    size_t osc_count = synth_return_osc_num(app_data->synth_data);
+    for (unsigned int i = 0; i < osc_count; i++)
+        app_param_config_reread(
+            &reload,
+            synth_osc_param_container(synth_osc_return(app_data->synth_data, i)),
+            PARAM_CONFIG_KIND_SYNTH_OSC, "");
+    for (unsigned int i = 0;; i++) {
+        void *smp = smp_sample_return(app_data->smp_data, i);
+        if (!smp)
+            break;
+        app_param_config_reread(&reload, smp_sample_param_container(smp),
+                                PARAM_CONFIG_KIND_SAMPLER, "");
     }
-    param_config_write(container, owner, path);
+    for (unsigned int i = 0;; i++) {
+        void *plug = plug_plugin_return(app_data->plug_data, i);
+        if (!plug)
+            break;
+        app_param_config_reread(&reload, plug_plugin_param_container(plug),
+                                PARAM_CONFIG_KIND_LV2, plug_plugin_uri(plug));
+    }
+    for (unsigned int i = 0;; i++) {
+        void *plug = clap_plug_plugin_return(app_data->clap_plug_data, i);
+        if (!plug)
+            break;
+        app_param_config_reread(&reload,
+                                clap_plug_plugin_param_container(plug),
+                                PARAM_CONFIG_KIND_CLAP,
+                                clap_plug_plugin_id(plug));
+    }
+
+    if (reload.missing &&
+        !app_param_config_create(app_data->param_config_dir, container,
+                                 reload.owner, reload.path))
+        reload.failed = true;
+    return reload.failed ? DATA_ACTION_ERR_DATA : DATA_ACTION_OK;
 }
 
 DataObject app_init(void) {
@@ -2025,6 +2205,7 @@ DataObject app_init(void) {
     };
     settings_read(SETTINGS_SECTION_PARAMS, params_keys,
                   sizeof(params_keys) / sizeof(params_keys[0]));
+    param_config_app = app_data;
 
     /*init the audio backend for the whole program*/
     /*--------------------------------------------------*/

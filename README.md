@@ -1,8 +1,57 @@
 # smp_groovebox
 
 ## Notes when refactor finished
+### Ports
 Latency is not calculated correctly if the external output ports are connected to the external input ports - a feedback loop is formed.
 Also, latency is incorrect if a program connected to the external ports does not report it's latency (has no latency callback function).
+Internal ports prohibit forming feedback loops.
+### Settings
+smp_groovebox searches for a config file in program's own folder/settings.json; $XDG_CONFIG_HOME/smp_groovebox/settings.json and ~/.config/smp_groovebox/settings.json, in that order.
+Change to the settings needs a restart.
+#### settings.json keys:
+parameter general settings
+{"params":
+Where to save and load the parameter config json files for each plugin, context.
+{"param_config_dir": "path_to_param_configs" }
+If this is set to a valid dir, the app saves default config files for context parameters (for example for a plugin parameters).
+~ is expanded to home for paths. Relative path is relative to the settings file's own folder.
+The user can modify those files to change the parameter display names, their value increment steps, add categories, etc.
+A saved json file will look like this:
+{
+    "format": 1,
+    "owner": "clap:org.surge-synth-team.surge-xt",
+    "load": false,
+    "params": {
+        "3742": {
+            "info": {
+                "name": "Osc 1 Pitch",
+                "increment": 0.01,
+                "default": 0.5,
+                "category": "Osc 1"
+            }
+        }
+    }
+}
+"info": is for the parameters values, and should not be changed. Modify the values, by adding the keys of the values under the "info", like this:
+{
+    "format": 1,
+    "owner": "clap:org.surge-synth-team.surge-xt",
+    "load": false,
+    "params": {
+        "3742": {
+            "info": {
+                "name": "Osc 1 Pitch",
+                "increment": 0.01,
+                "default": 0.5,
+                "category": "Osc 1"
+            },
+            "name": "Pitch",
+            "category": "Oscillators"
+        }
+    }
+}
+user parameter changes will not be loaded unless "load" is set to true
+}
 
 ## Still early development. Some parts of code can change completely.
 ## Simple groovebox for linux based systems. Works on rpi too.
