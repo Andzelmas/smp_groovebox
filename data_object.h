@@ -83,8 +83,10 @@ struct DataOps {
     uint32_t (*latency)(void *user_data);
 
     // DATA_CAP_ACTIONS - see data_actions.h for the flow and struct docs.
+    // action_list and action_do also get the DataObject's root_user_data.
     // fill *out with up to cap available actions for this object.
-    size_t (*action_list)(void *user_data, DataAction *out, size_t cap);
+    size_t (*action_list)(void *user_data, void *root_user_data,
+                          DataAction *out, size_t cap);
     // fill *out with up to cap argument specs the given action (type, id)
     // needs.
     size_t (*action_args)(void *user_data, DataActionType type, uint32_t id,
@@ -107,8 +109,8 @@ struct DataOps {
                     DataChoice *out);
     // execute the action. On success that creates a new object, *out_new is
     // set to its ContextId; otherwise *out_new is left untouched.
-    DataActionResult (*action_do)(void *user_data, const DataActionReq *req,
-                                  ContextId *out_new);
+    DataActionResult (*action_do)(void *user_data, void *root_user_data,
+                                  const DataActionReq *req, ContextId *out_new);
 };
 
 struct DataObject {
@@ -119,6 +121,9 @@ struct DataObject {
     // opaque handle owned by the data layer. The context layer only borrows it
     // and must never free or modify it.
     void *user_data;
+    // the root object's handle, the same on every object of the tree
+    // (data_child_at copies it down). Same rules as user_data.
+    void *root_user_data;
 };
 
 static inline bool data_obj_valid(const DataObject *obj) {
@@ -141,9 +146,13 @@ static inline bool data_child_at(const DataObject *obj, size_t idx,
         return false;
     out->ops = NULL;
     out->user_data = NULL;
+    out->root_user_data = NULL;
     if (!data_obj_has(obj, DATA_CAP_CHILDREN) || !obj->ops->child_at)
         return false;
-    return obj->ops->child_at(obj->user_data, idx, out);
+    if (!obj->ops->child_at(obj->user_data, idx, out))
+        return false;
+    out->root_user_data = obj->root_user_data;
+    return true;
 }
 
 static inline const char *data_name(const DataObject *obj) {
@@ -192,7 +201,7 @@ static inline size_t data_action_list(const DataObject *obj, DataAction *out,
                                       size_t cap) {
     if (!data_obj_has(obj, DATA_CAP_ACTIONS) || !obj->ops->action_list)
         return 0;
-    return obj->ops->action_list(obj->user_data, out, cap);
+    return obj->ops->action_list(obj->user_data, obj->root_user_data, out, cap);
 }
 
 static inline size_t data_action_args(const DataObject *obj,
@@ -233,5 +242,6 @@ static inline DataActionResult data_action_do(const DataObject *obj,
         *out_new = CONTEXT_ID_NULL;
     if (!data_obj_has(obj, DATA_CAP_ACTIONS) || !obj->ops->action_do || !req)
         return DATA_ACTION_ERR_INVALID;
-    return obj->ops->action_do(obj->user_data, req, out_new);
+    return obj->ops->action_do(obj->user_data, obj->root_user_data, req,
+                               out_new);
 }

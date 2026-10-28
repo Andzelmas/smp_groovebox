@@ -21,8 +21,9 @@ enum AppPluginType {
 typedef struct _app_info APP_INFO;
 
 // initialize the app_data and return the root DataObject. On failure the
-// returned object's .ops is NULL. root_obj.user_data is the APP_INFO* cast to
-// void*, kept by the caller for app_data_update / app_stop_and_clean.
+// returned object's .ops is NULL. root_obj.user_data and .root_user_data are
+// the APP_INFO* cast to void*, kept by the caller for app_data_update /
+// app_stop_and_clean.
 DataObject app_init(void);
 
 // pop the next queued data event into *out. returns false when the queue is

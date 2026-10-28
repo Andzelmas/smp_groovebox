@@ -99,10 +99,6 @@ typedef struct _app_info {
     uint32_t clap_uid_seen;
 } APP_INFO;
 
-// for the param config Reload of the contexts with params, whose user_data is
-// their module's item. Set in app_init, [main-thread] only
-static APP_INFO *param_config_app;
-
 // push one event, growing the queue if it is full
 static void app_data_push_event(APP_INFO *app_data, DataEventType type,
                                 ContextId id) {
@@ -128,7 +124,6 @@ static void app_data_push_event(APP_INFO *app_data, DataEventType type,
 static int clean_memory(APP_INFO *app_data) {
     if (!app_data)
         return -1;
-    param_config_app = NULL;
     // clean the clap plug_data memory
     if (app_data->clap_plug_data)
         clap_plug_clean_memory(app_data->clap_plug_data);
@@ -388,8 +383,9 @@ static bool cx_param_is_hidden(void *user_data) {
 // DATA_CAP_ACTIONS: every param can SET_VALUE/ADJUST_VALUE; an enum param
 // (PARAM_FLAG_ENUM) additionally gets SET_CHOICE. All three disabled if the
 // param is readonly (PARAM_FLAG_READONLY).
-static size_t cx_param_action_list(void *user_data, DataAction *out,
-                                   size_t cap) {
+static size_t cx_param_action_list(void *user_data, void *root_user_data,
+                                   DataAction *out, size_t cap) {
+    (void)root_user_data;
     PRM_CONTAIN *container;
     int val_id;
     if (!param_handle_resolve(user_data, &container, &val_id))
@@ -502,8 +498,10 @@ static bool cx_param_list_at(void *user_data, DataListId list,
     return true;
 }
 static DataActionResult cx_param_action_do(void *user_data,
+                                           void *root_user_data,
                                            const DataActionReq *req,
                                            ContextId *out_new) {
+    (void)root_user_data;
     (void)out_new; // none of these actions create anything
     if (!req)
         return DATA_ACTION_ERR_INVALID;
@@ -713,8 +711,9 @@ static bool cx_param_cat_child_at(void *user_data, size_t idx,
 }
 
 // the param config Reload, on every context with params
-static DataAction app_param_config_reload_action(void);
-static DataActionResult app_param_config_reload(PRM_CONTAIN *container,
+static DataAction app_param_config_reload_action(APP_INFO *app_data);
+static DataActionResult app_param_config_reload(APP_INFO *app_data,
+                                                PRM_CONTAIN *container,
                                                 const char *kind,
                                                 const char *id);
 
@@ -734,20 +733,22 @@ static ContextId trk_id(void *user_data) {
     (void)user_data;
     return MAKE_ID(DATA_NS_SINGLETON, SID_TRK);
 }
-static size_t trk_action_list(void *user_data, DataAction *out, size_t cap) {
+static size_t trk_action_list(void *user_data, void *root_user_data,
+                              DataAction *out, size_t cap) {
     (void)user_data;
     if (!out || cap < 1)
         return 0;
-    out[0] = app_param_config_reload_action();
+    out[0] = app_param_config_reload_action(root_user_data);
     return 1;
 }
-static DataActionResult trk_action_do(void *user_data,
+static DataActionResult trk_action_do(void *user_data, void *root_user_data,
                                       const DataActionReq *req,
                                       ContextId *out_new) {
     (void)out_new;
     if (!req || req->type != DATA_ACTION_REFRESH)
         return DATA_ACTION_ERR_INVALID;
-    return app_param_config_reload(transport_param_container(user_data),
+    return app_param_config_reload(root_user_data,
+                                   transport_param_container(user_data),
                                    PARAM_CONFIG_KIND_TRK, "");
 }
 
@@ -775,8 +776,8 @@ static ContextId sample_id(void *user_data) {
 // config. No args, no lists - action_args/list_count/list_at stay unset
 // (NULL), which the data_object.h wrappers already treat as "0 args" / "empty
 // list".
-static size_t sample_action_list(void *user_data, DataAction *out,
-                                 size_t cap) {
+static size_t sample_action_list(void *user_data, void *root_user_data,
+                                 DataAction *out, size_t cap) {
     (void)user_data;
     if (!out)
         return 0;
@@ -790,17 +791,18 @@ static size_t sample_action_list(void *user_data, DataAction *out,
             .style = DATA_ACTION_STYLE_DANGEROUS,
         };
     if (n < cap)
-        out[n++] = app_param_config_reload_action();
+        out[n++] = app_param_config_reload_action(root_user_data);
     return n;
 }
-static DataActionResult sample_action_do(void *user_data,
+static DataActionResult sample_action_do(void *user_data, void *root_user_data,
                                          const DataActionReq *req,
                                          ContextId *out_new) {
     (void)out_new; // no action creates anything
     if (!req || !user_data)
         return DATA_ACTION_ERR_INVALID;
     if (req->type == DATA_ACTION_REFRESH)
-        return app_param_config_reload(smp_sample_param_container(user_data),
+        return app_param_config_reload(root_user_data,
+                                       smp_sample_param_container(user_data),
                                        PARAM_CONFIG_KIND_SAMPLER, "");
     if (req->type != DATA_ACTION_REMOVE)
         return DATA_ACTION_ERR_INVALID;
@@ -844,9 +846,10 @@ static ContextId sampler_id(void *user_data) {
 }
 // DATA_CAP_ACTIONS: the sampler list can add a sample from a file path. One
 // PATH arg, no list - list_count/list_at stay unset.
-static size_t sampler_action_list(void *user_data, DataAction *out,
-                                  size_t cap) {
+static size_t sampler_action_list(void *user_data, void *root_user_data,
+                                  DataAction *out, size_t cap) {
     (void)user_data;
+    (void)root_user_data;
     if (!out || cap < 1)
         return 0;
     out[0] = (DataAction){
@@ -875,9 +878,10 @@ static size_t sampler_action_args(void *user_data, DataActionType type,
     };
     return 1;
 }
-static DataActionResult sampler_action_do(void *user_data,
+static DataActionResult sampler_action_do(void *user_data, void *root_user_data,
                                           const DataActionReq *req,
                                           ContextId *out_new) {
+    (void)root_user_data;
     SMP_INFO *smp_data = (SMP_INFO *)user_data;
     if (!smp_data || !req || req->type != DATA_ACTION_ADD_FILE_PATH)
         return DATA_ACTION_ERR_INVALID;
@@ -934,8 +938,9 @@ enum {
 // a loaded plugin's (lv2 or clap) action menu: Remove, Preset - loading one
 // picked from its preset list, GUI - showing or hiding the plugin's own GUI,
 // and Reload of its param config
-static size_t plugin_action_list(DataAction *out, size_t cap,
-                                 bool gui_available, bool gui_shown) {
+static size_t plugin_action_list(APP_INFO *app_data, DataAction *out,
+                                 size_t cap, bool gui_available,
+                                 bool gui_shown) {
     if (!out)
         return 0;
     size_t n = 0;
@@ -966,7 +971,7 @@ static size_t plugin_action_list(DataAction *out, size_t cap,
             .style = DATA_ACTION_STYLE_NORMAL,
         };
     if (n < cap)
-        out[n++] = app_param_config_reload_action();
+        out[n++] = app_param_config_reload_action(app_data);
     return n;
 }
 
@@ -1015,9 +1020,10 @@ static ContextId lv2_plugin_id(void *user_data) {
 }
 // DATA_CAP_ACTIONS: a loaded lv2 plugin can be removed, can load a preset
 // picked from its preset list (banks as category rows), and show its UI.
-static size_t lv2_plugin_action_list(void *user_data, DataAction *out,
-                                     size_t cap) {
-    return plugin_action_list(out, cap, plug_plugin_gui_available(user_data),
+static size_t lv2_plugin_action_list(void *user_data, void *root_user_data,
+                                     DataAction *out, size_t cap) {
+    return plugin_action_list(root_user_data, out, cap,
+                              plug_plugin_gui_available(user_data),
                               plug_plugin_gui_shown(user_data));
 }
 static size_t lv2_plugin_action_args(void *user_data,
@@ -1049,6 +1055,7 @@ static bool lv2_plugin_list_at(void *user_data, DataListId list,
     return true;
 }
 static DataActionResult lv2_plugin_action_do(void *user_data,
+                                             void *root_user_data,
                                              const DataActionReq *req,
                                              ContextId *out_new) {
     (void)out_new; // no action creates anything
@@ -1061,9 +1068,9 @@ static DataActionResult lv2_plugin_action_do(void *user_data,
         return plugin_gui_command(user_data, req->id, plug_plugin_gui_available,
                                   plug_plugin_gui_toggle);
     if (req->type == DATA_ACTION_REFRESH)
-        return app_param_config_reload(plug_plugin_param_container(user_data),
-                                       PARAM_CONFIG_KIND_LV2,
-                                       plug_plugin_uri(user_data));
+        return app_param_config_reload(
+            root_user_data, plug_plugin_param_container(user_data),
+            PARAM_CONFIG_KIND_LV2, plug_plugin_uri(user_data));
     if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
@@ -1116,9 +1123,10 @@ static ContextId lv2_plugins_id(void *user_data) {
 }
 // DATA_CAP_ACTIONS: the lv2 list can add a plugin chosen from the catalogue
 // (one CHOICE arg, list = the catalogue), and rescan that catalogue.
-static size_t lv2_plugins_action_list(void *user_data, DataAction *out,
-                                      size_t cap) {
+static size_t lv2_plugins_action_list(void *user_data, void *root_user_data,
+                                      DataAction *out, size_t cap) {
     (void)user_data;
+    (void)root_user_data;
     if (!out)
         return 0;
     size_t n = 0;
@@ -1183,8 +1191,10 @@ static bool lv2_plugins_list_at(void *user_data, DataListId list,
     return true;
 }
 static DataActionResult lv2_plugins_action_do(void *user_data,
+                                              void *root_user_data,
                                               const DataActionReq *req,
                                               ContextId *out_new) {
+    (void)root_user_data;
     PLUG_INFO *plug_data = (PLUG_INFO *)user_data;
     if (!plug_data || !req)
         return DATA_ACTION_ERR_INVALID;
@@ -1238,9 +1248,9 @@ static ContextId clap_plugin_id(void *user_data) {
 // DATA_CAP_ACTIONS: a loaded clap plugin can be removed, can load a preset
 // picked from its preset list (locations and their sub directories as
 // category rows), and show its GUI.
-static size_t clap_plugin_action_list(void *user_data, DataAction *out,
-                                      size_t cap) {
-    return plugin_action_list(out, cap,
+static size_t clap_plugin_action_list(void *user_data, void *root_user_data,
+                                      DataAction *out, size_t cap) {
+    return plugin_action_list(root_user_data, out, cap,
                               clap_plug_plugin_gui_available(user_data),
                               clap_plug_plugin_gui_shown(user_data));
 }
@@ -1273,6 +1283,7 @@ static bool clap_plugin_list_at(void *user_data, DataListId list,
     return true;
 }
 static DataActionResult clap_plugin_action_do(void *user_data,
+                                              void *root_user_data,
                                               const DataActionReq *req,
                                               ContextId *out_new) {
     (void)out_new; // no action creates anything
@@ -1288,8 +1299,8 @@ static DataActionResult clap_plugin_action_do(void *user_data,
                                   clap_plug_plugin_gui_toggle);
     if (req->type == DATA_ACTION_REFRESH)
         return app_param_config_reload(
-            clap_plug_plugin_param_container(user_data), PARAM_CONFIG_KIND_CLAP,
-            clap_plug_plugin_id(user_data));
+            root_user_data, clap_plug_plugin_param_container(user_data),
+            PARAM_CONFIG_KIND_CLAP, clap_plug_plugin_id(user_data));
     if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
@@ -1344,9 +1355,10 @@ static ContextId clap_plugins_id(void *user_data) {
 }
 // DATA_CAP_ACTIONS: the clap list can add a plugin chosen from the catalogue
 // (one CHOICE arg, list = the catalogue), and rescan that catalogue.
-static size_t clap_plugins_action_list(void *user_data, DataAction *out,
-                                       size_t cap) {
+static size_t clap_plugins_action_list(void *user_data, void *root_user_data,
+                                       DataAction *out, size_t cap) {
     (void)user_data;
+    (void)root_user_data;
     if (!out)
         return 0;
     size_t n = 0;
@@ -1411,8 +1423,10 @@ static bool clap_plugins_list_at(void *user_data, DataListId list,
     return true;
 }
 static DataActionResult clap_plugins_action_do(void *user_data,
+                                               void *root_user_data,
                                                const DataActionReq *req,
                                                ContextId *out_new) {
+    (void)root_user_data;
     CLAP_PLUG_INFO *plug_data = (CLAP_PLUG_INFO *)user_data;
     if (!plug_data || !req)
         return DATA_ACTION_ERR_INVALID;
@@ -1462,20 +1476,22 @@ static bool osc_child_at(void *user_data, size_t idx, DataObject *out) {
 static ContextId osc_id(void *user_data) {
     return MAKE_ID(DATA_NS_SYNTH_OSC, synth_osc_uid(user_data));
 }
-static size_t osc_action_list(void *user_data, DataAction *out, size_t cap) {
+static size_t osc_action_list(void *user_data, void *root_user_data,
+                              DataAction *out, size_t cap) {
     (void)user_data;
     if (!out || cap < 1)
         return 0;
-    out[0] = app_param_config_reload_action();
+    out[0] = app_param_config_reload_action(root_user_data);
     return 1;
 }
-static DataActionResult osc_action_do(void *user_data,
+static DataActionResult osc_action_do(void *user_data, void *root_user_data,
                                       const DataActionReq *req,
                                       ContextId *out_new) {
     (void)out_new;
     if (!req || req->type != DATA_ACTION_REFRESH)
         return DATA_ACTION_ERR_INVALID;
-    return app_param_config_reload(synth_osc_param_container(user_data),
+    return app_param_config_reload(root_user_data,
+                                   synth_osc_param_container(user_data),
                                    PARAM_CONFIG_KIND_SYNTH_OSC, "");
 }
 // synth_osc_name already matches DataOps.name (const char *(*)(void *))
@@ -1701,7 +1717,9 @@ static void root_extr_choice_fill(APP_INFO *app_data,
                      : 0;
 }
 
-static size_t root_action_list(void *user_data, DataAction *out, size_t cap) {
+static size_t root_action_list(void *user_data, void *root_user_data,
+                               DataAction *out, size_t cap) {
+    (void)root_user_data;
     APP_INFO *app_data = (APP_INFO *)user_data;
     if (!app_data || !out)
         return 0;
@@ -1930,9 +1948,10 @@ static DataActionResult root_extr_connect_do(APP_INFO *app_data,
     return any_failed ? DATA_ACTION_ERR_DATA : DATA_ACTION_OK;
 }
 
-static DataActionResult root_action_do(void *user_data,
+static DataActionResult root_action_do(void *user_data, void *root_user_data,
                                        const DataActionReq *req,
                                        ContextId *out_new) {
+    (void)root_user_data;
     APP_INFO *app_data = (APP_INFO *)user_data;
     (void)out_new; // none of these creates a context
     if (!app_data || !req)
@@ -2056,17 +2075,17 @@ static void app_param_config_sync(APP_INFO *app_data, PRM_CONTAIN *container,
     app_param_config_create(app_data->param_config_dir, container, owner, path);
 }
 
-static bool app_param_config_on(void) {
-    return param_config_app && param_config_app->param_config_dir[0] != '\0';
+static bool app_param_config_on(APP_INFO *app_data) {
+    return app_data && app_data->param_config_dir[0] != '\0';
 }
 
-static DataAction app_param_config_reload_action(void) {
+static DataAction app_param_config_reload_action(APP_INFO *app_data) {
     return (DataAction){
         .type = DATA_ACTION_REFRESH,
         .label = "Reload param config",
         .tooltip = "Read the param config file again, into everything that "
                    "shares it",
-        .enabled = app_param_config_on(),
+        .enabled = app_param_config_on(app_data),
         .style = DATA_ACTION_STYLE_NORMAL,
     };
 }
@@ -2101,14 +2120,14 @@ static void app_param_config_reread(APP_PARAM_RELOAD *reload,
 
 // every container of container's owner reads the file again, a missing file
 // is written from container
-static DataActionResult app_param_config_reload(PRM_CONTAIN *container,
+static DataActionResult app_param_config_reload(APP_INFO *app_data,
+                                                PRM_CONTAIN *container,
                                                 const char *kind,
                                                 const char *id) {
-    if (!app_param_config_on())
+    if (!app_param_config_on(app_data))
         return DATA_ACTION_ERR_NOT_ALLOWED;
     if (!container || !id)
         return DATA_ACTION_ERR_INVALID;
-    APP_INFO *app_data = param_config_app;
     APP_PARAM_RELOAD reload = {.kind = kind, .id = id};
     if (!app_param_config_owner_path(app_data->param_config_dir, kind, id,
                                      reload.owner, reload.path))
@@ -2205,7 +2224,6 @@ DataObject app_init(void) {
     };
     settings_read(SETTINGS_SECTION_PARAMS, params_keys,
                   sizeof(params_keys) / sizeof(params_keys[0]));
-    param_config_app = app_data;
 
     /*init the audio backend for the whole program*/
     /*--------------------------------------------------*/
@@ -2323,7 +2341,9 @@ DataObject app_init(void) {
     // now unpause the jack function again
     context_sub_wait_for_start(app_data->control_data, (void *)app_data);
 
-    DataObject root = {.ops = &root_ops, .user_data = (void *)app_data};
+    DataObject root = {.ops = &root_ops,
+                       .user_data = (void *)app_data,
+                       .root_user_data = (void *)app_data};
     return root;
 }
 

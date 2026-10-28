@@ -66,7 +66,7 @@ typedef struct _app_intrf {
     CX *cx_root;
     HashTable* cx_hashtable; //hash table that links ContextId -> CX*
 
-    void *main_user_data; // the root DataObject's user_data, kept for the
+    void *main_user_data; // the DataObjects' root_user_data, kept for the
                           // data_update / data_destroy calls
     // data function that updates its internal structures every cycle, should
     // be called first before any navigation
@@ -279,7 +279,7 @@ APP_INTRF *app_intrf_init() {
         app_intrf_destroy(app_intrf);
         return NULL;
     }
-    app_intrf->main_user_data = root_obj.user_data;
+    app_intrf->main_user_data = root_obj.root_user_data;
 
     // create the cx_root
     app_intrf->cx_root = app_intrf_cx_create(app_intrf, NULL, root_obj);
