@@ -13,6 +13,7 @@
 
 // every section the file can have, any other top-level key is logged
 #define SETTINGS_SECTION_PARAMS "params"
+#define SETTINGS_SECTION_PLUGINS "plugins"
 #define SETTINGS_SECTION_CLI "cli"
 
 typedef enum {

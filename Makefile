@@ -23,7 +23,7 @@ LIBS = -lm -ljack -lsndfile -llilv-0 $(WINDOW_LIBS)
 JALV_C = util_funcs/jalv/symap.c util_funcs/jalv/worker.c util_funcs/jalv/zix/allocator.c util_funcs/jalv/zix/allocator.h util_funcs/jalv/zix/attributes.h util_funcs/jalv/zix/ring.c
 
 #clap additional extension code
-CLAP_EXT_C = contexts/clap_ext/clap_ext_preset_load.c
+CLAP_EXT_C = contexts/clap_ext/clap_ext_preset_load.c contexts/clap_ext/clap_ext_state.c
 #the clap scanner's sources - plugin code that runs out of the app's process
 SCAN_C = contexts/clap_scan.c contexts/clap_ext/clap_ext_preset_factory.c
 #util functions

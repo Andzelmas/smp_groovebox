@@ -9,8 +9,8 @@
 #include <string.h>
 #include <unistd.h>
 
-static const char *const settings_sections[] = {SETTINGS_SECTION_PARAMS,
-                                                SETTINGS_SECTION_CLI};
+static const char *const settings_sections[] = {
+    SETTINGS_SECTION_PARAMS, SETTINGS_SECTION_PLUGINS, SETTINGS_SECTION_CLI};
 
 // dir + sub into dir_out, the settings file in it into path. True when
 // something is there - the first found is used even if it can not be read

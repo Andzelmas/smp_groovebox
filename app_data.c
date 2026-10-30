@@ -936,11 +936,11 @@ enum {
 };
 
 // a loaded plugin's (lv2 or clap) action menu: Remove, Preset - loading one
-// picked from its preset list, GUI - showing or hiding the plugin's own GUI,
-// and Reload of its param config
+// picked from its preset list, Save preset, GUI - showing or hiding the
+// plugin's own GUI, and Reload of its param config
 static size_t plugin_action_list(APP_INFO *app_data, DataAction *out,
-                                 size_t cap, bool gui_available,
-                                 bool gui_shown) {
+                                 size_t cap, bool save_available,
+                                 bool gui_available, bool gui_shown) {
     if (!out)
         return 0;
     size_t n = 0;
@@ -958,6 +958,15 @@ static size_t plugin_action_list(APP_INFO *app_data, DataAction *out,
             .label = "Preset",
             .tooltip = "Load one of this plugin's presets",
             .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_SAVE,
+            .label = "Save preset",
+            .tooltip = "Save this plugin's current state as a preset, "
+                       "replacing one of the same name",
+            .enabled = save_available,
             .style = DATA_ACTION_STYLE_NORMAL,
         };
     if (n < cap)
@@ -986,10 +995,22 @@ static DataActionResult plugin_gui_command(void *plug, uint32_t id,
     return toggle(plug) == 0 ? DATA_ACTION_OK : DATA_ACTION_ERR_DATA;
 }
 
-// the Preset action's one arg, picked from the plugin's preset list
+// the Preset action's one arg, picked from the plugin's preset list, and
+// Save preset's name
 static size_t plugin_preset_args(DataActionType type, DataListId list,
                                  DataArgSpec *out, size_t cap) {
-    if (type != DATA_ACTION_SET_CHOICE || !out || cap < 1)
+    if (!out || cap < 1)
+        return 0;
+    if (type == DATA_ACTION_SAVE) {
+        out[0] = (DataArgSpec){
+            .name = "name",
+            .label = "Preset name",
+            .kind = DATA_ARG_STRING,
+            .required = true,
+        };
+        return 1;
+    }
+    if (type != DATA_ACTION_SET_CHOICE)
         return 0;
     out[0] = (DataArgSpec){
         .name = "preset",
@@ -1008,6 +1029,13 @@ static DataActionResult plugin_preset_loaded(int loaded) {
     return loaded == 0 ? DATA_ACTION_OK : DATA_ACTION_ERR_DATA;
 }
 
+// a module's preset save result: 0 saved, -2 an empty name
+static DataActionResult plugin_preset_saved(int saved) {
+    if (saved == -2)
+        return DATA_ACTION_ERR_INVALID;
+    return saved == 0 ? DATA_ACTION_OK : DATA_ACTION_ERR_DATA;
+}
+
 // single loaded lv2 plugin. user_data is the PLUG_PLUG* from plug_plugin_return.
 static size_t lv2_plugin_child_count(void *user_data) {
     return cx_param_level_count(plug_plugin_param_container(user_data), 0);
@@ -1022,7 +1050,7 @@ static ContextId lv2_plugin_id(void *user_data) {
 // picked from its preset list (banks as category rows), and show its UI.
 static size_t lv2_plugin_action_list(void *user_data, void *root_user_data,
                                      DataAction *out, size_t cap) {
-    return plugin_action_list(root_user_data, out, cap,
+    return plugin_action_list(root_user_data, out, cap, true,
                               plug_plugin_gui_available(user_data),
                               plug_plugin_gui_shown(user_data));
 }
@@ -1071,6 +1099,9 @@ static DataActionResult lv2_plugin_action_do(void *user_data,
         return app_param_config_reload(
             root_user_data, plug_plugin_param_container(user_data),
             PARAM_CONFIG_KIND_LV2, plug_plugin_uri(user_data));
+    if (req->type == DATA_ACTION_SAVE)
+        return plugin_preset_saved(
+            plug_plugin_preset_save(user_data, req->save.name));
     if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
@@ -1251,6 +1282,7 @@ static ContextId clap_plugin_id(void *user_data) {
 static size_t clap_plugin_action_list(void *user_data, void *root_user_data,
                                       DataAction *out, size_t cap) {
     return plugin_action_list(root_user_data, out, cap,
+                              clap_plug_preset_can_save(user_data),
                               clap_plug_plugin_gui_available(user_data),
                               clap_plug_plugin_gui_shown(user_data));
 }
@@ -1301,6 +1333,12 @@ static DataActionResult clap_plugin_action_do(void *user_data,
         return app_param_config_reload(
             root_user_data, clap_plug_plugin_param_container(user_data),
             PARAM_CONFIG_KIND_CLAP, clap_plug_plugin_id(user_data));
+    if (req->type == DATA_ACTION_SAVE) {
+        if (!clap_plug_preset_can_save(user_data))
+            return DATA_ACTION_ERR_NOT_ALLOWED;
+        return plugin_preset_saved(
+            clap_plug_preset_save(user_data, req->save.name));
+    }
     if (req->type != DATA_ACTION_SET_CHOICE)
         return DATA_ACTION_ERR_INVALID;
 
@@ -1990,24 +2028,16 @@ static const DataOps root_ops = {
     .name = root_name,
 };
 
-static bool app_param_config_name_char(char c) {
-    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-           (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
-}
-
-// owner's param config file in dir, every char of owner outside
-// [A-Za-z0-9._-] as '_' - the owner inside the file tells apart two that come
-// out the same. false when it does not fit
+// owner's param config file in dir, named by path_safe_name - the owner
+// inside the file tells apart two that come out the same. false when it does
+// not fit
 static bool app_param_config_path(const char *dir, const char *owner,
                                   char *out, size_t out_len) {
-    int len = snprintf(out, out_len, "%s/%s.json", dir, owner);
-    if (len < 0 || (size_t)len >= out_len)
+    char name[MAX_PATH_STRING];
+    if (path_safe_name(owner, name, sizeof(name)) != 0)
         return false;
-    char *name = out + strlen(dir) + 1;
-    for (size_t i = 0; owner[i] != '\0'; i++)
-        if (!app_param_config_name_char(name[i]))
-            name[i] = '_';
-    return true;
+    int len = snprintf(out, out_len, "%s/%s.json", dir, name);
+    return len >= 0 && (size_t)len < out_len;
 }
 
 // a param config file lists only the params with a key
@@ -2224,6 +2254,23 @@ DataObject app_init(void) {
     };
     settings_read(SETTINGS_SECTION_PARAMS, params_keys,
                   sizeof(params_keys) / sizeof(params_keys[0]));
+    // the presets the host saves for clap plugins, "" for none
+    char clap_preset_dir[MAX_PATH_STRING] = "";
+    char data_dir[MAX_PATH_STRING];
+    if (path_user_data_dir(data_dir, sizeof(data_dir)) == 0) {
+        int len = snprintf(clap_preset_dir, sizeof(clap_preset_dir),
+                           "%s/" SETTINGS_DIR_NAME "/clap_presets", data_dir);
+        if (len < 0 || (size_t)len >= sizeof(clap_preset_dir))
+            clap_preset_dir[0] = '\0';
+    }
+    const SETTINGS_KEY plugins_keys[] = {
+        {.key = "clap_preset_dir",
+         .type = SETTINGS_PATH,
+         .out = clap_preset_dir,
+         .out_len = sizeof(clap_preset_dir)},
+    };
+    settings_read(SETTINGS_SECTION_PLUGINS, plugins_keys,
+                  sizeof(plugins_keys) / sizeof(plugins_keys[0]));
 
     /*init the audio backend for the whole program*/
     /*--------------------------------------------------*/
@@ -2293,7 +2340,7 @@ DataObject app_init(void) {
     app_data->clap_plug_data =
         clap_plug_init(buffer_size, buffer_size, samplerate, &clap_plug_errors,
                        app_data->graph, app_data->transport, app_data->hwin,
-                       DATA_NS_CLAP_PLUG);
+                       DATA_NS_CLAP_PLUG, clap_preset_dir);
     if (!(app_data->clap_plug_data)) {
         clean_memory(app_data);
         return invalid;

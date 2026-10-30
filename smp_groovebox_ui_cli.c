@@ -1059,26 +1059,29 @@ static ContextId helper_action_do_set_value(UI_LAYER *ui_layer, ContextId contex
     return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
 }
 
-// single PATH arg (ADD_FILE_PATH): cooked-mode text entry.
-static ContextId helper_action_do_path(UI_LAYER *ui_layer, ContextId context,
+// single PATH (ADD_FILE_PATH) or STRING (SAVE) arg: cooked-mode text entry.
+static ContextId helper_action_do_text(UI_LAYER *ui_layer, ContextId context,
                                        const DataAction *action, const DataArgSpec *spec,
                                        const char *label, char *msg, size_t msg_cap) {
-    char path_buf[512];
+    char text_buf[512];
     enterCookedMode();
     printf("%s: ", spec->label ? spec->label : spec->name);
     fflush(stdout);
-    bool ok = fgets(path_buf, (int)sizeof(path_buf), stdin) != NULL;
+    bool ok = fgets(text_buf, (int)sizeof(text_buf), stdin) != NULL;
     enterRawModeAgain();
     if (!ok) {
         snprintf(msg, msg_cap, "%s: cancelled.", label);
         return CONTEXT_ID_INVALID;
     }
-    size_t len = strlen(path_buf);
-    if (len > 0 && path_buf[len - 1] == '\n')
-        path_buf[len - 1] = '\0';
+    size_t len = strlen(text_buf);
+    if (len > 0 && text_buf[len - 1] == '\n')
+        text_buf[len - 1] = '\0';
 
-    DataActionReq req = {
-        .type = action->type, .id = action->id, .add_file_path.path = path_buf};
+    DataActionReq req = {.type = action->type, .id = action->id};
+    if (action->type == DATA_ACTION_SAVE)
+        req.save.name = text_buf;
+    else
+        req.add_file_path.path = text_buf;
     ContextId out_new = CONTEXT_ID_INVALID;
     DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
     helper_action_result_msg(result, label, msg, msg_cap);
@@ -1373,9 +1376,10 @@ static bool helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
         helper_action_do_direct(ui_layer, context, action, label, msg, msg_cap);
         return false;
     }
-    if (arg_count == 1 && specs[0].kind == DATA_ARG_PATH) {
+    if (arg_count == 1 &&
+        (specs[0].kind == DATA_ARG_PATH || specs[0].kind == DATA_ARG_STRING)) {
         printf("\n-- %s --\n", label);
-        helper_action_do_path(ui_layer, context, action, &specs[0], label, msg,
+        helper_action_do_text(ui_layer, context, action, &specs[0], label, msg,
                               msg_cap);
         return false;
     }

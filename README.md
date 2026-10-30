@@ -53,6 +53,17 @@ A saved json file will look like this:
 user parameter changes will not be loaded unless "load" is set to true
 }
 
+plugin settings
+{"plugins":
+Where to save the clap plugin presets made with "Save preset", a folder per plugin inside.
+{"clap_preset_dir": "path_to_clap_presets" }
+Defaults to $XDG_DATA_HOME/smp_groovebox/clap_presets, or ~/.local/share/smp_groovebox/clap_presets without XDG_DATA_HOME. "" turns saving clap presets off.
+}
+### Presets
+"Save preset" on a loaded plugin saves its current state as a preset under a name; a preset of the same name is replaced.
+LV2 presets are saved as bundles in ~/.lv2, where other LV2 hosts find them too.
+Clap has no standard place for presets saved by a host, so they go to the clap_preset_dir folder and are listed in the plugin's preset list under "User".
+
 ## Still early development. Some parts of code can change completely.
 ## Simple groovebox for linux based systems. Works on rpi too.
 Check out https://brumakes.com/programming.php for development blog and some videos.

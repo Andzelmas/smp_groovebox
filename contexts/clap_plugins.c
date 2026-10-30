@@ -33,6 +33,7 @@
 #include <unistd.h>
 
 #include "clap_ext/clap_ext_preset_load.h"
+#include "clap_ext/clap_ext_state.h"
 
 // what is the size of the buffer to get the formated param values to
 #define MAX_VALUE_LEN 64
@@ -47,6 +48,8 @@ static const char *clap_paths[] = {"/usr/lib/clap", "~/.clap", NULL};
 // the same two for indexing a plugin's presets - a big library takes a while
 #define CLAP_SCAN_PRESETS_TIMEOUT_MS 60000
 #define CLAP_SCAN_PRESETS_MAX_OUTPUT (32 << 20)
+// the top preset list category of the presets the host saved
+#define CLAP_USER_PRESETS_BRANCH "User"
 
 extern char **environ;
 
@@ -246,10 +249,13 @@ typedef struct _clap_plug_plug {
     clap_input_events_t input_events;
     clap_output_events_t output_events;
     UB_EVENT *out_list;
-    // the preset list from the plugin's preset-discovery factory, built on
-    // first browse (see clap_plug_presets_get)
+    // the preset list from the plugin's preset-discovery factory and the
+    // presets the host saved, built on first browse (see clap_plug_presets_get)
     TREE_INDEX *presets;
     bool presets_built;
+    // the plugin said its state changed, through the host's state extension.
+    // Set from any thread, nothing reads it yet
+    atomic_bool state_dirty;
     // [main-thread] the fds registered through posix-fd-support. A free slot
     // has fd -1, fds_count is one past the last used slot
     struct pollfd fds[CLAP_PLUG_FDS_MAX];
@@ -307,6 +313,7 @@ typedef struct _clap_plug_info {
         ext_params; // struct that holds functions for the params extension
     clap_host_preset_load_t ext_preset_load; // struct that holds functions for
                                              // the preset-load extension
+    clap_host_state_t ext_state;
     clap_host_latency_t ext_latency;
     clap_host_posix_fd_support_t ext_posix_fd;
     clap_host_timer_support_t ext_timer;
@@ -318,6 +325,8 @@ typedef struct _clap_plug_info {
     uint64_t owner_tag;
     // the plugin GUIs' host windows
     HWIN_SYS *hwin;
+    // the host saves presets in a folder per plugin id here, "" for none
+    char preset_dir[MAX_PATH_STRING];
     // [main-thread] epoll fd every plugin's registered fds and timerfds are
     // mirrored into, -1 if it could not be made
     int wake_epoll_fd;
@@ -1373,6 +1382,14 @@ static void clap_ext_preset_load_on_load(const clap_host_t *host,
     return;
 }
 
+// state extension, [main-thread] by the spec - not every plugin keeps to it
+static void clap_plug_ext_state_mark_dirty(const clap_host_t *host) {
+    CLAP_PLUG_PLUG *plug = (CLAP_PLUG_PLUG *)host->host_data;
+    if (!plug)
+        return;
+    atomic_store(&plug->state_dirty, true);
+}
+
 // deactivate the plugin if it is activated. The flag goes first - a plugin
 // may rescan(CLAP_PARAM_RESCAN_ALL) from inside deactivate()
 static void clap_plug_deactivate(CLAP_PLUG_PLUG *plug) {
@@ -1672,6 +1689,7 @@ static int clap_plug_plug_clean(CLAP_PLUG_INFO *plug_data, int plug_id) {
     atomic_store(&plug->requests, 0U);
     atomic_store(&plug->in_events_dropped, 0U);
     atomic_store(&plug->out_events_dropped, 0U);
+    atomic_store(&plug->state_dirty, false);
     if (plug->plug_entry) {
         if (clap_plug_return_plug_id_with_same_plug_entry(plug_data, plug) ==
             -1) {
@@ -1792,6 +1810,9 @@ static const void *clap_plug_get_extension(const clap_host_t *host,
     if (strcmp(ex_id, CLAP_EXT_PRESET_LOAD) == 0 ||
         strcmp(ex_id, CLAP_EXT_PRESET_LOAD_COMPAT) == 0) {
         return &(plug_data->ext_preset_load);
+    }
+    if (strcmp(ex_id, CLAP_EXT_STATE) == 0) {
+        return &(plug_data->ext_state);
     }
     if (strcmp(ex_id, CLAP_EXT_LATENCY) == 0) {
         return &(plug_data->ext_latency);
@@ -2419,7 +2440,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error, GRAPH *graph,
                                TRANSPORT *transport, HWIN_SYS *hwin,
-                               uint64_t owner_tag) {
+                               uint64_t owner_tag, const char *preset_dir) {
     if (!graph)
         return NULL;
     // clap_plug_init is called on [main-thread]
@@ -2435,6 +2456,8 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     plug_data->transport = transport;
     plug_data->hwin = hwin;
     plug_data->owner_tag = owner_tag;
+    snprintf(plug_data->preset_dir, sizeof(plug_data->preset_dir), "%s",
+             preset_dir ? preset_dir : "");
     // -1 (feature unavailable) is a valid outcome, not a reason to fail init
     plug_data->wake_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     plug_data->clap_plugin_list.plugin_list = NULL;
@@ -2493,6 +2516,8 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
     // preset-load extension
     plug_data->ext_preset_load.loaded = clap_ext_preset_load_on_load;
     plug_data->ext_preset_load.on_error = clap_ext_preset_load_on_error;
+    // state extension
+    plug_data->ext_state.mark_dirty = clap_plug_ext_state_mark_dirty;
     // latency extension
     plug_data->ext_latency.changed = clap_plug_ext_latency_changed;
     // posix-fd-support extension
@@ -2537,6 +2562,7 @@ CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
         atomic_init(&plug->requests, 0U);
         atomic_init(&plug->in_events_dropped, 0U);
         atomic_init(&plug->out_events_dropped, 0U);
+        atomic_init(&plug->state_dirty, false);
         plug->out_list = NULL;
     }
 
@@ -2925,6 +2951,57 @@ static void clap_plug_presets_scan(CLAP_PLUG_PLUG *plug) {
     free(out);
 }
 
+// the folder of the presets the host saved for plug, false when there is
+// none or it does not fit
+static bool clap_plug_user_preset_dir(const CLAP_PLUG_PLUG *plug,
+                                      char out[MAX_PATH_STRING]) {
+    const char *dir = plug->plug_data->preset_dir;
+    char id_safe[MAX_PATH_STRING];
+    if (dir[0] == '\0' ||
+        path_safe_name(plug->plugin_id, id_safe, sizeof(id_safe)) != 0)
+        return false;
+    int len = snprintf(out, MAX_PATH_STRING, "%s/%s", dir, id_safe);
+    return len >= 0 && len < MAX_PATH_STRING;
+}
+
+// add the preset file at path to the preset list, under the user category
+static void clap_plug_user_preset_add(CLAP_PLUG_PLUG *plug, const char *path) {
+    char name[MAX_PATH_STRING];
+    char identity[MAX_PATH_STRING + 1];
+    if (!clap_ext_state_file_name(path, plug->plugin_id, name, sizeof(name)) ||
+        clap_ext_state_identity(identity, sizeof(identity), path) >=
+            sizeof(identity))
+        return;
+    uint64_t branch =
+        tree_index_branch(plug->presets, 0, CLAP_USER_PRESETS_BRANCH);
+    if (branch)
+        tree_index_leaf(plug->presets, branch, name, identity);
+}
+
+static int clap_plug_user_preset_filter(const struct dirent *entry) {
+    size_t len = strlen(entry->d_name);
+    size_t ext_len = strlen(CLAP_HOST_PRESET_EXT);
+    return len > ext_len &&
+           strcmp(entry->d_name + len - ext_len, CLAP_HOST_PRESET_EXT) == 0;
+}
+
+// adds the presets the host saved for plug to the preset list, by file name
+static void clap_plug_user_presets_scan(CLAP_PLUG_PLUG *plug) {
+    char dir[MAX_PATH_STRING];
+    if (!clap_plug_user_preset_dir(plug, dir))
+        return;
+    struct dirent **entries = NULL;
+    int count = scandir(dir, &entries, clap_plug_user_preset_filter, alphasort);
+    for (int i = 0; i < count; i++) {
+        char path[MAX_PATH_STRING];
+        int len = snprintf(path, sizeof(path), "%s/%s", dir, entries[i]->d_name);
+        if (len >= 0 && len < (int)sizeof(path))
+            clap_plug_user_preset_add(plug, path);
+        free(entries[i]);
+    }
+    free(entries);
+}
+
 // the preset list, read the first time it is asked for. NULL (no presets)
 // when the index cannot be allocated - the next browse tries again
 static TREE_INDEX *clap_plug_presets_get(CLAP_PLUG_PLUG *plug) {
@@ -2939,6 +3016,7 @@ static TREE_INDEX *clap_plug_presets_get(CLAP_PLUG_PLUG *plug) {
         // also when there are none, so they are not looked for on every browse
         plug->presets_built = true;
         tree_index_reset(plug->presets);
+        clap_plug_user_presets_scan(plug);
         clap_plug_presets_scan(plug);
         tree_index_finish(plug->presets);
     }
@@ -2954,6 +3032,89 @@ bool clap_plug_presets_level_at(void *plug, uint64_t branch, size_t idx,
     return tree_index_level_at(clap_plug_presets_get(plug), branch, idx, out);
 }
 
+// load the preset file at path, one the host saved
+static bool clap_plug_user_preset_load(CLAP_PLUG_PLUG *plug, const char *path) {
+    CLAP_PLUG_INFO *plug_data = plug->plug_data;
+    void *data = NULL;
+    size_t size = 0;
+    if (!clap_ext_state_file_read(path, plug->plugin_id, &data, &size)) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "Could not read preset %s\n", path);
+        return false;
+    }
+    bool loaded = clap_ext_state_load(plug->plug_inst,
+                                      CLAP_STATE_CONTEXT_FOR_PRESET, data, size);
+    free(data);
+    if (!loaded)
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "%s did not load preset %s\n", plug->name, path);
+    return loaded;
+}
+
+bool clap_plug_preset_can_save(void *plug) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    return cur_plug && cur_plug->plug_inst && cur_plug->plug_data &&
+           cur_plug->plug_data->preset_dir[0] != '\0' &&
+           clap_ext_state_available(cur_plug->plug_inst);
+}
+
+int clap_plug_preset_save(void *plug, const char *name) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!clap_plug_preset_can_save(plug))
+        return -1;
+    if (!name || name[0] == '\0')
+        return -2;
+    CLAP_PLUG_INFO *plug_data = cur_plug->plug_data;
+    char dir[MAX_PATH_STRING];
+    char name_safe[MAX_PATH_STRING];
+    char path[MAX_PATH_STRING];
+    if (!clap_plug_user_preset_dir(cur_plug, dir) ||
+        path_safe_name(name, name_safe, sizeof(name_safe)) != 0)
+        return -1;
+    int len = snprintf(path, sizeof(path), "%s/%s%s", dir, name_safe,
+                       CLAP_HOST_PRESET_EXT);
+    if (len < 0 || len >= (int)sizeof(path))
+        return -1;
+    if (path_make_dirs(dir) != 0) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "%s: %s, preset not saved\n", dir,
+                             strerror(errno));
+        return -1;
+    }
+    void *data = NULL;
+    size_t size = 0;
+    if (!clap_ext_state_save(cur_plug->plug_inst, CLAP_STATE_CONTEXT_FOR_PRESET,
+                             &data, &size)) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "%s did not save its state\n", cur_plug->name);
+        return -1;
+    }
+    bool written =
+        clap_ext_state_file_write(path, cur_plug->plugin_id, name, data, size);
+    free(data);
+    if (!written) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "Could not write preset %s\n", path);
+        return -1;
+    }
+    // into the lists already built - building one again runs the scanner
+    for (int i = 0; i < MAX_INSTANCES; i++) {
+        CLAP_PLUG_PLUG *other = &plug_data->plugins[i];
+        if (!other->plug_inst || !other->presets_built ||
+            strcmp(other->plugin_id, cur_plug->plugin_id) != 0)
+            continue;
+        clap_plug_user_preset_add(other, path);
+        if (tree_index_finish(other->presets) != 0)
+            clap_plug_presets_clear(other);
+    }
+    return 0;
+}
+
 int clap_plug_preset_load(void *plug, uint64_t key) {
     CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
     if (!cur_plug || !cur_plug->plug_inst)
@@ -2961,7 +3122,9 @@ int clap_plug_preset_load(void *plug, uint64_t key) {
     const char *identity = tree_index_leaf_identity(cur_plug->presets, key);
     if (!identity)
         return -2;
-    if (!clap_ext_preset_load(cur_plug->plug_inst, identity))
+    const char *path = clap_ext_state_identity_path(identity);
+    if (path ? !clap_plug_user_preset_load(cur_plug, path)
+             : !clap_ext_preset_load(cur_plug->plug_inst, identity))
         return -1;
     // not every plugin reports the new values (rescan or events) - u-he does
     // not after the first load. Harmless when the plugin loads async (Surge),

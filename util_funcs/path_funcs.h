@@ -16,3 +16,9 @@ int path_exe_dir(char* out, size_t out_len);
 //make the folder path and every missing one above it, like mkdir -p. -1 (errno
 //set) when path is not a folder afterwards
 int path_make_dirs(const char* path);
+//name as one file name into out: every char outside [A-Za-z0-9._-], and a leading '.',
+//as '_'. -1 when name is empty or does not fit
+int path_safe_name(const char* name, char* out, size_t out_len);
+//the user's data folder: $XDG_DATA_HOME when it is absolute, else ~/.local/share. -1
+//when HOME is not set or it does not fit
+int path_user_data_dir(char* out, size_t out_len);

@@ -38,6 +38,7 @@
 #include "../util_funcs/intern_table.h"
 #include "../util_funcs/log_funcs.h"
 #include "../util_funcs/midi_buf.h"
+#include "../util_funcs/path_funcs.h"
 #include "../util_funcs/string_funcs.h"
 // a simple macro to get the max of the two values
 #ifndef MAX
@@ -49,6 +50,8 @@
 // this module - the name leaves as a const char* so callers need no matching
 // define.
 #define PLUG_PLUGIN_NAME_MAX 128
+// saved presets go here, a bundle each - every LV2 host looks there
+#define PLUG_PRESET_DIR "~/.lv2"
 // buffer cycles for ui, for example to get the buffer_size we midi_buf_size *
 // N_BUFFER_CYCLES
 #define N_BUFFER_CYCLES 4
@@ -382,6 +385,8 @@ typedef struct _plug_plug {
     bool presets_built;
     // port symbol -> index in ports, for restoring a preset's port values
     INTERN_TABLE port_symbols;
+    // [main-thread] the value plug_get_port_value last handed out
+    float state_port_value;
     // property URID -> param, sorted by URID. Built at load, read by the
     // [audio-thread] for the plugin's patch:Set and patch:Put messages and by
     // [main-thread] for its UI's patch:Set
@@ -1262,6 +1267,30 @@ static void plug_set_value_direct(const char *port_symbol, void *data,
         port->control = fvalue;
 }
 
+// LilvGetPortValueFunc - a control input's value, for a state. Its param's,
+// [audio-thread] writes port->control
+static const void *plug_get_port_value(const char *port_symbol,
+                                       void *user_data, uint32_t *size,
+                                       uint32_t *type) {
+    PLUG_PLUG *plug = (PLUG_PLUG *)user_data;
+    PLUG_PORT *port = plug_find_port_by_name(plug, port_symbol);
+    if (!port || port->type != PORT_TYPE_CONTROL ||
+        port->flow != PORT_FLOW_INPUT) {
+        *size = 0;
+        *type = 0;
+        return NULL;
+    }
+    // without a param only [main-thread] writes it, while the plugin is stopped
+    plug->state_port_value =
+        port->param_index < 0 || !plug->plug_params
+            ? port->control
+            : (float)param_get_value(plug->plug_params, port->param_index, 0);
+    *size = sizeof(float);
+    *type = plug->forge.Float;
+    // lilv copies it before the next call
+    return &(plug->state_port_value);
+}
+
 int plug_plugin_preset_load(void *plug, uint64_t key) {
     PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
     if (!cur_plug || !cur_plug->plug_instance || !cur_plug->plug_data)
@@ -1313,6 +1342,75 @@ int plug_plugin_preset_load(void *plug, uint64_t key) {
         lilv_state_free(cur_plug->preset);
     }
     cur_plug->preset = state;
+    return 0;
+}
+
+// a saved preset's bundle in PLUG_PRESET_DIR, "<plugin>_<name>.preset.lv2/" -
+// a bundle URI ends in '/' - and its file in there. false when they do not fit
+static bool plug_preset_paths(const PLUG_PLUG *plug, const char *name,
+                              char bundle[MAX_PATH_STRING],
+                              char file[MAX_PATH_STRING]) {
+    const char *plug_name = plug->name + plug->name_at;
+    if (plug_name[0] == '\0')
+        plug_name = plug_preset_uri_tail(
+            lilv_node_as_uri(lilv_plugin_get_uri(plug->plug)));
+    char dir[MAX_PATH_STRING];
+    char plug_safe[MAX_PATH_STRING];
+    char name_safe[MAX_PATH_STRING];
+    if (path_expand_home(PLUG_PRESET_DIR, dir, sizeof(dir)) != 0 ||
+        path_safe_name(plug_name, plug_safe, sizeof(plug_safe)) != 0 ||
+        path_safe_name(name, name_safe, sizeof(name_safe)) != 0)
+        return false;
+    int len = snprintf(bundle, MAX_PATH_STRING, "%s/%s_%s.preset.lv2/", dir,
+                       plug_safe, name_safe);
+    if (len < 0 || len >= MAX_PATH_STRING)
+        return false;
+    len = snprintf(file, MAX_PATH_STRING, "%s.ttl", name_safe);
+    return len >= 0 && len < MAX_PATH_STRING;
+}
+
+int plug_plugin_preset_save(void *plug, const char *name) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug || !cur_plug->plug_instance || !cur_plug->plug_data)
+        return -1;
+    if (!name || name[0] == '\0')
+        return -2;
+    char bundle[MAX_PATH_STRING];
+    char file[MAX_PATH_STRING];
+    if (!plug_preset_paths(cur_plug, name, bundle, file))
+        return -1;
+    PLUG_INFO *plug_data = cur_plug->plug_data;
+    LilvWorld *world = plug_data->lv_world;
+
+    // the plugin's save() may run next to its run(), no pause. Files it saves
+    // go into the bundle
+    LilvState *state = lilv_state_new_from_instance(
+        cur_plug->plug, cur_plug->plug_instance, &(cur_plug->map), NULL,
+        bundle, bundle, bundle, plug_get_port_value, cur_plug,
+        LV2_STATE_IS_POD | LV2_STATE_IS_PORTABLE, NULL);
+    if (!state)
+        return -1;
+    lilv_state_set_label(state, name);
+    int err = lilv_state_save(world, &(cur_plug->map), &(cur_plug->unmap),
+                              state, NULL, bundle, file);
+    lilv_state_free(state);
+    if (err != 0) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             is_audio_thread, "Could not save preset %s%s\n",
+                             bundle, file);
+        return -1;
+    }
+
+    // unloaded first, a loaded bundle is not read again
+    LilvNode *bundle_uri = lilv_new_file_uri(world, NULL, bundle);
+    if (!bundle_uri)
+        return -1;
+    lilv_world_unload_bundle(world, bundle_uri);
+    lilv_world_load_bundle(world, bundle_uri);
+    lilv_node_free(bundle_uri);
+    for (int i = 0; i < MAX_INSTANCES; i++)
+        if (plug_data->plugins[i].plug == cur_plug->plug)
+            plug_presets_clear(&plug_data->plugins[i]);
     return 0;
 }
 
@@ -2556,23 +2654,6 @@ static void plug_ports_connect(PLUG_PLUG *plug) {
             cur_port->type == PORT_TYPE_UNKNOWN)
             lilv_instance_connect_port(plug->plug_instance, i, NULL);
     }
-}
-
-// LilvGetPortValueFunc - a control input's value, for a state
-static const void *plug_get_port_value(const char *port_symbol,
-                                       void *user_data, uint32_t *size,
-                                       uint32_t *type) {
-    PLUG_PLUG *plug = (PLUG_PLUG *)user_data;
-    PLUG_PORT *port = plug_find_port_by_name(plug, port_symbol);
-    if (!port || port->type != PORT_TYPE_CONTROL ||
-        port->flow != PORT_FLOW_INPUT) {
-        *size = 0;
-        *type = 0;
-        return NULL;
-    }
-    *size = sizeof(float);
-    *type = plug->forge.Float;
-    return &(port->control);
 }
 
 // [main-thread] a reference on the plugin's loaded library, NULL when it is

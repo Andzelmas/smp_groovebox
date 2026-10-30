@@ -141,3 +141,34 @@ int path_make_dirs(const char* path){
     }
     return 0;
 }
+
+static int path_safe_char(char c){
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+	(c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+}
+
+int path_safe_name(const char* name, char* out, size_t out_len){
+    if(!name || !out || name[0] == '\0')return -1;
+    size_t len = strlen(name);
+    if(len >= out_len)return -1;
+    for(size_t i = 0; i < len; i++)
+	out[i] = path_safe_char(name[i]) && !(i == 0 && name[i] == '.') ? name[i] : '_';
+    out[len] = '\0';
+    return 0;
+}
+
+int path_user_data_dir(char* out, size_t out_len){
+    if(!out || out_len == 0)return -1;
+    //a relative or empty XDG_DATA_HOME is ignored
+    const char* xdg = getenv("XDG_DATA_HOME");
+    int len;
+    if(xdg && xdg[0] == '/')
+	len = snprintf(out, out_len, "%s", xdg);
+    else{
+	const char* home = getenv("HOME");
+	if(!home || home[0] == '\0')return -1;
+	len = snprintf(out, out_len, "%s/.local/share", home);
+    }
+    if(len < 0 || (size_t)len >= out_len)return -1;
+    return 0;
+}

@@ -33,29 +33,42 @@ int clap_read_rt_to_ui_messages(CLAP_PLUG_INFO *plug_data);
 int clap_plug_wake_fd(CLAP_PLUG_INFO *plug_data);
 
 // presets --------------------------------------------------
-// A loaded plugin's presets from its preset-discovery factory, browsed one
-// level at a time: categories first (a location, then its sub directories),
-// then presets. branch is 0 for the top level, or a category row's key. Built
-// the first time it is browsed and kept until clap_plug_plugin_list_init or
-// the plugin is removed. A row's name is valid until then too.
+// A loaded plugin's presets from its preset-discovery factory, and the ones
+// clap_plug_preset_save saved in a "User" category, browsed one level at a
+// time: categories first (a location, then its sub directories), then
+// presets. branch is 0 for the top level, or a category row's key. Built the
+// first time it is browsed and kept until clap_plug_plugin_list_init or the
+// plugin is removed - a preset save adds to it. A row's name is valid until
+// then too.
 size_t clap_plug_presets_level_count(void *plug, uint64_t branch);
 bool clap_plug_presets_level_at(void *plug, uint64_t branch, size_t idx,
                                 TREE_ROW *out);
 
 // load the preset with this key (a preset row's key) through the plugin's
-// preset-load extension. 0 on success, -1 when it failed to load, -2 when no
-// preset has this key
+// preset-load extension, or its state extension for a preset the host saved.
+// 0 on success, -1 when it failed to load, -2 when no preset has this key
 int clap_plug_preset_load(void *plug, uint64_t key);
+
+// [main-thread] the plugin has a state extension and there is a folder for
+// the presets the host saves
+bool clap_plug_preset_can_save(void *plug);
+
+// [main-thread] save the plugin's state as a preset named name, in the host's
+// preset folder - it replaces the preset saved under the same name. Every
+// instance of the plugin lists it. 0 on success, -1 when it could not be
+// saved, -2 for an empty name
+int clap_plug_preset_save(void *plug, const char *name);
 //--------------------------------------------------
 
 // initiate the main plugin data struct. A plugin is a node of graph, owned by
 // (owner_tag, the plugin's uid). clap_process.transport follows transport.
-// Plugin GUIs are shown with hwin
+// Plugin GUIs are shown with hwin. The host saves presets in preset_dir, a
+// folder per plugin; NULL or "" saves none
 CLAP_PLUG_INFO *clap_plug_init(uint32_t min_buffer_size,
                                uint32_t max_buffer_size, SAMPLE_T samplerate,
                                clap_plug_status_t *plug_error, GRAPH *graph,
                                TRANSPORT *transport, HWIN_SYS *hwin,
-                               uint64_t owner_tag);
+                               uint64_t owner_tag, const char *preset_dir);
 
 // [main-thread] the values plugins are activated with. Every activated plugin
 // restarts with them. A plugin runs nothing for nframes outside [min, max].
