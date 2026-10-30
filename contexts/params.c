@@ -1334,22 +1334,16 @@ uint32_t param_category_intern_path(PRM_CONTAIN *param_container,
     if (!param_container || !path)
         return 0;
     uint32_t parent_uid = 0;
-    const char *seg = path;
-    while (*seg) {
-        const char *end = sep != '\0' ? strchr(seg, sep) : NULL;
-        size_t len = end ? (size_t)(end - seg) : strlen(seg);
-        if (len > 0) {
-            char name[MAX_CATEGORY_SEGMENT];
-            str_utf8_copy(name, sizeof(name), seg, len);
-            uint32_t uid =
-                param_category_intern(param_container, parent_uid, name);
-            if (uid == 0)
-                return parent_uid;
-            parent_uid = uid;
-        }
-        if (!end)
-            break;
-        seg = end + 1;
+    size_t pos = 0;
+    const char *seg;
+    size_t len;
+    while (str_segment_next(path, sep, &pos, &seg, &len)) {
+        char name[MAX_CATEGORY_SEGMENT];
+        str_utf8_copy(name, sizeof(name), seg, len);
+        uint32_t uid = param_category_intern(param_container, parent_uid, name);
+        if (uid == 0)
+            return parent_uid;
+        parent_uid = uid;
     }
     return parent_uid;
 }

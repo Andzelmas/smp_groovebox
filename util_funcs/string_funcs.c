@@ -63,6 +63,44 @@ size_t str_utf8_copy(char *out, size_t cap, const char *src, size_t len) {
     return len;
 }
 
+bool str_segment_next(const char *s, char sep, size_t *pos, const char **seg,
+                      size_t *len) {
+    if (!s || !pos)
+        return false;
+    size_t i = *pos;
+    while (s[i] != '\0' && s[i] == sep)
+        i++;
+    size_t start = i;
+    while (s[i] != '\0' && s[i] != sep)
+        i++;
+    *pos = s[i] != '\0' ? i + 1 : i;
+    if (i == start)
+        return false;
+    *seg = s + start;
+    *len = i - start;
+    return true;
+}
+
+int str_segments_tidy(char *out, size_t cap, const char *s, char sep) {
+    if (!out || cap == 0)
+        return -1;
+    size_t n = 0;
+    size_t pos = 0;
+    const char *seg;
+    size_t len;
+    while (str_segment_next(s, sep, &pos, &seg, &len)) {
+        size_t need = (n > 0) + len;
+        if (n + need >= cap)
+            return -1;
+        if (n > 0)
+            out[n++] = sep;
+        memcpy(out + n, seg, len);
+        n += len;
+    }
+    out[n] = '\0';
+    return 0;
+}
+
 void str_combine_str_int(char **string_in, int num) {
     char *ret_string = NULL;
     if (!(*string_in))

@@ -1,5 +1,6 @@
 #include "tree_index.h"
 #include "intern_table.h"
+#include "string_funcs.h"
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -164,6 +165,35 @@ uint64_t tree_index_leaf(TREE_INDEX *tree, uint64_t branch, const char *name,
     *node = (TREE_NODE){.key = key, .parent = level, .name = name_offset};
     intern_set_slot(&tree->leaf_keys, key, tree->leaf_count - 1);
     tree->finished = false;
+    return key;
+}
+
+uint64_t tree_index_leaf_path(TREE_INDEX *tree, uint64_t branch,
+                              const char *path, char sep,
+                              const char *identity) {
+    if (!tree || !path)
+        return 0;
+    // the segments are NUL terminated in the copy as they come
+    char *copy = strdup(path);
+    if (!copy)
+        return 0;
+    char *name = NULL;
+    bool placed = true;
+    size_t pos = 0;
+    const char *seg;
+    size_t len;
+    while (placed && str_segment_next(copy, sep, &pos, &seg, &len)) {
+        // the one before is a branch
+        if (name) {
+            branch = tree_index_branch(tree, branch, name);
+            placed = branch != 0;
+        }
+        name = copy + (seg - copy);
+        name[len] = '\0';
+    }
+    uint64_t key =
+        placed && name ? tree_index_leaf(tree, branch, name, identity) : 0;
+    free(copy);
     return key;
 }
 

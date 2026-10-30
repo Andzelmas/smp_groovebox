@@ -7,7 +7,8 @@
 // browsed one level at a time. A level lists its sub-branches first, then its
 // leaves, each in the order they were first added.
 // Nesting is the owner's convention: it walks its own path syntax and calls
-// tree_index_branch once per level
+// tree_index_branch once per level, or hands a path and its separator to
+// tree_index_leaf_path
 // Keys are minted per name (see intern_table) and survive tree_index_reset,
 // so a rebuilt tree hands out the same key for the same branch or leaf. Keys
 // start at 1, branch key 0 is the top level.
@@ -36,6 +37,14 @@ uint64_t tree_index_branch(TREE_INDEX *tree, uint64_t parent,
 // already added, branch not in the index, or allocation failure
 uint64_t tree_index_leaf(TREE_INDEX *tree, uint64_t branch, const char *name,
                          const char *identity);
+
+// tree_index_leaf named by the last segment of path split at sep (see
+// str_segment_next), under a branch per segment before it, the first under
+// `branch`. Returns the leaf's key, 0 when it was not added - path has no
+// segment, or tree_index_branch or tree_index_leaf failed
+uint64_t tree_index_leaf_path(TREE_INDEX *tree, uint64_t branch,
+                              const char *path, char sep,
+                              const char *identity);
 
 // lay the levels out for browsing - until then every level is empty. A branch
 // with no leaf anywhere under it is left out. 0 on success, -1 on failure

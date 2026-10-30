@@ -61,8 +61,10 @@ Defaults to $XDG_DATA_HOME/smp_groovebox/clap_presets, or ~/.local/share/smp_gro
 }
 ### Presets
 "Save preset" on a loaded plugin saves its current state as a preset under a name; a preset of the same name is replaced.
-LV2 presets are saved as bundles in ~/.lv2, where other LV2 hosts find them too.
-Clap has no standard place for presets saved by a host, so they go to the clap_preset_dir folder and are listed in the plugin's preset list under "User".
+Saved presets are listed in the plugin's preset list under "User". A "/" in the name puts the preset into categories there: "keys/piano_1" is listed as User/keys/piano_1.
+Since the file name is made safe by replacing weird symbols with "_" "keys/piano_1" and "keys_piano_1" will make a single preset file (the second will overwrite the first).
+LV2 presets are saved as bundles in ~/.lv2, where other LV2 hosts find them too (they show the whole name, "keys/piano_1").
+Clap has no standard place for presets saved by a host, so they go to the clap_preset_dir folder.
 
 ## Still early development. Some parts of code can change completely.
 ## Simple groovebox for linux based systems. Works on rpi too.

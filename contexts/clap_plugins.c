@@ -50,6 +50,8 @@ static const char *clap_paths[] = {"/usr/lib/clap", "~/.clap", NULL};
 #define CLAP_SCAN_PRESETS_MAX_OUTPUT (32 << 20)
 // the top preset list category of the presets the host saved
 #define CLAP_USER_PRESETS_BRANCH "User"
+// splits a saved preset's name into categories under it ("keys/piano_1")
+#define CLAP_USER_PRESET_SEP '/'
 
 extern char **environ;
 
@@ -2964,7 +2966,8 @@ static bool clap_plug_user_preset_dir(const CLAP_PLUG_PLUG *plug,
     return len >= 0 && len < MAX_PATH_STRING;
 }
 
-// add the preset file at path to the preset list, under the user category
+// add the preset file at path to the preset list, under the user category and
+// the ones in its name
 static void clap_plug_user_preset_add(CLAP_PLUG_PLUG *plug, const char *path) {
     char name[MAX_PATH_STRING];
     char identity[MAX_PATH_STRING + 1];
@@ -2975,7 +2978,8 @@ static void clap_plug_user_preset_add(CLAP_PLUG_PLUG *plug, const char *path) {
     uint64_t branch =
         tree_index_branch(plug->presets, 0, CLAP_USER_PRESETS_BRANCH);
     if (branch)
-        tree_index_leaf(plug->presets, branch, name, identity);
+        tree_index_leaf_path(plug->presets, branch, name, CLAP_USER_PRESET_SEP,
+                             identity);
 }
 
 static int clap_plug_user_preset_filter(const struct dirent *entry) {
@@ -3064,14 +3068,19 @@ int clap_plug_preset_save(void *plug, const char *name) {
     CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
     if (!clap_plug_preset_can_save(plug))
         return -1;
-    if (!name || name[0] == '\0')
+    // a trailing separator leaves no name for the preset itself
+    if (!name || name[0] == '\0' ||
+        name[strlen(name) - 1] == CLAP_USER_PRESET_SEP)
         return -2;
     CLAP_PLUG_INFO *plug_data = cur_plug->plug_data;
     char dir[MAX_PATH_STRING];
+    char tidy[MAX_PATH_STRING];
     char name_safe[MAX_PATH_STRING];
     char path[MAX_PATH_STRING];
+    // "a//b" and "a/b" are one preset
     if (!clap_plug_user_preset_dir(cur_plug, dir) ||
-        path_safe_name(name, name_safe, sizeof(name_safe)) != 0)
+        str_segments_tidy(tidy, sizeof(tidy), name, CLAP_USER_PRESET_SEP) != 0 ||
+        path_safe_name(tidy, name_safe, sizeof(name_safe)) != 0)
         return -1;
     int len = snprintf(path, sizeof(path), "%s/%s%s", dir, name_safe,
                        CLAP_HOST_PRESET_EXT);
@@ -3094,7 +3103,7 @@ int clap_plug_preset_save(void *plug, const char *name) {
         return -1;
     }
     bool written =
-        clap_ext_state_file_write(path, cur_plug->plugin_id, name, data, size);
+        clap_ext_state_file_write(path, cur_plug->plugin_id, tidy, data, size);
     free(data);
     if (!written) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,

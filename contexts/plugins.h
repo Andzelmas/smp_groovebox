@@ -55,8 +55,9 @@ uint64_t plug_plugin_list_item_key(void *plug_list_item);
 void *plug_plugin_list_item_by_key(PLUG_INFO *plug_data, uint64_t key);
 
 // presets --------------------------------------------------
-// A loaded plugin's presets, browsed one level at a time: banks first, then
-// the presets outside any bank. branch is 0 for the top level, or a bank row's
+// A loaded plugin's presets, browsed one level at a time: categories first -
+// "User" with the ones plug_plugin_preset_save saved, then banks - then the
+// presets outside any. branch is 0 for the top level, or a category row's
 // key. Built the first time it is browsed and kept until
 // plug_plugin_list_init, a preset save or the plugin is removed. A row's name
 // is valid until then too.
@@ -70,8 +71,9 @@ int plug_plugin_preset_load(void *plug, uint64_t key);
 
 // save the plugin's current state as a preset named name, a bundle in ~/.lv2
 // - it replaces the preset saved under the same name. Every instance of the
-// plugin lists it. 0 on success, -1 when it failed to save, -2 for an empty
-// name
+// plugin lists it under "User", a name like "keys/piano_1" in categories
+// there. 0 on success, -1 when it failed to save, -2 for an empty name or one
+// ending in '/'
 int plug_plugin_preset_save(void *plug, const char *name);
 //--------------------------------------------------
 

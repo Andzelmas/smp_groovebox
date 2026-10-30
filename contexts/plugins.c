@@ -52,6 +52,11 @@
 #define PLUG_PLUGIN_NAME_MAX 128
 // saved presets go here, a bundle each - every LV2 host looks there
 #define PLUG_PRESET_DIR "~/.lv2"
+// marks the presets the app saved: listed under PLUG_USER_PRESETS_BRANCH, with
+// their label split into categories at PLUG_USER_PRESET_SEP ("keys/piano_1")
+#define PLUG_USER_PRESET_URI "urn:smp-groovebox:userPreset"
+#define PLUG_USER_PRESETS_BRANCH "User"
+#define PLUG_USER_PRESET_SEP '/'
 // buffer cycles for ui, for example to get the buffer_size we midi_buf_size *
 // N_BUFFER_CYCLES
 #define N_BUFFER_CYCLES 4
@@ -130,6 +135,7 @@ typedef struct _plug_nodes {
     LilvNode *rdfs_label;
     LilvNode *rdfs_range;
     LilvNode *rsz_minimumSize;
+    LilvNode *smp_userPreset;
     LilvNode *ui_fixedSize;
     LilvNode *ui_noUserResize;
     LilvNode *ui_showInterface;
@@ -160,6 +166,7 @@ typedef struct _plug_urids {
     LV2_URID patch_body;
     LV2_URID patch_property;
     LV2_URID patch_value;
+    LV2_URID smp_userPreset;
     LV2_URID time_Position;
     LV2_URID time_bar;
     LV2_URID time_barBeat;
@@ -805,6 +812,7 @@ static void plug_init_nodes(LilvWorld *const world, PLUG_NODES *const nodes) {
     nodes->rdfs_label = lilv_new_uri(world, LILV_NS_RDFS "label");
     nodes->rdfs_range = lilv_new_uri(world, LILV_NS_RDFS "range");
     nodes->rsz_minimumSize = lilv_new_uri(world, LV2_RESIZE_PORT__minimumSize);
+    nodes->smp_userPreset = lilv_new_uri(world, PLUG_USER_PRESET_URI);
     nodes->ui_fixedSize = lilv_new_uri(world, LV2_UI__fixedSize);
     nodes->ui_noUserResize = lilv_new_uri(world, LV2_UI__noUserResize);
     nodes->ui_showInterface = lilv_new_uri(world, LV2_UI__showInterface);
@@ -837,6 +845,7 @@ static void plug_init_urids(Symap *const symap, PLUG_URIDS *const urids) {
     urids->patch_body = symap_map(symap, LV2_PATCH__body);
     urids->patch_property = symap_map(symap, LV2_PATCH__property);
     urids->patch_value = symap_map(symap, LV2_PATCH__value);
+    urids->smp_userPreset = symap_map(symap, PLUG_USER_PRESET_URI);
     urids->time_Position = symap_map(symap, LV2_TIME__Position);
     urids->time_bar = symap_map(symap, LV2_TIME__bar);
     urids->time_barBeat = symap_map(symap, LV2_TIME__barBeat);
@@ -1150,9 +1159,10 @@ static const char *plug_preset_uri_tail(const char *uri) {
     return tail;
 }
 
-// add one preset to the preset list. Its own file is only read when the
-// manifest gives it no rdfs:label, so a pset:bank that is only in that file is
-// only seen then
+// add one preset to the preset list: one the app saved under the user
+// category and the ones in its label, any other under its bank. Its own file
+// is only read when the manifest gives it no rdfs:label, so a pset:bank or the
+// app's mark that is only in that file is only seen then
 static void plug_presets_add(PLUG_PLUG *plug, const LilvNode *preset) {
     LilvWorld *world = plug->plug_data->lv_world;
     PLUG_NODES *nodes = &plug->plug_data->nodes;
@@ -1165,22 +1175,32 @@ static void plug_presets_add(PLUG_PLUG *plug, const LilvNode *preset) {
         loaded = lilv_world_load_resource(world, preset) > 0;
         label = lilv_world_get(world, preset, nodes->rdfs_label, NULL);
     }
-    uint64_t bank_key = 0;
-    LilvNode *bank = lilv_world_get(world, preset, nodes->pset_bank, NULL);
-    if (bank) {
-        LilvNode *bank_label =
-            lilv_world_get(world, bank, nodes->rdfs_label, NULL);
-        bank_key = tree_index_branch(
-            plug->presets, 0,
-            lilv_node_as_string(bank_label ? bank_label : bank));
-        lilv_node_free(bank_label);
-        lilv_node_free(bank);
-    }
     // some plugins declare an empty label
     const char *name = label ? lilv_node_as_string(label) : NULL;
     if (!name || name[0] == '\0')
         name = plug_preset_uri_tail(uri);
-    tree_index_leaf(plug->presets, bank_key, name, uri);
+    LilvNode *user = lilv_world_get(world, preset, nodes->smp_userPreset, NULL);
+    if (user) {
+        uint64_t user_key =
+            tree_index_branch(plug->presets, 0, PLUG_USER_PRESETS_BRANCH);
+        if (user_key)
+            tree_index_leaf_path(plug->presets, user_key, name,
+                                 PLUG_USER_PRESET_SEP, uri);
+        lilv_node_free(user);
+    } else {
+        uint64_t bank_key = 0;
+        LilvNode *bank = lilv_world_get(world, preset, nodes->pset_bank, NULL);
+        if (bank) {
+            LilvNode *bank_label =
+                lilv_world_get(world, bank, nodes->rdfs_label, NULL);
+            bank_key = tree_index_branch(
+                plug->presets, 0,
+                lilv_node_as_string(bank_label ? bank_label : bank));
+            lilv_node_free(bank_label);
+            lilv_node_free(bank);
+        }
+        tree_index_leaf(plug->presets, bank_key, name, uri);
+    }
     lilv_node_free(label);
     // the names are copied, the file is not needed until the preset is loaded
     if (loaded)
@@ -1191,6 +1211,8 @@ static void plug_presets_build(PLUG_PLUG *plug) {
     plug_presets_clear(plug);
     // also when there are none, so they are not looked for on every browse
     plug->presets_built = true;
+    // the user category first, left out when empty
+    tree_index_branch(plug->presets, 0, PLUG_USER_PRESETS_BRANCH);
     LilvNodes *presets =
         lilv_plugin_get_related(plug->plug, plug->plug_data->nodes.pset_Preset);
     if (presets) {
@@ -1373,11 +1395,16 @@ int plug_plugin_preset_save(void *plug, const char *name) {
     PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
     if (!cur_plug || !cur_plug->plug_instance || !cur_plug->plug_data)
         return -1;
-    if (!name || name[0] == '\0')
+    // a trailing separator leaves no name for the preset itself
+    if (!name || name[0] == '\0' ||
+        name[strlen(name) - 1] == PLUG_USER_PRESET_SEP)
         return -2;
+    // "a//b" and "a/b" are one preset
+    char tidy[MAX_PATH_STRING];
     char bundle[MAX_PATH_STRING];
     char file[MAX_PATH_STRING];
-    if (!plug_preset_paths(cur_plug, name, bundle, file))
+    if (str_segments_tidy(tidy, sizeof(tidy), name, PLUG_USER_PRESET_SEP) != 0 ||
+        !plug_preset_paths(cur_plug, tidy, bundle, file))
         return -1;
     PLUG_INFO *plug_data = cur_plug->plug_data;
     LilvWorld *world = plug_data->lv_world;
@@ -1390,7 +1417,14 @@ int plug_plugin_preset_save(void *plug, const char *name) {
         LV2_STATE_IS_POD | LV2_STATE_IS_PORTABLE, NULL);
     if (!state)
         return -1;
-    lilv_state_set_label(state, name);
+    lilv_state_set_label(state, tidy);
+    const int32_t user = 1;
+    if (lilv_state_set_metadata(state, plug_data->urids.smp_userPreset, &user,
+                                sizeof(user), cur_plug->forge.Bool,
+                                LV2_STATE_IS_POD | LV2_STATE_IS_PORTABLE) != 0) {
+        lilv_state_free(state);
+        return -1;
+    }
     int err = lilv_state_save(world, &(cur_plug->map), &(cur_plug->unmap),
                               state, NULL, bundle, file);
     lilv_state_free(state);

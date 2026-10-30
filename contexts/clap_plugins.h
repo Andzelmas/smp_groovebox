@@ -55,8 +55,9 @@ bool clap_plug_preset_can_save(void *plug);
 
 // [main-thread] save the plugin's state as a preset named name, in the host's
 // preset folder - it replaces the preset saved under the same name. Every
-// instance of the plugin lists it. 0 on success, -1 when it could not be
-// saved, -2 for an empty name
+// instance of the plugin lists it under "User", a name like "keys/piano_1" in
+// categories there. 0 on success, -1 when it could not be saved, -2 for an
+// empty name or one ending in '/'
 int clap_plug_preset_save(void *plug, const char *name);
 //--------------------------------------------------
 

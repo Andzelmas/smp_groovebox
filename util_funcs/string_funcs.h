@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 // Functions that manipulate strings in some specific ways to the app
@@ -20,6 +21,17 @@ uint32_t str_numbered_name(char *out, size_t cap, const char *name,
 // terminated. When they do not fit in cap the cut never splits a character.
 // Returns the bytes written without the NUL
 size_t str_utf8_copy(char *out, size_t cap, const char *src, size_t len);
+
+// the next segment of s split at sep, from *pos on, an empty one skipped
+// ("a//b" is "a/b"): where it starts and its length, not NUL terminated. *pos
+// moves past it and its sep. false when none is left. A sep of '\0' makes s
+// one segment
+bool str_segment_next(const char *s, char sep, size_t *pos, const char **seg,
+                      size_t *len);
+
+// s with only its segments (see str_segment_next) into out, one sep between
+// them - no leading, trailing or doubled sep. -1 when it does not fit
+int str_segments_tidy(char *out, size_t cap, const char *s, char sep);
 
 // combines a string with integer and padding and _ symbols
 // the result is in the string_in, but it is freed if succesfully combined
