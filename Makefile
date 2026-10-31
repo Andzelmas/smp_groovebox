@@ -38,7 +38,7 @@ WINDOW_LIBS = -lX11
 #WINDOW = window/null_window.c
 #WINDOW_LIBS =
 #additional sources
-SRC = $(UTIL_FUNCS) $(ENGINE) $(BACKEND) $(WINDOW) contexts/sampler.c contexts/plugins.c contexts/clap_plugins.c contexts/context_control.c app_data.c settings.c app_intrf.c ui_layer.c contexts/params.c contexts/param_config.c contexts/synth.c $(JALV_C) $(CLAP_EXT_C)
+SRC = $(UTIL_FUNCS) $(ENGINE) $(BACKEND) $(WINDOW) contexts/sampler.c contexts/plugins.c contexts/clap_plugins.c contexts/context_control.c app_data.c settings.c app_intrf.c ui_layer.c contexts/params.c contexts/param_config.c contexts/synth.c song.c $(JALV_C) $(CLAP_EXT_C)
 
 #Remote dir for the source code
 PI_DIR = ~/Audio/Source/smp_groovebox/

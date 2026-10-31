@@ -18,6 +18,7 @@
 #include <lv2/time/time.h>
 #include <lv2/ui/ui.h>
 #include <lv2/worker/worker.h>
+#include <errno.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -57,6 +58,8 @@
 #define PLUG_USER_PRESET_URI "urn:smp-groovebox:userPreset"
 #define PLUG_USER_PRESETS_BRANCH "User"
 #define PLUG_USER_PRESET_SEP '/'
+// a state saved by plug_plugin_state_save, in its folder
+#define PLUG_STATE_FILE "state.ttl"
 // buffer cycles for ui, for example to get the buffer_size we midi_buf_size *
 // N_BUFFER_CYCLES
 #define N_BUFFER_CYCLES 4
@@ -1150,6 +1153,13 @@ void *plug_plugin_list_item_by_key(PLUG_INFO *plug_data, uint64_t key) {
     return &list->plugin_list[slot];
 }
 
+void *plug_plugin_list_item_by_uri(PLUG_INFO *plug_data, const char *uri) {
+    if (!plug_data || !uri)
+        return NULL;
+    return plug_plugin_list_item_by_key(
+        plug_data, intern_find(&plug_data->plugin_list.uris, uri));
+}
+
 // name for a preset without an rdfs:label: the last part of its URI
 static const char *plug_preset_uri_tail(const char *uri) {
     const char *tail = uri;
@@ -1313,6 +1323,29 @@ static const void *plug_get_port_value(const char *port_symbol,
     return &(plug->state_port_value);
 }
 
+// restore state into the plugin, paused. A state read before, so the pause
+// only covers the restore
+static void plug_state_restore(PLUG_PLUG *plug, const LilvState *state) {
+    PLUG_INFO *plug_data = plug->plug_data;
+    context_sub_wait_for_stop(plug_data->control_data, (void *)plug);
+    // TODO a plugin with safe_restore would not need the pause
+    const LV2_Feature *features[PLUG_RESTORE_FEATURES_MAX];
+    plug_restore_features(plug, features);
+    lilv_state_restore(state, plug->plug_instance, plug_set_value_direct, plug,
+                       0, features);
+    // the state set the control ports directly - sync the params to them,
+    // as values the plugin already has, so they are not sent back
+    for (uint32_t i = 0; i < plug->num_ports; i++) {
+        PLUG_PORT *const cur_port = &(plug->ports[i]);
+        if (cur_port->type != PORT_TYPE_CONTROL || cur_port->param_index < 0)
+            continue;
+        param_set_value(plug->plug_params, cur_port->param_index,
+                        (PARAM_T)cur_port->control, NULL, Operation_SyncValue);
+    }
+    atomic_store(&plug->request_update, true);
+    context_sub_wait_for_start(plug_data->control_data, (void *)plug);
+}
+
 int plug_plugin_preset_load(void *plug, uint64_t key) {
     PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
     if (!cur_plug || !cur_plug->plug_instance || !cur_plug->plug_data)
@@ -1320,11 +1353,8 @@ int plug_plugin_preset_load(void *plug, uint64_t key) {
     const char *preset_uri = tree_index_leaf_identity(cur_plug->presets, key);
     if (!preset_uri)
         return -2;
-    PLUG_INFO *plug_data = cur_plug->plug_data;
-    LilvWorld *world = plug_data->lv_world;
+    LilvWorld *world = cur_plug->plug_data->lv_world;
 
-    // read the preset before pausing the plugin, so the pause only covers the
-    // restore
     LilvNode *uri = lilv_new_uri(world, preset_uri);
     if (!uri)
         return -1;
@@ -1337,24 +1367,7 @@ int plug_plugin_preset_load(void *plug, uint64_t key) {
         return -1;
     }
     lilv_node_free(uri);
-
-    context_sub_wait_for_stop(plug_data->control_data, (void *)cur_plug);
-    // TODO a plugin with safe_restore would not need the pause
-    const LV2_Feature *features[PLUG_RESTORE_FEATURES_MAX];
-    plug_restore_features(cur_plug, features);
-    lilv_state_restore(state, cur_plug->plug_instance, plug_set_value_direct,
-                       cur_plug, 0, features);
-    // the preset set the control ports directly - sync the params to them,
-    // as values the plugin already has, so they are not sent back
-    for (uint32_t i = 0; i < cur_plug->num_ports; i++) {
-        PLUG_PORT *const cur_port = &(cur_plug->ports[i]);
-        if (cur_port->type != PORT_TYPE_CONTROL || cur_port->param_index < 0)
-            continue;
-        param_set_value(cur_plug->plug_params, cur_port->param_index,
-                        (PARAM_T)cur_port->control, NULL, Operation_SyncValue);
-    }
-    atomic_store(&cur_plug->request_update, true);
-    context_sub_wait_for_start(plug_data->control_data, (void *)cur_plug);
+    plug_state_restore(cur_plug, state);
 
     // the current preset's data stays loaded in the world while it is current
     if (cur_plug->preset) {
@@ -1445,6 +1458,67 @@ int plug_plugin_preset_save(void *plug, const char *name) {
     for (int i = 0; i < MAX_INSTANCES; i++)
         if (plug_data->plugins[i].plug == cur_plug->plug)
             plug_presets_clear(&plug_data->plugins[i]);
+    return 0;
+}
+
+int plug_plugin_state_save(void *plug, const char *dir) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug || !cur_plug->plug_instance || !cur_plug->plug_data || !dir)
+        return -1;
+    PLUG_INFO *plug_data = cur_plug->plug_data;
+    // lilv resolves the folder, it has to exist
+    if (path_make_dirs(dir) != 0) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             is_audio_thread, "%s: %s, state of %s not saved\n",
+                             dir, strerror(errno), cur_plug->name);
+        return -1;
+    }
+    // as plug_plugin_preset_save, no pause. Files the plugin saves go into
+    // dir, other files it uses are linked there
+    LilvState *state = lilv_state_new_from_instance(
+        cur_plug->plug, cur_plug->plug_instance, &(cur_plug->map), NULL, dir,
+        dir, dir, plug_get_port_value, cur_plug,
+        LV2_STATE_IS_POD | LV2_STATE_IS_PORTABLE, NULL);
+    if (!state)
+        return -1;
+    int err = lilv_state_save(plug_data->lv_world, &(cur_plug->map),
+                              &(cur_plug->unmap), state, NULL, dir,
+                              PLUG_STATE_FILE);
+    lilv_state_free(state);
+    if (err != 0) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             is_audio_thread, "Could not save the state of %s "
+                             "in %s\n",
+                             cur_plug->name, dir);
+        return -1;
+    }
+    return 0;
+}
+
+int plug_plugin_state_load(void *plug, const char *dir) {
+    PLUG_PLUG *cur_plug = (PLUG_PLUG *)plug;
+    if (!cur_plug || !cur_plug->plug_instance || !cur_plug->plug_data || !dir)
+        return -1;
+    char path[MAX_PATH_STRING];
+    int len = snprintf(path, sizeof(path), "%s/%s", dir, PLUG_STATE_FILE);
+    if (len < 0 || len >= (int)sizeof(path))
+        return -1;
+    // its own model, never loaded into the world
+    LilvState *state = lilv_state_new_from_file(cur_plug->plug_data->lv_world,
+                                                &(cur_plug->map), NULL, path);
+    if (!state)
+        return -1;
+    if (!lilv_node_equals(lilv_state_get_plugin_uri(state),
+                          lilv_plugin_get_uri(cur_plug->plug))) {
+        context_sub_send_msg(cur_plug->plug_data->control_data,
+                             (void *)cur_plug->plug_data, is_audio_thread,
+                             "%s is not a state of %s\n", path,
+                             cur_plug->name);
+        lilv_state_free(state);
+        return -1;
+    }
+    plug_state_restore(cur_plug, state);
+    lilv_state_free(state);
     return 0;
 }
 

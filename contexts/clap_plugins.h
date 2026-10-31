@@ -53,6 +53,17 @@ int clap_plug_preset_load(void *plug, uint64_t key);
 // the presets the host saves
 bool clap_plug_preset_can_save(void *plug);
 
+// [main-thread] the plugin has a state extension
+bool clap_plug_state_available(void *plug);
+// [main-thread] save the plugin's state for a project into a file at path,
+// replacing a file there. 0 on success, -1 when the plugin has no state
+// extension or it could not be saved (logged)
+int clap_plug_state_save(void *plug, const char *path);
+// [main-thread] load a state clap_plug_state_save saved at path. 0 on
+// success, -1 when the plugin has no state extension, the file is not one of
+// its states or it did not load (logged)
+int clap_plug_state_load(void *plug, const char *path);
+
 // [main-thread] save the plugin's state as a preset named name, in the host's
 // preset folder - it replaces the preset saved under the same name. Every
 // instance of the plugin lists it under "User", a name like "keys/piano_1" in
@@ -103,6 +114,11 @@ uint64_t clap_plug_plugin_list_item_key(void *plugin_item);
 // the listed item with this key, NULL when the current list has none
 void *clap_plug_plugin_list_item_by_key(CLAP_PLUG_INFO *plug_data,
                                         uint64_t key);
+
+// the listed plugin with this descriptor id, NULL when the current list has
+// none
+void *clap_plug_plugin_list_item_by_id(CLAP_PLUG_INFO *plug_data,
+                                       const char *id);
 
 // initiate and load plugin from the plugin_list_item. On success returns its
 // identity uid (always > 0, matching clap_plug_plugin_uid); on failure

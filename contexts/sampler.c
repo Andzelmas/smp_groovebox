@@ -483,15 +483,10 @@ bool smp_process_rt(void *smp_data_ptr, NFRAMES_T nframes) {
     return true;
 }
 
-char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id){
-    if(!smp_data)return NULL;
-    if(smp_id >= MAX_SAMPLES)return NULL;
-    SMP_SMP* cur_smp = &(smp_data->samples[smp_id]);
-    if(!cur_smp->file_path)return NULL;
-    char* ret_name = (char*)malloc(sizeof(char) * (strlen(cur_smp->file_path) + 1));
-    if(!ret_name)return NULL;
-    strcpy(ret_name, cur_smp->file_path);
-    return ret_name;
+const char* smp_sample_file_path(void* smp){
+    SMP_SMP* cur_smp = (SMP_SMP*)smp;
+    if(!cur_smp)return NULL;
+    return cur_smp->file_path;
 }
 
 void* smp_sample_return(SMP_INFO* smp_data, unsigned int idx){

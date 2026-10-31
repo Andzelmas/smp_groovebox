@@ -22,3 +22,10 @@ int path_safe_name(const char* name, char* out, size_t out_len);
 //the user's data folder: $XDG_DATA_HOME when it is absolute, else ~/.local/share. -1
 //when HOME is not set or it does not fit
 int path_user_data_dir(char* out, size_t out_len);
+//remove the folder path and everything in it. A symlink is removed, never what it
+//points to. -1 (errno set) when something could not be removed
+int path_remove_tree(const char* path);
+//copy the file src to dst through dst.tmp renamed over dst, so a crash leaves the old
+//dst or the copy; a symlink at dst is replaced by the file. -1 (errno set) on failure,
+//dst untouched
+int path_copy_file(const char* src, const char* dst);

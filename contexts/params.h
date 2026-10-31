@@ -41,6 +41,8 @@ enum paramFlags {
     PARAM_FLAG_HIDDEN   = 1 << 0,
     PARAM_FLAG_READONLY = 1 << 1,
     PARAM_FLAG_ENUM     = 1 << 2,
+    // the value is not saved in a song, nor set when one loads
+    PARAM_FLAG_NO_SAVE  = 1 << 3,
 };
 
 // buffer size of ONE parameter-category name segment (see param_category_
@@ -288,6 +290,10 @@ PARAM_T param_get_max(PRM_CONTAIN *param_container, int val_id);
 // Also clears "was this parameter changed".
 PARAM_T param_get_value(PRM_CONTAIN *param_container, int val_id,
                         unsigned int rt_params);
+
+// the ui side's stored value, before the owner's build_value - what a
+// SetValue sets. -1 on error. ui-only
+PARAM_T param_get_raw_value(PRM_CONTAIN *param_container, int val_id);
 
 // return a display string for `value` on this param, via the owner's
 // val_to_string callback. return the value with a default format if no callback

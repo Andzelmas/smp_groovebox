@@ -5,18 +5,28 @@
 Latency is not calculated correctly if the external output ports are connected to the external input ports - a feedback loop is formed.
 Also, latency is incorrect if a program connected to the external ports does not report it's latency (has no latency callback function).
 Internal ports prohibit forming feedback loops.
+
 ### Settings
 smp_groovebox searches for a config file in program's own folder/settings.json; $XDG_CONFIG_HOME/smp_groovebox/settings.json and ~/.config/smp_groovebox/settings.json, in that order.
 Change to the settings needs a restart.
-#### settings.json keys:
-parameter general settings
-{"params":
+
+#### settings.json
+For paths "~" is expanded to the home directory. Usually relative paths work, if appropriate directory is set. The relative path will be relative to that "appropriate directory" or the settings.json file.
+
+##### parameter general settings
+```
+{
+"params":
+    "param_config_dir": "path_to_param_configs"
+}
+```
 Where to save and load the parameter config json files for each plugin, context.
-{"param_config_dir": "path_to_param_configs" }
 If this is set to a valid dir, the app saves default config files for context parameters (for example for a plugin parameters).
-~ is expanded to home for paths. Relative path is relative to the settings file's own folder.
+Relative path is relative to the settings.json file's own folder.
 The user can modify those files to change the parameter display names, their value increment steps, add categories, etc.
+
 A saved json file will look like this:
+```
 {
     "format": 1,
     "owner": "clap:org.surge-synth-team.surge-xt",
@@ -32,7 +42,9 @@ A saved json file will look like this:
         }
     }
 }
+```
 "info": is for the parameters values, and should not be changed. Modify the values, by adding the keys of the values under the "info", like this:
+```
 {
     "format": 1,
     "owner": "clap:org.surge-synth-team.surge-xt",
@@ -50,21 +62,64 @@ A saved json file will look like this:
         }
     }
 }
+```
 user parameter changes will not be loaded unless "load" is set to true
-}
 
-plugin settings
-{"plugins":
-Where to save the clap plugin presets made with "Save preset", a folder per plugin inside.
-{"clap_preset_dir": "path_to_clap_presets" }
-Defaults to $XDG_DATA_HOME/smp_groovebox/clap_presets, or ~/.local/share/smp_groovebox/clap_presets without XDG_DATA_HOME. "" turns saving clap presets off.
+##### plugin settings
+```
+{
+"plugins":
+    "clap_preset_dir": "path_to_clap_presets"
 }
+```
+Where to save the clap plugin presets made with "Save preset", a folder per plugin inside.
+Defaults to $XDG_DATA_HOME/smp_groovebox/clap_presets, or ~/.local/share/smp_groovebox/clap_presets without XDG_DATA_HOME. "" turns saving clap presets off.
+
+##### song settings
+```
+{
+"songs":
+    {
+        "song_dir": "path_to_songs",
+        "template": "path_to_a_song" 
+    }
+}
+```
+song_dir - Where songs typed with a relative path are saved and loaded from. Defaults to "" - then only a ~ or an absolute path can be given.
+template - A song the app loads at the start and on "New song", "" (the default) for none - the app then starts with an empty song.
+A template is loaded like any song, but it does not become the current song, so "Save song" with an empty path never writes over it. To change the template, save to its path on purpose.
+
+##### basic settings.json example
+```
+{
+"params":
+    {"param_config_dir":"param_configs"},
+"plugins":
+    {"clap_preset_dir":"clap_presets"},
+"songs":
+    {
+        "song_dir":"~/Music",
+        "template":"~/Music/init"
+    }
+}
+```
+
 ### Presets
 "Save preset" on a loaded plugin saves its current state as a preset under a name; a preset of the same name is replaced.
 Saved presets are listed in the plugin's preset list under "User". A "/" in the name puts the preset into categories there: "keys/piano_1" is listed as User/keys/piano_1.
 Since the file name is made safe by replacing weird symbols with "_" "keys/piano_1" and "keys_piano_1" will make a single preset file (the second will overwrite the first).
 LV2 presets are saved as bundles in ~/.lv2, where other LV2 hosts find them too (they show the whole name, "keys/piano_1").
 Clap has no standard place for presets saved by a host, so they go to the clap_preset_dir folder.
+
+### Songs
+The root context has "Save song", "Load song" and "New song".
+A song saves the transport settings (tempo, time signature, sync, PDC - not the playhead), the synth oscillators' parameters, the samples with their parameters, the LV2 and CLAP plugins with their own state, the connections between the app's ports and the exposed ports' connections to other programs.
+A path is a song folder: "jazz/tune_1" saves song_dir/jazz/tune_1/tune_1.json. A path starting with ~ or / is used as it is. A ".json" at the end is dropped when saving, "Load song" also takes the .json file itself.
+"Save song" with an empty path saves the current song (the last saved or loaded one); without one it makes song_dir/song_<date>_<time>.
+The plugin states go into a states_<n> folder next to the json, a new one on each save - the older ones are removed after the json is written, so a crash leaves the old song or the new one. Nothing else in the song folder is touched.
+LV2 plugins save files they use into their state folder as links (a copy for a file from another song's states folder). Samples are saved by their path, they are not copied into the song folder.
+"Load song" and "New song" replace the whole song, nothing asks about unsaved changes. A plugin that is not installed, a sample file that is gone or a port of another program that is not there is skipped and written to the log.
+The json can be edited by hand: a plugin's "id" only ties it to its state and its connections inside one file, the app numbers them again on every save.
 
 ## Still early development. Some parts of code can change completely.
 ## Simple groovebox for linux based systems. Works on rpi too.

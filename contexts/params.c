@@ -1123,6 +1123,15 @@ static int param_decimals_for_inc(PARAM_T inc) {
     return 6;
 }
 
+PARAM_T param_get_raw_value(PRM_CONTAIN *param_container, int val_id) {
+    if (!param_container || val_id < 0 ||
+        (unsigned int)val_id >= param_container->num_of_params_ui)
+        return -1;
+    if (!param_container->ui_params[val_id])
+        return -1;
+    return param_container->ui_params[val_id]->val;
+}
+
 const char *param_get_value_as_string(PRM_CONTAIN *param_container,
                                       int val_id, PARAM_T value) {
     if (!param_container)

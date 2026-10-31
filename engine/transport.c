@@ -480,19 +480,21 @@ TRANSPORT *transport_init(SAMPLE_T rate) {
         transport_clean(transport);
         return NULL;
     }
-    // uid 0 - params.c mints one
+    // uid 0 - params.c mints one. Bar, Beat and Tick are the playhead, a song
+    // leaves them be - an edit is a locate
     PRM_CONTAIN *params = transport->params;
     transport->val[TRK_PARAM_TEMPO] =
         param_add_param(params, "Tempo", "tempo", 100, 10, 500, 1, 0,
                         TRK_PARAM_TEMPO, 0, 0, NULL);
     transport->val[TRK_PARAM_BAR] =
         param_add_param(params, "Bar", "bar", 1, 1, TRANSPORT_BAR_MAX, 1, 0,
-                        TRK_PARAM_BAR, 0, 0, NULL);
-    transport->val[TRK_PARAM_BEAT] = param_add_param(
-        params, "Beat", "beat", 1, 1, 4, 1, 0, TRK_PARAM_BEAT, 0, 0, NULL);
+                        TRK_PARAM_BAR, PARAM_FLAG_NO_SAVE, 0, NULL);
+    transport->val[TRK_PARAM_BEAT] =
+        param_add_param(params, "Beat", "beat", 1, 1, 4, 1, 0, TRK_PARAM_BEAT,
+                        PARAM_FLAG_NO_SAVE, 0, NULL);
     transport->val[TRK_PARAM_TICK] = param_add_param(
         params, "Tick", "tick", 0, 0, TRANSPORT_TICKS_PER_BEAT - 1, 1, 0,
-        TRK_PARAM_TICK, PARAM_FLAG_READONLY, 0, NULL);
+        TRK_PARAM_TICK, PARAM_FLAG_READONLY | PARAM_FLAG_NO_SAVE, 0, NULL);
     transport->val[TRK_PARAM_BPB] = param_add_param(
         params, "BPB", "bpb", 4, 1, 16, 1, 0, TRK_PARAM_BPB, 0, 0, NULL);
     transport->val[TRK_PARAM_BEAT_TYPE] =

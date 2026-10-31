@@ -54,6 +54,9 @@ uint64_t plug_plugin_list_item_key(void *plug_list_item);
 // the listed item with this key, NULL when the current list has none
 void *plug_plugin_list_item_by_key(PLUG_INFO *plug_data, uint64_t key);
 
+// the listed plugin with this URI, NULL when the current list has none
+void *plug_plugin_list_item_by_uri(PLUG_INFO *plug_data, const char *uri);
+
 // presets --------------------------------------------------
 // A loaded plugin's presets, browsed one level at a time: categories first -
 // "User" with the ones plug_plugin_preset_save saved, then banks - then the
@@ -76,6 +79,15 @@ int plug_plugin_preset_load(void *plug, uint64_t key);
 // ending in '/'
 int plug_plugin_preset_save(void *plug, const char *name);
 //--------------------------------------------------
+
+// save the plugin's current state into the folder dir, made when missing.
+// Files the plugin saves land there, other files it uses are linked there. 0
+// on success, -1 on failure (logged)
+int plug_plugin_state_save(void *plug, const char *dir);
+// restore a state plug_plugin_state_save saved in dir, the plugin paused
+// meanwhile. 0 on success, -1 when it could not be read or is another
+// plugin's
+int plug_plugin_state_load(void *plug, const char *dir);
 
 // read the main-thread audio-thread comm messages and launch apropriate
 // functions (stop, start processes etc.)

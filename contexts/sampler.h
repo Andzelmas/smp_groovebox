@@ -35,8 +35,10 @@ uint32_t smp_add(SMP_INFO *smp_data, const char* samp_path, int in_id);
 //process the sampler (smp_data is a SMP_INFO*, the sampler is one owner) into
 //its summed outs, on the [audio-thread]. true if it wrote its outputs
 bool smp_process_rt(void* smp_data, NFRAMES_T nframes);
-//copy to new malloced string and return the file path of the sample
-char* smp_get_sample_file_path(SMP_INFO* smp_data, int smp_id);
+//the file path the sample was loaded from, from a SMP_SMP* returned by
+//smp_sample_return. Owned by the sample, valid until it is removed. NULL on
+//error
+const char* smp_sample_file_path(void* smp);
 //return the idx-th loaded sample (walking occupied slots in order), NULL past
 //the end. The returned SMP_SMP* is borrowed - do not free or modify it.
 void* smp_sample_return(SMP_INFO* smp_data, unsigned int idx);

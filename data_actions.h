@@ -36,6 +36,8 @@ typedef enum {
     DATA_ACTION_COMMAND,      // do it now, no payload - the (type, id) pair
                                // says what (Play, Stop)
     DATA_ACTION_SAVE,         // save the context's state under a name
+    DATA_ACTION_LOAD,         // replace the context's state with one from a
+                               // path
 } DataActionType;
 
 typedef enum {

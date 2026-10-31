@@ -14,6 +14,7 @@
 #include "engine/midi_clock.h"
 #include "engine/transport.h"
 #include "settings.h"
+#include "song.h"
 #include "window/host_window.h"
 // string functions
 #include "contexts/clap_plugins.h"
@@ -97,6 +98,8 @@ typedef struct _app_info {
     uint32_t smp_uid_seen;
     uint32_t lv2_uid_seen;
     uint32_t clap_uid_seen;
+    // saves and loads the whole song
+    SONG *song;
 } APP_INFO;
 
 // push one event, growing the queue if it is full
@@ -146,6 +149,7 @@ static int clean_memory(APP_INFO *app_data) {
     transport_clean(app_data->transport);
 
     // clean the app_data
+    song_clean(app_data->song);
     context_sub_clean(app_data->control_data);
     free(app_data->events);
     if (app_data->rt_ui_timerfd >= 0)
@@ -1627,6 +1631,7 @@ enum {
     ROOT_ACTION_EXTR_CONNECT,
     ROOT_ACTION_PLAY,
     ROOT_ACTION_STOP,
+    ROOT_ACTION_NEW_SONG,
 };
 
 // the name the tree shows for a port owner, NULL for an unknown one. Owner
@@ -1799,12 +1804,49 @@ static size_t root_action_list(void *user_data, void *root_user_data,
             .enabled = true,
             .style = DATA_ACTION_STYLE_NORMAL,
         };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_SAVE,
+            .label = "Save song",
+            .tooltip = "Save the song to a path, an empty one saves the "
+                       "current song",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_NORMAL,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_LOAD,
+            .label = "Load song",
+            .tooltip = "Replace the song with a saved one",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_DANGEROUS,
+        };
+    if (n < cap)
+        out[n++] = (DataAction){
+            .type = DATA_ACTION_COMMAND,
+            .id = ROOT_ACTION_NEW_SONG,
+            .label = "New song",
+            .tooltip = "Replace the song with the template, or an empty one",
+            .enabled = true,
+            .style = DATA_ACTION_STYLE_DANGEROUS,
+        };
     return n;
 }
 
 static size_t root_action_args(void *user_data, DataActionType type,
                                uint32_t id, DataArgSpec *out, size_t cap) {
     (void)user_data;
+    if ((type == DATA_ACTION_SAVE || type == DATA_ACTION_LOAD) && out &&
+        cap >= 1) {
+        out[0] = (DataArgSpec){
+            .name = "path",
+            .label = "Song path",
+            .kind = DATA_ARG_PATH,
+            .required = type == DATA_ACTION_LOAD,
+            .list = DATA_LIST_NONE,
+        };
+        return 1;
+    }
     if (type != DATA_ACTION_CONNECT || !out || cap < 2)
         return 0;
     bool graph = id == ROOT_ACTION_CONNECT;
@@ -1986,6 +2028,19 @@ static DataActionResult root_extr_connect_do(APP_INFO *app_data,
     return any_failed ? DATA_ACTION_ERR_DATA : DATA_ACTION_OK;
 }
 
+static DataActionResult root_song_result(SONG_RESULT result) {
+    if (result == SONG_INVALID)
+        return DATA_ACTION_ERR_INVALID;
+    return result == SONG_OK ? DATA_ACTION_OK : DATA_ACTION_ERR_DATA;
+}
+
+// a load drops and makes links after a backend port sync whose news
+// app_data_update did not see
+static void root_song_replaced(APP_INFO *app_data) {
+    app_data_push_event(app_data, DATA_EVENT_CHANGED,
+                        MAKE_ID(DATA_NS_SINGLETON, SID_ROOT));
+}
+
 static DataActionResult root_action_do(void *user_data, void *root_user_data,
                                        const DataActionReq *req,
                                        ContextId *out_new) {
@@ -1994,6 +2049,20 @@ static DataActionResult root_action_do(void *user_data, void *root_user_data,
     (void)out_new; // none of these creates a context
     if (!app_data || !req)
         return DATA_ACTION_ERR_INVALID;
+    if (req->type == DATA_ACTION_SAVE)
+        return root_song_result(song_save(app_data->song, req->save.name));
+    if (req->type == DATA_ACTION_LOAD) {
+        SONG_RESULT result =
+            song_load(app_data->song, req->add_file_path.path);
+        if (result == SONG_OK)
+            root_song_replaced(app_data);
+        return root_song_result(result);
+    }
+    if (req->type == DATA_ACTION_COMMAND && req->id == ROOT_ACTION_NEW_SONG) {
+        song_new(app_data->song);
+        root_song_replaced(app_data);
+        return DATA_ACTION_OK;
+    }
     if (req->type == DATA_ACTION_COMMAND) {
         int rc = -1;
         if (req->id == ROOT_ACTION_PLAY)
@@ -2245,6 +2314,7 @@ DataObject app_init(void) {
     app_data->smp_uid_seen = 0;
     app_data->lv2_uid_seen = 0;
     app_data->clap_uid_seen = 0;
+    app_data->song = NULL;
 
     const SETTINGS_KEY params_keys[] = {
         {.key = "param_config_dir",
@@ -2271,6 +2341,21 @@ DataObject app_init(void) {
     };
     settings_read(SETTINGS_SECTION_PLUGINS, plugins_keys,
                   sizeof(plugins_keys) / sizeof(plugins_keys[0]));
+    // where a relative song path goes, the song a start loads. "" for none
+    char song_dir[MAX_PATH_STRING] = "";
+    char song_template[MAX_PATH_STRING] = "";
+    const SETTINGS_KEY songs_keys[] = {
+        {.key = "song_dir",
+         .type = SETTINGS_PATH,
+         .out = song_dir,
+         .out_len = sizeof(song_dir)},
+        {.key = "template",
+         .type = SETTINGS_PATH,
+         .out = song_template,
+         .out_len = sizeof(song_template)},
+    };
+    settings_read(SETTINGS_SECTION_SONGS, songs_keys,
+                  sizeof(songs_keys) / sizeof(songs_keys[0]));
 
     /*init the audio backend for the whole program*/
     /*--------------------------------------------------*/
@@ -2365,21 +2450,33 @@ DataObject app_init(void) {
             app_data,
             synth_osc_param_container(synth_osc_return(app_data->synth_data, i)),
             PARAM_CONFIG_KIND_SYNTH_OSC, "", true);
-    // the transport's MIDI clock, pre-wired to the exposed midi_clock_out
+    // the transport's MIDI clock, wired by the song
     app_data->midi_clock = midi_clock_init(
         app_data->graph, app_data->transport, DATA_NS_SINGLETON, SID_TRK);
     if (!app_data->midi_clock) {
         clean_memory(app_data);
         return invalid;
     }
-    if (graph_connect_keys(
-            app_data->graph,
-            graph_port_find(app_data->graph, DATA_NS_SINGLETON, SID_TRK,
-                            MIDI_CLOCK_PORT_NAME),
-            graph_port_find(app_data->graph, DATA_NS_SINGLETON, SID_ROOT,
-                            AUDIO_BACKEND_MIDI_CLOCK_OUT)) != 0)
-        log_append_logfile("Could not connect the MIDI clock to %s\n",
-                           AUDIO_BACKEND_MIDI_CLOCK_OUT);
+    const SONG_MODULES song_modules = {
+        .graph = app_data->graph,
+        .backend = app_data->backend,
+        .transport = app_data->transport,
+        .synth = app_data->synth_data,
+        .smp = app_data->smp_data,
+        .lv2 = app_data->plug_data,
+        .clap = app_data->clap_plug_data,
+        .root = {DATA_NS_SINGLETON, SID_ROOT},
+        .sampler = {DATA_NS_SINGLETON, SID_SAMPLER},
+        .midi_clock = {DATA_NS_SINGLETON, SID_TRK},
+        .synth_osc_tag = DATA_NS_SYNTH_OSC,
+        .lv2_tag = DATA_NS_LV2_PLUG,
+        .clap_tag = DATA_NS_CLAP_PLUG,
+    };
+    app_data->song = song_init(&song_modules, song_dir, song_template);
+    if (!app_data->song) {
+        clean_memory(app_data);
+        return invalid;
+    }
     // the first cycle already runs a plan with every node
     if (graph_plan_update(app_data->graph) != 0) {
         clean_memory(app_data);
@@ -2387,6 +2484,8 @@ DataObject app_init(void) {
     }
     // now unpause the jack function again
     context_sub_wait_for_start(app_data->control_data, (void *)app_data);
+    // a template's plugins and samples wait for the audio thread to start them
+    song_new(app_data->song);
 
     DataObject root = {.ops = &root_ops,
                        .user_data = (void *)app_data,

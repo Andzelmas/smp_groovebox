@@ -15,6 +15,7 @@
 #define SETTINGS_SECTION_PARAMS "params"
 #define SETTINGS_SECTION_PLUGINS "plugins"
 #define SETTINGS_SECTION_CLI "cli"
+#define SETTINGS_SECTION_SONGS "songs"
 
 typedef enum {
     SETTINGS_STRING,

@@ -3036,32 +3036,80 @@ bool clap_plug_presets_level_at(void *plug, uint64_t branch, size_t idx,
     return tree_index_level_at(clap_plug_presets_get(plug), branch, idx, out);
 }
 
-// load the preset file at path, one the host saved
-static bool clap_plug_user_preset_load(CLAP_PLUG_PLUG *plug, const char *path) {
+// load the state file at path, one the host saved, for context (a
+// clap_plugin_state_context_type)
+static bool clap_plug_state_file_load(CLAP_PLUG_PLUG *plug, const char *path,
+                                      uint32_t context) {
     CLAP_PLUG_INFO *plug_data = plug->plug_data;
     void *data = NULL;
     size_t size = 0;
     if (!clap_ext_state_file_read(path, plug->plugin_id, &data, &size)) {
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
-                             "Could not read preset %s\n", path);
+                             "Could not read %s\n", path);
         return false;
     }
-    bool loaded = clap_ext_state_load(plug->plug_inst,
-                                      CLAP_STATE_CONTEXT_FOR_PRESET, data, size);
+    bool loaded = clap_ext_state_load(plug->plug_inst, context, data, size);
     free(data);
     if (!loaded)
         context_sub_send_msg(plug_data->control_data, (void *)plug_data,
                              clap_plug_return_is_audio_thread(),
-                             "%s did not load preset %s\n", plug->name, path);
+                             "%s did not load %s\n", plug->name, path);
     return loaded;
 }
 
-bool clap_plug_preset_can_save(void *plug) {
+// the plugin's state for context written as a host preset file at path, named
+// name
+static bool clap_plug_state_file_save(CLAP_PLUG_PLUG *plug, const char *path,
+                                      const char *name, uint32_t context) {
+    CLAP_PLUG_INFO *plug_data = plug->plug_data;
+    void *data = NULL;
+    size_t size = 0;
+    if (!clap_ext_state_save(plug->plug_inst, context, &data, &size)) {
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "%s did not save its state\n", plug->name);
+        return false;
+    }
+    bool written =
+        clap_ext_state_file_write(path, plug->plugin_id, name, data, size);
+    free(data);
+    if (!written)
+        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
+                             clap_plug_return_is_audio_thread(),
+                             "Could not write %s\n", path);
+    return written;
+}
+
+bool clap_plug_state_available(void *plug) {
     CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
     return cur_plug && cur_plug->plug_inst && cur_plug->plug_data &&
-           cur_plug->plug_data->preset_dir[0] != '\0' &&
            clap_ext_state_available(cur_plug->plug_inst);
+}
+
+int clap_plug_state_save(void *plug, const char *path) {
+    if (!clap_plug_state_available(plug) || !path)
+        return -1;
+    return clap_plug_state_file_save((CLAP_PLUG_PLUG *)plug, path, "",
+                                     CLAP_STATE_CONTEXT_FOR_PROJECT)
+               ? 0
+               : -1;
+}
+
+int clap_plug_state_load(void *plug, const char *path) {
+    CLAP_PLUG_PLUG *cur_plug = (CLAP_PLUG_PLUG *)plug;
+    if (!clap_plug_state_available(plug) || !path ||
+        !clap_plug_state_file_load(cur_plug, path,
+                                   CLAP_STATE_CONTEXT_FOR_PROJECT))
+        return -1;
+    // as after a preset load
+    atomic_fetch_or(&cur_plug->requests, CLAP_PLUG_REQ_SYNC_VALUES);
+    return 0;
+}
+
+bool clap_plug_preset_can_save(void *plug) {
+    return clap_plug_state_available(plug) &&
+           ((CLAP_PLUG_PLUG *)plug)->plug_data->preset_dir[0] != '\0';
 }
 
 int clap_plug_preset_save(void *plug, const char *name) {
@@ -3093,24 +3141,9 @@ int clap_plug_preset_save(void *plug, const char *name) {
                              strerror(errno));
         return -1;
     }
-    void *data = NULL;
-    size_t size = 0;
-    if (!clap_ext_state_save(cur_plug->plug_inst, CLAP_STATE_CONTEXT_FOR_PRESET,
-                             &data, &size)) {
-        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                             clap_plug_return_is_audio_thread(),
-                             "%s did not save its state\n", cur_plug->name);
+    if (!clap_plug_state_file_save(cur_plug, path, tidy,
+                                   CLAP_STATE_CONTEXT_FOR_PRESET))
         return -1;
-    }
-    bool written =
-        clap_ext_state_file_write(path, cur_plug->plugin_id, tidy, data, size);
-    free(data);
-    if (!written) {
-        context_sub_send_msg(plug_data->control_data, (void *)plug_data,
-                             clap_plug_return_is_audio_thread(),
-                             "Could not write preset %s\n", path);
-        return -1;
-    }
     // into the lists already built - building one again runs the scanner
     for (int i = 0; i < MAX_INSTANCES; i++) {
         CLAP_PLUG_PLUG *other = &plug_data->plugins[i];
@@ -3132,7 +3165,8 @@ int clap_plug_preset_load(void *plug, uint64_t key) {
     if (!identity)
         return -2;
     const char *path = clap_ext_state_identity_path(identity);
-    if (path ? !clap_plug_user_preset_load(cur_plug, path)
+    if (path ? !clap_plug_state_file_load(cur_plug, path,
+                                          CLAP_STATE_CONTEXT_FOR_PRESET)
              : !clap_ext_preset_load(cur_plug->plug_inst, identity))
         return -1;
     // not every plugin reports the new values (rescan or events) - u-he does
@@ -3229,6 +3263,14 @@ void *clap_plug_plugin_list_item_by_key(CLAP_PLUG_INFO *plug_data,
     if (slot >= list->size_curr)
         return NULL;
     return &list->plugin_list[slot];
+}
+
+void *clap_plug_plugin_list_item_by_id(CLAP_PLUG_INFO *plug_data,
+                                       const char *id) {
+    if (!plug_data || !id)
+        return NULL;
+    return clap_plug_plugin_list_item_by_key(
+        plug_data, intern_find(&plug_data->clap_plugin_list.ids, id));
 }
 
 // build the display name into plug->name, numbered when a loaded plugin has
