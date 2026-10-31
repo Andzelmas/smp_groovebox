@@ -1179,8 +1179,9 @@ static bool helper_views_reconcile(const VIEWS_SYNC *sync) {
 }
 
 // wait for a key, pulling fresh data meanwhile - woken by sync->wake_fd when
-// it is available, else by polling every INPUT_WAIT_TICK_MS as before.
-// Returns the key, or INPUT_WAIT_REDRAW as soon as a view shows a change
+// it is available, else by polling every INPUT_WAIT_TICK_MS.
+// Returns the key, EOF once stdin has ended, or INPUT_WAIT_REDRAW as soon as a
+// view shows a change
 static int helper_input_wait(const VIEWS_SYNC *sync) {
     struct pollfd fds[2] = {{.fd = STDIN_FILENO, .events = POLLIN},
                             {.fd = sync->wake_fd, .events = POLLIN}};
@@ -1190,7 +1191,10 @@ static int helper_input_wait(const VIEWS_SYNC *sync) {
     int timeout = sync->wake_fd >= 0 ? -1 : INPUT_WAIT_TICK_MS;
     while (1) {
         int ready = poll(fds, nfds, timeout);
-        if (ready > 0 && (fds[0].revents & POLLIN))
+        // a pipe whose writer is gone reports POLLHUP without POLLIN -
+        // getchar then returns EOF instead of blocking
+        if (ready > 0 &&
+            (fds[0].revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL)))
             return getchar();
         // poll itself failed - fall back to simply blocking for the key
         if (ready < 0 && errno != EINTR)
@@ -1262,6 +1266,9 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return true;
     // a result is shown for exactly one frame
     msg[0] = '\0';
+    // stdin ended - close the session, the main loop reads EOF again and quits
+    if (input == EOF)
+        return false;
 
     if (input == '\e' || input == 'h') {
         if (helper_list_close(session, which))
@@ -1644,6 +1651,9 @@ int main() {
         int input = helper_input_wait(&views_sync);
         if (input == INPUT_WAIT_REDRAW)
             continue;
+        // stdin ended (closed pipe, end of a redirected file) - quit like q
+        if (input == EOF)
+            break;
         unsigned int exit = 0;
 
         if (input == '\e') {
