@@ -647,7 +647,8 @@ static bool ui_reconcile_removed(UI_LAYER* ui_layer, UI_STATE* state,
 }
 
 // overflow fallback: no per-event anchor info, so just prune everything that no
-// longer validates (re-anchor modes degrade to remove; CLEAR still clears).
+// longer validates (sibling modes degrade to remove, TO_SOURCE goes to the
+// entry's source; CLEAR still clears).
 static void ui_reconcile_full_sweep(UI_LAYER* ui_layer, UI_STATE* state){
     for(size_t s = 0; s < state->capacity; s++){
         UI_STATE_ENTRY* e = &state->entries[s];
@@ -675,6 +676,21 @@ static void ui_reconcile_full_sweep(UI_LAYER* ui_layer, UI_STATE* state){
                 if(e->targets.item_policy.mode == UI_STALE_CLEAR){
                     ui_layer_nav_target_list_clear(&e->targets);
                     break;
+                }
+                // e->context was validated above
+                if(e->targets.item_policy.mode == UI_STALE_TO_SOURCE &&
+                   e->context != CONTEXT_ID_INVALID){
+                    bool dup = false;
+                    for(size_t k = 0; k < e->targets.count; k++)
+                        if(e->targets.items[k] == e->context){
+                            dup = true;
+                            break;
+                        }
+                    if(!dup){
+                        e->targets.items[i] = e->context;
+                        i++;
+                        continue;
+                    }
                 }
                 ui_layer_nav_target_list_remove(&e->targets, i);
             }

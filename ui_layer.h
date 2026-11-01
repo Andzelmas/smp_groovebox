@@ -35,7 +35,7 @@ typedef enum{
     UI_STALE_FIRST_SIBLING,  // re-point to the removed id's parent's first child
     UI_STALE_NEXT_SIBLING,   // ...to the child now at the removed id's index
     UI_STALE_PREV_SIBLING,   // ...to the child before the removed id's index
-    UI_STALE_TO_SOURCE,      // re-point to the parent context itself
+    UI_STALE_TO_SOURCE,      // re-point to the removed id's parent (after an overflow: to the entry's source)
     UI_STALE_CLEAR,          // empty the list (for an entry: keep it, clear targets)
 }UiStaleMode;
 
@@ -91,7 +91,7 @@ size_t ui_layer_nav_target_list_count(UI_TARGET_LIST* targets);
 bool ui_layer_nav_target_list_clear(UI_TARGET_LIST* targets);
 // get the ContextId from the targets list in the idx index
 ContextId ui_layer_nav_target_list_get(UI_TARGET_LIST* targets, size_t idx);
-// double the target_list size
+// change the target_list size
 bool ui_layer_nav_target_list_resize(UI_TARGET_LIST* targets, size_t new_capacity);
 // lower the borrow_count of the state, indicating that it is safe to change the hash table
 void ui_layer_nav_target_list_end(UI_STATE* state);
