@@ -11,8 +11,7 @@
 #include <unistd.h>
 
 // limit the display to 10 rows before and after the hovered context
-#define SELECTED_DIST 10 // further away contexts from cx_selected will not be displayed
-#define VIEW_ROWS (SELECTED_DIST * 2 + 1) // hovered row + SELECTED_DIST either side
+#define VIEW_ROWS 21
 
 #define ACTION_LIST_COUNT 8 // maximum possible actions for a context when returning DataAction
 #define ACTION_ARG_COUNT 5 // maximum possible DataArgSpec for a single DataAction
@@ -47,7 +46,8 @@ typedef struct _view_source{
 // cursor. rows are raw indices into the source, in order - only shown ones, so
 // an item that is not drawn never costs a row or a truncation marker
 typedef struct _list_view{
-    size_t rows[VIEW_ROWS];
+    size_t *rows;      // caller-owned, holds capacity items
+    size_t capacity;
     size_t row_count;
     size_t cursor_row; // index into rows, row_count when nothing is drawn
     bool more_before;  // shown items exist above rows[0]
@@ -327,7 +327,7 @@ static size_t helper_view_before(const VIEW_SOURCE *src, size_t pos){
 
 // collect up to cap shown items walking away from `from` in one direction (no
 // wrapping), nearest first. Sets *more when at least one more shown item was
-// left behind
+// left behind. A NULL out only counts
 static size_t helper_view_collect(const VIEW_SOURCE *src, size_t from, bool next,
                                   size_t cap, size_t *out, bool *more){
     size_t count = 0;
@@ -342,37 +342,40 @@ static size_t helper_view_collect(const VIEW_SOURCE *src, size_t from, bool next
             *more = true;
             break;
         }
-        out[count++] = idx;
+        if(out)
+            out[count] = idx;
+        count++;
     }
 
     return count;
 }
 
-// build the on-screen slice of src's shown items around cursor_idx. A cursor
-// that is out of range or on an item not shown yields an empty view
+// build the on-screen slice of src's shown items around cursor_idx, up to
+// view->capacity rows into view->rows. No capacity, or a cursor that is out of
+// range or on an item not shown yields an empty view
 static void helper_view_build(const VIEW_SOURCE *src, size_t cursor_idx, LIST_VIEW *view){
     view->row_count = 0;
     view->cursor_row = 0;
     view->more_before = false;
     view->more_after = false;
 
-    if(!helper_view_shown(src, cursor_idx))
+    if(view->capacity == 0 || !helper_view_shown(src, cursor_idx))
         return;
 
-    // gather as much as either side could ever need, then split the
-    // VIEW_ROWS - 1 non-cursor rows between them
-    size_t before[VIEW_ROWS - 1];
-    size_t after[VIEW_ROWS - 1];
-    size_t before_count = helper_view_collect(src, cursor_idx, false, VIEW_ROWS - 1,
-                                              before, &view->more_before);
-    size_t after_count = helper_view_collect(src, cursor_idx, true, VIEW_ROWS - 1,
-                                             after, &view->more_after);
+    // count as much as either side could ever need, then split the
+    // non-cursor rows between them
+    size_t non_cursor_rows = view->capacity - 1;
+    size_t before_count = helper_view_collect(src, cursor_idx, false, non_cursor_rows,
+                                              NULL, &view->more_before);
+    size_t after_count = helper_view_collect(src, cursor_idx, true, non_cursor_rows,
+                                             NULL, &view->more_after);
 
     // centre the cursor row, then hand whatever the short side left unused
     // to the other one, so the screen stays full near either end of the list
-    size_t take_before = before_count < SELECTED_DIST ? before_count : SELECTED_DIST;
-    size_t take_after = after_count < SELECTED_DIST ? after_count : SELECTED_DIST;
-    size_t spare = (VIEW_ROWS - 1) - take_before - take_after;
+    size_t selected_dist = non_cursor_rows / 2;
+    size_t take_before = before_count < selected_dist ? before_count : selected_dist;
+    size_t take_after = after_count < selected_dist ? after_count : selected_dist;
+    size_t spare = non_cursor_rows - take_before - take_after;
 
     size_t grow = after_count - take_after;
     if(grow > spare)
@@ -385,20 +388,20 @@ static void helper_view_build(const VIEW_SOURCE *src, size_t cursor_idx, LIST_VI
         grow = spare;
     take_before += grow;
 
-    // before[] came back nearest-first, so it unwinds into the view backwards
-    for(size_t i = take_before; i > 0; i--)
-        view->rows[view->row_count++] = before[i - 1];
+    // capped at the split, so these also set more_* for the rows it dropped
+    view->row_count = helper_view_collect(src, cursor_idx, false, take_before,
+                                          view->rows, &view->more_before);
+    // the before rows came back nearest-first
+    for(size_t low = 0, high = view->row_count; low + 1 < high; low++, high--){
+        size_t row = view->rows[low];
+        view->rows[low] = view->rows[high - 1];
+        view->rows[high - 1] = row;
+    }
     view->cursor_row = view->row_count;
     view->rows[view->row_count++] = cursor_idx;
-    for(size_t i = 0; i < take_after; i++)
-        view->rows[view->row_count++] = after[i];
-
-    // rows dropped by the split are truncation just as much as the ones
-    // collect left behind
-    if(take_before < before_count)
-        view->more_before = true;
-    if(take_after < after_count)
-        view->more_after = true;
+    view->row_count += helper_view_collect(src, cursor_idx, true, take_after,
+                                           view->rows + view->row_count,
+                                           &view->more_after);
 }
 
 // ---------------------------------------------------------------------------
@@ -925,7 +928,8 @@ static void helper_list_render(LIST_ROWS *rows, const char *header,
     printf("-- %s --\n\n", header);
 
     VIEW_SOURCE source = helper_list_source(rows);
-    LIST_VIEW view;
+    size_t view_rows[VIEW_ROWS];
+    LIST_VIEW view = {.rows = view_rows, .capacity = VIEW_ROWS};
     helper_view_build(&source, cursor_idx, &view);
     if (view.row_count == 0)
         printf("(no options)\n");
@@ -1512,7 +1516,8 @@ int main() {
             CONTEXT_CHILDREN children = {ui_layer, state_main_context_current};
             VIEW_SOURCE source = {state_main_current_info.child_count,
                                   helper_context_child_shown, &children};
-            LIST_VIEW view;
+            size_t view_rows[VIEW_ROWS];
+            LIST_VIEW view = {.rows = view_rows, .capacity = VIEW_ROWS};
             helper_view_build(&source, state_main_hovered_idx, &view);
             // store all the row ContextIds so the ui_layer_state_reconcile
             // checks these for any changes, not only the
