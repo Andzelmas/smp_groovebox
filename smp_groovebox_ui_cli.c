@@ -1,6 +1,7 @@
 #include "data_actions.h"
 #include "data_object.h"
 #include "ui_layer.h"
+#include "ui_windowing.h"
 #include <errno.h>
 #include <poll.h>
 #include <stdint.h>
@@ -34,27 +35,7 @@ typedef struct _context_intrf_info{
     uint32_t latency; // frames the context adds, 0 for none
 } CONTEXT_INTRF_INFO;
 
-// what a window is built over: count raw items, of which shown() says which
-// are drawn. shown NULL means every item is drawn
-typedef struct _view_source{
-    size_t count;
-    bool (*shown)(void *user, size_t idx);
-    void *user;
-} VIEW_SOURCE;
-
-// the slice of a source's shown items that fits on screen, built around the
-// cursor. rows are raw indices into the source, in order - only shown ones, so
-// an item that is not drawn never costs a row or a truncation marker
-typedef struct _list_view{
-    size_t *rows;      // caller-owned, holds capacity items
-    size_t capacity;
-    size_t row_count;
-    size_t cursor_row; // index into rows, row_count when nothing is drawn
-    bool more_before;  // shown items exist above rows[0]
-    bool more_after;   // ... and below rows[row_count - 1]
-} LIST_VIEW;
-
-// a context's children as a VIEW_SOURCE: shown means visible
+// a context's children as a UI_WINDOWING_SOURCE: shown means visible
 typedef struct _context_children{
     UI_LAYER *ui_layer;
     ContextId parent;
@@ -189,7 +170,8 @@ typedef struct _list_session{
     size_t depth[LIST_MAX_ARG_SPECS];
 } LIST_SESSION;
 
-// one list of a session as a VIEW_SOURCE: shown means the row passes filter
+// one list of a session as a UI_WINDOWING_SOURCE: shown means the row passes
+// filter
 typedef struct _list_rows{
     UI_LAYER *ui_layer;
     ContextId context;
@@ -280,131 +262,6 @@ static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* ta
 */
 
 // ---------------------------------------------------------------------------
-// windows. Pure over a VIEW_SOURCE: no ui_layer, no knowledge of what an item is
-
-static bool helper_view_shown(const VIEW_SOURCE *src, size_t idx){
-    if(idx >= src->count)
-        return false;
-    return !src->shown || src->shown(src->user, idx);
-}
-
-// step one shown item away from `from`, wrapping at the ends. src->count when
-// nothing is shown
-static size_t helper_view_step(const VIEW_SOURCE *src, size_t from, bool next){
-    if(src->count == 0)
-        return 0;
-
-    size_t idx = from;
-    for(size_t steps = 0; steps < src->count; steps++){
-        if(next)
-            idx = (idx + 1 >= src->count) ? 0 : idx + 1;
-        else
-            idx = (idx == 0 || idx > src->count) ? src->count - 1 : idx - 1;
-        if(helper_view_shown(src, idx))
-            return idx;
-    }
-
-    return src->count;
-}
-
-// `from` itself when it is shown, else the next shown item after it.
-// src->count when nothing is shown
-static size_t helper_view_nearest(const VIEW_SOURCE *src, size_t from){
-    if(helper_view_shown(src, from))
-        return from;
-    return helper_view_step(src, from, true);
-}
-
-// the last shown item before pos, else the first shown one at or after it.
-// src->count when nothing is shown
-static size_t helper_view_before(const VIEW_SOURCE *src, size_t pos){
-    for(size_t i = pos < src->count ? pos : src->count; i > 0; i--){
-        if(helper_view_shown(src, i - 1))
-            return i - 1;
-    }
-    return helper_view_nearest(src, pos);
-}
-
-// collect up to cap shown items walking away from `from` in one direction (no
-// wrapping), nearest first. Sets *more when at least one more shown item was
-// left behind. A NULL out only counts
-static size_t helper_view_collect(const VIEW_SOURCE *src, size_t from, bool next,
-                                  size_t cap, size_t *out, bool *more){
-    size_t count = 0;
-    *more = false;
-
-    size_t idx = from;
-    while(next ? (idx + 1 < src->count) : (idx > 0)){
-        idx = next ? idx + 1 : idx - 1;
-        if(!helper_view_shown(src, idx))
-            continue;
-        if(count == cap){
-            *more = true;
-            break;
-        }
-        if(out)
-            out[count] = idx;
-        count++;
-    }
-
-    return count;
-}
-
-// build the on-screen slice of src's shown items around cursor_idx, up to
-// view->capacity rows into view->rows. No capacity, or a cursor that is out of
-// range or on an item not shown yields an empty view
-static void helper_view_build(const VIEW_SOURCE *src, size_t cursor_idx, LIST_VIEW *view){
-    view->row_count = 0;
-    view->cursor_row = 0;
-    view->more_before = false;
-    view->more_after = false;
-
-    if(view->capacity == 0 || !helper_view_shown(src, cursor_idx))
-        return;
-
-    // count as much as either side could ever need, then split the
-    // non-cursor rows between them
-    size_t non_cursor_rows = view->capacity - 1;
-    size_t before_count = helper_view_collect(src, cursor_idx, false, non_cursor_rows,
-                                              NULL, &view->more_before);
-    size_t after_count = helper_view_collect(src, cursor_idx, true, non_cursor_rows,
-                                             NULL, &view->more_after);
-
-    // centre the cursor row, then hand whatever the short side left unused
-    // to the other one, so the screen stays full near either end of the list
-    size_t selected_dist = non_cursor_rows / 2;
-    size_t take_before = before_count < selected_dist ? before_count : selected_dist;
-    size_t take_after = after_count < selected_dist ? after_count : selected_dist;
-    size_t spare = non_cursor_rows - take_before - take_after;
-
-    size_t grow = after_count - take_after;
-    if(grow > spare)
-        grow = spare;
-    take_after += grow;
-    spare -= grow;
-
-    grow = before_count - take_before;
-    if(grow > spare)
-        grow = spare;
-    take_before += grow;
-
-    // capped at the split, so these also set more_* for the rows it dropped
-    view->row_count = helper_view_collect(src, cursor_idx, false, take_before,
-                                          view->rows, &view->more_before);
-    // the before rows came back nearest-first
-    for(size_t low = 0, high = view->row_count; low + 1 < high; low++, high--){
-        size_t row = view->rows[low];
-        view->rows[low] = view->rows[high - 1];
-        view->rows[high - 1] = row;
-    }
-    view->cursor_row = view->row_count;
-    view->rows[view->row_count++] = cursor_idx;
-    view->row_count += helper_view_collect(src, cursor_idx, true, take_after,
-                                           view->rows + view->row_count,
-                                           &view->more_after);
-}
-
-// ---------------------------------------------------------------------------
 // visible children. Navigation and rendering must agree on which children
 // exist, otherwise the cursor lands on rows that are never drawn - so every
 // index that travels between them goes through the helpers below.
@@ -445,8 +302,8 @@ static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, Conte
         return;
 
     CONTEXT_CHILDREN children = {ui_layer, parent};
-    VIEW_SOURCE source = {cx_info.child_count, helper_context_child_shown, &children};
-    size_t new_idx = helper_view_step(&source, *cur_idx, next);
+    UI_WINDOWING_SOURCE source = {cx_info.child_count, helper_context_child_shown, &children};
+    size_t new_idx = ui_windowing_step(&source, *cur_idx, next);
     if(new_idx >= cx_info.child_count)
         return;
 
@@ -511,8 +368,8 @@ helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
 
     // a hidden row is never drawn, so the purpose must not rest on one
     CONTEXT_CHILDREN children = {ui_layer, parent};
-    VIEW_SOURCE source = {parent_info.child_count, helper_context_child_shown, &children};
-    size_t visible_idx = helper_view_nearest(&source, stored_idx);
+    UI_WINDOWING_SOURCE source = {parent_info.child_count, helper_context_child_shown, &children};
+    size_t visible_idx = ui_windowing_nearest_shown(&source, stored_idx);
     if(visible_idx < parent_info.child_count && visible_idx != stored_idx){
         ContextId visible_child = ui_layer_context_child_at(ui_layer, parent, visible_idx);
         if(ui_layer_context_valid(ui_layer, visible_child)){
@@ -748,8 +605,8 @@ static bool helper_list_row_shown(void *user, size_t idx) {
 }
 
 // an unfiltered list skips the predicate - every row list_at returns is shown
-static VIEW_SOURCE helper_list_source(LIST_ROWS *rows) {
-    VIEW_SOURCE src = {helper_list_count(rows), NULL, rows};
+static UI_WINDOWING_SOURCE helper_list_source(LIST_ROWS *rows) {
+    UI_WINDOWING_SOURCE src = {helper_list_count(rows), NULL, rows};
     if (rows->filter->group != 0 || rows->filter->linked_only)
         src.shown = helper_list_row_shown;
     return src;
@@ -783,16 +640,16 @@ static size_t helper_list_find(const LIST_ROWS *rows, uint64_t value,
 
 // idx must be shown
 static void helper_list_cursor_settle(const LIST_ROWS *rows,
-                                      const VIEW_SOURCE *src, LIST_CURSOR *cur,
-                                      size_t idx) {
+                                      const UI_WINDOWING_SOURCE *src,
+                                      LIST_CURSOR *cur, size_t idx) {
     size_t near;
     bool more;
     cur->idx = idx;
     cur->value = helper_list_value_at(rows, idx);
-    cur->prev = helper_view_collect(src, idx, false, 1, &near, &more)
+    cur->prev = ui_windowing_collect_shown(src, idx, false, 1, &near, &more)
                     ? helper_list_value_at(rows, near)
                     : 0;
-    cur->next = helper_view_collect(src, idx, true, 1, &near, &more)
+    cur->next = ui_windowing_collect_shown(src, idx, true, 1, &near, &more)
                     ? helper_list_value_at(rows, near)
                     : 0;
 }
@@ -802,13 +659,13 @@ static void helper_list_cursor_settle(const LIST_ROWS *rows,
 // A row that is gone passes it to the row before where it was, as
 // UI_STALE_PREV_SIBLING does. With nothing shown the cursor is left as it is
 static void helper_list_cursor_anchor(LIST_ROWS *rows, LIST_CURSOR *cur) {
-    VIEW_SOURCE src = helper_list_source(rows);
+    UI_WINDOWING_SOURCE src = helper_list_source(rows);
     size_t idx;
     size_t found = helper_list_find(rows, cur->value, cur->idx);
     if (cur->value == 0) {
-        idx = helper_view_nearest(&src, 0);
+        idx = ui_windowing_nearest_shown(&src, 0);
     } else if (found < src.count) {
-        idx = helper_view_nearest(&src, found);
+        idx = ui_windowing_nearest_shown(&src, found);
     } else {
         // where the gone row would sit now, going by the rows it had around it
         size_t prev = helper_list_find(rows, cur->prev, cur->idx - 1);
@@ -818,7 +675,7 @@ static void helper_list_cursor_anchor(LIST_ROWS *rows, LIST_CURSOR *cur) {
             pos = prev + 1;
         else if (next < src.count)
             pos = next;
-        idx = helper_view_before(&src, pos);
+        idx = ui_windowing_last_shown_before(&src, pos);
     }
     if (idx < src.count)
         helper_list_cursor_settle(rows, &src, cur, idx);
@@ -826,8 +683,8 @@ static void helper_list_cursor_anchor(LIST_ROWS *rows, LIST_CURSOR *cur) {
 
 static void helper_list_cursor_move(LIST_ROWS *rows, LIST_CURSOR *cur,
                                     bool next) {
-    VIEW_SOURCE src = helper_list_source(rows);
-    size_t idx = helper_view_step(&src, cur->idx, next);
+    UI_WINDOWING_SOURCE src = helper_list_source(rows);
+    size_t idx = ui_windowing_step(&src, cur->idx, next);
     if (idx < src.count)
         helper_list_cursor_settle(rows, &src, cur, idx);
 }
@@ -927,29 +784,29 @@ static void helper_list_render(LIST_ROWS *rows, const char *header,
                                const char *status, size_t cursor_idx) {
     printf("-- %s --\n\n", header);
 
-    VIEW_SOURCE source = helper_list_source(rows);
-    size_t view_rows[VIEW_ROWS];
-    LIST_VIEW view = {.rows = view_rows, .capacity = VIEW_ROWS};
-    helper_view_build(&source, cursor_idx, &view);
-    if (view.row_count == 0)
+    UI_WINDOWING_SOURCE source = helper_list_source(rows);
+    size_t slice_items[VIEW_ROWS];
+    UI_WINDOWING_SLICE slice = {.items = slice_items, .capacity = VIEW_ROWS};
+    ui_windowing_fill_around_cursor(&source, cursor_idx, &slice);
+    if (slice.count == 0)
         printf("(no options)\n");
 
-    if (view.more_before)
+    if (slice.more_before)
         printf("-...-\n");
     DataChoice row;
-    for (size_t r = 0; r < view.row_count; r++) {
+    for (size_t r = 0; r < slice.count; r++) {
         if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                      rows->partial, rows->branch, view.rows[r], &row))
+                                      rows->partial, rows->branch, slice.items[r], &row))
             continue;
         // the group tells same-named rows apart until one group is shown
         bool grouped = rows->filter->group == 0 && row.group_key != 0;
-        printf("%s%s%s%s%s%s\n", r == view.cursor_row ? ">" : "",
+        printf("%s%s%s%s%s%s\n", r == slice.cursor_slot ? ">" : "",
                grouped ? (row.group_label ? row.group_label : "?") : "",
                grouped ? ": " : "", row.label ? row.label : "?",
                (row.flags & DATA_CHOICE_BRANCH) ? "/" : "",
                (row.flags & DATA_CHOICE_LINKED) ? " [connected]" : "");
     }
-    if (view.more_after)
+    if (slice.more_after)
         printf("-...-\n");
 
     if (status && status[0])
@@ -1213,16 +1070,16 @@ static int helper_input_wait(const VIEWS_SYNC *sync) {
 // refilled every frame
 static void helper_shown_rows_set(UI_LAYER *ui_layer, UI_STATE *state,
                                   ContextId root, ContextId parent,
-                                  const LIST_VIEW *view) {
+                                  const UI_WINDOWING_SLICE *slice) {
     ui_layer_state_entry_set(state, root, UI_PURPOSE_SHOWN, VIEW_ROWS);
     UI_TARGET_LIST *targets =
         ui_layer_nav_target_list_begin(state, root, UI_PURPOSE_SHOWN);
     if (!targets)
         return;
     ui_layer_nav_target_list_clear(targets);
-    for (size_t row = 0; row < view->row_count; row++)
+    for (size_t row = 0; row < slice->count; row++)
         ui_layer_nav_target_list_add(
-            targets, ui_layer_context_child_at(ui_layer, parent, view->rows[row]));
+            targets, ui_layer_context_child_at(ui_layer, parent, slice->items[row]));
     ui_layer_nav_target_list_end(state);
 }
 
@@ -1301,8 +1158,8 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return true;
 
     // with nothing shown the cursor rests on a row the user cannot see
-    VIEW_SOURCE source = helper_list_source(&rows);
-    if (!helper_view_shown(&source, cur->idx))
+    UI_WINDOWING_SOURCE source = helper_list_source(&rows);
+    if (!ui_windowing_is_shown(&source, cur->idx))
         return true;
     DataChoice picked;
     if (!ui_layer_context_list_at(ui_layer, session->context, spec->list,
@@ -1514,26 +1371,26 @@ int main() {
             // one. The builder owns the hidden/limit geometry, so all that is
             // left here is drawing rows
             CONTEXT_CHILDREN children = {ui_layer, state_main_context_current};
-            VIEW_SOURCE source = {state_main_current_info.child_count,
-                                  helper_context_child_shown, &children};
-            size_t view_rows[VIEW_ROWS];
-            LIST_VIEW view = {.rows = view_rows, .capacity = VIEW_ROWS};
-            helper_view_build(&source, state_main_hovered_idx, &view);
+            UI_WINDOWING_SOURCE source = {state_main_current_info.child_count,
+                                          helper_context_child_shown, &children};
+            size_t slice_items[VIEW_ROWS];
+            UI_WINDOWING_SLICE slice = {.items = slice_items, .capacity = VIEW_ROWS};
+            ui_windowing_fill_around_cursor(&source, state_main_hovered_idx, &slice);
             // store all the row ContextIds so the ui_layer_state_reconcile
             // checks these for any changes, not only the
             // state_main_context_current, root and others
             helper_shown_rows_set(ui_layer, state_main, id_root,
-                                  state_main_context_current, &view);
+                                  state_main_context_current, &slice);
 
-            if (view.more_before)
+            if (slice.more_before)
                 printf("-...-\n");
-            for (size_t row = 0; row < view.row_count; row++) {
+            for (size_t row = 0; row < slice.count; row++) {
                 ContextId child = ui_layer_context_child_at(
-                    ui_layer, state_main_context_current, view.rows[row]);
+                    ui_layer, state_main_context_current, slice.items[row]);
                 CONTEXT_INTRF_INFO child_info;
                 if (!helper_context_info_get(ui_layer, child, &child_info))
                     continue;
-                if (row == view.cursor_row)
+                if (row == slice.cursor_slot)
                     printf(">%s", child_info.name);
                 else
                     printf("%s", child_info.name);
@@ -1542,7 +1399,7 @@ int main() {
                 child_info.value ? printf(" --- %s\n", child_info.value)
                                  : printf("\n");
             }
-            if (view.more_after)
+            if (slice.more_after)
                 printf("-...-\n");
         }
 
@@ -1630,8 +1487,8 @@ int main() {
             for(size_t i = 0; i < cx_root_info.child_count; i++){
                 // don't show hidden children
                 CONTEXT_CHILDREN chldr = {ui_layer, id_root};
-                VIEW_SOURCE src = {cx_root_info.child_count, helper_context_child_shown, &chldr};
-                if(!helper_view_shown(&src, i))
+                UI_WINDOWING_SOURCE src = {cx_root_info.child_count, helper_context_child_shown, &chldr};
+                if(!ui_windowing_is_shown(&src, i))
                     continue;
                 ContextId root_child =
                     ui_layer_context_child_at(ui_layer, id_root, i);
