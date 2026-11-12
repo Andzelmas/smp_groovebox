@@ -1,6 +1,7 @@
 #include "data_actions.h"
 #include "data_object.h"
 #include "ui_layer.h"
+#include "ui_nav.h"
 #include "ui_windowing.h"
 #include <errno.h>
 #include <poll.h>
@@ -17,29 +18,13 @@
 #define ACTION_LIST_COUNT 8 // maximum possible actions for a context when returning DataAction
 #define ACTION_ARG_COUNT 5 // maximum possible DataArgSpec for a single DataAction
 #define STATES_COUNT 2 // how many states on this program
-#define ACTION_SOURCES_COUNT 3 // contexts whose actions are gathered: current + hovered + root
+#define ACTION_SOURCES_COUNT 10 // contexts whose actions are gathered: hovered + ContexIds up to root Context
 #define MAX_ACTION_CANDIDATES (ACTION_LIST_COUNT * ACTION_SOURCES_COUNT)
 // while waiting for a key, pull fresh data from the ui_layer this often (ms)
 #define INPUT_WAIT_TICK_MS 30
 // helper_input_wait result when the screen has to be drawn again - not a key
 // (and not EOF, which is -1)
 #define INPUT_WAIT_REDRAW (-2)
-
-// convenient struct to hold info about a retrieved ContextId
-typedef struct _context_intrf_info{
-    // BORROWED STRING ADDRESS
-    const char *name;
-    size_t child_count;
-    bool is_hidden; //is this context hidden (as informed by the data layer)
-    const char* value; //value of a context with a value, BORROWED
-    uint32_t latency; // frames the context adds, 0 for none
-} CONTEXT_INTRF_INFO;
-
-// a context's children as a UI_WINDOWING_SOURCE: shown means visible
-typedef struct _context_children{
-    UI_LAYER *ui_layer;
-    ContextId parent;
-} CONTEXT_CHILDREN;
 
 // the views helper_input_wait keeps in step with the data while no key is
 // pressed
@@ -181,30 +166,6 @@ typedef struct _list_rows{
     const LIST_FILTER *filter;
 } LIST_ROWS;
 
-static bool helper_context_info_get( UI_LAYER *ui_layer, ContextId context, CONTEXT_INTRF_INFO *info)
-{
-    if (!ui_layer)
-        return false;
-
-    if (!info)
-        return false;
-
-    if (!ui_layer_context_valid(ui_layer, context))
-        return false;
-
-    const char *cx_name = ui_layer_context_name_return(ui_layer, context);
-    if (!cx_name)
-        return false;
-
-    info->name = cx_name;
-    info->child_count = ui_layer_context_children_count(ui_layer, context);
-    info->value = ui_layer_context_value_as_string(ui_layer, context);
-    info->is_hidden = ui_layer_context_is_hidden(ui_layer, context);
-    info->latency = ui_layer_context_latency(ui_layer, context);
-
-    return true;
-}
-
 // Add add_id, if the array is full reset the array and start from beginning
 static bool helper_target_list_add_reset_on_full(UI_LAYER* ui_layer, UI_TARGET_LIST* target_list, ContextId add_id){
     if (!target_list)
@@ -266,26 +227,6 @@ static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* ta
 // exist, otherwise the cursor lands on rows that are never drawn - so every
 // index that travels between them goes through the helpers below.
 
-// a child is visible when it can be read and the data layer does not hide it.
-// Deliberately the same info_get the renderer uses, so "visible" always means
-// "will be drawn"
-static bool helper_child_visible_at(UI_LAYER* ui_layer, ContextId parent, size_t idx, ContextId* out_child){
-    ContextId child = ui_layer_context_child_at(ui_layer, parent, idx);
-    CONTEXT_INTRF_INFO info;
-    if(!helper_context_info_get(ui_layer, child, &info))
-        return false;
-    if(info.is_hidden)
-        return false;
-    if(out_child)
-        *out_child = child;
-    return true;
-}
-
-static bool helper_context_child_shown(void *user, size_t idx){
-    CONTEXT_CHILDREN *children = user;
-    return helper_child_visible_at(children->ui_layer, children->parent, idx, NULL);
-}
-
 // select previous child of parent (or next if next true), skipping hidden
 // children so the cursor only ever rests on a drawn row.
 // cur_idx - address of the current index in the parent children array
@@ -297,12 +238,12 @@ static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, Conte
     if(!cur_idx)
         return;
 
-    CONTEXT_INTRF_INFO cx_info;
-    if(!helper_context_info_get(ui_layer, parent, &cx_info))
+    UI_NAV_CONTEXT_INFO cx_info;
+    if(!ui_nav_context_info_get(ui_layer, parent, &cx_info))
         return;
 
-    CONTEXT_CHILDREN children = {ui_layer, parent};
-    UI_WINDOWING_SOURCE source = {cx_info.child_count, helper_context_child_shown, &children};
+    UI_NAV_CHILDREN children;
+    UI_WINDOWING_SOURCE source = ui_nav_children_source(ui_layer, parent, &children);
     size_t new_idx = ui_windowing_step(&source, *cur_idx, 1, next, true);
     if(new_idx >= cx_info.child_count)
         return;
@@ -337,8 +278,8 @@ helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
     if(!ui_layer_context_valid(ui_layer, parent))
         return 0;
 
-    CONTEXT_INTRF_INFO parent_info;
-    if(!helper_context_info_get(ui_layer, parent, &parent_info))
+    UI_NAV_CONTEXT_INFO parent_info;
+    if(!ui_nav_context_info_get(ui_layer, parent, &parent_info))
         return 0;
     if(parent_info.child_count == 0)
         return 0;
@@ -367,8 +308,8 @@ helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
     }
 
     // a hidden row is never drawn, so the purpose must not rest on one
-    CONTEXT_CHILDREN children = {ui_layer, parent};
-    UI_WINDOWING_SOURCE source = {parent_info.child_count, helper_context_child_shown, &children};
+    UI_NAV_CHILDREN children;
+    UI_WINDOWING_SOURCE source = ui_nav_children_source(ui_layer, parent, &children);
     size_t visible_idx = ui_windowing_nearest_shown(&source, stored_idx);
     if(visible_idx < parent_info.child_count && visible_idx != stored_idx){
         ContextId visible_child = ui_layer_context_child_at(ui_layer, parent, visible_idx);
@@ -1362,17 +1303,17 @@ int main() {
         if(ui_nav_mode == UI_MODE_ACTION)
             printf("\e[2m");
 
-        CONTEXT_INTRF_INFO state_main_current_info;
-        if (helper_context_info_get(ui_layer, state_main_context_current,
+        UI_NAV_CONTEXT_INFO state_main_current_info;
+        if (ui_nav_context_info_get(ui_layer, state_main_context_current,
                                     &state_main_current_info)) {
             printf("----| %s |----\n\n", state_main_current_info.name);
 
             // the window of children that fits on screen around the hovered
             // one. The builder owns the hidden/limit geometry, so all that is
             // left here is drawing rows
-            CONTEXT_CHILDREN children = {ui_layer, state_main_context_current};
-            UI_WINDOWING_SOURCE source = {state_main_current_info.child_count,
-                                          helper_context_child_shown, &children};
+            UI_NAV_CHILDREN children;
+            UI_WINDOWING_SOURCE source = ui_nav_children_source(
+                ui_layer, state_main_context_current, &children);
             size_t slice_items[VIEW_ROWS];
             UI_WINDOWING_SLICE slice = {.items = slice_items, .capacity = VIEW_ROWS};
             ui_windowing_fill_around_cursor(&source, state_main_hovered_idx, &slice);
@@ -1387,8 +1328,8 @@ int main() {
             for (size_t row = 0; row < slice.count; row++) {
                 ContextId child = ui_layer_context_child_at(
                     ui_layer, state_main_context_current, slice.items[row]);
-                CONTEXT_INTRF_INFO child_info;
-                if (!helper_context_info_get(ui_layer, child, &child_info))
+                UI_NAV_CONTEXT_INFO child_info;
+                if (!ui_nav_context_info_get(ui_layer, child, &child_info))
                     continue;
                 if (row == slice.cursor_slot)
                     printf(">%s", child_info.name);
@@ -1412,12 +1353,25 @@ int main() {
         ContextId state_current_context_hovered = helper_purpose_get(
             ui_layer, state_main, state_main_context_current,
             UI_PURPOSE_HOVERED);
-        // root's actions are offered everywhere, but only once
-        ContextId root_source =
-            (id_root == state_main_context_current ||
-             id_root == state_current_context_hovered)
-                ? CONTEXT_ID_INVALID
-                : id_root;
+        // collect the ContextIds that can have actions - from hovered up to root
+        ContextId action_sources[ACTION_SOURCES_COUNT] = {0};
+        size_t action_idx_counted = 0;
+        // find the ContextIds from the current context, travelling up until the root ContextId
+        ContextId action_cx_curr = state_main_context_current;
+        for(size_t action_idx = 0; action_idx < ACTION_SOURCES_COUNT; action_idx++){
+            // always add the hovered id
+            if(action_idx == 0){
+                action_sources[action_idx] = state_current_context_hovered;
+                action_idx_counted += 1;
+                continue;
+            }
+            action_sources[action_idx] = action_cx_curr;
+            action_idx_counted += 1;
+            ContextId action_cx_parent = ui_layer_context_parent_return(ui_layer, action_cx_curr);
+            if(!ui_layer_context_valid(ui_layer, action_cx_parent))
+                break;
+            action_cx_curr = action_cx_parent;
+        }
         bool need_gather = true;
         if (ui_nav_mode == UI_MODE_ACTION) {
             candidate_count = helper_action_candidates_revalidate(
@@ -1429,33 +1383,28 @@ int main() {
         }
         if (need_gather) {
             candidate_count = 0;
-            helper_action_candidates_gather(
-                ui_layer, state_main_context_current, candidates,
-                MAX_ACTION_CANDIDATES, &candidate_count);
-            helper_action_candidates_gather(
-                ui_layer, state_current_context_hovered, candidates,
-                MAX_ACTION_CANDIDATES, &candidate_count);
-            helper_action_candidates_gather(ui_layer, root_source, candidates,
-                                            MAX_ACTION_CANDIDATES,
-                                            &candidate_count);
+            for (size_t i = 0; i < action_idx_counted; i++) {
+                ContextId curr_action_cx = action_sources[i];
+                helper_action_candidates_gather(
+                    ui_layer, curr_action_cx, candidates, MAX_ACTION_CANDIDATES,
+                    &candidate_count);
+            }
             helper_action_candidates_assign_letters(candidates, candidate_count,
                                                     true);
         }
-        // show possible actions for the current drill round
+        // show(print) possible actions for the current drill round
         printf("\n-------------------------------------------------------------"
-               "---------------------------------------\n");
+               "---------------------------------------");
 
-        ContextId action_sources[ACTION_SOURCES_COUNT] = {
-            state_main_context_current, state_current_context_hovered,
-            root_source};
-        for (size_t s = 0; s < ACTION_SOURCES_COUNT; s++) {
+        for (size_t s = 0; s < action_idx_counted; s++) {
             ContextId src = action_sources[s];
-            CONTEXT_INTRF_INFO src_info;
-            if (!helper_context_info_get(ui_layer, src, &src_info))
+            UI_NAV_CONTEXT_INFO src_info;
+            if (!ui_nav_context_info_get(ui_layer, src, &src_info))
                 continue;
             if (!helper_action_canditates_has_source(candidates, candidate_count,
                                                     src))
                 continue;
+            printf("\n");
             printf("%s: ", src_info.name);
             for (size_t i = 0; i < candidate_count; i++) {
                 if (candidates[i].actions_context != src)
@@ -1474,7 +1423,6 @@ int main() {
                 if (ui_nav_mode == UI_MODE_ACTION)
                     printf("\e[2m");
             }
-            printf("| ");
         }
         printf("\n");
         printf("-------------------------------------------------------------"
@@ -1482,25 +1430,23 @@ int main() {
 
         // show the state_root info
         printf("\n");
-        CONTEXT_INTRF_INFO cx_root_info;
-        if(helper_context_info_get(ui_layer, id_root, &cx_root_info)){
+        UI_NAV_CONTEXT_INFO cx_root_info;
+        if(ui_nav_context_info_get(ui_layer, id_root, &cx_root_info)){
+            UI_NAV_CHILDREN chldr;
+            UI_WINDOWING_SOURCE src = ui_nav_children_source(ui_layer, id_root, &chldr);
             for(size_t i = 0; i < cx_root_info.child_count; i++){
                 // don't show hidden children
-                CONTEXT_CHILDREN chldr = {ui_layer, id_root};
-                UI_WINDOWING_SOURCE src = {cx_root_info.child_count, helper_context_child_shown, &chldr};
                 if(!ui_windowing_is_shown(&src, i))
                     continue;
                 ContextId root_child =
                     ui_layer_context_child_at(ui_layer, id_root, i);
-                if (ui_layer_context_valid(ui_layer, root_child)) {
-                    CONTEXT_INTRF_INFO cx_root_child_info;
-                    if(helper_context_info_get(ui_layer, root_child, &cx_root_child_info)){
-                        printf("| %lu_%s |", i, cx_root_child_info.name);
-                    }
+                UI_NAV_CONTEXT_INFO cx_root_child_info;
+                if (ui_nav_context_info_get(ui_layer, root_child,
+                                            &cx_root_child_info)) {
+                    printf("| %lu_%s |", i, cx_root_child_info.name);
                 }
-                if(i == cx_root_info.child_count - 1)
-                    printf("\n");
             }
+            printf("\n");
         }
 
         // system messages
