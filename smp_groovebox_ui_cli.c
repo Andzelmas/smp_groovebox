@@ -303,7 +303,7 @@ static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, Conte
 
     CONTEXT_CHILDREN children = {ui_layer, parent};
     UI_WINDOWING_SOURCE source = {cx_info.child_count, helper_context_child_shown, &children};
-    size_t new_idx = ui_windowing_step(&source, *cur_idx, next);
+    size_t new_idx = ui_windowing_step(&source, *cur_idx, 1, next, true);
     if(new_idx >= cx_info.child_count)
         return;
 
@@ -684,7 +684,7 @@ static void helper_list_cursor_anchor(LIST_ROWS *rows, LIST_CURSOR *cur) {
 static void helper_list_cursor_move(LIST_ROWS *rows, LIST_CURSOR *cur,
                                     bool next) {
     UI_WINDOWING_SOURCE src = helper_list_source(rows);
-    size_t idx = ui_windowing_step(&src, cur->idx, next);
+    size_t idx = ui_windowing_step(&src, cur->idx, 1, next, true);
     if (idx < src.count)
         helper_list_cursor_settle(rows, &src, cur, idx);
 }

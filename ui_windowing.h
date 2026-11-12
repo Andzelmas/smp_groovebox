@@ -21,16 +21,18 @@ typedef struct _ui_windowing_slice{
     size_t *items;      // caller-owned, holds capacity items
     size_t capacity;
     size_t count;
-    size_t cursor_slot; // index into items, count when nothing is drawn
+    size_t cursor_slot; // index into items, count when the cursor is not in them
     bool more_before;   // shown items exist before items[0]
     bool more_after;    // ... and after items[count - 1]
 } UI_WINDOWING_SLICE;
 
 bool ui_windowing_is_shown(const UI_WINDOWING_SOURCE *source, size_t idx);
 
-// step one shown item away from from_idx, wrapping at the ends. source->count
-// when nothing is shown
-size_t ui_windowing_step(const UI_WINDOWING_SOURCE *source, size_t from_idx, bool forward);
+// move steps shown items away from from_idx. With wrap it goes on past the
+// ends, without it stops on the last shown item in that direction.
+// source->count when that leaves it on no shown item
+size_t ui_windowing_step(const UI_WINDOWING_SOURCE *source, size_t from_idx, size_t steps,
+                         bool forward, bool wrap);
 
 // from_idx itself when it is shown, else the next shown item after it, wrapping
 // at the end. source->count when nothing is shown
@@ -51,3 +53,12 @@ size_t ui_windowing_collect_shown(const UI_WINDOWING_SOURCE *source, size_t from
 // an empty slice
 void ui_windowing_fill_around_cursor(const UI_WINDOWING_SOURCE *source, size_t cursor_idx,
                                      UI_WINDOWING_SLICE *slice);
+
+// fill slice forward from the first shown item at or after first_idx, up to
+// slice->capacity. Never pulls in earlier items, so a short last page keeps the
+// page boundaries fixed. No capacity yields an empty slice, so does no shown
+// item at or after first_idx, but then more_before says if any lie before it.
+// To page, step items[0] (first_idx when empty) by capacity without wrap while
+// more_after / more_before
+void ui_windowing_fill_from_first(const UI_WINDOWING_SOURCE *source, size_t first_idx,
+                                  size_t cursor_idx, UI_WINDOWING_SLICE *slice);
