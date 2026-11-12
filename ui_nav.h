@@ -27,7 +27,8 @@ typedef struct _ui_nav_children{
 bool ui_nav_context_info_get(UI_LAYER *ui_layer, ContextId context, UI_NAV_CONTEXT_INFO *info);
 
 // a child is visible when ui_nav_context_info_get reads it and it is not
-// hidden, so visible means "will be drawn". out_child may be NULL
+// hidden, so visible means "will be drawn". Reads only validity, name and
+// hidden. out_child may be NULL
 bool ui_nav_child_visible_at(UI_LAYER *ui_layer, ContextId parent, size_t idx,
                              ContextId *out_child);
 
