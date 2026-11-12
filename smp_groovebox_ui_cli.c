@@ -32,11 +32,6 @@ typedef struct _views_sync{
     UI_LAYER *ui_layer;
     UI_STATE **states;
     size_t states_count;
-    UI_STATE *state_main;
-    // state_main's current context, sent back to root on a REBUILD that left
-    // it invalid
-    ContextId *main_current;
-    ContextId id_root;
     // ui_layer_wake_fd(ui_layer, INPUT_WAIT_TICK_MS), requested once at
     // startup; -1 if unavailable - helper_input_wait falls back to ticking
     int wake_fd;
@@ -342,39 +337,59 @@ static ContextId helper_purpose_get(UI_LAYER* ui_layer, UI_STATE* state, Context
     return id;
 }
 
-// change the parent to the ContextId saved in the purpose on the *parent
-static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, ContextId* parent, UiPurpose purpose){
+// make id the single ContextId saved for parent+purpose on state. The entry
+// must exist; an invalid id changes nothing
+static bool helper_purpose_set(UI_LAYER* ui_layer, UI_STATE* state, ContextId parent, UiPurpose purpose, ContextId id){
+    if(!ui_layer)
+        return false;
+    if(!state)
+        return false;
+    if(!ui_layer_context_valid(ui_layer, id))
+        return false;
+
+    UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, parent, purpose);
+    if(!target_list)
+        return false;
+
+    ui_layer_nav_target_list_clear(target_list);
+    bool added = ui_layer_nav_target_list_add(target_list, id) == UI_TARGET_LIST_ADD_SUCCESS;
+    ui_layer_nav_target_list_end(state);
+    return added;
+}
+
+// make the current context's hovered_purpose child the current one. The
+// current context is the one saved for current_source+current_purpose
+static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, ContextId current_source,
+                                     UiPurpose current_purpose, UiPurpose hovered_purpose){
     if(!ui_layer)
         return;
     if(!state)
         return;
-    if(!parent)
-        return;
-    if(!ui_layer_context_valid(ui_layer, *parent))
+
+    ContextId current = helper_purpose_get(ui_layer, state, current_source, current_purpose);
+    if(!ui_layer_context_valid(ui_layer, current))
         return;
 
-    ContextId cx_curr = helper_purpose_get(ui_layer, state, *parent, purpose);
-    if(ui_layer_context_valid(ui_layer, cx_curr) && ui_layer_context_children_count(ui_layer, cx_curr) > 0){
-        *parent = cx_curr;
+    ContextId hovered = helper_purpose_get(ui_layer, state, current, hovered_purpose);
+    if(ui_layer_context_valid(ui_layer, hovered) && ui_layer_context_children_count(ui_layer, hovered) > 0){
+        helper_purpose_set(ui_layer, state, current_source, current_purpose, hovered);
     }
 }
 
-// change the parent to the parents parent
-static void helper_nav_context_exit(UI_LAYER* ui_layer, UI_STATE* state, ContextId* parent){
+// make the current context's parent the current one
+static void helper_nav_context_exit(UI_LAYER* ui_layer, UI_STATE* state, ContextId current_source,
+                                    UiPurpose current_purpose){
     if(!ui_layer)
         return;
     if(!state)
         return;
-    if(!parent)
-        return;
-    if(!ui_layer_context_valid(ui_layer, *parent))
+
+    ContextId current = helper_purpose_get(ui_layer, state, current_source, current_purpose);
+    if(!ui_layer_context_valid(ui_layer, current))
         return;
 
-    ContextId cx_parent = ui_layer_context_parent_return(ui_layer, *parent);
-    if(ui_layer_context_valid(ui_layer, cx_parent)){
-        *parent = cx_parent;
-    }
-
+    helper_purpose_set(ui_layer, state, current_source, current_purpose,
+                       ui_layer_context_parent_return(ui_layer, current));
 }
 
 // append ctx's actions (if any) to candidates[*count..), each starting with
@@ -969,13 +984,6 @@ static bool helper_views_reconcile(const VIEWS_SYNC *sync) {
             ui_layer_state_reconcile(sync->ui_layer, sync->states[si]);
         if (rr != UI_RECONCILE_OK)
             redraw = true;
-        // the view's cursor fell behind, so per-event anchoring was lost -
-        // if the ContextIds this UI uses are not valid anymore, fallback to
-        // the root ContextId
-        if (rr == UI_RECONCILE_REBUILD && sync->states[si] == sync->state_main &&
-            !ui_layer_context_valid(sync->ui_layer, *sync->main_current)) {
-            *sync->main_current = sync->id_root;
-        }
     }
     return redraw;
 }
@@ -1229,16 +1237,29 @@ int main() {
 
     // main ui state, for general program navigation
     UI_STATE* state_main = ui_layer_state_init(ui_layer);
-    // current ContextId of the state_main;
-    ContextId state_main_context_current = id_root;
-    // the current context parent, useful when current is stale/deleted
-    ContextId state_main_context_current_parent = id_root;
     // which idx in the state_main_context_current children array is the UI_PURPOSE_HOVERED
     // this will be set to an actual value later - idx 0 can be hidden.
     size_t state_main_hovered_idx = 0;
 
     // this array will contain all of the states
     UI_STATE* states_all[STATES_COUNT] = {state_main, state_root};
+
+    // state_main's current context, saved under id_root + UI_PURPOSE_CURRENT
+    UI_TARGET_LIST* current_list = NULL;
+    if (ui_layer_state_entry_set(state_main, id_root, UI_PURPOSE_CURRENT, 1))
+        current_list = ui_layer_nav_target_list_begin(state_main, id_root,
+                                                      UI_PURPOSE_CURRENT);
+    if (!current_list) {
+        printf("\nCould not create the current context entry\n");
+        helper_program_destroy(ui_layer, states_all, STATES_COUNT);
+        return 1;
+    }
+    // removals arrive children first, so a removed current climbs to its
+    // closest surviving ancestor
+    ui_layer_target_list_set_stale_policy(
+        current_list, (UiStalePolicy){.mode = UI_STALE_TO_SOURCE});
+    ui_layer_nav_target_list_add(current_list, id_root);
+    ui_layer_nav_target_list_end(state_main);
 
     // initial navigation mode
     size_t ui_nav_mode = UI_MODE_STANDARD;
@@ -1252,8 +1273,6 @@ int main() {
     LIST_SESSION list_session = {0};
     // what the input wait keeps up to date while no key is pressed
     const VIEWS_SYNC views_sync = {ui_layer, states_all, STATES_COUNT,
-                                   state_main, &state_main_context_current,
-                                   id_root,
                                    ui_layer_wake_fd(ui_layer, INPUT_WAIT_TICK_MS)};
 
     while (1) {
@@ -1266,29 +1285,24 @@ int main() {
         // let each view react to contexts that appeared / were removed
         helper_views_reconcile(&views_sync);
 
-        // first update the contexts if they are deleted
-        if (!ui_layer_context_valid(ui_layer, state_main_context_current)) {
-            if (ui_layer_context_valid(ui_layer,
-                                       state_main_context_current_parent)) {
-                state_main_context_current = state_main_context_current_parent;
-            } else {
-                state_main_context_current = id_root;
+        ContextId state_main_context_current = helper_purpose_get(
+            ui_layer, state_main, id_root, UI_PURPOSE_CURRENT);
+        // if the state_main_context_current does not have any children
+        // the state_main_context_current will be its parent
+        if(ui_layer_context_children_count(ui_layer, state_main_context_current) == 0){
+            ContextId curr_parent = ui_layer_context_parent_return(ui_layer, state_main_context_current);
+            // if the state_main_context_current is not valid or does not have a
+            // parent it will jump to the root
+            if (!ui_layer_context_valid(ui_layer, curr_parent)) {
+                curr_parent = id_root;
             }
+            state_main_context_current = curr_parent;
+            helper_purpose_set(ui_layer, state_main, id_root, UI_PURPOSE_CURRENT, state_main_context_current);
         }
 
         state_main_hovered_idx = helper_nav_context_single_purpose_set(
             ui_layer, state_main, state_main_context_current, UI_PURPOSE_HOVERED,
             (UiStalePolicy){.mode = UI_STALE_PREV_SIBLING});
-
-        // update the parent
-        ContextId parent = ui_layer_context_parent_return(ui_layer, state_main_context_current);
-        if(ui_layer_context_valid(ui_layer, parent)){
-            state_main_context_current_parent = parent;
-        }
-        else{
-            state_main_context_current_parent = id_root;
-        }
-
 
         printf("\e[22m");
         // a list session owns the whole frame; it runs after the update cycle
@@ -1516,13 +1530,13 @@ int main() {
                         UI_PURPOSE_HOVERED, &state_main_hovered_idx, false);
                     break;
                 case 'l':
-                    helper_nav_context_enter(ui_layer, state_main,
-                                             &state_main_context_current,
+                    helper_nav_context_enter(ui_layer, state_main, id_root,
+                                             UI_PURPOSE_CURRENT,
                                              UI_PURPOSE_HOVERED);
                     break;
                 case 'h':
-                    helper_nav_context_exit(ui_layer, state_main,
-                                            &state_main_context_current);
+                    helper_nav_context_exit(ui_layer, state_main, id_root,
+                                            UI_PURPOSE_CURRENT);
                     break;
                 case 'q':
                     exit = 1;
