@@ -15,11 +15,10 @@
 // limit the display to 10 rows before and after the hovered context
 #define VIEW_ROWS 21
 
-#define ACTION_LIST_COUNT 8 // maximum possible actions for a context when returning DataAction
 #define ACTION_ARG_COUNT 5 // maximum possible DataArgSpec for a single DataAction
 #define STATES_COUNT 2 // how many states on this program
 #define ACTION_SOURCES_COUNT 10 // contexts whose actions are gathered: hovered + ContexIds up to root Context
-#define MAX_ACTION_CANDIDATES (ACTION_LIST_COUNT * ACTION_SOURCES_COUNT)
+#define MAX_ACTION_CANDIDATES (UI_NAV_CONTEXT_ACTIONS_MAX * ACTION_SOURCES_COUNT)
 // while waiting for a key, pull fresh data from the ui_layer this often (ms)
 #define INPUT_WAIT_TICK_MS 30
 // helper_input_wait result when the screen has to be drawn again - not a key
@@ -37,12 +36,10 @@ typedef struct _views_sync{
     int wake_fd;
 } VIEWS_SYNC;
 
-// one (context, action) pair still reachable this drill round, plus where in
-// its own label the next letter search should resume from if it survives
-// another narrow.
+// an action still reachable this drill round, plus where in its own label the
+// next letter search should resume from if it survives another narrow.
 typedef struct _action_candidate{
-    ContextId actions_context;
-    DataAction action;
+    UI_NAV_ACTION entry;
     size_t label_pos;   // resume position for the NEXT round's letter search
     size_t letter_pos;  // where in the label THIS round's letter was found
     char letter;         // this round's activation key, '\0' = unreachable
@@ -193,33 +190,6 @@ static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* ta
 }
 */
 
-// append ctx's actions (if any) to candidates[*count..), each starting with
-// label_pos/letter_pos 0 and letter '\0' - unassigned until
-// helper_action_candidates_assign_letters runs over the whole gathered set.
-static void helper_action_candidates_gather(UI_LAYER *ui_layer, ContextId ctx,
-                                            ACTION_CANDIDATE *candidates,
-                                            size_t cap, size_t *count) {
-    if (!ui_layer || !candidates || !count)
-        return;
-    if (!ui_layer_context_valid(ui_layer, ctx))
-        return;
-    if (*count >= cap)
-        return;
-
-    DataAction actions[ACTION_LIST_COUNT];
-    size_t action_count =
-        ui_layer_context_actions(ui_layer, ctx, actions, ACTION_LIST_COUNT);
-    for (size_t i = 0; i < action_count && *count < cap; i++) {
-        ACTION_CANDIDATE *cand = &candidates[*count];
-        cand->actions_context = ctx;
-        cand->action = actions[i];
-        cand->label_pos = 0;
-        cand->letter_pos = 0;
-        cand->letter = '\0';
-        (*count)++;
-    }
-}
-
 // pure: for each candidate, pick the round's activation letter by scanning
 // its label from label_pos onward for the first usable character. Disabled
 // actions, and a label with nothing left to try from label_pos, get letter
@@ -236,9 +206,9 @@ static void helper_action_candidates_assign_letters(ACTION_CANDIDATE *candidates
     for (size_t i = 0; i < count; i++) {
         ACTION_CANDIDATE *cand = &candidates[i];
         cand->letter = '\0';
-        if (!cand->action.enabled)
+        if (!cand->entry.action.enabled)
             continue;
-        const char *label = cand->action.label;
+        const char *label = cand->entry.action.label;
         if (!label)
             continue;
         size_t len = strlen(label);
@@ -294,7 +264,7 @@ static size_t helper_action_candidates_revalidate(UI_LAYER *ui_layer,
         return 0;
     size_t insert_idx = 0;
     for (size_t i = 0; i < count; i++) {
-        if (!ui_layer_context_valid(ui_layer, candidates[i].actions_context))
+        if (!ui_layer_context_valid(ui_layer, candidates[i].entry.context))
             continue;
         if (insert_idx != i)
             candidates[insert_idx] = candidates[i];
@@ -311,7 +281,7 @@ static bool helper_action_canditates_has_source(ACTION_CANDIDATE* canditates, si
 
     for(size_t i = 0; i < count; i ++){
         ACTION_CANDIDATE cur_canditate = canditates[i];
-        if(cur_canditate.actions_context == context){
+        if(cur_canditate.entry.context == context){
             return true;
         }
     }
@@ -635,9 +605,9 @@ static bool helper_action_do_adjust_value_direct(UI_LAYER* ui_layer, ContextId c
     if(adjust_value == 0)
         return false;
 
-    DataAction actions_out[ACTION_LIST_COUNT];
+    DataAction actions_out[UI_NAV_CONTEXT_ACTIONS_MAX];
     size_t actions = ui_layer_context_actions(ui_layer, context, actions_out,
-                                              ACTION_LIST_COUNT);
+                                              UI_NAV_CONTEXT_ACTIONS_MAX);
     for (size_t i = 0; i < actions; i++) {
         DataAction cur_action = actions_out[i];
         if (cur_action.type == DATA_ACTION_ADJUST_VALUE) {
@@ -935,7 +905,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
 // Returns true when that is a list: the session is set up in *session and the
 // main loop drives it from then on. scope_from is where the user is - a list
 // opens narrowed to it when it can be
-static bool helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
+static bool helper_action_resolve(UI_LAYER *ui_layer, const UI_NAV_ACTION *chosen,
                                   ContextId scope_from, LIST_SESSION *session,
                                   char *msg, size_t msg_cap) {
     if (!msg || msg_cap == 0)
@@ -944,7 +914,7 @@ static bool helper_action_resolve(UI_LAYER *ui_layer, ACTION_CANDIDATE *chosen,
     if (!ui_layer || !chosen || !session)
         return false;
 
-    ContextId context = chosen->actions_context;
+    ContextId context = chosen->context;
     const DataAction *action = &chosen->action;
     DataActionType type = action->type;
     const char *label = action->label ? action->label : "action";
@@ -1179,13 +1149,14 @@ int main() {
                 ui_nav_mode = UI_MODE_STANDARD;
         }
         if (need_gather) {
+            UI_NAV_ACTION gathered[MAX_ACTION_CANDIDATES];
             candidate_count = 0;
-            for (size_t i = 0; i < action_idx_counted; i++) {
-                ContextId curr_action_cx = action_sources[i];
-                helper_action_candidates_gather(
-                    ui_layer, curr_action_cx, candidates, MAX_ACTION_CANDIDATES,
-                    &candidate_count);
-            }
+            for (size_t i = 0; i < action_idx_counted; i++)
+                candidate_count += ui_nav_actions_gather(
+                    ui_layer, action_sources[i], gathered + candidate_count,
+                    MAX_ACTION_CANDIDATES - candidate_count);
+            for (size_t i = 0; i < candidate_count; i++)
+                candidates[i] = (ACTION_CANDIDATE){.entry = gathered[i]};
             helper_action_candidates_assign_letters(candidates, candidate_count,
                                                     true);
         }
@@ -1204,17 +1175,17 @@ int main() {
             printf("\n");
             printf("%s: ", src_info.name);
             for (size_t i = 0; i < candidate_count; i++) {
-                if (candidates[i].actions_context != src)
+                if (candidates[i].entry.context != src)
                     continue;
                 if (ui_nav_mode == UI_MODE_ACTION)
                     printf("\e[22m");
                 printf("-");
-                helper_string_print_underline(candidates[i].action.label,
+                helper_string_print_underline(candidates[i].entry.action.label,
                                               candidates[i].letter);
                 printf("-");
-                if (candidates[i].action.active)
+                if (candidates[i].entry.action.active)
                     printf(" (on)");
-                if (!candidates[i].action.enabled)
+                if (!candidates[i].entry.action.enabled)
                     printf(" (disabled)");
                 printf(" ");
                 if (ui_nav_mode == UI_MODE_ACTION)
@@ -1276,7 +1247,7 @@ int main() {
                         ? state_current_context_hovered
                         : state_main_context_current;
                 bool listing = helper_action_resolve(
-                    ui_layer, &candidates[0], scope_from, &list_session,
+                    ui_layer, &candidates[0].entry, scope_from, &list_session,
                     action_status_msg, sizeof(action_status_msg));
                 candidate_count = 0;
                 ui_nav_mode = listing ? UI_MODE_LIST : UI_MODE_STANDARD;

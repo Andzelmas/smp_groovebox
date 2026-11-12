@@ -78,3 +78,16 @@ bool ui_nav_context_exit(UI_LAYER *ui_layer, UI_STATE *state, ContextId current_
 bool ui_nav_shown_store(UI_LAYER *ui_layer, UI_STATE *state, ContextId source,
                         UiPurpose purpose, ContextId parent,
                         const UI_WINDOWING_SLICE *slice);
+
+// most actions ui_nav_actions_gather reads from one context
+#define UI_NAV_CONTEXT_ACTIONS_MAX 8
+
+// an action and the context it acts on
+typedef struct _ui_nav_action{
+    ContextId context;
+    DataAction action;
+} UI_NAV_ACTION;
+
+// fill out with up to capacity of context's actions. Returns how many it wrote
+size_t ui_nav_actions_gather(UI_LAYER *ui_layer, ContextId context, UI_NAV_ACTION *out,
+                             size_t capacity);

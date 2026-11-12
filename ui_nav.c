@@ -168,3 +168,16 @@ bool ui_nav_shown_store(UI_LAYER *ui_layer, UI_STATE *state, ContextId source,
     ui_layer_nav_target_list_end(state);
     return stored;
 }
+
+size_t ui_nav_actions_gather(UI_LAYER *ui_layer, ContextId context, UI_NAV_ACTION *out,
+                             size_t capacity){
+    if(!out || !ui_layer_context_valid(ui_layer, context))
+        return 0;
+    DataAction actions[UI_NAV_CONTEXT_ACTIONS_MAX];
+    size_t count = ui_layer_context_actions(
+        ui_layer, context, actions,
+        capacity < UI_NAV_CONTEXT_ACTIONS_MAX ? capacity : UI_NAV_CONTEXT_ACTIONS_MAX);
+    for(size_t i = 0; i < count; i++)
+        out[i] = (UI_NAV_ACTION){context, actions[i]};
+    return count;
+}
