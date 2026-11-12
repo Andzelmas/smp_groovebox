@@ -161,30 +161,6 @@ typedef struct _list_rows{
     const LIST_FILTER *filter;
 } LIST_ROWS;
 
-// Add add_id, if the array is full reset the array and start from beginning
-static bool helper_target_list_add_reset_on_full(UI_LAYER* ui_layer, UI_TARGET_LIST* target_list, ContextId add_id){
-    if (!target_list)
-        return false;
-    if(!ui_layer)
-        return false;
-    if (!ui_layer_context_valid(ui_layer, add_id))
-        return false;
-
-    UiTargetListAddResult add_result =
-        ui_layer_nav_target_list_add(target_list, add_id);
-    if (add_result == UI_TARGET_LIST_ADD_ERROR)
-        return false;
-    if (add_result == UI_TARGET_LIST_ADD_FULL) {
-        if(!ui_layer_nav_target_list_clear(target_list))
-            return false;
-
-        add_result = ui_layer_nav_target_list_add(target_list, add_id);
-        if(add_result != UI_TARGET_LIST_ADD_SUCCESS)
-            return false;
-    }
-
-    return true;
-}
 // Helper function to add a add_id, if the array is full, double its size
 // TODO not used at his time, since no UI_TARGET_LISTS with growing arrays
 /*
@@ -216,181 +192,6 @@ static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* ta
     return true;
 }
 */
-
-// ---------------------------------------------------------------------------
-// visible children. Navigation and rendering must agree on which children
-// exist, otherwise the cursor lands on rows that are never drawn - so every
-// index that travels between them goes through the helpers below.
-
-// select previous child of parent (or next if next true), skipping hidden
-// children so the cursor only ever rests on a drawn row.
-// cur_idx - address of the current index in the parent children array
-static void helper_nav_context_scroll(UI_LAYER* ui_layer, UI_STATE* state, ContextId parent, UiPurpose purpose, size_t* cur_idx, bool next){
-    if(!ui_layer)
-        return;
-    if(!state)
-        return;
-    if(!cur_idx)
-        return;
-
-    UI_NAV_CONTEXT_INFO cx_info;
-    if(!ui_nav_context_info_get(ui_layer, parent, &cx_info))
-        return;
-
-    UI_NAV_CHILDREN children;
-    UI_WINDOWING_SOURCE source = ui_nav_children_source(ui_layer, parent, &children);
-    size_t new_idx = ui_windowing_step(&source, *cur_idx, 1, next, true);
-    if(new_idx >= cx_info.child_count)
-        return;
-
-    ContextId new_context = ui_layer_context_child_at(ui_layer, parent, new_idx);
-    if(!ui_layer_context_valid(ui_layer, new_context))
-        return;
-
-    UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, parent, purpose);
-    if(!target_list)
-        return;
-
-    *cur_idx = new_idx;
-    helper_target_list_add_reset_on_full(ui_layer, target_list, new_context);
-
-    ui_layer_nav_target_list_end(state);
-}
-
-// find the parent + purpose on the state (creating the entry with capacity 1
-// when it does not exist) and point it at a *visible* child: the stored one
-// while it is still there and not hidden, otherwise the nearest visible one.
-// Returns that child's index in the parent child array, or child_count when
-// the parent has no visible child to point at
-static size_t
-helper_nav_context_single_purpose_set(UI_LAYER *ui_layer, UI_STATE *state,
-                                      ContextId parent, UiPurpose purpose,
-                                      UiStalePolicy stale_policy) {
-    if(!ui_layer)
-        return 0;
-    if(!state)
-        return 0;
-    if(!ui_layer_context_valid(ui_layer, parent))
-        return 0;
-
-    UI_NAV_CONTEXT_INFO parent_info;
-    if(!ui_nav_context_info_get(ui_layer, parent, &parent_info))
-        return 0;
-    if(parent_info.child_count == 0)
-        return 0;
-
-    UI_TARGET_LIST* targets = ui_layer_nav_target_list_begin(state, parent, purpose);
-    if(!targets){
-        // begin does not borrow when it finds nothing, so entry_set is safe here
-        ui_layer_state_entry_set(state, parent, purpose, 1);
-        targets = ui_layer_nav_target_list_begin(state, parent, purpose);
-        if(!targets)
-            return 0;
-        ui_layer_target_list_set_stale_policy(targets, stale_policy);
-    }
-
-    // where the stored target sits now - child_count when it is not a child
-    // of parent (anymore), which also covers a freshly created entry
-    size_t stored_idx = parent_info.child_count;
-    ContextId stored = ui_layer_nav_target_list_get(targets, 0);
-    if(ui_layer_context_valid(ui_layer, stored)){
-        for(size_t i = 0; i < parent_info.child_count; i++){
-            if(ui_layer_context_child_at(ui_layer, parent, i) == stored){
-                stored_idx = i;
-                break;
-            }
-        }
-    }
-
-    // a hidden row is never drawn, so the purpose must not rest on one
-    UI_NAV_CHILDREN children;
-    UI_WINDOWING_SOURCE source = ui_nav_children_source(ui_layer, parent, &children);
-    size_t visible_idx = ui_windowing_nearest_shown(&source, stored_idx);
-    if(visible_idx < parent_info.child_count && visible_idx != stored_idx){
-        ContextId visible_child = ui_layer_context_child_at(ui_layer, parent, visible_idx);
-        if(ui_layer_context_valid(ui_layer, visible_child)){
-            ui_layer_nav_target_list_clear(targets);
-            helper_target_list_add_reset_on_full(ui_layer, targets, visible_child);
-        }
-    }
-
-    ui_layer_nav_target_list_end(state);
-
-    return visible_idx;
-}
-
-// return the (single) ContextId saved for parent+purpose on state, or
-// CONTEXT_ID_INVALID if there is none. Factors the begin/get/end idiom used
-// in several places below.
-static ContextId helper_purpose_get(UI_LAYER* ui_layer, UI_STATE* state, ContextId parent, UiPurpose purpose){
-    if(!ui_layer)
-        return CONTEXT_ID_INVALID;
-    if(!state)
-        return CONTEXT_ID_INVALID;
-
-    UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, parent, purpose);
-    if(!target_list)
-        return CONTEXT_ID_INVALID;
-
-    ContextId id = ui_layer_nav_target_list_get(target_list, 0);
-    ui_layer_nav_target_list_end(state);
-    return id;
-}
-
-// make id the single ContextId saved for parent+purpose on state. The entry
-// must exist; an invalid id changes nothing
-static bool helper_purpose_set(UI_LAYER* ui_layer, UI_STATE* state, ContextId parent, UiPurpose purpose, ContextId id){
-    if(!ui_layer)
-        return false;
-    if(!state)
-        return false;
-    if(!ui_layer_context_valid(ui_layer, id))
-        return false;
-
-    UI_TARGET_LIST* target_list = ui_layer_nav_target_list_begin(state, parent, purpose);
-    if(!target_list)
-        return false;
-
-    ui_layer_nav_target_list_clear(target_list);
-    bool added = ui_layer_nav_target_list_add(target_list, id) == UI_TARGET_LIST_ADD_SUCCESS;
-    ui_layer_nav_target_list_end(state);
-    return added;
-}
-
-// make the current context's hovered_purpose child the current one. The
-// current context is the one saved for current_source+current_purpose
-static void helper_nav_context_enter(UI_LAYER* ui_layer, UI_STATE* state, ContextId current_source,
-                                     UiPurpose current_purpose, UiPurpose hovered_purpose){
-    if(!ui_layer)
-        return;
-    if(!state)
-        return;
-
-    ContextId current = helper_purpose_get(ui_layer, state, current_source, current_purpose);
-    if(!ui_layer_context_valid(ui_layer, current))
-        return;
-
-    ContextId hovered = helper_purpose_get(ui_layer, state, current, hovered_purpose);
-    if(ui_layer_context_valid(ui_layer, hovered) && ui_layer_context_children_count(ui_layer, hovered) > 0){
-        helper_purpose_set(ui_layer, state, current_source, current_purpose, hovered);
-    }
-}
-
-// make the current context's parent the current one
-static void helper_nav_context_exit(UI_LAYER* ui_layer, UI_STATE* state, ContextId current_source,
-                                    UiPurpose current_purpose){
-    if(!ui_layer)
-        return;
-    if(!state)
-        return;
-
-    ContextId current = helper_purpose_get(ui_layer, state, current_source, current_purpose);
-    if(!ui_layer_context_valid(ui_layer, current))
-        return;
-
-    helper_purpose_set(ui_layer, state, current_source, current_purpose,
-                       ui_layer_context_parent_return(ui_layer, current));
-}
 
 // append ctx's actions (if any) to candidates[*count..), each starting with
 // label_pos/letter_pos 0 and letter '\0' - unassigned until
@@ -1015,23 +816,6 @@ static int helper_input_wait(const VIEWS_SYNC *sync) {
     }
 }
 
-// store the rows drawn under (root, UI_PURPOSE_SHOWN) on the state - one entry,
-// refilled every frame
-static void helper_shown_rows_set(UI_LAYER *ui_layer, UI_STATE *state,
-                                  ContextId root, ContextId parent,
-                                  const UI_WINDOWING_SLICE *slice) {
-    ui_layer_state_entry_set(state, root, UI_PURPOSE_SHOWN, VIEW_ROWS);
-    UI_TARGET_LIST *targets =
-        ui_layer_nav_target_list_begin(state, root, UI_PURPOSE_SHOWN);
-    if (!targets)
-        return;
-    ui_layer_nav_target_list_clear(targets);
-    for (size_t row = 0; row < slice->count; row++)
-        ui_layer_nav_target_list_add(
-            targets, ui_layer_context_child_at(ui_layer, parent, slice->items[row]));
-    ui_layer_nav_target_list_end(state);
-}
-
 // one frame of a list session: re-anchor, draw, read a key, act. Returns false
 // once the session is over, with its closing message in msg
 static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
@@ -1285,8 +1069,8 @@ int main() {
         // let each view react to contexts that appeared / were removed
         helper_views_reconcile(&views_sync);
 
-        ContextId state_main_context_current = helper_purpose_get(
-            ui_layer, state_main, id_root, UI_PURPOSE_CURRENT);
+        ContextId state_main_context_current =
+            ui_nav_purpose_context(state_main, id_root, UI_PURPOSE_CURRENT);
         // if the state_main_context_current does not have any children
         // the state_main_context_current will be its parent
         if(ui_layer_context_children_count(ui_layer, state_main_context_current) == 0){
@@ -1297,10 +1081,10 @@ int main() {
                 curr_parent = id_root;
             }
             state_main_context_current = curr_parent;
-            helper_purpose_set(ui_layer, state_main, id_root, UI_PURPOSE_CURRENT, state_main_context_current);
+            ui_nav_purpose_context_set(ui_layer, state_main, id_root, UI_PURPOSE_CURRENT, state_main_context_current);
         }
 
-        state_main_hovered_idx = helper_nav_context_single_purpose_set(
+        state_main_hovered_idx = ui_nav_purpose_context_ensure_visible(
             ui_layer, state_main, state_main_context_current, UI_PURPOSE_HOVERED,
             (UiStalePolicy){.mode = UI_STALE_PREV_SIBLING});
 
@@ -1334,8 +1118,8 @@ int main() {
             // store all the row ContextIds so the ui_layer_state_reconcile
             // checks these for any changes, not only the
             // state_main_context_current, root and others
-            helper_shown_rows_set(ui_layer, state_main, id_root,
-                                  state_main_context_current, &slice);
+            ui_nav_shown_store(ui_layer, state_main, id_root, UI_PURPOSE_SHOWN,
+                               state_main_context_current, &slice);
 
             if (slice.more_before)
                 printf("-...-\n");
@@ -1364,9 +1148,8 @@ int main() {
         // action candidates: either keep drilling the previous round
         // (revalidating first, in case something acted on disappeared
         // between rounds) or, in standard mode, rebuild round 0 fresh
-        ContextId state_current_context_hovered = helper_purpose_get(
-            ui_layer, state_main, state_main_context_current,
-            UI_PURPOSE_HOVERED);
+        ContextId state_current_context_hovered = ui_nav_purpose_context(
+            state_main, state_main_context_current, UI_PURPOSE_HOVERED);
         // collect the ContextIds that can have actions - from hovered up to root
         ContextId action_sources[ACTION_SOURCES_COUNT] = {0};
         size_t action_idx_counted = 0;
@@ -1520,23 +1303,22 @@ int main() {
                     break;
 
                 case 'j':
-                    helper_nav_context_scroll(
+                    state_main_hovered_idx = ui_nav_purpose_step(
                         ui_layer, state_main, state_main_context_current,
-                        UI_PURPOSE_HOVERED, &state_main_hovered_idx, true);
+                        UI_PURPOSE_HOVERED, state_main_hovered_idx, 1, true, true);
                     break;
                 case 'k':
-                    helper_nav_context_scroll(
+                    state_main_hovered_idx = ui_nav_purpose_step(
                         ui_layer, state_main, state_main_context_current,
-                        UI_PURPOSE_HOVERED, &state_main_hovered_idx, false);
+                        UI_PURPOSE_HOVERED, state_main_hovered_idx, 1, false, true);
                     break;
                 case 'l':
-                    helper_nav_context_enter(ui_layer, state_main, id_root,
-                                             UI_PURPOSE_CURRENT,
-                                             UI_PURPOSE_HOVERED);
+                    ui_nav_context_enter(ui_layer, state_main, id_root,
+                                         UI_PURPOSE_CURRENT, UI_PURPOSE_HOVERED);
                     break;
                 case 'h':
-                    helper_nav_context_exit(ui_layer, state_main, id_root,
-                                            UI_PURPOSE_CURRENT);
+                    ui_nav_context_exit(ui_layer, state_main, id_root,
+                                        UI_PURPOSE_CURRENT);
                     break;
                 case 'q':
                     exit = 1;
