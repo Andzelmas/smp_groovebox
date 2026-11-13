@@ -129,3 +129,36 @@ DataActionResult ui_nav_action_run_set_value(UI_LAYER *ui_layer,
 // for the call only
 DataActionResult ui_nav_action_run_text(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
                                         const char *text, ContextId *out_new);
+
+// what narrows a list. The two parts compose
+typedef struct _ui_nav_list_filter{
+    uint64_t group;   // DataChoice.group_key to keep, 0 = every group
+    bool linked_only; // keep only DATA_CHOICE_LINKED rows
+} UI_NAV_LIST_FILTER;
+
+// one level of an action argument's list. As a UI_WINDOWING_SOURCE, shown
+// means the row passes filter
+typedef struct _ui_nav_list_rows{
+    UI_LAYER *ui_layer;
+    ContextId context;
+    DataListId list;               // from the argument's DataArgSpec
+    const DataActionReq *partial;  // the request built so far
+    uint64_t branch;               // level of the list, 0 = top
+    const UI_NAV_LIST_FILTER *filter; // NULL shows every row
+} UI_NAV_LIST_ROWS;
+
+// false when there is no row idx
+bool ui_nav_list_row_at(const UI_NAV_LIST_ROWS *rows, size_t idx, DataChoice *out_row);
+
+// pages with ui_nav_list_row_at when the list answers 0 for an unknown count
+size_t ui_nav_list_count(const UI_NAV_LIST_ROWS *rows);
+
+// rows must outlive the returned source
+UI_WINDOWING_SOURCE ui_nav_list_source(UI_NAV_LIST_ROWS *rows);
+
+// 0 when there is no row idx
+uint64_t ui_nav_list_value_at(const UI_NAV_LIST_ROWS *rows, size_t idx);
+
+// index of the row holding value, trying hint_idx first. SIZE_MAX when value is
+// 0 or no row holds it
+size_t ui_nav_list_find(const UI_NAV_LIST_ROWS *rows, uint64_t value, size_t hint_idx);

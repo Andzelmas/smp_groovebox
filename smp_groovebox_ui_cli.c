@@ -107,12 +107,6 @@ typedef struct _list_cursor{
     uint64_t next;  // 0 when there is none
 } LIST_CURSOR;
 
-// what narrows a list. The two parts compose
-typedef struct _list_filter{
-    uint64_t group;   // DataChoice.group_key to keep, 0 = every group
-    bool linked_only; // keep only DATA_CHOICE_LINKED rows
-} LIST_FILTER;
-
 // how many categories deep a list can be opened
 #define LIST_DEPTH_MAX 16
 // how many list args one session browses (CONNECT: source, targets)
@@ -142,55 +136,12 @@ typedef struct _list_session{
     int connect_pick;
     // one per spec, of its innermost opened level
     LIST_CURSOR cursors[LIST_MAX_ARG_SPECS];
-    LIST_FILTER filters[LIST_MAX_ARG_SPECS]; // one per spec
+    UI_NAV_LIST_FILTER filters[LIST_MAX_ARG_SPECS]; // one per spec
     uint64_t source_value; // CONNECT: the source picked from specs[0]
     // opened categories, one stack per spec
     LIST_LEVEL levels[LIST_MAX_ARG_SPECS][LIST_DEPTH_MAX];
     size_t depth[LIST_MAX_ARG_SPECS];
 } LIST_SESSION;
-
-// one list of a session as a UI_WINDOWING_SOURCE: shown means the row passes
-// filter
-typedef struct _list_rows{
-    UI_LAYER *ui_layer;
-    ContextId context;
-    DataListId list;
-    const DataActionReq *partial;
-    uint64_t branch; // level of the list shown, 0 = top
-    const LIST_FILTER *filter;
-} LIST_ROWS;
-
-// Helper function to add a add_id, if the array is full, double its size
-// TODO not used at his time, since no UI_TARGET_LISTS with growing arrays
-/*
-static bool helper_target_list_add_resize(UI_LAYER* ui_layer, UI_TARGET_LIST* target_list, ContextId add_id){
-    if(!ui_layer)
-        return false;
-    if (!target_list)
-        return false;
-    if (!ui_layer_context_valid(ui_layer, add_id))
-        return false;
-
-    UiTargetListAddResult add_result =
-        ui_layer_nav_target_list_add(target_list, add_id);
-    if (add_result == UI_TARGET_LIST_ADD_ERROR)
-        return false;
-    if (add_result == UI_TARGET_LIST_ADD_FULL) {
-        size_t capacity = ui_layer_nav_target_list_capacity(target_list);
-        if (capacity > SIZE_MAX / 2)
-            return false;
-        size_t new_capacity = capacity * 2;
-        if(!ui_layer_nav_target_list_resize(target_list, new_capacity))
-            return false;
-
-        add_result = ui_layer_nav_target_list_add(target_list, add_id);
-        if(add_result != UI_TARGET_LIST_ADD_SUCCESS)
-            return false;
-    }
-
-    return true;
-}
-*/
 
 // pure: for each candidate, pick the round's activation letter by scanning
 // its label from label_pos onward for the first usable character. Disabled
@@ -305,81 +256,19 @@ static void helper_string_print_underline(const char* string, char char_underlin
     }
 }
 
-// list_count may answer 0 for "unknown" rather than "empty" - page with list_at
-// then
-static size_t helper_list_count(const LIST_ROWS *rows) {
-    size_t count = ui_layer_context_list_count(rows->ui_layer, rows->context,
-                                               rows->list, rows->partial,
-                                               rows->branch);
-    if (count > 0)
-        return count;
-    DataChoice row;
-    while (ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                    rows->partial, rows->branch, count, &row))
-        count++;
-    return count;
-}
-
-static bool helper_list_row_shown(void *user, size_t idx) {
-    const LIST_ROWS *rows = user;
-    DataChoice row;
-    if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                  rows->partial, rows->branch, idx, &row))
-        return false;
-    if (rows->filter->group != 0 && row.group_key != rows->filter->group)
-        return false;
-    if (rows->filter->linked_only && !(row.flags & DATA_CHOICE_LINKED))
-        return false;
-    return true;
-}
-
-// an unfiltered list skips the predicate - every row list_at returns is shown
-static UI_WINDOWING_SOURCE helper_list_source(LIST_ROWS *rows) {
-    UI_WINDOWING_SOURCE src = {helper_list_count(rows), NULL, rows};
-    if (rows->filter->group != 0 || rows->filter->linked_only)
-        src.shown = helper_list_row_shown;
-    return src;
-}
-
-static uint64_t helper_list_value_at(const LIST_ROWS *rows, size_t idx) {
-    DataChoice row;
-    if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                  rows->partial, rows->branch, idx, &row))
-        return 0;
-    return row.value;
-}
-
-// index of the row holding value, trying hint first. SIZE_MAX when no row does
-static size_t helper_list_find(const LIST_ROWS *rows, uint64_t value,
-                               size_t hint) {
-    if (value == 0)
-        return SIZE_MAX;
-    if (helper_list_value_at(rows, hint) == value)
-        return hint;
-    DataChoice row;
-    for (size_t i = 0;
-         ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                  rows->partial, rows->branch, i, &row);
-         i++) {
-        if (row.value == value)
-            return i;
-    }
-    return SIZE_MAX;
-}
-
 // idx must be shown
-static void helper_list_cursor_settle(const LIST_ROWS *rows,
+static void helper_list_cursor_settle(const UI_NAV_LIST_ROWS *rows,
                                       const UI_WINDOWING_SOURCE *src,
                                       LIST_CURSOR *cur, size_t idx) {
     size_t near;
     bool more;
     cur->idx = idx;
-    cur->value = helper_list_value_at(rows, idx);
+    cur->value = ui_nav_list_value_at(rows, idx);
     cur->prev = ui_windowing_collect_shown(src, idx, false, 1, &near, &more)
-                    ? helper_list_value_at(rows, near)
+                    ? ui_nav_list_value_at(rows, near)
                     : 0;
     cur->next = ui_windowing_collect_shown(src, idx, true, 1, &near, &more)
-                    ? helper_list_value_at(rows, near)
+                    ? ui_nav_list_value_at(rows, near)
                     : 0;
 }
 
@@ -387,18 +276,19 @@ static void helper_list_cursor_settle(const LIST_ROWS *rows,
 // A row the filter now hides passes the cursor to the next shown row after it.
 // A row that is gone passes it to the row before where it was, as
 // UI_STALE_PREV_SIBLING does. With nothing shown the cursor is left as it is
-static void helper_list_cursor_anchor(LIST_ROWS *rows, LIST_CURSOR *cur) {
-    UI_WINDOWING_SOURCE src = helper_list_source(rows);
+static void helper_list_cursor_anchor(UI_NAV_LIST_ROWS *rows,
+                                      LIST_CURSOR *cur) {
+    UI_WINDOWING_SOURCE src = ui_nav_list_source(rows);
     size_t idx;
-    size_t found = helper_list_find(rows, cur->value, cur->idx);
+    size_t found = ui_nav_list_find(rows, cur->value, cur->idx);
     if (cur->value == 0) {
         idx = ui_windowing_nearest_shown(&src, 0);
     } else if (found < src.count) {
         idx = ui_windowing_nearest_shown(&src, found);
     } else {
         // where the gone row would sit now, going by the rows it had around it
-        size_t prev = helper_list_find(rows, cur->prev, cur->idx - 1);
-        size_t next = helper_list_find(rows, cur->next, cur->idx);
+        size_t prev = ui_nav_list_find(rows, cur->prev, cur->idx - 1);
+        size_t next = ui_nav_list_find(rows, cur->next, cur->idx);
         size_t pos = cur->idx < src.count ? cur->idx : src.count;
         if (prev < src.count)
             pos = prev + 1;
@@ -410,35 +300,29 @@ static void helper_list_cursor_anchor(LIST_ROWS *rows, LIST_CURSOR *cur) {
         helper_list_cursor_settle(rows, &src, cur, idx);
 }
 
-static void helper_list_cursor_move(LIST_ROWS *rows, LIST_CURSOR *cur,
+static void helper_list_cursor_move(UI_NAV_LIST_ROWS *rows, LIST_CURSOR *cur,
                                     bool next) {
-    UI_WINDOWING_SOURCE src = helper_list_source(rows);
+    UI_WINDOWING_SOURCE src = ui_nav_list_source(rows);
     size_t idx = ui_windowing_step(&src, cur->idx, 1, next, true);
     if (idx < src.count)
         helper_list_cursor_settle(rows, &src, cur, idx);
 }
 
 // the label of the first row in `group`, NULL when no row is in it
-static const char *helper_list_group_label(const LIST_ROWS *rows,
+static const char *helper_list_group_label(const UI_NAV_LIST_ROWS *rows,
                                            uint64_t group) {
     DataChoice row;
-    for (size_t i = 0; ui_layer_context_list_at(rows->ui_layer, rows->context,
-                                                rows->list, rows->partial,
-                                                rows->branch, i, &row);
-         i++) {
+    for (size_t i = 0; ui_nav_list_row_at(rows, i, &row); i++) {
         if (row.group_key == group)
             return row.group_label ? row.group_label : "?";
     }
     return NULL;
 }
 
-static bool helper_list_group_starts_at(const LIST_ROWS *rows, uint64_t group,
-                                        size_t idx) {
+static bool helper_list_group_starts_at(const UI_NAV_LIST_ROWS *rows,
+                                        uint64_t group, size_t idx) {
     DataChoice row;
-    for (size_t i = 0; i < idx && ui_layer_context_list_at(
-                                      rows->ui_layer, rows->context, rows->list,
-                                      rows->partial, rows->branch, i, &row);
-         i++) {
+    for (size_t i = 0; i < idx && ui_nav_list_row_at(rows, i, &row); i++) {
         if (row.group_key == group)
             return false;
     }
@@ -447,14 +331,11 @@ static bool helper_list_group_starts_at(const LIST_ROWS *rows, uint64_t group,
 
 // the group after `current` in the order the groups first appear; 0 (every
 // group) after the last one, and when current is not in the list at all
-static uint64_t helper_list_group_next(const LIST_ROWS *rows,
+static uint64_t helper_list_group_next(const UI_NAV_LIST_ROWS *rows,
                                        uint64_t current) {
     bool passed = current == 0;
     DataChoice row;
-    for (size_t i = 0; ui_layer_context_list_at(rows->ui_layer, rows->context,
-                                                rows->list, rows->partial,
-                                                rows->branch, i, &row);
-         i++) {
+    for (size_t i = 0; ui_nav_list_row_at(rows, i, &row); i++) {
         uint64_t group = row.group_key;
         if (group == 0 || !helper_list_group_starts_at(rows, group, i))
             continue;
@@ -467,13 +348,11 @@ static uint64_t helper_list_group_next(const LIST_ROWS *rows,
 }
 
 // how many groups the list has, counting no further than limit
-static size_t helper_list_group_count(const LIST_ROWS *rows, size_t limit) {
+static size_t helper_list_group_count(const UI_NAV_LIST_ROWS *rows,
+                                      size_t limit) {
     size_t count = 0;
     DataChoice row;
-    for (size_t i = 0; count < limit &&
-                       ui_layer_context_list_at(rows->ui_layer, rows->context,
-                                                rows->list, rows->partial,
-                                                rows->branch, i, &row);
+    for (size_t i = 0; count < limit && ui_nav_list_row_at(rows, i, &row);
          i++) {
         if (row.group_key != 0 &&
             helper_list_group_starts_at(rows, row.group_key, i))
@@ -484,7 +363,8 @@ static size_t helper_list_group_count(const LIST_ROWS *rows, size_t limit) {
 
 // the group of the nearest context, from `from` up through its parents, that
 // declares one appearing in the list; 0 when none does
-static uint64_t helper_list_scope(const LIST_ROWS *rows, ContextId from) {
+static uint64_t helper_list_scope(const UI_NAV_LIST_ROWS *rows,
+                                  ContextId from) {
     for (ContextId cx = from; ui_layer_context_valid(rows->ui_layer, cx);
          cx = ui_layer_context_parent_return(rows->ui_layer, cx)) {
         uint64_t group = ui_layer_context_group_key(rows->ui_layer, cx);
@@ -495,7 +375,7 @@ static uint64_t helper_list_scope(const LIST_ROWS *rows, ContextId from) {
 }
 
 // the list's name, then whatever narrows it: "Connect to (system, connected)"
-static void helper_list_title(const LIST_ROWS *rows, const char *name,
+static void helper_list_title(const UI_NAV_LIST_ROWS *rows, const char *name,
                               char *out, size_t cap) {
     const char *group = rows->filter->group
                             ? helper_list_group_label(rows, rows->filter->group)
@@ -509,11 +389,11 @@ static void helper_list_title(const LIST_ROWS *rows, const char *name,
              group && linked ? ", " : "", linked ? "connected" : "");
 }
 
-static void helper_list_render(LIST_ROWS *rows, const char *header,
+static void helper_list_render(UI_NAV_LIST_ROWS *rows, const char *header,
                                const char *status, size_t cursor_idx) {
     printf("-- %s --\n\n", header);
 
-    UI_WINDOWING_SOURCE source = helper_list_source(rows);
+    UI_WINDOWING_SOURCE source = ui_nav_list_source(rows);
     size_t slice_items[VIEW_ROWS];
     UI_WINDOWING_SLICE slice = {.items = slice_items, .capacity = VIEW_ROWS};
     ui_windowing_fill_around_cursor(&source, cursor_idx, &slice);
@@ -524,8 +404,7 @@ static void helper_list_render(LIST_ROWS *rows, const char *header,
         printf("-...-\n");
     DataChoice row;
     for (size_t r = 0; r < slice.count; r++) {
-        if (!ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list,
-                                      rows->partial, rows->branch, slice.items[r], &row))
+        if (!ui_nav_list_row_at(rows, slice.items[r], &row))
             continue;
         // the group tells same-named rows apart until one group is shown
         bool grouped = rows->filter->group == 0 && row.group_key != 0;
@@ -704,9 +583,8 @@ static void helper_list_session_start(LIST_SESSION *session, int kind,
 static void helper_list_session_scope(UI_LAYER *ui_layer, LIST_SESSION *session,
                                       ContextId from) {
     DataActionReq partial = {.type = session->type, .id = session->id};
-    LIST_FILTER none = {0};
-    LIST_ROWS rows = {ui_layer, session->context, session->specs[0].list,
-                      &partial, 0, &none};
+    UI_NAV_LIST_ROWS rows = {ui_layer, session->context, session->specs[0].list,
+                             &partial, 0, NULL};
     session->filters[0].group = helper_list_scope(&rows, from);
 }
 
@@ -807,12 +685,12 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
     size_t which = picking_targets ? 1 : 0;
     const DataArgSpec *spec = &session->specs[which];
     LIST_CURSOR *cur = &session->cursors[which];
-    LIST_FILTER *filter = &session->filters[which];
+    UI_NAV_LIST_FILTER *filter = &session->filters[which];
     DataActionReq partial = {.type = session->type, .id = session->id};
     if (picking_targets)
         partial.connect.source = session->source_value;
-    LIST_ROWS rows = {ui_layer, session->context, spec->list, &partial,
-                      helper_list_branch(session, which), filter};
+    UI_NAV_LIST_ROWS rows = {ui_layer, session->context, spec->list, &partial,
+                             helper_list_branch(session, which), filter};
 
     // a group whose rows all went away cannot be narrowed to any more
     if (filter->group != 0 && !helper_list_group_label(&rows, filter->group))
@@ -867,12 +745,11 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return true;
 
     // with nothing shown the cursor rests on a row the user cannot see
-    UI_WINDOWING_SOURCE source = helper_list_source(&rows);
+    UI_WINDOWING_SOURCE source = ui_nav_list_source(&rows);
     if (!ui_windowing_is_shown(&source, cur->idx))
         return true;
     DataChoice picked;
-    if (!ui_layer_context_list_at(ui_layer, session->context, spec->list,
-                                  &partial, rows.branch, cur->idx, &picked))
+    if (!ui_nav_list_row_at(&rows, cur->idx, &picked))
         return true;
     // a category row is opened, it is never an action value
     if (picked.flags & DATA_CHOICE_BRANCH) {

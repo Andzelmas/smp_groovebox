@@ -261,3 +261,60 @@ DataActionResult ui_nav_action_run_text(UI_LAYER *ui_layer, const UI_NAV_ACTION 
         req.add_file_path.path = text;
     return ui_nav_action_req_run(ui_layer, action, &req, out_new);
 }
+
+bool ui_nav_list_row_at(const UI_NAV_LIST_ROWS *rows, size_t idx, DataChoice *out_row){
+    return ui_layer_context_list_at(rows->ui_layer, rows->context, rows->list, rows->partial,
+                                    rows->branch, idx, out_row);
+}
+
+size_t ui_nav_list_count(const UI_NAV_LIST_ROWS *rows){
+    size_t count = ui_layer_context_list_count(rows->ui_layer, rows->context, rows->list,
+                                               rows->partial, rows->branch);
+    if(count > 0)
+        return count;
+    DataChoice row;
+    while(ui_nav_list_row_at(rows, count, &row))
+        count++;
+    return count;
+}
+
+static bool ui_nav_list_row_shown(void *user, size_t idx){
+    const UI_NAV_LIST_ROWS *rows = user;
+    DataChoice row;
+    if(!ui_nav_list_row_at(rows, idx, &row))
+        return false;
+    if(rows->filter->group != 0 && row.group_key != rows->filter->group)
+        return false;
+    if(rows->filter->linked_only && !(row.flags & DATA_CHOICE_LINKED))
+        return false;
+    return true;
+}
+
+UI_WINDOWING_SOURCE ui_nav_list_source(UI_NAV_LIST_ROWS *rows){
+    UI_WINDOWING_SOURCE source = {ui_nav_list_count(rows), NULL, rows};
+    // unfiltered, every row list_at returns is shown
+    const UI_NAV_LIST_FILTER *filter = rows->filter;
+    if(filter && (filter->group != 0 || filter->linked_only))
+        source.shown = ui_nav_list_row_shown;
+    return source;
+}
+
+uint64_t ui_nav_list_value_at(const UI_NAV_LIST_ROWS *rows, size_t idx){
+    DataChoice row;
+    if(!ui_nav_list_row_at(rows, idx, &row))
+        return 0;
+    return row.value;
+}
+
+size_t ui_nav_list_find(const UI_NAV_LIST_ROWS *rows, uint64_t value, size_t hint_idx){
+    if(value == 0)
+        return SIZE_MAX;
+    if(ui_nav_list_value_at(rows, hint_idx) == value)
+        return hint_idx;
+    DataChoice row;
+    for(size_t i = 0; ui_nav_list_row_at(rows, i, &row); i++){
+        if(row.value == value)
+            return i;
+    }
+    return SIZE_MAX;
+}
