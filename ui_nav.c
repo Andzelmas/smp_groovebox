@@ -181,3 +181,83 @@ size_t ui_nav_actions_gather(UI_LAYER *ui_layer, ContextId context, UI_NAV_ACTIO
         out[i] = (UI_NAV_ACTION){context, actions[i]};
     return count;
 }
+
+bool ui_nav_context_action_find(UI_LAYER *ui_layer, ContextId context,
+                                DataActionType type, UI_NAV_ACTION *out){
+    if(!out)
+        return false;
+    UI_NAV_ACTION actions[UI_NAV_CONTEXT_ACTIONS_MAX];
+    size_t count = ui_nav_actions_gather(ui_layer, context, actions, UI_NAV_CONTEXT_ACTIONS_MAX);
+    for(size_t i = 0; i < count; i++){
+        if(actions[i].action.type == type){
+            *out = actions[i];
+            return true;
+        }
+    }
+    return false;
+}
+
+UiNavInput ui_nav_action_input(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
+                               DataArgSpec specs[UI_NAV_ACTION_ARGS_MAX]){
+    if(!action || !specs)
+        return UI_NAV_INPUT_UNSUPPORTED;
+    DataActionType type = action->action.type;
+    size_t arg_count = ui_layer_context_action_args(ui_layer, action->context, type,
+                                                    action->action.id, specs,
+                                                    UI_NAV_ACTION_ARGS_MAX);
+    if(type == DATA_ACTION_CONNECT)
+        return arg_count < 2 ? UI_NAV_INPUT_MISCONFIGURED : UI_NAV_INPUT_LIST_CONNECT;
+    if(type == DATA_ACTION_ADJUST_VALUE)
+        return arg_count < 1 ? UI_NAV_INPUT_MISCONFIGURED : UI_NAV_INPUT_STEPS;
+    if(type == DATA_ACTION_SET_VALUE)
+        return arg_count < 1 ? UI_NAV_INPUT_MISCONFIGURED : UI_NAV_INPUT_NUMBER;
+    if(arg_count == 0)
+        return UI_NAV_INPUT_NONE;
+    if(arg_count == 1 && (specs[0].kind == DATA_ARG_PATH || specs[0].kind == DATA_ARG_STRING))
+        return UI_NAV_INPUT_TEXT;
+    if(arg_count == 1 && specs[0].kind == DATA_ARG_CHOICE)
+        return UI_NAV_INPUT_LIST_CHOICE;
+    return UI_NAV_INPUT_UNSUPPORTED;
+}
+
+// req carries the input, the action's type and id are filled here
+static DataActionResult ui_nav_action_req_run(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
+                                              DataActionReq *req, ContextId *out_new){
+    if(!action){
+        if(out_new)
+            *out_new = CONTEXT_ID_INVALID;
+        return DATA_ACTION_ERR_INVALID;
+    }
+    req->type = action->action.type;
+    req->id = action->action.id;
+    return ui_layer_context_action_do(ui_layer, action->context, req, out_new);
+}
+
+DataActionResult ui_nav_action_run(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
+                                   ContextId *out_new){
+    DataActionReq req = {0};
+    return ui_nav_action_req_run(ui_layer, action, &req, out_new);
+}
+
+DataActionResult ui_nav_action_run_adjust(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
+                                          int steps, ContextId *out_new){
+    DataActionReq req = {.adjust_value.step = steps};
+    return ui_nav_action_req_run(ui_layer, action, &req, out_new);
+}
+
+DataActionResult ui_nav_action_run_set_value(UI_LAYER *ui_layer,
+                                             const UI_NAV_ACTION *action, double value,
+                                             ContextId *out_new){
+    DataActionReq req = {.set_value.value = value};
+    return ui_nav_action_req_run(ui_layer, action, &req, out_new);
+}
+
+DataActionResult ui_nav_action_run_text(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
+                                        const char *text, ContextId *out_new){
+    DataActionReq req = {0};
+    if(action && action->action.type == DATA_ACTION_SAVE)
+        req.save.name = text;
+    else
+        req.add_file_path.path = text;
+    return ui_nav_action_req_run(ui_layer, action, &req, out_new);
+}

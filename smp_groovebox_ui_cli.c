@@ -3,7 +3,10 @@
 #include "ui_layer.h"
 #include "ui_nav.h"
 #include "ui_windowing.h"
+#include <ctype.h>
 #include <errno.h>
+#include <limits.h>
+#include <math.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -15,7 +18,6 @@
 // limit the display to 10 rows before and after the hovered context
 #define VIEW_ROWS 21
 
-#define ACTION_ARG_COUNT 5 // maximum possible DataArgSpec for a single DataAction
 #define STATES_COUNT 2 // how many states on this program
 #define ACTION_SOURCES_COUNT 10 // contexts whose actions are gathered: hovered + ContexIds up to root Context
 #define MAX_ACTION_CANDIDATES (UI_NAV_CONTEXT_ACTIONS_MAX * ACTION_SOURCES_COUNT)
@@ -561,119 +563,123 @@ static void helper_action_result_msg(DataActionResult result, const char *label,
     }
 }
 
-// a 0-arg action (REMOVE, REFRESH): nothing to collect, just execute.
-static ContextId helper_action_do_direct(UI_LAYER *ui_layer, ContextId context,
-                                         const DataAction *action,
-                                         const char *label, char *msg,
-                                         size_t msg_cap) {
-    DataActionReq req = {.type = action->type, .id = action->id};
-    ContextId out_new = CONTEXT_ID_INVALID;
-    DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
-    helper_action_result_msg(result, label, msg, msg_cap);
-    return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
+static const char *helper_action_label(const DataAction *action) {
+    return action->label ? action->label : "action";
 }
 
-// adjust a value (of a parameter for example) by adjust_value
-// if adjust_value is 0, will ask for user input for the adjust_value
-static ContextId helper_action_do_adjust_value(UI_LAYER *ui_layer, ContextId context,
-                                       const DataAction *action, int adjust_value, const DataArgSpec *spec,
-                                       const char *label, char *msg, size_t msg_cap) {
-    int value = adjust_value;
-    if (value == 0) {
-        enterCookedMode();
-        printf("%s: ", spec->label ? spec->label : spec->name);
-        int scan_err = scanf("%d", &value);
-        enterRawModeAgain();
-        if (scan_err <= 0)
-            return CONTEXT_ID_INVALID;
-    }
-
-    DataActionReq req = {
-        .type = action->type, .id = action->id, .adjust_value.step = value};
-    ContextId out_new = CONTEXT_ID_INVALID;
-    DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
-    helper_action_result_msg(result, label, msg, msg_cap);
-    return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
-}
-// adjust value (of a parameter for example), directly. Not through action drilling
-static bool helper_action_do_adjust_value_direct(UI_LAYER* ui_layer, ContextId context, int adjust_value, char* msg, size_t msg_cap){
-    if(!ui_layer)
-        return false;
-    if(!ui_layer_context_valid(ui_layer, context))
-        return false;
-
-    if(adjust_value == 0)
-        return false;
-
-    DataAction actions_out[UI_NAV_CONTEXT_ACTIONS_MAX];
-    size_t actions = ui_layer_context_actions(ui_layer, context, actions_out,
-                                              UI_NAV_CONTEXT_ACTIONS_MAX);
-    for (size_t i = 0; i < actions; i++) {
-        DataAction cur_action = actions_out[i];
-        if (cur_action.type == DATA_ACTION_ADJUST_VALUE) {
-            DataArgSpec specs[ACTION_ARG_COUNT];
-            size_t arguments = ui_layer_context_action_args(
-                ui_layer, context, cur_action.type, cur_action.id, specs,
-                ACTION_ARG_COUNT);
-            if (arguments != 1)
-                return false;
-            helper_action_do_adjust_value(ui_layer, context, &cur_action,
-                                          adjust_value, &specs[0],
-                                          cur_action.label, msg, msg_cap);
-            return true;
-        }
-    }
-
-    return false;
-}
-
-// set value (of a parameter for example) using user intput
-static ContextId helper_action_do_set_value(UI_LAYER *ui_layer, ContextId context,
-                                       const DataAction *action, const DataArgSpec *spec,
-                                       const char *label, char *msg, size_t msg_cap) {
-    double value = 0.0;
-    enterCookedMode();
-    printf("%s: ", spec->label ? spec->label : spec->name);
-    int scan_err = scanf("%lf", &value);
-    enterRawModeAgain();
-    if(scan_err <= 0)
-        return CONTEXT_ID_INVALID;
-
-    DataActionReq req = {
-        .type = action->type, .id = action->id, .set_value.value = value};
-    ContextId out_new = CONTEXT_ID_INVALID;
-    DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
-    helper_action_result_msg(result, label, msg, msg_cap);
-    return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
-}
-
-// single PATH (ADD_FILE_PATH) or STRING (SAVE) arg: cooked-mode text entry.
-static ContextId helper_action_do_text(UI_LAYER *ui_layer, ContextId context,
-                                       const DataAction *action, const DataArgSpec *spec,
-                                       const char *label, char *msg, size_t msg_cap) {
-    char text_buf[512];
+// read the line typed for spec in cooked mode, without its newline. The whole
+// line is always read, so none of it is left over as keys. false with msg set
+// on EOF or when the line does not fit in line
+static bool helper_prompt_line(const DataArgSpec *spec, const char *label, char *line,
+                               size_t line_cap, char *msg, size_t msg_cap) {
     enterCookedMode();
     printf("%s: ", spec->label ? spec->label : spec->name);
     fflush(stdout);
-    bool ok = fgets(text_buf, (int)sizeof(text_buf), stdin) != NULL;
-    enterRawModeAgain();
-    if (!ok) {
-        snprintf(msg, msg_cap, "%s: cancelled.", label);
-        return CONTEXT_ID_INVALID;
+    bool got_line = fgets(line, (int)line_cap, stdin) != NULL;
+    size_t len = got_line ? strlen(line) : 0;
+    bool whole = len > 0 && line[len - 1] == '\n';
+    // a full buffer without the newline: drain the rest. Nothing left means
+    // the line fit exactly, or was the last one before EOF
+    bool too_long = false;
+    if (got_line && !whole) {
+        int c;
+        while ((c = getchar()) != '\n' && c != EOF)
+            too_long = true;
     }
-    size_t len = strlen(text_buf);
-    if (len > 0 && text_buf[len - 1] == '\n')
-        text_buf[len - 1] = '\0';
+    // a Ctrl-D ends the prompt, not the program. Input that really ended
+    // reads EOF again in the main loop
+    clearerr(stdin);
+    enterRawModeAgain();
+    if (!got_line) {
+        snprintf(msg, msg_cap, "%s: cancelled.", label);
+        return false;
+    }
+    if (too_long) {
+        snprintf(msg, msg_cap, "%s: too long.", label);
+        return false;
+    }
+    if (whole)
+        line[len - 1] = '\0';
+    return true;
+}
 
-    DataActionReq req = {.type = action->type, .id = action->id};
-    if (action->type == DATA_ACTION_SAVE)
-        req.save.name = text_buf;
-    else
-        req.add_file_path.path = text_buf;
-    ContextId out_new = CONTEXT_ID_INVALID;
-    DataActionResult result = ui_layer_context_action_do(ui_layer, context, &req, &out_new);
-    helper_action_result_msg(result, label, msg, msg_cap);
-    return result == DATA_ACTION_OK ? out_new : CONTEXT_ID_INVALID;
+// read one number typed for spec, spaces around it allowed. as_int: it has to
+// fit an int. false with msg set when cancelled (also a blank line) or the
+// line is not one number
+static bool helper_prompt_number(const DataArgSpec *spec, const char *label, bool as_int,
+                                 double *out, char *msg, size_t msg_cap) {
+    char line[128];
+    if (!helper_prompt_line(spec, label, line, sizeof(line), msg, msg_cap))
+        return false;
+    const char *start = line;
+    while (isspace((unsigned char)*start))
+        start++;
+    if (*start == '\0') {
+        snprintf(msg, msg_cap, "%s: cancelled.", label);
+        return false;
+    }
+    char *end;
+    bool in_range;
+    errno = 0;
+    if (as_int) {
+        long value = strtol(start, &end, 10);
+        in_range = errno != ERANGE && value >= INT_MIN && value <= INT_MAX;
+        *out = (double)value;
+    } else {
+        *out = strtod(start, &end);
+        in_range = !(errno == ERANGE && isinf(*out));
+    }
+    while (isspace((unsigned char)*end))
+        end++;
+    if (end == start || *end != '\0' || !in_range) {
+        snprintf(msg, msg_cap, "%s: not a number.", label);
+        return false;
+    }
+    return true;
+}
+
+// prompt for a step count, then adjust the value (of a parameter for example)
+static void helper_action_do_adjust_value(UI_LAYER *ui_layer, const UI_NAV_ACTION *chosen,
+                                          const DataArgSpec *spec, const char *label,
+                                          char *msg, size_t msg_cap) {
+    double steps;
+    if (!helper_prompt_number(spec, label, true, &steps, msg, msg_cap))
+        return;
+    helper_action_result_msg(ui_nav_action_run_adjust(ui_layer, chosen, (int)steps, NULL),
+                             label, msg, msg_cap);
+}
+// adjust value (of a parameter for example), directly. Not through action
+// drilling. msg stays as it was when context has no adjust action
+static void helper_action_do_adjust_value_direct(UI_LAYER *ui_layer, ContextId context,
+                                                 int adjust_value, char *msg,
+                                                 size_t msg_cap) {
+    UI_NAV_ACTION adjust;
+    if (!ui_nav_context_action_find(ui_layer, context, DATA_ACTION_ADJUST_VALUE, &adjust))
+        return;
+    helper_action_result_msg(ui_nav_action_run_adjust(ui_layer, &adjust, adjust_value, NULL),
+                             helper_action_label(&adjust.action), msg, msg_cap);
+}
+
+// set value (of a parameter for example) using user intput
+static void helper_action_do_set_value(UI_LAYER *ui_layer, const UI_NAV_ACTION *chosen,
+                                       const DataArgSpec *spec, const char *label,
+                                       char *msg, size_t msg_cap) {
+    double value;
+    if (!helper_prompt_number(spec, label, false, &value, msg, msg_cap))
+        return;
+    helper_action_result_msg(ui_nav_action_run_set_value(ui_layer, chosen, value, NULL),
+                             label, msg, msg_cap);
+}
+
+// single PATH (ADD_FILE_PATH) or STRING (SAVE) arg: cooked-mode text entry.
+static void helper_action_do_text(UI_LAYER *ui_layer, const UI_NAV_ACTION *chosen,
+                                  const DataArgSpec *spec, const char *label, char *msg,
+                                  size_t msg_cap) {
+    char text_buf[512];
+    if (!helper_prompt_line(spec, label, text_buf, sizeof(text_buf), msg, msg_cap))
+        return;
+    helper_action_result_msg(ui_nav_action_run_text(ui_layer, chosen, text_buf, NULL),
+                             label, msg, msg_cap);
 }
 
 static void helper_list_session_start(LIST_SESSION *session, int kind,
@@ -916,51 +922,42 @@ static bool helper_action_resolve(UI_LAYER *ui_layer, const UI_NAV_ACTION *chose
 
     ContextId context = chosen->context;
     const DataAction *action = &chosen->action;
-    DataActionType type = action->type;
-    const char *label = action->label ? action->label : "action";
+    const char *label = helper_action_label(action);
 
-    DataArgSpec specs[ACTION_ARG_COUNT];
-    size_t arg_count = ui_layer_context_action_args(
-        ui_layer, context, type, action->id, specs, ACTION_ARG_COUNT);
-
-    if (type == DATA_ACTION_CONNECT) {
-        if (arg_count < 2) {
-            snprintf(msg, msg_cap, "%s: misconfigured.", label);
-            return false;
-        }
-        helper_list_session_start(session, LIST_SESSION_CONNECT, context,
-                                  action, label, specs, 2);
-        helper_list_session_scope(ui_layer, session, scope_from);
-        return true;
-    }
-    if (type == DATA_ACTION_ADJUST_VALUE){
-        helper_action_do_adjust_value(ui_layer, context, action, 0, &specs[0],
-                                      label, msg, msg_cap);
+    DataArgSpec specs[UI_NAV_ACTION_ARGS_MAX];
+    switch (ui_nav_action_input(ui_layer, chosen, specs)) {
+    case UI_NAV_INPUT_NONE:
+        helper_action_result_msg(ui_nav_action_run(ui_layer, chosen, NULL), label,
+                                 msg, msg_cap);
         return false;
-    }
-    if (type == DATA_ACTION_SET_VALUE){
-        helper_action_do_set_value(ui_layer, context, action, &specs[0], label,
-                                   msg, msg_cap);
+    case UI_NAV_INPUT_STEPS:
+        helper_action_do_adjust_value(ui_layer, chosen, &specs[0], label, msg,
+                                      msg_cap);
         return false;
-    }
-    if (arg_count == 0) {
-        helper_action_do_direct(ui_layer, context, action, label, msg, msg_cap);
+    case UI_NAV_INPUT_NUMBER:
+        helper_action_do_set_value(ui_layer, chosen, &specs[0], label, msg,
+                                   msg_cap);
         return false;
-    }
-    if (arg_count == 1 &&
-        (specs[0].kind == DATA_ARG_PATH || specs[0].kind == DATA_ARG_STRING)) {
+    case UI_NAV_INPUT_TEXT:
         printf("\n-- %s --\n", label);
-        helper_action_do_text(ui_layer, context, action, &specs[0], label, msg,
-                              msg_cap);
+        helper_action_do_text(ui_layer, chosen, &specs[0], label, msg, msg_cap);
         return false;
-    }
-    if (arg_count == 1 && specs[0].kind == DATA_ARG_CHOICE) {
+    case UI_NAV_INPUT_LIST_CHOICE:
         helper_list_session_start(session, LIST_SESSION_CHOICE, context,
                                   action, label, specs, 1);
         helper_list_session_scope(ui_layer, session, scope_from);
         return true;
+    case UI_NAV_INPUT_LIST_CONNECT:
+        helper_list_session_start(session, LIST_SESSION_CONNECT, context,
+                                  action, label, specs, 2);
+        helper_list_session_scope(ui_layer, session, scope_from);
+        return true;
+    case UI_NAV_INPUT_MISCONFIGURED:
+        snprintf(msg, msg_cap, "%s: misconfigured.", label);
+        return false;
+    case UI_NAV_INPUT_UNSUPPORTED:
+        break;
     }
-
     snprintf(msg, msg_cap, "%s: unsupported arguments.", label);
     return false;
 }

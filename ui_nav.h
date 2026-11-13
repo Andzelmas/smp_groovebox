@@ -91,3 +91,41 @@ typedef struct _ui_nav_action{
 // fill out with up to capacity of context's actions. Returns how many it wrote
 size_t ui_nav_actions_gather(UI_LAYER *ui_layer, ContextId context, UI_NAV_ACTION *out,
                              size_t capacity);
+
+// the first of context's actions with this type. false when it has none
+bool ui_nav_context_action_find(UI_LAYER *ui_layer, ContextId context,
+                                DataActionType type, UI_NAV_ACTION *out);
+
+// most argument specs ui_nav_action_input reads for one action
+#define UI_NAV_ACTION_ARGS_MAX 5
+
+// the input an action needs, and the specs that describe it
+typedef enum {
+    UI_NAV_INPUT_NONE,
+    UI_NAV_INPUT_STEPS,         // a step count, specs[0]
+    UI_NAV_INPUT_NUMBER,        // specs[0]
+    UI_NAV_INPUT_TEXT,          // a path or a string, specs[0]
+    UI_NAV_INPUT_LIST_CHOICE,   // a row of specs[0]'s list
+    UI_NAV_INPUT_LIST_CONNECT,  // a source from specs[0]'s list, then targets
+                                // from specs[1]'s
+    UI_NAV_INPUT_MISCONFIGURED, // fewer specs than the action needs
+    UI_NAV_INPUT_UNSUPPORTED,   // specs no kind above takes, or no action
+} UiNavInput;
+
+// fill specs with action's argument specs and return what input it needs
+UiNavInput ui_nav_action_input(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
+                               DataArgSpec specs[UI_NAV_ACTION_ARGS_MAX]);
+
+// Run an action with the input ui_nav_action_input says it needs. out_new gets
+// the context the action created, if any, and may be NULL.
+DataActionResult ui_nav_action_run(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
+                                   ContextId *out_new);
+DataActionResult ui_nav_action_run_adjust(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
+                                          int steps, ContextId *out_new);
+DataActionResult ui_nav_action_run_set_value(UI_LAYER *ui_layer,
+                                             const UI_NAV_ACTION *action, double value,
+                                             ContextId *out_new);
+// text is the name to save under for DATA_ACTION_SAVE, else a path. Borrowed
+// for the call only
+DataActionResult ui_nav_action_run_text(UI_LAYER *ui_layer, const UI_NAV_ACTION *action,
+                                        const char *text, ContextId *out_new);
