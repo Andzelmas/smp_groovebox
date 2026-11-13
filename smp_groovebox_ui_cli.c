@@ -97,16 +97,6 @@ enum Ui_Modes{
 enum { LIST_SESSION_CHOICE, LIST_SESSION_CONNECT };
 enum { CONNECT_PICK_SOURCE, CONNECT_PICK_TARGETS };
 
-// where a list's cursor is, and the row it sits on, so it can follow that row
-// when the list changes under it. prev/next are the shown rows around it, to
-// find where it was if its row goes away
-typedef struct _list_cursor{
-    size_t idx;
-    uint64_t value; // 0 until the cursor has landed on a row
-    uint64_t prev;  // 0 when there is none
-    uint64_t next;  // 0 when there is none
-} LIST_CURSOR;
-
 // how many categories deep a list can be opened
 #define LIST_DEPTH_MAX 16
 // how many list args one session browses (CONNECT: source, targets)
@@ -116,7 +106,7 @@ typedef struct _list_cursor{
 // branch listed, parent_cursor is the level above's, given back on close
 typedef struct _list_level{
     uint64_t branch;
-    LIST_CURSOR parent_cursor;
+    UI_NAV_LIST_CURSOR parent_cursor;
     char label[64]; // copied - a row's label is borrowed
 } LIST_LEVEL;
 
@@ -135,7 +125,7 @@ typedef struct _list_session{
     DataArgSpec specs[LIST_MAX_ARG_SPECS];
     int connect_pick;
     // one per spec, of its innermost opened level
-    LIST_CURSOR cursors[LIST_MAX_ARG_SPECS];
+    UI_NAV_LIST_CURSOR cursors[LIST_MAX_ARG_SPECS];
     UI_NAV_LIST_FILTER filters[LIST_MAX_ARG_SPECS]; // one per spec
     uint64_t source_value; // CONNECT: the source picked from specs[0]
     // opened categories, one stack per spec
@@ -254,58 +244,6 @@ static void helper_string_print_underline(const char* string, char char_underlin
             printf("%c", cur_char);
         }
     }
-}
-
-// idx must be shown
-static void helper_list_cursor_settle(const UI_NAV_LIST_ROWS *rows,
-                                      const UI_WINDOWING_SOURCE *src,
-                                      LIST_CURSOR *cur, size_t idx) {
-    size_t near;
-    bool more;
-    cur->idx = idx;
-    cur->value = ui_nav_list_value_at(rows, idx);
-    cur->prev = ui_windowing_collect_shown(src, idx, false, 1, &near, &more)
-                    ? ui_nav_list_value_at(rows, near)
-                    : 0;
-    cur->next = ui_windowing_collect_shown(src, idx, true, 1, &near, &more)
-                    ? ui_nav_list_value_at(rows, near)
-                    : 0;
-}
-
-// put the cursor back on the row it was on, wherever the list has moved it.
-// A row the filter now hides passes the cursor to the next shown row after it.
-// A row that is gone passes it to the row before where it was, as
-// UI_STALE_PREV_SIBLING does. With nothing shown the cursor is left as it is
-static void helper_list_cursor_anchor(UI_NAV_LIST_ROWS *rows,
-                                      LIST_CURSOR *cur) {
-    UI_WINDOWING_SOURCE src = ui_nav_list_source(rows);
-    size_t idx;
-    size_t found = ui_nav_list_find(rows, cur->value, cur->idx);
-    if (cur->value == 0) {
-        idx = ui_windowing_nearest_shown(&src, 0);
-    } else if (found < src.count) {
-        idx = ui_windowing_nearest_shown(&src, found);
-    } else {
-        // where the gone row would sit now, going by the rows it had around it
-        size_t prev = ui_nav_list_find(rows, cur->prev, cur->idx - 1);
-        size_t next = ui_nav_list_find(rows, cur->next, cur->idx);
-        size_t pos = cur->idx < src.count ? cur->idx : src.count;
-        if (prev < src.count)
-            pos = prev + 1;
-        else if (next < src.count)
-            pos = next;
-        idx = ui_windowing_last_shown_before(&src, pos);
-    }
-    if (idx < src.count)
-        helper_list_cursor_settle(rows, &src, cur, idx);
-}
-
-static void helper_list_cursor_move(UI_NAV_LIST_ROWS *rows, LIST_CURSOR *cur,
-                                    bool next) {
-    UI_WINDOWING_SOURCE src = ui_nav_list_source(rows);
-    size_t idx = ui_windowing_step(&src, cur->idx, 1, next, true);
-    if (idx < src.count)
-        helper_list_cursor_settle(rows, &src, cur, idx);
 }
 
 // the label of the first row in `group`, NULL when no row is in it
@@ -604,7 +542,7 @@ static bool helper_list_open(LIST_SESSION *session, size_t which,
     level->parent_cursor = session->cursors[which];
     snprintf(level->label, sizeof(level->label), "%s",
              row->label ? row->label : "?");
-    session->cursors[which] = (LIST_CURSOR){0};
+    session->cursors[which] = (UI_NAV_LIST_CURSOR){0};
     return true;
 }
 
@@ -684,7 +622,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
                            session->connect_pick == CONNECT_PICK_TARGETS;
     size_t which = picking_targets ? 1 : 0;
     const DataArgSpec *spec = &session->specs[which];
-    LIST_CURSOR *cur = &session->cursors[which];
+    UI_NAV_LIST_CURSOR *cur = &session->cursors[which];
     UI_NAV_LIST_FILTER *filter = &session->filters[which];
     DataActionReq partial = {.type = session->type, .id = session->id};
     if (picking_targets)
@@ -696,7 +634,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
     if (filter->group != 0 && !helper_list_group_label(&rows, filter->group))
         filter->group = 0;
 
-    helper_list_cursor_anchor(&rows, cur);
+    ui_nav_list_cursor_follow_row(&rows, cur);
 
     char path[128];
     helper_list_path(session, which, path, sizeof(path));
@@ -729,7 +667,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return false;
     }
     if (input == 'j' || input == 'k') {
-        helper_list_cursor_move(&rows, cur, input == 'j');
+        ui_nav_list_cursor_step(&rows, cur, 1, input == 'j', true);
         return true;
     }
     if (input == 'g') {
@@ -763,7 +701,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         session->source_value = picked.value;
         session->connect_pick = CONNECT_PICK_TARGETS;
         // a new source has its own target list
-        session->cursors[1] = (LIST_CURSOR){0};
+        session->cursors[1] = (UI_NAV_LIST_CURSOR){0};
         session->depth[1] = 0;
         return true;
     }

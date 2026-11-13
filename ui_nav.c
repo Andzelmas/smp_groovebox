@@ -318,3 +318,61 @@ size_t ui_nav_list_find(const UI_NAV_LIST_ROWS *rows, uint64_t value, size_t hin
     }
     return SIZE_MAX;
 }
+
+// idx must be shown
+static void ui_nav_list_cursor_land(const UI_NAV_LIST_ROWS *rows, const UI_WINDOWING_SOURCE *source,
+                                    UI_NAV_LIST_CURSOR *cursor, size_t idx){
+    size_t near;
+    bool more;
+    cursor->idx = idx;
+    cursor->value = ui_nav_list_value_at(rows, idx);
+    cursor->prev = ui_windowing_collect_shown(source, idx, false, 1, &near, &more)
+                       ? ui_nav_list_value_at(rows, near)
+                       : 0;
+    cursor->next = ui_windowing_collect_shown(source, idx, true, 1, &near, &more)
+                       ? ui_nav_list_value_at(rows, near)
+                       : 0;
+}
+
+bool ui_nav_list_cursor_set(UI_NAV_LIST_ROWS *rows, UI_NAV_LIST_CURSOR *cursor, size_t idx){
+    UI_WINDOWING_SOURCE source = ui_nav_list_source(rows);
+    if(!ui_windowing_is_shown(&source, idx))
+        return false;
+    ui_nav_list_cursor_land(rows, &source, cursor, idx);
+    return true;
+}
+
+bool ui_nav_list_cursor_follow_row(UI_NAV_LIST_ROWS *rows, UI_NAV_LIST_CURSOR *cursor){
+    UI_WINDOWING_SOURCE source = ui_nav_list_source(rows);
+    size_t idx;
+    size_t found = ui_nav_list_find(rows, cursor->value, cursor->idx);
+    if(cursor->value == 0){
+        idx = ui_windowing_nearest_shown(&source, 0);
+    } else if(found < source.count){
+        idx = ui_windowing_nearest_shown(&source, found);
+    } else {
+        // where the gone row would sit now, going by the rows it had around it
+        size_t prev = ui_nav_list_find(rows, cursor->prev, cursor->idx - 1);
+        size_t next = ui_nav_list_find(rows, cursor->next, cursor->idx);
+        size_t pos = cursor->idx < source.count ? cursor->idx : source.count;
+        if(prev < source.count)
+            pos = prev + 1;
+        else if(next < source.count)
+            pos = next;
+        idx = ui_windowing_last_shown_before(&source, pos);
+    }
+    if(idx >= source.count)
+        return false;
+    ui_nav_list_cursor_land(rows, &source, cursor, idx);
+    return true;
+}
+
+bool ui_nav_list_cursor_step(UI_NAV_LIST_ROWS *rows, UI_NAV_LIST_CURSOR *cursor, size_t steps,
+                             bool forward, bool wrap){
+    UI_WINDOWING_SOURCE source = ui_nav_list_source(rows);
+    size_t idx = ui_windowing_step(&source, cursor->idx, steps, forward, wrap);
+    if(idx >= source.count)
+        return false;
+    ui_nav_list_cursor_land(rows, &source, cursor, idx);
+    return true;
+}

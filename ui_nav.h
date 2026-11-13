@@ -162,3 +162,28 @@ uint64_t ui_nav_list_value_at(const UI_NAV_LIST_ROWS *rows, size_t idx);
 // index of the row holding value, trying hint_idx first. SIZE_MAX when value is
 // 0 or no row holds it
 size_t ui_nav_list_find(const UI_NAV_LIST_ROWS *rows, uint64_t value, size_t hint_idx);
+
+// a list's cursor and the row it is on, so it can follow that row when the list
+// changes. prev / next are the shown rows around it, to place it when its row
+// goes away. Zeroed, it lands on the first shown row
+typedef struct _ui_nav_list_cursor{
+    size_t idx;
+    uint64_t value; // 0 until the cursor has landed on a row
+    uint64_t prev;  // 0 when there is none
+    uint64_t next;  // 0 when there is none
+} UI_NAV_LIST_CURSOR;
+
+// The cursor functions return false when the cursor did not land on a shown row
+// and was left as it was.
+
+// put the cursor on row idx, e.g. a tapped one
+bool ui_nav_list_cursor_set(UI_NAV_LIST_ROWS *rows, UI_NAV_LIST_CURSOR *cursor, size_t idx);
+
+// put the cursor back on its row, wherever the list moved it. A row the filter
+// now hides passes it to the next shown row (wrapping), a row that is gone to
+// the shown row before where it was
+bool ui_nav_list_cursor_follow_row(UI_NAV_LIST_ROWS *rows, UI_NAV_LIST_CURSOR *cursor);
+
+// move the cursor steps shown rows from cursor->idx, as ui_windowing_step
+bool ui_nav_list_cursor_step(UI_NAV_LIST_ROWS *rows, UI_NAV_LIST_CURSOR *cursor, size_t steps,
+                             bool forward, bool wrap);
