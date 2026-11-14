@@ -187,3 +187,21 @@ bool ui_nav_list_cursor_follow_row(UI_NAV_LIST_ROWS *rows, UI_NAV_LIST_CURSOR *c
 // move the cursor steps shown rows from cursor->idx, as ui_windowing_step
 bool ui_nav_list_cursor_step(UI_NAV_LIST_ROWS *rows, UI_NAV_LIST_CURSOR *cursor, size_t steps,
                              bool forward, bool wrap);
+
+// A list's groups are its rows' DataChoice.group_key values other than 0, in
+// the order they first appear. The group functions read every row, rows->filter
+// is not applied.
+
+// index of the first row in group. SIZE_MAX when no row is in it
+size_t ui_nav_list_group_first_row(const UI_NAV_LIST_ROWS *rows, uint64_t group);
+
+// the group after current, the first one when current is 0. 0 (every group)
+// after the last one, and when no row is in current
+uint64_t ui_nav_list_group_next(const UI_NAV_LIST_ROWS *rows, uint64_t current);
+
+// how many groups the list has, counting no further than limit
+size_t ui_nav_list_group_count(const UI_NAV_LIST_ROWS *rows, size_t limit);
+
+// the group of the nearest context, from context up through its parents, that
+// declares one the list has. 0 when none does
+uint64_t ui_nav_list_group_of_context(const UI_NAV_LIST_ROWS *rows, ContextId context);

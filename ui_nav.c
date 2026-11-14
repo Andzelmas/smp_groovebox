@@ -376,3 +376,47 @@ bool ui_nav_list_cursor_step(UI_NAV_LIST_ROWS *rows, UI_NAV_LIST_CURSOR *cursor,
     ui_nav_list_cursor_land(rows, &source, cursor, idx);
     return true;
 }
+
+size_t ui_nav_list_group_first_row(const UI_NAV_LIST_ROWS *rows, uint64_t group){
+    DataChoice row;
+    for(size_t i = 0; ui_nav_list_row_at(rows, i, &row); i++){
+        if(row.group_key == group)
+            return i;
+    }
+    return SIZE_MAX;
+}
+
+uint64_t ui_nav_list_group_next(const UI_NAV_LIST_ROWS *rows, uint64_t current){
+    bool passed = current == 0;
+    DataChoice row;
+    for(size_t i = 0; ui_nav_list_row_at(rows, i, &row); i++){
+        uint64_t group = row.group_key;
+        if(group == 0 || ui_nav_list_group_first_row(rows, group) != i)
+            continue;
+        if(passed)
+            return group;
+        if(group == current)
+            passed = true;
+    }
+    return 0;
+}
+
+size_t ui_nav_list_group_count(const UI_NAV_LIST_ROWS *rows, size_t limit){
+    size_t count = 0;
+    DataChoice row;
+    for(size_t i = 0; count < limit && ui_nav_list_row_at(rows, i, &row); i++){
+        if(row.group_key != 0 && ui_nav_list_group_first_row(rows, row.group_key) == i)
+            count++;
+    }
+    return count;
+}
+
+uint64_t ui_nav_list_group_of_context(const UI_NAV_LIST_ROWS *rows, ContextId context){
+    for(ContextId cx = context; ui_layer_context_valid(rows->ui_layer, cx);
+        cx = ui_layer_context_parent_return(rows->ui_layer, cx)){
+        uint64_t group = ui_layer_context_group_key(rows->ui_layer, cx);
+        if(group != 0 && ui_nav_list_group_first_row(rows, group) != SIZE_MAX)
+            return group;
+    }
+    return 0;
+}

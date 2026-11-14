@@ -246,78 +246,16 @@ static void helper_string_print_underline(const char* string, char char_underlin
     }
 }
 
-// the label of the first row in `group`, NULL when no row is in it
-static const char *helper_list_group_label(const UI_NAV_LIST_ROWS *rows,
-                                           uint64_t group) {
-    DataChoice row;
-    for (size_t i = 0; ui_nav_list_row_at(rows, i, &row); i++) {
-        if (row.group_key == group)
-            return row.group_label ? row.group_label : "?";
-    }
-    return NULL;
-}
-
-static bool helper_list_group_starts_at(const UI_NAV_LIST_ROWS *rows,
-                                        uint64_t group, size_t idx) {
-    DataChoice row;
-    for (size_t i = 0; i < idx && ui_nav_list_row_at(rows, i, &row); i++) {
-        if (row.group_key == group)
-            return false;
-    }
-    return true;
-}
-
-// the group after `current` in the order the groups first appear; 0 (every
-// group) after the last one, and when current is not in the list at all
-static uint64_t helper_list_group_next(const UI_NAV_LIST_ROWS *rows,
-                                       uint64_t current) {
-    bool passed = current == 0;
-    DataChoice row;
-    for (size_t i = 0; ui_nav_list_row_at(rows, i, &row); i++) {
-        uint64_t group = row.group_key;
-        if (group == 0 || !helper_list_group_starts_at(rows, group, i))
-            continue;
-        if (passed)
-            return group;
-        if (group == current)
-            passed = true;
-    }
-    return 0;
-}
-
-// how many groups the list has, counting no further than limit
-static size_t helper_list_group_count(const UI_NAV_LIST_ROWS *rows,
-                                      size_t limit) {
-    size_t count = 0;
-    DataChoice row;
-    for (size_t i = 0; count < limit && ui_nav_list_row_at(rows, i, &row);
-         i++) {
-        if (row.group_key != 0 &&
-            helper_list_group_starts_at(rows, row.group_key, i))
-            count++;
-    }
-    return count;
-}
-
-// the group of the nearest context, from `from` up through its parents, that
-// declares one appearing in the list; 0 when none does
-static uint64_t helper_list_scope(const UI_NAV_LIST_ROWS *rows,
-                                  ContextId from) {
-    for (ContextId cx = from; ui_layer_context_valid(rows->ui_layer, cx);
-         cx = ui_layer_context_parent_return(rows->ui_layer, cx)) {
-        uint64_t group = ui_layer_context_group_key(rows->ui_layer, cx);
-        if (group != 0 && helper_list_group_label(rows, group))
-            return group;
-    }
-    return 0;
-}
-
 // the list's name, then whatever narrows it: "Connect to (system, connected)"
 static void helper_list_title(const UI_NAV_LIST_ROWS *rows, const char *name,
                               char *out, size_t cap) {
-    const char *group = rows->filter->group
-                            ? helper_list_group_label(rows, rows->filter->group)
-                            : NULL;
+    const char *group = NULL;
+    uint64_t group_key = rows->filter->group;
+    DataChoice first;
+    if (group_key &&
+        ui_nav_list_row_at(rows, ui_nav_list_group_first_row(rows, group_key),
+                           &first))
+        group = first.group_label ? first.group_label : "?";
     bool linked = rows->filter->linked_only;
     if (!group && !linked) {
         snprintf(out, cap, "%s", name);
@@ -523,7 +461,7 @@ static void helper_list_session_scope(UI_LAYER *ui_layer, LIST_SESSION *session,
     DataActionReq partial = {.type = session->type, .id = session->id};
     UI_NAV_LIST_ROWS rows = {ui_layer, session->context, session->specs[0].list,
                              &partial, 0, NULL};
-    session->filters[0].group = helper_list_scope(&rows, from);
+    session->filters[0].group = ui_nav_list_group_of_context(&rows, from);
 }
 
 // the branch a spec's list shows, 0 = its top level
@@ -631,7 +569,8 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
                              helper_list_branch(session, which), filter};
 
     // a group whose rows all went away cannot be narrowed to any more
-    if (filter->group != 0 && !helper_list_group_label(&rows, filter->group))
+    if (filter->group != 0 &&
+        ui_nav_list_group_first_row(&rows, filter->group) == SIZE_MAX)
         filter->group = 0;
 
     ui_nav_list_cursor_follow_row(&rows, cur);
@@ -671,8 +610,8 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return true;
     }
     if (input == 'g') {
-        if (helper_list_group_count(&rows, 2) >= 2)
-            filter->group = helper_list_group_next(&rows, filter->group);
+        if (ui_nav_list_group_count(&rows, 2) >= 2)
+            filter->group = ui_nav_list_group_next(&rows, filter->group);
         return true;
     }
     if (input == 'c' && picking_targets) {
