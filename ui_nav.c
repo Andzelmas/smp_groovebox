@@ -1,4 +1,5 @@
 #include "ui_nav.h"
+#include <stdio.h>
 
 // NULL when context is not valid or has no name
 static const char *ui_nav_valid_context_name(UI_LAYER *ui_layer, ContextId context){
@@ -419,4 +420,57 @@ uint64_t ui_nav_list_group_of_context(const UI_NAV_LIST_ROWS *rows, ContextId co
             return group;
     }
     return 0;
+}
+
+bool ui_nav_list_session_start(UI_NAV_LIST_SESSION *session, const UI_NAV_ACTION *action,
+                               UiNavInput input, const DataArgSpec *specs){
+    size_t spec_count = input == UI_NAV_INPUT_LIST_CONNECT ? 2
+                        : input == UI_NAV_INPUT_LIST_CHOICE ? 1
+                                                            : 0;
+    if(!session || !action || !specs || spec_count == 0)
+        return false;
+    *session = (UI_NAV_LIST_SESSION){.action = *action,
+                                     .input = input,
+                                     .connect_pick = UI_NAV_CONNECT_PICK_SOURCE};
+    for(size_t i = 0; i < spec_count; i++)
+        session->specs[i] = specs[i];
+    return true;
+}
+
+void ui_nav_list_session_narrow_to(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session,
+                                   ContextId context){
+    DataActionReq partial = {.type = session->action.action.type,
+                             .id = session->action.action.id};
+    UI_NAV_LIST_ROWS rows = {ui_layer, session->action.context, session->specs[0].list,
+                             &partial, ui_nav_list_session_branch(session, 0), NULL};
+    session->filters[0].group = ui_nav_list_group_of_context(&rows, context);
+}
+
+uint64_t ui_nav_list_session_branch(const UI_NAV_LIST_SESSION *session, size_t spec_idx){
+    if(spec_idx >= UI_NAV_LIST_SESSION_SPECS)
+        return 0;
+    size_t depth = session->depth[spec_idx];
+    return depth ? session->levels[spec_idx][depth - 1].branch : 0;
+}
+
+bool ui_nav_list_session_open(UI_NAV_LIST_SESSION *session, size_t spec_idx,
+                              const DataChoice *row){
+    if(spec_idx >= UI_NAV_LIST_SESSION_SPECS ||
+       session->depth[spec_idx] == UI_NAV_LIST_DEPTH_MAX)
+        return false;
+    UI_NAV_LIST_LEVEL *level = &session->levels[spec_idx][session->depth[spec_idx]++];
+    level->branch = row->value;
+    level->parent_cursor = session->cursors[spec_idx];
+    level->has_label = row->label != NULL;
+    snprintf(level->label, sizeof(level->label), "%s", row->label ? row->label : "");
+    session->cursors[spec_idx] = (UI_NAV_LIST_CURSOR){0};
+    return true;
+}
+
+bool ui_nav_list_session_close(UI_NAV_LIST_SESSION *session, size_t spec_idx){
+    if(spec_idx >= UI_NAV_LIST_SESSION_SPECS || session->depth[spec_idx] == 0)
+        return false;
+    session->depth[spec_idx]--;
+    session->cursors[spec_idx] = session->levels[spec_idx][session->depth[spec_idx]].parent_cursor;
+    return true;
 }

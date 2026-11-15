@@ -94,45 +94,6 @@ enum Ui_Modes{
     UI_MODE_LIST = 3
 };
 
-enum { LIST_SESSION_CHOICE, LIST_SESSION_CONNECT };
-enum { CONNECT_PICK_SOURCE, CONNECT_PICK_TARGETS };
-
-// how many categories deep a list can be opened
-#define LIST_DEPTH_MAX 16
-// how many list args one session browses (CONNECT: source, targets)
-#define LIST_MAX_ARG_SPECS 2
-
-// one opened category of a list (a DATA_CHOICE_BRANCH row): its value is the
-// branch listed, parent_cursor is the level above's, given back on close
-typedef struct _list_level{
-    uint64_t branch;
-    UI_NAV_LIST_CURSOR parent_cursor;
-    char label[64]; // copied - a row's label is borrowed
-} LIST_LEVEL;
-
-// an action whose argument is picked from a live list. The main loop drives it
-// one frame at a time, so the list resyncs between keypresses.
-// CHOICE browses specs[0] and runs the action per pick, staying open.
-// CONNECT picks a source from specs[0], then toggles links to rows of
-// specs[1]; h/ESC there steps back to the source list.
-// l on a category row opens it, h/ESC closes it again first
-typedef struct _list_session{
-    int kind;
-    ContextId context;
-    DataActionType type;
-    uint32_t id; // the action's DataAction.id
-    const char *label; // the action's label, static in the data layer
-    DataArgSpec specs[LIST_MAX_ARG_SPECS];
-    int connect_pick;
-    // one per spec, of its innermost opened level
-    UI_NAV_LIST_CURSOR cursors[LIST_MAX_ARG_SPECS];
-    UI_NAV_LIST_FILTER filters[LIST_MAX_ARG_SPECS]; // one per spec
-    uint64_t source_value; // CONNECT: the source picked from specs[0]
-    // opened categories, one stack per spec
-    LIST_LEVEL levels[LIST_MAX_ARG_SPECS][LIST_DEPTH_MAX];
-    size_t depth[LIST_MAX_ARG_SPECS];
-} LIST_SESSION;
-
 // pure: for each candidate, pick the round's activation letter by scanning
 // its label from label_pos onward for the first usable character. Disabled
 // actions, and a label with nothing left to try from label_pos, get letter
@@ -437,73 +398,17 @@ static void helper_action_do_text(UI_LAYER *ui_layer, const UI_NAV_ACTION *chose
                              label, msg, msg_cap);
 }
 
-static void helper_list_session_start(LIST_SESSION *session, int kind,
-                                      ContextId context,
-                                      const DataAction *action,
-                                      const char *label,
-                                      const DataArgSpec *specs,
-                                      size_t spec_count) {
-    *session = (LIST_SESSION){0};
-    session->kind = kind;
-    session->context = context;
-    session->type = action->type;
-    session->id = action->id;
-    session->label = label;
-    for (size_t i = 0; i < spec_count && i < LIST_MAX_ARG_SPECS; i++)
-        session->specs[i] = specs[i];
-    session->connect_pick = CONNECT_PICK_SOURCE;
-}
-
-// a session opens on its first list narrowed to the context the user is at,
-// when that context declares a group the list has
-static void helper_list_session_scope(UI_LAYER *ui_layer, LIST_SESSION *session,
-                                      ContextId from) {
-    DataActionReq partial = {.type = session->type, .id = session->id};
-    UI_NAV_LIST_ROWS rows = {ui_layer, session->context, session->specs[0].list,
-                             &partial, 0, NULL};
-    session->filters[0].group = ui_nav_list_group_of_context(&rows, from);
-}
-
-// the branch a spec's list shows, 0 = its top level
-static uint64_t helper_list_branch(const LIST_SESSION *session, size_t which) {
-    size_t depth = session->depth[which];
-    return depth ? session->levels[which][depth - 1].branch : 0;
-}
-
-// open a category row of a spec's list. false when already LIST_DEPTH_MAX deep
-static bool helper_list_open(LIST_SESSION *session, size_t which,
-                             const DataChoice *row) {
-    if (session->depth[which] == LIST_DEPTH_MAX)
-        return false;
-    LIST_LEVEL *level = &session->levels[which][session->depth[which]++];
-    level->branch = row->value;
-    level->parent_cursor = session->cursors[which];
-    snprintf(level->label, sizeof(level->label), "%s",
-             row->label ? row->label : "?");
-    session->cursors[which] = (UI_NAV_LIST_CURSOR){0};
-    return true;
-}
-
-// close the innermost opened category, the cursor goes back onto its row.
-// false at the top level
-static bool helper_list_close(LIST_SESSION *session, size_t which) {
-    if (session->depth[which] == 0)
-        return false;
-    session->depth[which]--;
-    session->cursors[which] =
-        session->levels[which][session->depth[which]].parent_cursor;
-    return true;
-}
-
 // the list's name, then every category opened in it: "Preset / Bank"
-static void helper_list_path(const LIST_SESSION *session, size_t which,
+static void helper_list_path(const UI_NAV_LIST_SESSION *session, size_t which,
                              char *out, size_t cap) {
     const DataArgSpec *spec = &session->specs[which];
     size_t len = (size_t)snprintf(out, cap, "%s",
                                   spec->label ? spec->label : spec->name);
-    for (size_t i = 0; i < session->depth[which] && len < cap; i++)
+    for (size_t i = 0; i < session->depth[which] && len < cap; i++) {
+        const UI_NAV_LIST_LEVEL *level = &session->levels[which][i];
         len += (size_t)snprintf(out + len, cap - len, " / %s",
-                                session->levels[which][i].label);
+                                level->has_label ? level->label : "?");
+    }
 }
 
 // let each view react to the context events since the last call. Returns true
@@ -546,27 +451,32 @@ static int helper_input_wait(const VIEWS_SYNC *sync) {
     }
 }
 
-// one frame of a list session: re-anchor, draw, read a key, act. Returns false
-// once the session is over, with its closing message in msg
-static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
+// one frame of a list session: re-anchor, draw, read a key, act. The main loop
+// drives it, so the list resyncs between keypresses. h/ESC closes a category
+// first, then steps back from a connect's targets to its source list. Returns
+// false once the session is over, with its closing message in msg
+static bool helper_list_session_frame(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session,
                                       const VIEWS_SYNC *sync, char *msg,
                                       size_t msg_cap) {
-    if (!ui_layer_context_valid(ui_layer, session->context)) {
-        snprintf(msg, msg_cap, "%s: no longer available.", session->label);
+    const char *label = helper_action_label(&session->action.action);
+    if (!ui_layer_context_valid(ui_layer, session->action.context)) {
+        snprintf(msg, msg_cap, "%s: no longer available.", label);
         return false;
     }
 
-    bool picking_targets = session->kind == LIST_SESSION_CONNECT &&
-                           session->connect_pick == CONNECT_PICK_TARGETS;
+    bool connect = session->input == UI_NAV_INPUT_LIST_CONNECT;
+    bool picking_targets =
+        connect && session->connect_pick == UI_NAV_CONNECT_PICK_TARGETS;
     size_t which = picking_targets ? 1 : 0;
     const DataArgSpec *spec = &session->specs[which];
     UI_NAV_LIST_CURSOR *cur = &session->cursors[which];
     UI_NAV_LIST_FILTER *filter = &session->filters[which];
-    DataActionReq partial = {.type = session->type, .id = session->id};
+    DataActionReq partial = {.type = session->action.action.type,
+                             .id = session->action.action.id};
     if (picking_targets)
         partial.connect.source = session->source_value;
-    UI_NAV_LIST_ROWS rows = {ui_layer, session->context, spec->list, &partial,
-                             helper_list_branch(session, which), filter};
+    UI_NAV_LIST_ROWS rows = {ui_layer, session->action.context, spec->list, &partial,
+                             ui_nav_list_session_branch(session, which), filter};
 
     // a group whose rows all went away cannot be narrowed to any more
     if (filter->group != 0 &&
@@ -596,13 +506,13 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return false;
 
     if (input == '\e' || input == 'h') {
-        if (helper_list_close(session, which))
+        if (ui_nav_list_session_close(session, which))
             return true;
         if (picking_targets) {
-            session->connect_pick = CONNECT_PICK_SOURCE;
+            session->connect_pick = UI_NAV_CONNECT_PICK_SOURCE;
             return true;
         }
-        snprintf(msg, msg_cap, "%s: cancelled.", session->label);
+        snprintf(msg, msg_cap, "%s: cancelled.", label);
         return false;
     }
     if (input == 'j' || input == 'k') {
@@ -630,24 +540,24 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
         return true;
     // a category row is opened, it is never an action value
     if (picked.flags & DATA_CHOICE_BRANCH) {
-        if (!helper_list_open(session, which, &picked))
-            snprintf(msg, msg_cap, "%s: categories nested too deep.",
-                     session->label);
+        if (!ui_nav_list_session_open(session, which, &picked))
+            snprintf(msg, msg_cap, "%s: categories nested too deep.", label);
         return true;
     }
 
-    if (session->kind == LIST_SESSION_CONNECT && !picking_targets) {
+    if (connect && !picking_targets) {
         session->source_value = picked.value;
-        session->connect_pick = CONNECT_PICK_TARGETS;
+        session->connect_pick = UI_NAV_CONNECT_PICK_TARGETS;
         // a new source has its own target list
         session->cursors[1] = (UI_NAV_LIST_CURSOR){0};
         session->depth[1] = 0;
         return true;
     }
 
-    DataActionReq req = {.type = session->type, .id = session->id};
+    DataActionReq req = {.type = session->action.action.type,
+                         .id = session->action.action.id};
     uint64_t target_value = picked.value;
-    if (session->kind == LIST_SESSION_CONNECT) {
+    if (connect) {
         req.connect.source = session->source_value;
         req.connect.targets = &target_value;
         req.connect.target_count = 1;
@@ -656,8 +566,8 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
     }
     ContextId out_new = CONTEXT_ID_INVALID;
     DataActionResult result =
-        ui_layer_context_action_do(ui_layer, session->context, &req, &out_new);
-    helper_action_result_msg(result, session->label, msg, msg_cap);
+        ui_layer_context_action_do(ui_layer, session->action.context, &req, &out_new);
+    helper_action_result_msg(result, label, msg, msg_cap);
     return true;
 }
 
@@ -666,7 +576,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, LIST_SESSION *session,
 // main loop drives it from then on. scope_from is where the user is - a list
 // opens narrowed to it when it can be
 static bool helper_action_resolve(UI_LAYER *ui_layer, const UI_NAV_ACTION *chosen,
-                                  ContextId scope_from, LIST_SESSION *session,
+                                  ContextId scope_from, UI_NAV_LIST_SESSION *session,
                                   char *msg, size_t msg_cap) {
     if (!msg || msg_cap == 0)
         return false;
@@ -674,12 +584,11 @@ static bool helper_action_resolve(UI_LAYER *ui_layer, const UI_NAV_ACTION *chose
     if (!ui_layer || !chosen || !session)
         return false;
 
-    ContextId context = chosen->context;
-    const DataAction *action = &chosen->action;
-    const char *label = helper_action_label(action);
+    const char *label = helper_action_label(&chosen->action);
 
     DataArgSpec specs[UI_NAV_ACTION_ARGS_MAX];
-    switch (ui_nav_action_input(ui_layer, chosen, specs)) {
+    UiNavInput input = ui_nav_action_input(ui_layer, chosen, specs);
+    switch (input) {
     case UI_NAV_INPUT_NONE:
         helper_action_result_msg(ui_nav_action_run(ui_layer, chosen, NULL), label,
                                  msg, msg_cap);
@@ -697,14 +606,9 @@ static bool helper_action_resolve(UI_LAYER *ui_layer, const UI_NAV_ACTION *chose
         helper_action_do_text(ui_layer, chosen, &specs[0], label, msg, msg_cap);
         return false;
     case UI_NAV_INPUT_LIST_CHOICE:
-        helper_list_session_start(session, LIST_SESSION_CHOICE, context,
-                                  action, label, specs, 1);
-        helper_list_session_scope(ui_layer, session, scope_from);
-        return true;
     case UI_NAV_INPUT_LIST_CONNECT:
-        helper_list_session_start(session, LIST_SESSION_CONNECT, context,
-                                  action, label, specs, 2);
-        helper_list_session_scope(ui_layer, session, scope_from);
+        ui_nav_list_session_start(session, chosen, input, specs);
+        ui_nav_list_session_narrow_to(ui_layer, session, scope_from);
         return true;
     case UI_NAV_INPUT_MISCONFIGURED:
         snprintf(msg, msg_cap, "%s: misconfigured.", label);
@@ -775,7 +679,7 @@ int main() {
     // result of the last resolved action, shown once at the top of the frame
     char action_status_msg[128] = {0};
     // the list being browsed while ui_nav_mode == UI_MODE_LIST
-    LIST_SESSION list_session = {0};
+    UI_NAV_LIST_SESSION list_session = {0};
     // what the input wait keeps up to date while no key is pressed
     const VIEWS_SYNC views_sync = {ui_layer, states_all, STATES_COUNT,
                                    ui_layer_wake_fd(ui_layer, INPUT_WAIT_TICK_MS)};

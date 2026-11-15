@@ -205,3 +205,59 @@ size_t ui_nav_list_group_count(const UI_NAV_LIST_ROWS *rows, size_t limit);
 // the group of the nearest context, from context up through its parents, that
 // declares one the list has. 0 when none does
 uint64_t ui_nav_list_group_of_context(const UI_NAV_LIST_ROWS *rows, ContextId context);
+
+// how many categories deep a session's list can be opened
+#define UI_NAV_LIST_DEPTH_MAX 16
+// the lists one session browses, a connect's source and targets
+#define UI_NAV_LIST_SESSION_SPECS 2
+
+// one opened category of a list (a DATA_CHOICE_BRANCH row): its value is the
+// branch listed, parent_cursor is the level above's, given back on close
+typedef struct _ui_nav_list_level{
+    uint64_t branch;
+    UI_NAV_LIST_CURSOR parent_cursor;
+    bool has_label;
+    char label[64]; // copied, a row's label is borrowed
+} UI_NAV_LIST_LEVEL;
+
+typedef enum {
+    UI_NAV_CONNECT_PICK_SOURCE,
+    UI_NAV_CONNECT_PICK_TARGETS,
+} UiNavConnectPick;
+
+// an action whose argument is picked from a live list, kept between frames.
+// A choice browses specs[0]'s list and runs the action per picked row. A
+// connect picks a source from specs[0]'s list, then links to targets from
+// specs[1]'s. A category row is opened, never picked. The arrays are per spec
+typedef struct _ui_nav_list_session{
+    UI_NAV_ACTION action;
+    UiNavInput input; // UI_NAV_INPUT_LIST_CHOICE or UI_NAV_INPUT_LIST_CONNECT
+    DataArgSpec specs[UI_NAV_LIST_SESSION_SPECS];
+    UiNavConnectPick connect_pick;
+    uint64_t source_value; // connect: the source picked from specs[0]
+    UI_NAV_LIST_CURSOR cursors[UI_NAV_LIST_SESSION_SPECS]; // of the innermost level
+    UI_NAV_LIST_FILTER filters[UI_NAV_LIST_SESSION_SPECS]; // for every level
+    UI_NAV_LIST_LEVEL levels[UI_NAV_LIST_SESSION_SPECS][UI_NAV_LIST_DEPTH_MAX];
+    size_t depth[UI_NAV_LIST_SESSION_SPECS]; // opened levels per spec
+} UI_NAV_LIST_SESSION;
+
+// start a session for action, with the input and specs ui_nav_action_input
+// gave it. false, session untouched, when input is not a list
+bool ui_nav_list_session_start(UI_NAV_LIST_SESSION *session, const UI_NAV_ACTION *action,
+                               UiNavInput input, const DataArgSpec *specs);
+
+// narrow specs[0]'s list to the group of context, as ui_nav_list_group_of_context
+void ui_nav_list_session_narrow_to(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session,
+                                   ContextId context);
+
+// the branch spec_idx's list shows, 0 = its top level
+uint64_t ui_nav_list_session_branch(const UI_NAV_LIST_SESSION *session, size_t spec_idx);
+
+// open category row in spec_idx's list, its cursor starts over. false when
+// already UI_NAV_LIST_DEPTH_MAX deep
+bool ui_nav_list_session_open(UI_NAV_LIST_SESSION *session, size_t spec_idx,
+                              const DataChoice *row);
+
+// close the innermost opened category of spec_idx's list, the cursor goes back
+// onto its row. false at the top level
+bool ui_nav_list_session_close(UI_NAV_LIST_SESSION *session, size_t spec_idx);
