@@ -459,31 +459,16 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *s
                                       const VIEWS_SYNC *sync, char *msg,
                                       size_t msg_cap) {
     const char *label = helper_action_label(&session->action.action);
-    if (!ui_layer_context_valid(ui_layer, session->action.context)) {
+    if (!ui_nav_list_session_sync(ui_layer, session)) {
         snprintf(msg, msg_cap, "%s: no longer available.", label);
         return false;
     }
 
+    size_t which = ui_nav_list_session_shown_spec(session);
     bool connect = session->input == UI_NAV_INPUT_LIST_CONNECT;
-    bool picking_targets =
-        connect && session->connect_pick == UI_NAV_CONNECT_PICK_TARGETS;
-    size_t which = picking_targets ? 1 : 0;
-    const DataArgSpec *spec = &session->specs[which];
+    bool picking_targets = which == 1;
     UI_NAV_LIST_CURSOR *cur = &session->cursors[which];
-    UI_NAV_LIST_FILTER *filter = &session->filters[which];
-    DataActionReq partial = {.type = session->action.action.type,
-                             .id = session->action.action.id};
-    if (picking_targets)
-        partial.connect.source = session->source_value;
-    UI_NAV_LIST_ROWS rows = {ui_layer, session->action.context, spec->list, &partial,
-                             ui_nav_list_session_branch(session, which), filter};
-
-    // a group whose rows all went away cannot be narrowed to any more
-    if (filter->group != 0 &&
-        ui_nav_list_group_first_row(&rows, filter->group) == SIZE_MAX)
-        filter->group = 0;
-
-    ui_nav_list_cursor_follow_row(&rows, cur);
+    UI_NAV_LIST_ROWS rows = ui_nav_list_session_rows(ui_layer, session);
 
     char path[128];
     helper_list_path(session, which, path, sizeof(path));
@@ -506,12 +491,8 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *s
         return false;
 
     if (input == '\e' || input == 'h') {
-        if (ui_nav_list_session_close(session, which))
+        if (ui_nav_list_session_back(session) != UI_NAV_LIST_BACK_OVER)
             return true;
-        if (picking_targets) {
-            session->connect_pick = UI_NAV_CONNECT_PICK_SOURCE;
-            return true;
-        }
         snprintf(msg, msg_cap, "%s: cancelled.", label);
         return false;
     }
@@ -520,12 +501,11 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *s
         return true;
     }
     if (input == 'g') {
-        if (ui_nav_list_group_count(&rows, 2) >= 2)
-            filter->group = ui_nav_list_group_next(&rows, filter->group);
+        ui_nav_list_session_next_group(ui_layer, session);
         return true;
     }
-    if (input == 'c' && picking_targets) {
-        filter->linked_only = !filter->linked_only;
+    if (input == 'c') {
+        ui_nav_list_session_toggle_linked(session);
         return true;
     }
     if (input != 'l')
@@ -546,7 +526,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *s
     }
 
     if (connect && !picking_targets) {
-        session->source_value = picked.value;
+        session->partial.connect.source = picked.value;
         session->connect_pick = UI_NAV_CONNECT_PICK_TARGETS;
         // a new source has its own target list
         session->cursors[1] = (UI_NAV_LIST_CURSOR){0};
@@ -558,7 +538,7 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *s
                          .id = session->action.action.id};
     uint64_t target_value = picked.value;
     if (connect) {
-        req.connect.source = session->source_value;
+        req.connect.source = session->partial.connect.source;
         req.connect.targets = &target_value;
         req.connect.target_count = 1;
     } else {

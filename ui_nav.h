@@ -234,7 +234,8 @@ typedef struct _ui_nav_list_session{
     UiNavInput input; // UI_NAV_INPUT_LIST_CHOICE or UI_NAV_INPUT_LIST_CONNECT
     DataArgSpec specs[UI_NAV_LIST_SESSION_SPECS];
     UiNavConnectPick connect_pick;
-    uint64_t source_value; // connect: the source picked from specs[0]
+    // the request built so far: connect.source is set while picking targets
+    DataActionReq partial;
     UI_NAV_LIST_CURSOR cursors[UI_NAV_LIST_SESSION_SPECS]; // of the innermost level
     UI_NAV_LIST_FILTER filters[UI_NAV_LIST_SESSION_SPECS]; // for every level
     UI_NAV_LIST_LEVEL levels[UI_NAV_LIST_SESSION_SPECS][UI_NAV_LIST_DEPTH_MAX];
@@ -261,3 +262,34 @@ bool ui_nav_list_session_open(UI_NAV_LIST_SESSION *session, size_t spec_idx,
 // close the innermost opened category of spec_idx's list, the cursor goes back
 // onto its row. false at the top level
 bool ui_nav_list_session_close(UI_NAV_LIST_SESSION *session, size_t spec_idx);
+
+// the spec whose list is shown: 1 while a connect picks targets, else 0
+size_t ui_nav_list_session_shown_spec(const UI_NAV_LIST_SESSION *session);
+
+// the shown list at its innermost opened level, with its filter. The rows
+// point into session
+UI_NAV_LIST_ROWS ui_nav_list_session_rows(UI_LAYER *ui_layer,
+                                          const UI_NAV_LIST_SESSION *session);
+
+// once per frame, before reading the rows: drop a group no row is in any more
+// from the filter, and let the cursor follow its row. false when the action's
+// context is gone, the session is over
+bool ui_nav_list_session_sync(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session);
+
+typedef enum {
+    UI_NAV_LIST_BACK_CLOSED_LEVEL, // closed the innermost opened category
+    UI_NAV_LIST_BACK_TO_SOURCE,    // a connect is picking its source again
+    UI_NAV_LIST_BACK_OVER,         // nothing to go back to, the session is over
+} UiNavListBack;
+
+// step back once in the shown list
+UiNavListBack ui_nav_list_session_back(UI_NAV_LIST_SESSION *session);
+
+// narrow the shown list to its next group, as ui_nav_list_group_next. With
+// fewer than two groups it goes back to every group. false when the filter
+// did not change
+bool ui_nav_list_session_next_group(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session);
+
+// show only the targets linked to the picked source, or all of them again.
+// false unless a connect is picking targets
+bool ui_nav_list_session_toggle_linked(UI_NAV_LIST_SESSION *session);

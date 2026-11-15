@@ -429,20 +429,30 @@ bool ui_nav_list_session_start(UI_NAV_LIST_SESSION *session, const UI_NAV_ACTION
                                                             : 0;
     if(!session || !action || !specs || spec_count == 0)
         return false;
-    *session = (UI_NAV_LIST_SESSION){.action = *action,
-                                     .input = input,
-                                     .connect_pick = UI_NAV_CONNECT_PICK_SOURCE};
+    *session = (UI_NAV_LIST_SESSION){
+        .action = *action,
+        .input = input,
+        .connect_pick = UI_NAV_CONNECT_PICK_SOURCE,
+        .partial = {.type = action->action.type, .id = action->action.id}};
     for(size_t i = 0; i < spec_count; i++)
         session->specs[i] = specs[i];
     return true;
 }
 
+static UI_NAV_LIST_ROWS ui_nav_list_session_rows_of(UI_LAYER *ui_layer,
+                                                    const UI_NAV_LIST_SESSION *session,
+                                                    size_t spec_idx){
+    return (UI_NAV_LIST_ROWS){ui_layer,
+                              session->action.context,
+                              session->specs[spec_idx].list,
+                              &session->partial,
+                              ui_nav_list_session_branch(session, spec_idx),
+                              &session->filters[spec_idx]};
+}
+
 void ui_nav_list_session_narrow_to(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session,
                                    ContextId context){
-    DataActionReq partial = {.type = session->action.action.type,
-                             .id = session->action.action.id};
-    UI_NAV_LIST_ROWS rows = {ui_layer, session->action.context, session->specs[0].list,
-                             &partial, ui_nav_list_session_branch(session, 0), NULL};
+    UI_NAV_LIST_ROWS rows = ui_nav_list_session_rows_of(ui_layer, session, 0);
     session->filters[0].group = ui_nav_list_group_of_context(&rows, context);
 }
 
@@ -472,5 +482,63 @@ bool ui_nav_list_session_close(UI_NAV_LIST_SESSION *session, size_t spec_idx){
         return false;
     session->depth[spec_idx]--;
     session->cursors[spec_idx] = session->levels[spec_idx][session->depth[spec_idx]].parent_cursor;
+    return true;
+}
+
+static bool ui_nav_list_session_picking_targets(const UI_NAV_LIST_SESSION *session){
+    return session->input == UI_NAV_INPUT_LIST_CONNECT &&
+           session->connect_pick == UI_NAV_CONNECT_PICK_TARGETS;
+}
+
+size_t ui_nav_list_session_shown_spec(const UI_NAV_LIST_SESSION *session){
+    return ui_nav_list_session_picking_targets(session) ? 1 : 0;
+}
+
+UI_NAV_LIST_ROWS ui_nav_list_session_rows(UI_LAYER *ui_layer,
+                                          const UI_NAV_LIST_SESSION *session){
+    return ui_nav_list_session_rows_of(ui_layer, session,
+                                       ui_nav_list_session_shown_spec(session));
+}
+
+bool ui_nav_list_session_sync(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session){
+    if(!ui_layer_context_valid(ui_layer, session->action.context))
+        return false;
+    size_t spec_idx = ui_nav_list_session_shown_spec(session);
+    UI_NAV_LIST_ROWS rows = ui_nav_list_session_rows_of(ui_layer, session, spec_idx);
+    UI_NAV_LIST_FILTER *filter = &session->filters[spec_idx];
+    if(filter->group != 0 && ui_nav_list_group_first_row(&rows, filter->group) == SIZE_MAX)
+        filter->group = 0;
+    ui_nav_list_cursor_follow_row(&rows, &session->cursors[spec_idx]);
+    return true;
+}
+
+UiNavListBack ui_nav_list_session_back(UI_NAV_LIST_SESSION *session){
+    if(ui_nav_list_session_close(session, ui_nav_list_session_shown_spec(session)))
+        return UI_NAV_LIST_BACK_CLOSED_LEVEL;
+    if(ui_nav_list_session_picking_targets(session)){
+        session->connect_pick = UI_NAV_CONNECT_PICK_SOURCE;
+        session->partial.connect.source = 0;
+        return UI_NAV_LIST_BACK_TO_SOURCE;
+    }
+    return UI_NAV_LIST_BACK_OVER;
+}
+
+bool ui_nav_list_session_next_group(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session){
+    size_t spec_idx = ui_nav_list_session_shown_spec(session);
+    UI_NAV_LIST_ROWS rows = ui_nav_list_session_rows_of(ui_layer, session, spec_idx);
+    UI_NAV_LIST_FILTER *filter = &session->filters[spec_idx];
+    uint64_t group = ui_nav_list_group_count(&rows, 2) >= 2
+                         ? ui_nav_list_group_next(&rows, filter->group)
+                         : 0;
+    if(group == filter->group)
+        return false;
+    filter->group = group;
+    return true;
+}
+
+bool ui_nav_list_session_toggle_linked(UI_NAV_LIST_SESSION *session){
+    if(!ui_nav_list_session_picking_targets(session))
+        return false;
+    session->filters[1].linked_only = !session->filters[1].linked_only;
     return true;
 }
