@@ -277,6 +277,22 @@ UI_NAV_LIST_ROWS ui_nav_list_session_rows(UI_LAYER *ui_layer,
 bool ui_nav_list_session_sync(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session);
 
 typedef enum {
+    UI_NAV_LIST_PICK_NOTHING,      // idx is not a shown row
+    UI_NAV_LIST_PICK_OPENED_LEVEL, // opened a category row
+    UI_NAV_LIST_PICK_TOO_DEEP,     // a category row, already UI_NAV_LIST_DEPTH_MAX deep
+    UI_NAV_LIST_PICK_TO_TARGETS,   // picked a connect's source, its targets are shown
+    UI_NAV_LIST_PICK_RAN,          // ran the action with the row
+} UiNavListPick;
+
+// put the shown list's cursor on row idx, e.g. a tapped one, and pick that row.
+// Nothing changes for UI_NAV_LIST_PICK_NOTHING. out_result is set for
+// UI_NAV_LIST_PICK_RAN only, out_new gets the context the action created, if
+// any. Either may be NULL
+UiNavListPick ui_nav_list_session_pick(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session,
+                                       size_t idx, DataActionResult *out_result,
+                                       ContextId *out_new);
+
+typedef enum {
     UI_NAV_LIST_BACK_CLOSED_LEVEL, // closed the innermost opened category
     UI_NAV_LIST_BACK_TO_SOURCE,    // a connect is picking its source again
     UI_NAV_LIST_BACK_OVER,         // nothing to go back to, the session is over

@@ -465,7 +465,6 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *s
     }
 
     size_t which = ui_nav_list_session_shown_spec(session);
-    bool connect = session->input == UI_NAV_INPUT_LIST_CONNECT;
     bool picking_targets = which == 1;
     UI_NAV_LIST_CURSOR *cur = &session->cursors[which];
     UI_NAV_LIST_ROWS rows = ui_nav_list_session_rows(ui_layer, session);
@@ -511,43 +510,19 @@ static bool helper_list_session_frame(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *s
     if (input != 'l')
         return true;
 
-    // with nothing shown the cursor rests on a row the user cannot see
-    UI_WINDOWING_SOURCE source = ui_nav_list_source(&rows);
-    if (!ui_windowing_is_shown(&source, cur->idx))
-        return true;
-    DataChoice picked;
-    if (!ui_nav_list_row_at(&rows, cur->idx, &picked))
-        return true;
-    // a category row is opened, it is never an action value
-    if (picked.flags & DATA_CHOICE_BRANCH) {
-        if (!ui_nav_list_session_open(session, which, &picked))
-            snprintf(msg, msg_cap, "%s: categories nested too deep.", label);
-        return true;
+    DataActionResult result;
+    switch (ui_nav_list_session_pick(ui_layer, session, cur->idx, &result, NULL)) {
+    case UI_NAV_LIST_PICK_TOO_DEEP:
+        snprintf(msg, msg_cap, "%s: categories nested too deep.", label);
+        break;
+    case UI_NAV_LIST_PICK_RAN:
+        helper_action_result_msg(result, label, msg, msg_cap);
+        break;
+    case UI_NAV_LIST_PICK_NOTHING:
+    case UI_NAV_LIST_PICK_OPENED_LEVEL:
+    case UI_NAV_LIST_PICK_TO_TARGETS:
+        break;
     }
-
-    if (connect && !picking_targets) {
-        session->partial.connect.source = picked.value;
-        session->connect_pick = UI_NAV_CONNECT_PICK_TARGETS;
-        // a new source has its own target list
-        session->cursors[1] = (UI_NAV_LIST_CURSOR){0};
-        session->depth[1] = 0;
-        return true;
-    }
-
-    DataActionReq req = {.type = session->action.action.type,
-                         .id = session->action.action.id};
-    uint64_t target_value = picked.value;
-    if (connect) {
-        req.connect.source = session->partial.connect.source;
-        req.connect.targets = &target_value;
-        req.connect.target_count = 1;
-    } else {
-        req.add_choice.choice_value = picked.value;
-    }
-    ContextId out_new = CONTEXT_ID_INVALID;
-    DataActionResult result =
-        ui_layer_context_action_do(ui_layer, session->action.context, &req, &out_new);
-    helper_action_result_msg(result, label, msg, msg_cap);
     return true;
 }
 

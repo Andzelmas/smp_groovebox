@@ -512,6 +512,46 @@ bool ui_nav_list_session_sync(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session){
     return true;
 }
 
+UiNavListPick ui_nav_list_session_pick(UI_LAYER *ui_layer, UI_NAV_LIST_SESSION *session,
+                                       size_t idx, DataActionResult *out_result,
+                                       ContextId *out_new){
+    if(out_new)
+        *out_new = CONTEXT_ID_INVALID;
+    size_t spec_idx = ui_nav_list_session_shown_spec(session);
+    UI_NAV_LIST_ROWS rows = ui_nav_list_session_rows_of(ui_layer, session, spec_idx);
+    DataChoice row;
+    if(!ui_nav_list_row_at(&rows, idx, &row) ||
+       !ui_nav_list_cursor_set(&rows, &session->cursors[spec_idx], idx))
+        return UI_NAV_LIST_PICK_NOTHING;
+
+    if(row.flags & DATA_CHOICE_BRANCH)
+        return ui_nav_list_session_open(session, spec_idx, &row) ? UI_NAV_LIST_PICK_OPENED_LEVEL
+                                                                 : UI_NAV_LIST_PICK_TOO_DEEP;
+
+    bool connect = session->input == UI_NAV_INPUT_LIST_CONNECT;
+    if(connect && spec_idx == 0){
+        session->partial.connect.source = row.value;
+        session->connect_pick = UI_NAV_CONNECT_PICK_TARGETS;
+        // a new source has its own target list
+        session->cursors[1] = (UI_NAV_LIST_CURSOR){0};
+        session->depth[1] = 0;
+        return UI_NAV_LIST_PICK_TO_TARGETS;
+    }
+
+    DataActionReq req = {0};
+    if(connect){
+        req.connect.source = session->partial.connect.source;
+        req.connect.targets = &row.value;
+        req.connect.target_count = 1;
+    } else {
+        req.add_choice.choice_value = row.value;
+    }
+    DataActionResult result = ui_nav_action_req_run(ui_layer, &session->action, &req, out_new);
+    if(out_result)
+        *out_result = result;
+    return UI_NAV_LIST_PICK_RAN;
+}
+
 UiNavListBack ui_nav_list_session_back(UI_NAV_LIST_SESSION *session){
     if(ui_nav_list_session_close(session, ui_nav_list_session_shown_spec(session)))
         return UI_NAV_LIST_BACK_CLOSED_LEVEL;
